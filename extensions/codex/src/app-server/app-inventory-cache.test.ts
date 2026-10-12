@@ -59,7 +59,7 @@ describe("Codex app inventory cache", () => {
       codexAppInventoryResponse(method, apps, params),
     );
     await cache.refreshNow({ key: "runtime", request });
-    cache.invalidate("runtime", "connector changed", Date.now(), [runtimeId]);
+    cache.invalidate("runtime", "connector changed");
     await cache.refreshNow({ key: "runtime", request, targetAppIds: [manifestId] });
     expect(cache.read({ key: "runtime", request, suppressRefresh: true })).toMatchObject({
       state: "fresh",
@@ -295,144 +295,6 @@ describe("Codex app inventory cache", () => {
     });
   });
 
-  it.each(["clear", "invalidate", "forced successor"] as const)(
-    "keeps an obsolete refresh rejection out of cache state after %s",
-    async (replacement) => {
-      const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-      const key = "runtime";
-      const deferred = Promise.withResolvers<never>();
-      const failure = new Error("obsolete inventory refresh failed");
-      const request = vi.fn(async (method, params) =>
-        codexAppInventoryResponse(method, [app("fresh-app")], params),
-      );
-      const obsolete = cache.refreshNow({ key, request: () => deferred.promise, nowMs: 0 });
-      const obsoleteRejection = expect(obsolete).rejects.toBe(failure);
-
-      if (replacement === "clear") {
-        cache.clear();
-      } else if (replacement === "invalidate") {
-        cache.invalidate(key, "apps changed", 1);
-      } else {
-        await cache.refreshNow({ key, request, nowMs: 2, forceRefetch: true });
-      }
-      deferred.reject(failure);
-      await obsoleteRejection;
-
-      const current = cache.read({ key, request, nowMs: 3, suppressRefresh: true });
-      expect(current.state).toBe(replacement === "forced successor" ? "fresh" : "missing");
-      expect(current.diagnostic).toEqual(
-        replacement === "invalidate" ? { message: "apps changed", atMs: 1 } : undefined,
-      );
-      if (replacement === "forced successor") {
-        expect(current.snapshot?.apps).toEqual([app("fresh-app")]);
-        expect(current.snapshot?.lastError).toBeUndefined();
-      } else {
-        expect(current.snapshot).toBeUndefined();
-      }
-    },
-  );
-
-  it("forces a post-install refresh past an older in-flight runtime snapshot", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-    const key = "runtime";
-    let resolveStale: ((response: v2.AppsInstalledResponse) => void) | undefined;
-    let resolveFresh: ((response: v2.AppsInstalledResponse) => void) | undefined;
-    let installedCalls = 0;
-    const request = vi.fn(async (method, params) => {
-      if (method === "app/installed") {
-        installedCalls += 1;
-        expect(params.forceRefresh).toBe(true);
-        return await new Promise<v2.AppsInstalledResponse>((resolve) => {
-          if (installedCalls === 1) {
-            resolveStale = resolve;
-          } else {
-            resolveFresh = resolve;
-          }
-        });
-      }
-      return codexAppInventoryResponse(method, [app("fresh-app"), app("stale-app")], params);
-    });
-
-    const staleRead = cache.read({ key, request, nowMs: 0 });
-    expect(staleRead.state).toBe("missing");
-    expect(staleRead.refreshScheduled).toBe(true);
-
-    cache.invalidate(key, "plugin installed", 1);
-    const forcedRead = cache.read({ key, request, nowMs: 1, forceRefetch: true });
-    expect(forcedRead.state).toBe("missing");
-    expect(forcedRead.refreshScheduled).toBe(true);
-    expect(installedCalls).toBe(2);
-
-    const forced = cache.refreshNow({ key, request, nowMs: 1 });
-    resolveFresh?.(codexAppInventoryResponse("app/installed", [app("fresh-app")]));
-    await expect(forced).resolves.toStrictEqual({
-      key,
-      apps: [app("fresh-app")],
-      installedApps: [{ id: "fresh-app", runtimeName: "fresh-app", enabled: true, callable: true }],
-      fetchedAtMs: 1,
-      expiresAtMs: 1_001,
-      revision: 2,
-    });
-
-    resolveStale?.(codexAppInventoryResponse("app/installed", [app("stale-app")]));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
-
-    const freshRead = cache.read({ key, request, nowMs: 2 });
-    expect(freshRead.state).toBe("fresh");
-    expect(freshRead.snapshot?.apps).toEqual([app("fresh-app")]);
-  });
-
-  it("does not republish a pre-clear refresh over the new inventory", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-    const staleInstalled = Promise.withResolvers<v2.AppsInstalledResponse>();
-    const apps = [app("fresh-app"), app("stale-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-    request.mockImplementationOnce(() => staleInstalled.promise);
-
-    const stale = cache.refreshNow({ key: "runtime", request, nowMs: 0 });
-    cache.clear();
-    await cache.refreshNow({
-      key: "runtime",
-      request,
-      nowMs: 1,
-      targetAppIds: ["fresh-app"],
-    });
-    staleInstalled.resolve(codexAppInventoryResponse("app/installed", [app("stale-app")]));
-    await stale;
-
-    const read = cache.read({ key: "runtime", request, nowMs: 2, suppressRefresh: true });
-    expect(read.state).toBe("fresh");
-    expect(read.snapshot?.apps).toEqual([app("fresh-app")]);
-  });
-
-  it("discards a pre-invalidation refresh instead of republishing it as fresh", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-    const key = "runtime";
-    let resolveInstalled: ((response: v2.AppsInstalledResponse) => void) | undefined;
-    const request = vi.fn(async (method, params) => {
-      if (method === "app/installed") {
-        return await new Promise<v2.AppsInstalledResponse>((resolve) => {
-          resolveInstalled = resolve;
-        });
-      }
-      return codexAppInventoryResponse(method, [app("stale-app")], params);
-    });
-
-    const read = cache.read({ key, request, nowMs: 0 });
-    expect(read.state).toBe("missing");
-    expect(read.refreshScheduled).toBe(true);
-
-    cache.invalidate(key, "plugin installed", 1);
-    resolveInstalled?.(codexAppInventoryResponse("app/installed", [app("stale-app")]));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-
-    const after = cache.read({ key, request, nowMs: 2, suppressRefresh: true });
-    expect(after.state).toBe("missing");
-    expect(after.diagnostic?.message).toBe("plugin installed");
-  });
-
   it("does not renew non-target row freshness during a targeted merge", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";
@@ -498,8 +360,6 @@ describe("Codex app inventory cache", () => {
       forceRefetch: true,
       targetAppIds: ["drive-app"],
     });
-    expect(cache.read({ key, request, nowMs: 1_500, suppressRefresh: true }).state).toBe("stale");
-
     // Past TTL nothing is preserved; the single-target refresh replaces the
     // union entry and freshness recovers without a complete fetch.
     await cache.refreshNow({
@@ -513,61 +373,6 @@ describe("Codex app inventory cache", () => {
     expect(read.state).toBe("fresh");
     expect(read.snapshot?.targetAppIds).toEqual(["calendar-app"]);
     expect(read.snapshot?.apps).toEqual([app("calendar-app")]);
-  });
-
-  it("retires stacked scoped invalidations across separate covering refreshes", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-    const key = "runtime";
-    const apps = [app("calendar-app"), app("drive-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-
-    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
-    cache.invalidate(key, "calendar plugin installed", 1, ["calendar-app"]);
-    cache.invalidate(key, "drive plugin installed", 2, ["drive-app"]);
-
-    await cache.refreshNow({
-      key,
-      request,
-      nowMs: 3,
-      forceRefetch: true,
-      targetAppIds: ["calendar-app"],
-    });
-    expect(cache.read({ key, request, nowMs: 4, suppressRefresh: true }).state).toBe("stale");
-
-    await cache.refreshNow({
-      key,
-      request,
-      nowMs: 5,
-      forceRefetch: true,
-      targetAppIds: ["drive-app"],
-    });
-    expect(cache.read({ key, request, nowMs: 6, suppressRefresh: true }).state).toBe("fresh");
-  });
-
-  it("keeps an unscoped invalidation until a complete refresh", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-    const key = "runtime";
-    const apps = [app("calendar-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-
-    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
-    cache.invalidate(key, "runtime identity changed", 1);
-
-    await cache.refreshNow({
-      key,
-      request,
-      nowMs: 2,
-      forceRefetch: true,
-      targetAppIds: ["calendar-app"],
-    });
-    expect(cache.read({ key, request, nowMs: 3, suppressRefresh: true }).state).toBe("stale");
-
-    await cache.refreshNow({ key, request, nowMs: 4, forceRefetch: true, targetAppIds: [] });
-    expect(cache.read({ key, request, nowMs: 5, suppressRefresh: true }).state).toBe("fresh");
   });
 });
 

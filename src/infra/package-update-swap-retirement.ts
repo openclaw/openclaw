@@ -14,13 +14,12 @@ import type { PackageRootIntegrityFingerprint } from "./package-update-integrity
 import type { createNpmPackageRootLinkLifecycle } from "./package-update-npm-root.js";
 import type { createPublicationOwner } from "./package-update-publication-owner.js";
 import { PackageUpdateActivationError } from "./package-update-swap-contract.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-  PKG_INSPECTION_TIMEOUT_MS,
-} from "./update-freebsd-pkg-ownership.js";
 import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  PKG_INSPECTION_TIMEOUT_MS,
+} from "./update-system-package-ownership.js";
 
 type RetireLegacyPackageBackups = (
   assertCurrent: () => void,
@@ -73,20 +72,18 @@ export async function captureLegacyPackageBackupRetirement(
     for (const entry of entries) {
       try {
         assertOwner();
-        if (process.platform === "freebsd") {
-          const remainingMs = Math.floor(inspectionDeadlineAtMs - performance.now());
-          if (remainingMs <= 0) {
-            messages.push(
-              `Historical package backups retained in ${root}: FreeBSD pkg inspection budget expired`,
-            );
-            break;
-          }
-          const inspection = createFreeBsdPkgOwnershipInspection(remainingMs);
-          if (entry.identity.isSymbolicLink()) {
-            await inspection.assertEntryUnowned(entry.path);
-          } else {
-            await inspection.assertUnowned(entry.path);
-          }
+        const remainingMs = Math.floor(inspectionDeadlineAtMs - performance.now());
+        if (remainingMs <= 0) {
+          messages.push(
+            `Historical package backups retained in ${root}: system package inspection budget expired`,
+          );
+          break;
+        }
+        const inspection = createSystemPackageOwnershipInspection(remainingMs);
+        if (entry.identity.isSymbolicLink()) {
+          await inspection.assertEntryUnowned(entry.path);
+        } else {
+          await inspection.assertUnowned(entry.path);
         }
         const message = await discardPackageUpdateBackup(
           entry.path,
@@ -113,12 +110,6 @@ export async function captureLegacyPackageBackupRetirement(
         messages.push(
           `Historical package backup retained at ${entry.path}: ${formatErrorMessage(error)}`,
         );
-        if (
-          error instanceof FreeBsdPkgOwnershipError &&
-          error.reason === "pkg-ownership-unavailable"
-        ) {
-          break;
-        }
       }
     }
     assertOwner();

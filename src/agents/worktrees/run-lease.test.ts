@@ -30,10 +30,9 @@ import {
   abortWorktreeRemoval,
   acquireWorktreeRunLease,
   claimWorktreeRemoval,
-  hasLiveWorktreeRunLease,
   resolveWorktreeForPath,
 } from "./run-lease.js";
-import { testing as runLeaseTesting } from "./run-lease.test-support.js";
+import { hasLiveWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);

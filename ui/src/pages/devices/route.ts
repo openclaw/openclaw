@@ -3,7 +3,7 @@ import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
-import type { DevicesRouteData } from "./devices-page.ts";
+import type { DevicesRouteData } from "./devices-page.tsx";
 
 export const page = definePage({
   ...routePageSpec("devices"),
@@ -33,7 +33,7 @@ export const page = definePage({
     return { gateway, gatewaySnapshot, devices };
   },
   component: () =>
-    import("./devices-page.ts").then(() => ({
+    import("./devices-page.tsx").then(() => ({
       header: true,
       render: (data: DevicesRouteData | undefined) =>
         html`<openclaw-devices-page .routeData=${data}></openclaw-devices-page>`,

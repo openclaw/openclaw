@@ -95,9 +95,6 @@
       "model": "gpt-5.5",
       "responseId": "chatcmpl-parity",
       "responseModel": "gpt-5.5-response",
-      "openclawDelivery": {
-        "textPhaseRequiresTerminal": true
-      },
       "usage": {
         "input": 6,
         "output": 4,
@@ -180,11 +177,6 @@
         "delta": "Think."
       },
       {
-        "type": "thinking_delta",
-        "contentIndex": 0,
-        "delta": ""
-      },
-      {
         "type": "text_start",
         "contentIndex": 1
       },
@@ -216,9 +208,6 @@
       "model": "gpt-5.5",
       "responseId": "chatcmpl-parity",
       "responseModel": "gpt-5.5-response",
-      "openclawDelivery": {
-        "textPhaseRequiresTerminal": true
-      },
       "usage": {
         "input": 6,
         "output": 4,

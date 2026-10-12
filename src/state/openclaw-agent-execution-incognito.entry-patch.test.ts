@@ -388,6 +388,53 @@ it("rejects a valid captured durable source before reading outside its actor", a
   ).rejects.toThrow("Captured session database changed");
 });
 
+it.each([
+  { stage: "transaction", guard: "commit" },
+  { stage: "commit", guard: "commit" },
+  { stage: "transaction", guard: "mutation" },
+  { stage: "commit", guard: "mutation" },
+] as const)(
+  "rechecks $guard permission at $stage and never publishes a refused write",
+  async ({ stage, guard }) => {
+    const scope = await create(`revoked-${stage}-${guard}`);
+    let grants = 0;
+    let publications = 0;
+    let prepared = false;
+    const assertPermission = () => {
+      expect(prepared).toBe(true);
+      grants += 1;
+      if (grants === (stage === "transaction" ? 1 : 2)) {
+        throw new Error("permission revoked");
+      }
+    };
+    await expect(
+      withIncognitoSessionActor(actor, () =>
+        patchSessionEntryCore(
+          scope,
+          async () => {
+            await Promise.resolve();
+            prepared = true;
+            return { label: "forbidden" };
+          },
+          {
+            ...(guard === "mutation"
+              ? { workerGuard: { assertMutationAllowed: assertPermission } }
+              : { assertCommitAllowed: assertPermission }),
+            onCommitted() {
+              publications += 1;
+            },
+          },
+        ),
+      ),
+    ).rejects.toThrow("permission revoked");
+    expect(grants).toBe(stage === "transaction" ? 1 : 2);
+    expect(publications).toBe(0);
+    expect(
+      (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry?.label,
+    ).toBeUndefined();
+  },
+);
+
 it.each(
   (["core", "SDK", "runtime", "composed SDK"] as const).flatMap((boundary) =>
     (["transaction", "commit", "allowed"] as const).map((stage) => ({ boundary, stage })),

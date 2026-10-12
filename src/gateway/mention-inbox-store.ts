@@ -7,6 +7,12 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 type ConfigMachineStateDatabase = Pick<StateDatabase, "config_machine_state">;
 
@@ -46,16 +52,31 @@ export type MentionStoreSnapshot = {
   sources: MentionStoreSource[];
 };
 
+const headAdmission: SqliteDatabaseAdmissionKey<MentionStoreHead> = {
+  name: "state.mention-head",
+  read: (value) => headSchema.safeParse(value).data,
+};
+
+export function getMentionStoreHeadAdmission(databasePath: string): MentionStoreHead | undefined {
+  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, headAdmission, () => undefined);
+}
+
 /** The existing machine-state primary key owns lookup; this feature creates no schema. */
 export function readMentionStoreHead(database: DatabaseSync): MentionStoreHead {
+  const admitted = getSqliteDatabaseAdmission(database, headAdmission);
+  if (admitted) {
+    return admitted;
+  }
   const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
   const headRow = executeSqliteQueryTakeFirstSync(
     database,
     db.selectFrom("config_machine_state").select("value_json").where("state_key", "=", HEAD_KEY),
   );
-  return headRow
+  const head = headRow
     ? headSchema.parse(JSON.parse(headRow.value_json))
     : { revision: 0, nextSequence: 0 };
+  publishSqliteDatabaseAdmission(database, headAdmission, head);
+  return head;
 }
 
 export function readMentionStoreSnapshot(
@@ -63,19 +84,35 @@ export function readMentionStoreSnapshot(
   database: DatabaseSync,
 ): MentionStoreSnapshot | undefined {
   const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
-  const head = readMentionStoreHead(database);
-  if (head.revision === revision) {
+  if (getSqliteDatabaseAdmission(database, headAdmission)?.revision === revision) {
     return undefined;
   }
-  const rows = executeSqliteQuerySync(
+  // Header and sources belong to one native statement snapshot, including forced repair.
+  const snapshotRows = executeSqliteQuerySync(
     database,
     db
       .selectFrom("config_machine_state")
       .select(["state_key", "value_json"])
-      .where("state_key", ">=", SOURCE_PREFIX)
-      .where("state_key", "<", SOURCE_END)
-      .limit(MAX_MENTION_SOURCES + 1),
+      .where((eb) =>
+        eb.or([
+          eb("state_key", "=", HEAD_KEY),
+          eb.and([eb("state_key", ">=", SOURCE_PREFIX), eb("state_key", "<", SOURCE_END)]),
+        ]),
+      )
+      .limit(MAX_MENTION_SOURCES + 2),
   ).rows;
+  const header = snapshotRows.find((row) => row.state_key === HEAD_KEY);
+  const head = header
+    ? headSchema.parse(JSON.parse(header.value_json))
+    : { revision: 0, nextSequence: 0 };
+  const current = getSqliteDatabaseAdmission(database, headAdmission);
+  if (!current || current.revision <= head.revision) {
+    publishSqliteDatabaseAdmission(database, headAdmission, head);
+  }
+  if (head.revision === revision) {
+    return undefined;
+  }
+  const rows = snapshotRows.filter((row) => row.state_key !== HEAD_KEY);
   if (rows.length > MAX_MENTION_SOURCES) {
     throw new Error("Mention retention exceeds its source budget");
   }
@@ -169,5 +206,6 @@ export function writeMentionStoreChanges(
   }
   flushDeletes();
   writeValue(HEAD_KEY, JSON.stringify(next));
+  publishSqliteDatabaseAdmission(database, headAdmission, next);
   return next;
 }

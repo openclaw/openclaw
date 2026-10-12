@@ -9,6 +9,7 @@ import {
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
@@ -145,6 +146,14 @@ export const modelsHandlers: GatewayRequestHandlers = {
                 ...listParams(),
                 publicationScope: preparedScope,
               }));
+            const runtimeOwnership =
+              scope && params.view !== "provider-config"
+                ? await readSessionRuntimeOwnershipAsync({
+                    ...scope,
+                    config: context.getRuntimeConfig(),
+                    assertCurrent,
+                  })
+                : undefined;
             const publish = () => {
               assertCurrent();
               const currentConfig = context.getRuntimeConfig();
@@ -160,7 +169,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
                             ),
                           }
                         : {}),
-                      models: projectSessionModelCatalog(scope, result.models, currentConfig),
+                      models: projectSessionModelCatalog(
+                        scope,
+                        result.models,
+                        currentConfig,
+                        runtimeOwnership,
+                      ),
                     }
                   : result;
               const policy = prepareOperatorModelPresentation({

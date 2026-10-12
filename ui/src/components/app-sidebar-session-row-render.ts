@@ -44,16 +44,20 @@ import { describeSessionState, renderSessionLeadingState } from "./session-leadi
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
-import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
+import {
+  renderSidebarSessionSubtitle,
+  resolveSidebarSessionRowSubtitle,
+} from "./session-row-subtitle.ts";
 import { sessionRunVisibility } from "./session-run-visibility.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
-import "./elapsed-time.ts";
+import "./elapsed-time.tsx";
 import "./tooltip.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 export interface SessionListHost {
+  readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
   readonly sidebarAgentsMode?: "chip" | "roster";
   readonly basePath: string;
   readonly sessionDataContext:
@@ -106,6 +110,7 @@ export interface SessionListHost {
     | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"
     | "patchSession"
+    | "isPersonalSessionPin"
     | "reorderSidebarSection"
   >;
   readonly sidebarMenus: Pick<
@@ -340,12 +345,8 @@ export function renderRecentSession(params: {
   icon?: TemplateResult;
 }) {
   const { host, session, display, listItem = true, icon } = params;
-  const pinAccess = host.readSessionMutationAccess({
-    method: "sessions.patch",
-    params: { key: session.key, pinned: !session.pinned },
-    sessionScope: true,
-    session,
-  });
+  const personallyPinned = host.sessionOrganizer.isPersonalSessionPin(session.key);
+  const pinAccess = { allowed: true, reason: "" };
   const archiveAccess = host.readSessionMutationAccess({
     method: "sessions.patch",
     params: { key: session.key, archived: !session.archived },
@@ -365,19 +366,9 @@ export function renderRecentSession(params: {
   const team = host.sidebarAgentsMode === "roster";
   const ownAttention = session.ownAttention ?? session.attention;
   const label = session.label;
-  const toolActivity =
-    !team && host.sessionsShowPreview && session.hasActiveRun && host.sidebarLiveActivity
-      ? host.sidebarTools.get(session.key)
-      : undefined;
-  const { subtitle, narration, toolName } = host.sessionProjection.resolveSubtitle({
-    session,
-    hasDisplay: display !== undefined,
-    sidebarLiveActivity: host.sidebarLiveActivity,
-    showPreview: host.sessionsShowPreview,
-    narrationLine: host.sidebarNarrationLines.get(session.key),
-    toolActivity,
-    observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
-  });
+  const { subtitle, narration, toolName } =
+    (host.sidebarSnapshot ? session.snapshotSubtitle : undefined) ??
+    resolveSidebarSessionRowSubtitle(host, session, display);
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
   const { running, stateId, metaId, pullRequest, persistentIndicator, childrenExpanded } =
     indicators;
@@ -390,10 +381,12 @@ export function renderRecentSession(params: {
           host.sidebarMenus.catalogMenu.open(display.catalogMenu, x, y, trigger ?? undefined);
           return;
         }
-        host.sidebarMenus.openSessionMenu(session, x, y, trigger);
+        if (!host.sidebarSnapshot) {
+          host.sidebarMenus.openSessionMenu(session, x, y, trigger);
+        }
       },
     );
-  const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
+  const pinLabel = t(personallyPinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   const archiveLabel = t(
     session.archived ? "sessionsView.restoreSession" : "sessionsView.archiveSession",
   );
@@ -413,7 +406,7 @@ export function renderRecentSession(params: {
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
     host.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
-    session.pinned ? "session-row-host--pinned" : "",
+    personallyPinned ? "session-row-host--pinned" : "",
     running ? "session-row-host--running" : "",
     session.visibility === "draft" ? "session-row-host--draft" : "",
     session.visibility === "draft"
@@ -599,6 +592,7 @@ export function renderRecentSession(params: {
           <button
             class="session-action session-action--touch-menu"
             data-sidebar-session-menu="true"
+            ?disabled=${Boolean(host.sidebarSnapshot)}
             type="button"
             title=${t("chat.sidebar.openSessionMenu")}
             aria-label=${`${t("chat.sidebar.openSessionMenu")}: ${label}`}

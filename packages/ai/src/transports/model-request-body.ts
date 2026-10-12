@@ -20,12 +20,22 @@ export function modelRequestBodyState(
   return state;
 }
 
-export function serializeModelRequestBody(payload: unknown): EncodedModelRequestBody {
+export function serializeModelRequestBody(
+  payload: unknown,
+  onSerializedPayload?: (payload: unknown) => void,
+): EncodedModelRequestBody {
   const json = JSON.stringify(payload);
+  const serialized: unknown = json === undefined ? undefined : JSON.parse(json);
+  // Preserve the wire fact even when the observer changes its detached parsed value.
+  const stream =
+    typeof serialized === "object" &&
+    serialized !== null &&
+    "stream" in serialized &&
+    serialized.stream === true;
+  onSerializedPayload?.(serialized);
   return {
     body: new TextEncoder().encode(json),
-    // Preserve toJSON/getter semantics when carrying the guarded-fetch stream fact.
-    stream: json !== undefined && JSON.parse(json)?.stream === true,
+    stream,
   };
 }
 

@@ -68,6 +68,7 @@ export function registerExternalHandoffShutdownTests(
           expectRestartCloseCall(close, restartDeferralTimeoutMs);
           expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
           expect(runtime.exit).not.toHaveBeenCalled();
+          expect(cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
         } finally {
           joined.resolve();
         }
@@ -77,7 +78,8 @@ export function registerExternalHandoffShutdownTests(
         expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
         expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
         expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
-        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalled();
+        // A settled rejection preserves failure status, not an orphaned watchdog.
+        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
       });
     },
   );
@@ -255,11 +257,7 @@ export function registerExternalHandoffShutdownTests(
       captureSignal("SIGTERM")();
       await expect(exited).resolves.toBe(0);
       expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, expect.any(Object));
-      expect(close).toHaveBeenCalledWith({
-        reason: "gateway stopping",
-        restartExpectedMs: null,
-        exitAfterClose: true,
-      });
+      expect(close).toHaveBeenCalledWith({ reason: "gateway stopping", restartExpectedMs: null });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "external restart handoff refused: gateway terminal persistence is still pending",
       );

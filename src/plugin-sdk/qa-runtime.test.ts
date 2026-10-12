@@ -220,18 +220,7 @@ describe("plugin-sdk qa-runtime", () => {
     });
   });
 
-  const rejectedScenarioSelection = {
-    kind: "rejected",
-    error: expect.objectContaining({ message: expect.stringContaining("--scenario") }),
-  };
-  it.each([
-    {
-      name: "whitespace value",
-      args: ["--scenario", " \t "],
-      outcome: rejectedScenarioSelection,
-      selections: [],
-    },
-  ])("guards dedicated QA scenario selection: $name", async ({ args, outcome, selections }) => {
+  it("reports a blank dedicated QA scenario selection without dispatching", async () => {
     const module = await import("./qa-runtime.js");
     const qa = new Command();
     const dispatchedScenarioIds: string[][] = [];
@@ -251,13 +240,20 @@ describe("plugin-sdk qa-runtime", () => {
       })
       .register(qa);
 
-    const actual = await qa.parseAsync(["node", "openclaw", "sample-transport", ...args]).then(
-      () => ({ kind: "dispatched" }),
-      (error: unknown) => ({ kind: "rejected", error }),
-    );
+    const previousExitCode = process.exitCode;
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await qa.parseAsync(["node", "openclaw", "sample-transport", "--scenario", " \t "]);
 
-    expect(actual).toEqual(outcome);
-    expect(dispatchedScenarioIds).toEqual(selections);
+      expect(stderrWrite).toHaveBeenCalledWith(
+        "--scenario must name at least one non-empty scenario id.\n",
+      );
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = previousExitCode;
+      stderrWrite.mockRestore();
+    }
+    expect(dispatchedScenarioIds).toEqual([]);
   });
 
   it("shares Docker health parsing across array and jsonl compose output", async () => {

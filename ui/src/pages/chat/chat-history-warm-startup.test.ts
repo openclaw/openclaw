@@ -401,10 +401,7 @@ describe("first chat startup snapshot ordering", () => {
     h.read.resolve(stored);
   });
 
-  it.each([
-    ["main", "agent:main:main"],
-    ["AGENT:MAIN:WARM-STARTUP", sessionKey],
-  ])(
+  it.each([["main", "agent:main:main"]])(
     "retains startup when %s becomes its canonical key %s during hydration",
     async (alias, canonical) => {
       const h = mountPane(true, canonical);
@@ -422,14 +419,6 @@ describe("first chat startup snapshot ordering", () => {
       expect(h.state.chatMessages).toEqual(liveMessages);
     },
   );
-
-  it("does not defer startup when the pane has no stored read", async () => {
-    const h = mountPane(false);
-    h.connect();
-    const loading = h.start();
-    expect(h.request).toHaveBeenCalledOnce();
-    await loading;
-  });
 
   it("does not defer startup for a stored read begun after connection readiness", async () => {
     const h = mountPane(true, sessionKey, true);

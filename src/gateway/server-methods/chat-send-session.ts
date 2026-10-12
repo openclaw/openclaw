@@ -218,7 +218,9 @@ async function loadChatSendSessionContext(params: {
   const requestedAgentId = requestedAgent.agentId;
   const sessionLoadKey = resolveChatSendSessionKey(runtimeConfig, rawSessionKey, requestedAgentId);
   const sessionLoadOptions = { agentId: requestedAgentId };
-  const assertRoutingCurrent = captureSessionMutationRouting(runtimeConfig);
+  const assertRoutingCurrent = captureSessionMutationRouting(runtimeConfig, undefined, [
+    { sessionKey: rawSessionKey, agentId: requestedAgentId },
+  ]);
   const assertConfigCurrent = () => assertRoutingCurrent(context.getRuntimeConfig());
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = await measureDiagnosticsTimelineSpan(
@@ -452,7 +454,7 @@ export function withCurrentChatSendSession<T>(params: {
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
 }) {
   const { session } = params;
-  const assertRoutingCurrent = captureSessionMutationRouting(session.cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(session.cfg, undefined, [session]);
   const preparationRequest = { explicitOrigin: session.preparationOrigin };
   const preparationConfig = chatSendPreparationConfig(
     session.cfg,

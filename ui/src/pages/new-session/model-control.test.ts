@@ -564,11 +564,13 @@ it.each(["blue", "red"])(
     ]);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
-    await waitForFast(() =>
+    await waitForFast(() => {
+      const container = renderControl(control, context);
       expect(
-        renderControl(control, context).querySelector('[data-chat-speed-option="on"]'),
-      ).not.toBeNull(),
-    );
+        container.querySelector('[data-chat-model-option="openai/' + id + '"]'),
+      ).not.toBeNull();
+      expect(container.querySelector('[data-chat-speed-option="on"]')).not.toBeNull();
+    });
     renderControl(control, context)
       .querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!
       .click();

@@ -34,27 +34,31 @@ function labelForChannel(channel?: string): string {
 
 function hasNativeExecApprovalCapability(channel?: string): boolean {
   const capability = resolveChannelApprovalCapability(getChannelPlugin(channel ?? ""));
-  if (!capability?.native) {
+  if (!capability?.native && !capability?.nativeAsync) {
     return false;
   }
-  return Boolean(capability.getExecInitiatingSurfaceState || capability.getActionAvailabilityState);
+  return Boolean(
+    capability.getExecInitiatingSurfaceStateAsync ||
+    capability.getExecInitiatingSurfaceState ||
+    capability.getActionAvailabilityState,
+  );
 }
 
-export function resolveExecApprovalInitiatingSurfaceState(params: {
+export function resolveExecApprovalInitiatingSurfaceStateAsync(params: {
   channel?: string | null;
   accountId?: string | null;
   cfg?: OpenClawConfig;
-}): ExecApprovalInitiatingSurfaceState {
-  return resolveApprovalInitiatingSurfaceState({ ...params, approvalKind: "exec" });
+}): Promise<ExecApprovalInitiatingSurfaceState> {
+  return resolveApprovalInitiatingSurfaceStateAsync({ ...params, approvalKind: "exec" });
 }
 
-export function resolveApprovalInitiatingSurfaceState(params: {
+export async function resolveApprovalInitiatingSurfaceStateAsync(params: {
   channel?: string | null;
   accountId?: string | null;
   cfg?: OpenClawConfig;
   approvalKind: ChannelApprovalKind;
   request?: PluginApprovalRequest;
-}): ExecApprovalInitiatingSurfaceState {
+}): Promise<ExecApprovalInitiatingSurfaceState> {
   const channel = normalizeMessageChannel(params.channel);
   const channelLabel = labelForChannel(channel);
   const accountId = normalizeOptionalString(params.accountId);
@@ -70,15 +74,12 @@ export function resolveApprovalInitiatingSurfaceState(params: {
   ) {
     return { kind: "disabled", channel, channelLabel, accountId };
   }
-  // Prefer the exec-specific hook, then the generic approval hook, before
-  // falling back to basic deliverability for channels without native state.
+  // Prefer worker-owned exec availability; config-only plugins can keep their sync hook.
+  const execHook =
+    capability?.getExecInitiatingSurfaceStateAsync ?? capability?.getExecInitiatingSurfaceState;
   const state =
     (params.approvalKind === "exec"
-      ? capability?.getExecInitiatingSurfaceState?.({
-          cfg,
-          accountId: params.accountId,
-          action: "approve",
-        })
+      ? await execHook?.({ cfg, accountId: params.accountId, action: "approve" })
       : undefined) ??
     capability?.getActionAvailabilityState?.({
       cfg,

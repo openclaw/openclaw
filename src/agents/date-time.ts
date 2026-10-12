@@ -146,40 +146,28 @@ export function withNormalizedTimestamp<T extends Record<string, unknown>>(
 }
 
 function detectSystemTimeFormat(): boolean {
-  if (process.platform === "darwin") {
-    try {
+  try {
+    if (process.platform === "darwin") {
       const result = execFileSync("defaults", ["read", "-g", "AppleICUForce24HourTime"], {
         encoding: "utf8",
         timeout: 500,
         stdio: ["pipe", "pipe", "pipe"],
       }).trim();
-      if (result === "1") {
-        return true;
+      if (result === "1" || result === "0") {
+        return result === "1";
       }
-      if (result === "0") {
-        return false;
-      }
-    } catch {
-      // macOS omits the key for locale-default behavior.
-    }
-  }
-
-  if (process.platform === "win32") {
-    try {
+    } else if (process.platform === "win32") {
       const result = execFileSync(
         "powershell",
         ["-Command", "(Get-Culture).DateTimeFormat.ShortTimePattern"],
         { encoding: "utf8", timeout: 1000 },
       ).trim();
-      if (result.startsWith("H")) {
-        return true;
+      if (result.startsWith("H") || result.startsWith("h")) {
+        return result.startsWith("H");
       }
-      if (result.startsWith("h")) {
-        return false;
-      }
-    } catch {
-      // Windows detection is best-effort; Intl below is the portable fallback.
     }
+  } catch {
+    // Missing OS preferences and failed probes use the portable Intl fallback.
   }
 
   try {

@@ -24,6 +24,7 @@ import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
   markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { ElevatedLevel, VerboseLevel } from "../thinking.js";
@@ -464,14 +465,14 @@ export async function handleInlineActions(
     if (!reply || !opts?.onBlockReply) {
       return;
     }
-    await opts.onBlockReply(
-      markReplyPayloadForSourceSuppressionDelivery(
-        copyReplyPayloadMetadata(reply, {
-          ...reply,
-          isStatusNotice: true,
-        }),
-      ),
+    const payload = markReplyPayloadForSourceSuppressionDelivery(
+      copyReplyPayloadMetadata(reply, {
+        ...reply,
+        isStatusNotice: true,
+      }),
     );
+    setReplyPayloadMetadata(payload, { inlineCommandReply: true });
+    await opts.onBlockReply(payload);
   };
 
   // Standalone commands use ordinary dispatch even when the prompt contains extra context.

@@ -12,7 +12,7 @@ import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { purgeDeletedAgentSessionEntries } from "./session-accessor.sqlite-projection.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
-import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";

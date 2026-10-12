@@ -86,7 +86,7 @@ scripts/pr review-checkout-pr <pr>
 scripts/pr review-artifacts-init <pr>
 # Complete .local/review.json for this exact head.
 scripts/pr review-validate-artifacts <pr>
-# After local review and a completed ClawSweeper review, submit with enforced GitHub gates.
+# Local review complete → submit with enforced GitHub gates.
 env -u OPENCLAW_TESTBOX OPENCLAW_PR_GATES_REMOTE=github scripts/pr prepare-run <pr>
 scripts/pr merge-run <pr> --auto-merge
 ```
@@ -142,6 +142,8 @@ existing landing authority. Preserve any accepted merge receipt and use native
 recovery before replacing its head; never erase an outcome or blindly resubmit
 an accepted or uncertain request. GitHub's head precondition applies only when
 the request is submitted, and a collaborator push can leave auto-merge enabled.
+If GitHub merged such a pushed head, record the receipt with
+`merge-recover ... --merged-head <SHA>` instead of fighting the drift refusal.
 Treat a changed head as new review work, never as the original approved head.
 
 When completed hosted evidence is specifically needed, clear the pending-mode
@@ -416,12 +418,8 @@ separate landing gate. Check live rules and review state before claiming a human
 approval is mandatory; bypass ability is not authorization to skip an enforced
 review.
 
-The native ClawSweeper completion gate currently enforces a 12-hour window,
-including on an unchanged head. Reusing local review or CI proof does not waive
-that independent gate. New admission needs an eligible completion; retain other
-still-valid review and CI proof. Do not rewrite timestamps, manufacture proof,
-or change freshness policy to resume a task. An accepted or uncertain merge
-intent still takes the recovery path below before fresh admission.
+ClawSweeper reviews advisory; no completion comment or freshness precondition.
+Accepted/uncertain merge intent → recovery below before fresh admission.
 
 For non-main targets, do not use `prepare-run` or `merge-run`: their base is main.
 Use review artifacts and exact base/head CI, revalidate the remote head, and
@@ -447,6 +445,32 @@ A lost cancellation response is observation-only on retry; never send a second
 cancellation blindly. Only confirmed retirement allows head repair. Existing
 land authority covers this recovery; do not ask again or replace the PR merely
 because its submission response was lost.
+
+### Receipt for an auto-merged pushed head
+
+If GitHub already merged a collaborator's pushed head, inspect the PR timeline
+and main history, then explicitly select that exact head:
+
+```bash
+scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery --merged-head <SHA>
+```
+
+This requires the exact current retained accepted non-queue auto intent without
+any cancellation record, the MERGED PR's retained identity/base and authoritative
+head, strict descent from the prepared head, and a landed commit reachable from
+authoritative main with a tree reconstructed under the retained method. Squash
+receipts require one landed parent. The CAS successor records `phase: merged`,
+`landed`, and `headDrift {actor, outcome, mergedHead}` while preserving `head`
+and retaining the pushed head as a parent. It never dispatches, cancels, re-arms,
+or clears refs. Stale OIDs, identity/base/method drift, unselected or unrelated
+heads, OPEN/CLOSED PRs, unaccepted or cancelled intents, other routes, and
+unreachable or mismatched receipts stay blocked. `merge-run` can then reconcile;
+after ownership-checked cleanup, use the new outcome OID with
+`scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion`.
+Its completion comment names both the prepared and merged heads.
+
+### Replacement after confirmed retirement
+
 Then repair and push the branch, refresh review and preparation, and wait for
 completed CI. Use the current retained outcome OID and explicitly reviewed head:
 
@@ -517,7 +541,7 @@ scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
 
 Do not pass `--admin-evidence`. The replacement must differ, and the PR must stay
 OPEN and `MERGEABLE/BLOCKED` or `MERGEABLE/BEHIND`. Normal required-check,
-ClawSweeper, review, security, and owner gates still apply. The successor CAS
+review, security, and owner gates still apply. The successor CAS
 records route `auto` plus `recovery.staleHeadRetirement`, preserving ancestry
 and exact regular capture bytes without interpreting them; an empty capture is
 valid. Missing, symlink, extra, or admission-mutated captures, same-head or

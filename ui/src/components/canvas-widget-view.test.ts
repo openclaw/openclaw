@@ -4,17 +4,24 @@ import {
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
   bumpCanvasWidgetFrameConnectionGeneration,
   getCanvasWidgetFrameConnectionGeneration,
 } from "../lib/chat/canvas-widget-frame-generation.ts";
-import { OpenClawCanvasWidgetView } from "./canvas-widget-view.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../test-helpers/solid-application-context.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { CanvasWidgetView, type OpenClawCanvasWidgetView } from "./canvas-widget-view.ts";
 import { WIDGET_PROMPT_EVENT } from "./mcp-app-security.ts";
 
-const elementName = `test-canvas-widget-${crypto.randomUUID()}`;
-customElements.define(elementName, class extends OpenClawCanvasWidgetView {});
+const elementName = "openclaw-canvas-widget-view";
 const documentView: CanvasDocumentViewResult = {
   html: "<p>Widget ready</p>",
   sandboxUrl: "/mcp-app-sandbox?frames=none",
@@ -38,6 +45,7 @@ async function settle(view: OpenClawCanvasWidgetView) {
   for (let i = 0; i < 4; i += 1) {
     await view.updateComplete;
     await Promise.resolve();
+    flush();
   }
 }
 
@@ -70,12 +78,19 @@ function mount(
     },
   };
   gateways.set(view, gateway);
-  Reflect.set(view, "context", { gateway });
+  view.addEventListener("context-request", (event) => {
+    if (event.context === applicationContext) {
+      event.stopPropagation();
+      event.callback({ gateway } as unknown as ApplicationContext);
+    }
+  });
   view.docId = docId;
   view.sessionKey = "agent:main:widget-test";
   view.messageTimestamp = Date.now();
   view.connectionGeneration = getCanvasWidgetFrameConnectionGeneration();
-  parent.append(view);
+  const container = document.createElement("div");
+  parent.append(container);
+  mountSolid(() => view, { container });
   return view;
 }
 
@@ -222,6 +237,51 @@ describe("Canvas widget view", () => {
     view.allowScripts = false;
     await view.updateComplete;
     expect(view.querySelector("iframe")?.srcdoc).toBe(documentView.html);
+    expect(client.request).toHaveBeenCalledOnce();
+  });
+
+  it("replaces browsing contexts when direct Solid props change script policy", async () => {
+    const client = { request: vi.fn().mockResolvedValue(documentView) };
+    const gateway = createApplicationGateway();
+    gateway.gateway.connection.gatewayUrl = "ws://gateway.example:8443";
+    gateway.publish({
+      ...gateway.gateway.snapshot,
+      phase: "connected",
+      client: client as unknown as ApplicationGatewaySnapshot["client"],
+    });
+    const provider = createSolidApplicationContextProvider({
+      gateway: gateway.gateway,
+    } as ApplicationContext);
+    const [allowScripts, setAllowScripts] = createSignal(true);
+    const mounted = mountSolid(
+      () =>
+        createComponent(CanvasWidgetView, {
+          docId: "cv_solid_policy",
+          sessionKey: "agent:main:widget-test",
+          get allowScripts() {
+            return allowScripts();
+          },
+        }),
+      { wrapper: provider.wrapper },
+    );
+    const view = mounted.container.querySelector<OpenClawCanvasWidgetView>(
+      "openclaw-canvas-widget-view",
+    )!;
+    const interactive = await frameFor(view);
+
+    setAllowScripts(false);
+    await settle(view);
+    const strict = await frameFor(view);
+    expect(strict).not.toBe(interactive);
+    expect(strict.getAttribute("sandbox")).toBe("");
+    expect(strict.srcdoc).toBe(documentView.html);
+
+    setAllowScripts(true);
+    await settle(view);
+    const restored = await frameFor(view);
+    expect(restored).not.toBe(strict);
+    expect(restored.src).toBe(interactive.src);
+    expect(restored.hasAttribute("srcdoc")).toBe(false);
     expect(client.request).toHaveBeenCalledOnce();
   });
 
@@ -811,6 +871,7 @@ describe("Canvas widget view", () => {
     }
     if (change === "disconnect") {
       view.remove();
+      await Promise.resolve();
     } else {
       view.allowScripts = false;
     }

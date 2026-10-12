@@ -75,6 +75,8 @@ export function updateLiveEditDiffProgress(
   const block = readToolCallBlock(event);
   const toolCallId = typeof block?.id === "string" ? block.id : "";
   const name = typeof block?.name === "string" ? block.name : "";
+  // partialJson is the producer's live buffer, not a per-event snapshot. A lagging reader sees a
+  // newer value (counts only move forward) or none after toolcall_end (skipped); accepted for progress.
   const partialJson = typeof block?.partialJson === "string" ? block.partialJson : "";
   return updateLiveEditDiffProgressFromInput(stateByToolCallId, {
     toolCallId,

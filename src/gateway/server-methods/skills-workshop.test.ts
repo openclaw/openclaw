@@ -2,6 +2,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { skillsRetiredHandlers } from "./skills-retired.js";
 import { skillsWorkshopHandlers } from "./skills-workshop.js";
@@ -17,6 +18,7 @@ const library = vi.hoisted(() => ({
   restoreWorkshopSkill: vi.fn(),
 }));
 const readSkillUsage = vi.hoisted(() => vi.fn());
+const undoWorkshopReview = vi.hoisted(() => vi.fn());
 
 vi.mock("../../skills/workshop/library.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../skills/workshop/library.js")>()),
@@ -25,6 +27,10 @@ vi.mock("../../skills/workshop/library.js", async (importOriginal) => ({
 vi.mock("../../skills/workshop/skill-usage.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../skills/workshop/skill-usage.js")>()),
   readSkillUsage,
+}));
+vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/workshop/review-undo.js")>()),
+  undoWorkshopReview,
 }));
 
 const config: OpenClawConfig = {
@@ -123,32 +129,29 @@ describe("skills.workshop gateway methods", () => {
     });
   });
 
-  it.each(["skills.workshop.archive", "skills.workshop.restore"])(
-    "refuses %s once the requester loses authority after admission",
-    async (method) => {
-      const client = { invalidated: false };
-      // The library calls assertLive right before its final file effect.
-      const revokeThenCommit = async (ctx: { assertLive: () => void }) => {
-        client.invalidated = true;
-        ctx.assertLive();
-        return change;
-      };
-      library.archiveWorkshopSkill.mockImplementation(revokeThenCommit);
-      library.restoreWorkshopSkill.mockImplementation(revokeThenCommit);
+  it.each([
+    ["skills.workshop.archive", { name: "deploy-notes" }],
+    ["skills.workshop.restore", { name: "deploy-notes" }],
+    ["skills.workshop.undo", { runId: "skill-workshop-review:1" }],
+  ])("refuses %s once the requester loses authority after admission", async (method, params) => {
+    const client = { invalidated: false };
+    // The library calls assertLive right before its final file effect.
+    const revokeThenCommit = async (ctx: { assertLive: () => void }) => {
+      client.invalidated = true;
+      ctx.assertLive();
+      return change;
+    };
+    library.archiveWorkshopSkill.mockImplementation(revokeThenCommit);
+    library.restoreWorkshopSkill.mockImplementation(revokeThenCommit);
+    undoWorkshopReview.mockImplementation(revokeThenCommit);
 
-      await expect(
-        callGatewayHandler(
-          skillsWorkshopHandlers,
-          method,
-          { name: "deploy-notes" },
-          {
-            client: client as never,
-            context,
-          },
-        ),
-      ).rejects.toThrow("Gateway requester authority changed");
-    },
-  );
+    await expect(
+      callGatewayHandler(skillsWorkshopHandlers, method, params, {
+        client: client as never,
+        context,
+      }),
+    ).rejects.toThrow("Gateway requester authority changed");
+  });
 
   it("returns library refusals and unknown agents as invalid requests", async () => {
     library.archiveWorkshopSkill.mockRejectedValue(
@@ -157,13 +160,27 @@ describe("skills.workshop gateway methods", () => {
 
     const refused = await call("skills.workshop.archive", { name: "ghost" });
     const unknownAgent = await call("skills.workshop.restore", { agentId: "nope", name: "x" });
+    undoWorkshopReview.mockRejectedValue(
+      new WorkshopReviewNotFoundError(
+        "No skill changes recorded for review skill-workshop-review:9.",
+      ),
+    );
+    const unknownReview = await call("skills.workshop.undo", {
+      runId: "skill-workshop-review:9",
+    });
 
     expect(refused).toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST", message: 'Skill "ghost" does not exist.' },
     });
     expect(unknownAgent).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    expect(library.restoreWorkshopSkill).not.toHaveBeenCalled();
+    expect(unknownReview).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "No skill changes recorded for review skill-workshop-review:9.",
+      },
+    });
   });
 
   it("answers retired proposal and curator methods with Workshop guidance", async () => {

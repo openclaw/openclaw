@@ -247,7 +247,6 @@ describe("harness context engine source scopes", () => {
           await expect(prepareHarnessContextEnginePrompt(params)).resolves.toMatchObject({
             messages,
             systemPrompt: "system",
-            contextEngineAssemblySucceeded: false,
           });
         }
         expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("plugin failed"));

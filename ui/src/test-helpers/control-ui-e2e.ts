@@ -228,6 +228,8 @@ export async function assertSessionSectionCountAlignment(
 }
 
 export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
+  // The hook loads its readiness module on first read, so the first read can be undefined.
+  await page.waitForFunction(() => window.openclawControlUi !== undefined);
   const expectedPathname = await page.evaluate((sessionPath) => {
     const app: ControlUiReadiness["hook"] | undefined = window.openclawControlUi;
     if (!app) {
@@ -595,21 +597,6 @@ export async function pauseVirtualClock(page: Page): Promise<void> {
   await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 5_000);
 }
 
-// New-session place catalog refreshes read placement policy before inventory. Mock
-// replies are delivered on page timers, so a paused virtual clock holds that read
-// until advanced; release it without reaching any retry deadline.
-export async function releasePlacementPolicyRead(
-  page: Page,
-  gateway: MockGatewayControls,
-  trigger: () => Promise<void>,
-): Promise<void> {
-  const match = { includeSessionPlacement: true };
-  const before = (await gateway.getRequests("agents.list", match)).length;
-  await trigger();
-  await gateway.waitForRequest("agents.list", { after: before, match });
-  await page.clock.runFor(1);
-}
-
 export async function startControlUiE2eServer(
   buildInfo?: ControlUiBuildInfo,
   options: ControlUiE2eServerOptions = {},
@@ -631,9 +618,9 @@ export async function startControlUiE2eServer(
   const [
     { createServer },
     { controlUiLocaleModulesPlugin },
+    { controlUiSolidPlugin },
     {
       commonJsOptimizeDeps,
-      controlUiSolidPlugin,
       controlUiBrowserOnlySharedModuleAliases,
       resolveExternalPackageAliasesForVite,
       resolveSourcePackageAliasesForVite,
@@ -642,6 +629,7 @@ export async function startControlUiE2eServer(
   ] = await Promise.all([
     import("vite"),
     import("../../config/control-ui-locales.ts"),
+    import("../../config/control-ui-solid.ts"),
     import("../../vite.config.ts"),
   ]);
   const repoRoot = resolveRepoRoot();

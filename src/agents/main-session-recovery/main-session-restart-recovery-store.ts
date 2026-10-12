@@ -12,9 +12,10 @@ import {
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
 } from "../../config/sessions/session-source-authority.js";
+import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
 import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentSessionWorkStartError } from "../../gateway/agent-turn/agent-handler-helpers.js";
+import { canPrepareAgentSessionWorktree } from "../../gateway/agent-turn/agent-handler-helpers.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -162,6 +163,7 @@ export async function recoverStore(params: {
   observationOnly?: boolean;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   onSkipped?: (reason: MainSessionRecoverySkipReason) => void;
+  onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
   passId?: string;
   storePath: string;
   stateDir?: string;
@@ -238,10 +240,6 @@ export async function recoverStore(params: {
         skip("not_main_session");
         continue;
       }
-      if (resolveAgentSessionWorkStartError(sessionKey, entry)) {
-        skip("work_start_blocked");
-        continue;
-      }
       const dispatchTarget = resolveRestartRecoveryDispatchTarget({
         agentId: params.expectedTarget?.agentId,
         storeAgentId: params.storeAgentId,
@@ -255,6 +253,28 @@ export async function recoverStore(params: {
       }
       const agentId = dispatchTarget.agentId;
       const target = { agentId, sessionKey, storePath: params.storePath };
+      const workStartBlock = resolveSessionWorkStartBlock(
+        sessionKey,
+        entry,
+        canPrepareAgentSessionWorktree(sessionKey, entry)
+          ? { allowPendingWorkspace: true }
+          : undefined,
+      );
+      if (workStartBlock) {
+        skip(
+          workStartBlock.reason === "archived"
+            ? "archived"
+            : workStartBlock.retryable
+              ? "work_start_pending"
+              : "work_start_blocked",
+        );
+        decision.reason = workStartBlock.reason;
+        if (workStartBlock.retryable) {
+          params.onPreparationPending?.({ ...target, sessionId: entry.sessionId });
+        }
+        continue;
+      }
+
       const dispatchSessionKey =
         params.expectedTarget?.canonicalSessionKey ?? dispatchTarget.sessionKey;
       if (hasCurrentProcessOwner(entry, sessionKey)) {

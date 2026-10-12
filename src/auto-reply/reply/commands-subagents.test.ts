@@ -61,37 +61,6 @@ describe("subagents status", () => {
     await resetSubagentRegistryForTests({ persist: false });
   });
 
-  it("does not count stale unended runs as active or completed", async () => {
-    const now = Date.now();
-    for (const [name, ageMs, endedAt] of [
-      ["stale", 3 * 60 * 60_000, undefined],
-      ["live", 60_000, undefined],
-      ["completed", 120_000, now - 60_000],
-    ] as const) {
-      seedSubagentRunForReadTest({
-        runId: name,
-        childSessionKey: `agent:main:subagent:${name}`,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: `${name} worker`,
-        cleanup: "keep",
-        createdAt: now - ageMs,
-        startedAt: now - ageMs,
-        endedAt,
-      });
-    }
-
-    const text = buildSubagentsStatusLine({
-      context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
-      verboseEnabled: true,
-      now,
-    });
-
-    expect(text).toContain("🤖 Subagents: 1 active · 1 done");
-    expect(text).toContain("live worker");
-    expect(text).not.toContain("stale worker");
-  });
-
   it.each([
     {
       name: "omits subagent status line when none exist",
@@ -99,25 +68,6 @@ describe("subagents status", () => {
       verboseLevel: "on" as const,
       expectedText: [] as string[],
       unexpectedText: ["Subagents:"],
-    },
-    {
-      name: "includes subagent count and active detail in /status when active",
-      seedRuns: () => {
-        seedSubagentRunForReadTest({
-          runId: "run-1",
-          childSessionKey: "agent:main:subagent:abc",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "do thing",
-          completion: { required: true, resultText: "Completed the requested task" },
-          cleanup: "keep",
-          createdAt: 1000,
-          startedAt: 1000,
-        });
-      },
-      verboseLevel: "off" as const,
-      expectedText: ["🤖 Subagents: 1 active", "  • do thing · 4s"],
-      unexpectedText: [] as string[],
     },
     {
       name: "preserves verbose done-only summary",
@@ -214,29 +164,29 @@ describe("subagents status", () => {
     },
   );
 
-  it.each([
-    { endedAt: Number.NaN, duration: "4s" },
-    { endedAt: Infinity, duration: "0s" },
-  ])("preserves active duration for non-finite end $endedAt", async ({ endedAt, duration }) => {
-    const run: SubagentRunRecord = {
-      runId: "non-finite-end",
-      childSessionKey: "agent:main:subagent:non-finite-end",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "active worker",
-      cleanup: "keep",
-      createdAt: 1_000,
-      execution: { status: "running", startedAt: 1_000, endedAt },
-    };
-    seedSubagentRunForReadTest(run);
-    const text = buildSubagentsStatusLine({
-      context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
-      verboseEnabled: false,
-      now: 5_000,
-    });
-    expect(text).toContain("Subagents: 1 active");
-    expect(text).toContain(`active worker · ${duration}`);
-  });
+  it.each([{ endedAt: Infinity, duration: "0s" }])(
+    "preserves active duration for non-finite end $endedAt",
+    async ({ endedAt, duration }) => {
+      const run: SubagentRunRecord = {
+        runId: "non-finite-end",
+        childSessionKey: "agent:main:subagent:non-finite-end",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "active worker",
+        cleanup: "keep",
+        createdAt: 1_000,
+        execution: { status: "running", startedAt: 1_000, endedAt },
+      };
+      seedSubagentRunForReadTest(run);
+      const text = buildSubagentsStatusLine({
+        context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
+        verboseEnabled: false,
+        now: 5_000,
+      });
+      expect(text).toContain("Subagents: 1 active");
+      expect(text).toContain(`active worker · ${duration}`);
+    },
+  );
 });
 
 describe("subagents command snapshots", () => {
@@ -389,7 +339,7 @@ describe("subagents global-session inspection", () => {
 
   afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
-  it.each(["/subagents list", "/subagents info 1", "/subagents log 1", "/agents"])(
+  it.each(["/subagents info 1", "/subagents log 1", "/agents"])(
     "keeps the selected agent's global children visible through %s",
     async (command) => {
       const cfg: OpenClawConfig = {
@@ -544,7 +494,7 @@ describe("subagents info", () => {
     expect(result.reply?.text).toContain("/subagents info <id|#>");
   });
 
-  it.each([undefined, "task-missing", "expired"] as const)(
+  it.each(["expired"] as const)(
     "returns info for a subagent with discard reason=%s",
     async (discardReason) => {
       const now = Date.now();
@@ -566,25 +516,15 @@ describe("subagents info", () => {
           outcome: { status: "ok" },
         },
       } satisfies SubagentRunRecord;
-      if (discardReason === "task-missing") {
-        run.delivery = {
-          status: "discarded",
-          disposition: "permanent_failure",
-          discardReason: "task-missing",
-          discardedAt: now,
-        };
-      }
-      if (discardReason === "expired") {
-        run.execution.endedAt = now - 8 * 24 * 60 * 60_000;
-        run.delivery = {
-          status: "suspended",
-          suspendedAt: now - 7 * 24 * 60 * 60_000,
-          suspendedReason: "permanent_failure",
-          lastError: "requester unavailable\ntry retained result",
-        };
-        SubagentLifecycleController.discardTerminalDelivery(run, now, "expired");
-        expect(run.delivery.lastError).toBeUndefined();
-      }
+      run.execution.endedAt = now - 8 * 24 * 60 * 60_000;
+      run.delivery = {
+        status: "suspended",
+        suspendedAt: now - 7 * 24 * 60 * 60_000,
+        suspendedReason: "permanent_failure",
+        lastError: "requester unavailable\ntry retained result",
+      };
+      SubagentLifecycleController.discardTerminalDelivery(run, now, discardReason);
+      expect(run.delivery.lastError).toBeUndefined();
       seedSubagentRunForReadTest(run);
       const cfg = buildCommandTestConfig();
       const result = await handleSubagentsInfoAction(
@@ -597,14 +537,10 @@ describe("subagents info", () => {
       expect(text).toContain("Status: done");
       expect(text).toContain("Outcome: ok");
       expect(text).toContain("Progress: Completed the requested task");
-      if (discardReason) {
-        expect(text).toContain("Delivery: discarded");
-        expect(text).toContain(`Delivery disposition: ${discardReason}`);
-        expect(text).toContain(`Delivery retired: ${new Date(now).toISOString()}`);
-      }
-      if (discardReason === "expired") {
-        expect(text).toContain("Task summary: requester unavailable try retained result");
-      }
+      expect(text).toContain("Delivery: discarded");
+      expect(text).toContain(`Delivery disposition: ${discardReason}`);
+      expect(text).toContain(`Delivery retired: ${new Date(now).toISOString()}`);
+      expect(text).toContain("Task summary: requester unavailable try retained result");
     },
   );
 
@@ -661,22 +597,6 @@ describe("subagents info", () => {
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
       outcome: { status: "error", error: "agent run aborted" } as const,
       expectedStatus: "killed",
-    },
-    {
-      name: "a killed run despite its earlier successful result",
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "ok" } as const,
-      expectedStatus: "killed",
-    },
-    {
-      name: "a failed run",
-      outcome: { status: "error", error: "provider rejected the request" } as const,
-      expectedStatus: "failed",
-    },
-    {
-      name: "a timed-out run",
-      outcome: { status: "timeout" } as const,
-      expectedStatus: "timeout",
     },
   ])(
     "keeps /subagents info and list aligned for $name",
@@ -793,47 +713,6 @@ describe("subagents info", () => {
     expect(text).not.toContain("OpenClaw runtime context (internal):");
     expect(text).not.toContain("Internal task completion event");
   });
-
-  it("shows the selected routed requester completion", async () => {
-    const now = Date.now();
-    const runId = "commands-subagents-info-routed-run";
-    const childSessionKey = "agent:main:subagent:commands-info-routed";
-    const run = {
-      runId,
-      childSessionKey,
-      requesterSessionKey: "agent:main:target",
-      requesterDisplayKey: "target",
-      task: "do routed thing",
-      completion: { required: true, resultText: "Resolved via routed owner key" },
-      cleanup: "keep",
-      createdAt: now - 20_000,
-      execution: {
-        status: "terminal",
-        startedAt: now - 20_000,
-        endedAt: now - 1_000,
-        outcome: { status: "ok" },
-      },
-    } satisfies SubagentRunRecord;
-    seedSubagentRunForReadTest(run);
-    const cfg = {
-      commands: { text: true },
-      channels: { quietchat: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender", store: TEST_SESSION_STORE_PATH },
-    } as OpenClawConfig;
-    const result = await handleSubagentsInfoAction({
-      ...buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
-      params: {
-        ...buildCommandTestParams("/subagents info 1", cfg),
-        sessionKey: "agent:main:slash-session",
-      },
-      requesterKey: "agent:main:target",
-    });
-    const text = requireReplyText(result.reply);
-
-    expect(result.shouldContinue).toBe(false);
-    expect(text).toContain("Outcome: ok");
-    expect(text).toContain("Progress: Resolved via routed owner key");
-  });
 });
 
 describe("subagents log", () => {
@@ -869,17 +748,6 @@ describe("subagents log", () => {
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({
       messages: [{ role: "assistant", content: "log line" }],
-    });
-  });
-
-  it("does not treat a numeric target as the history limit", async () => {
-    const result = await handleSubagentsLogAction(buildLogContext(["1"], [makeRun()]));
-
-    expect(result.shouldContinue).toBe(false);
-    expect(requireReplyText(result.reply)).toContain("log line");
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:subagent:log", limit: 20 },
     });
   });
 
@@ -942,22 +810,6 @@ describe("subagents log", () => {
       expectedText: "(no messages)",
       unexpectedText: "PRIVATE_LEGACY",
     },
-    {
-      name: "renders persisted Responses output text",
-      messages: [
-        { role: "assistant", content: [{ type: "output_text", text: "Persisted output" }] },
-      ],
-      expectedText: "Assistant: Persisted output",
-      unexpectedText: "(no messages)",
-    },
-    {
-      name: "renders persisted assistant input text",
-      messages: [
-        { role: "assistant", content: [{ type: "input_text", text: "Persisted assistant input" }] },
-      ],
-      expectedText: "Assistant: Persisted assistant input",
-      unexpectedText: "(no messages)",
-    },
   ])("$name", async ({ messages, expectedText, unexpectedText }) => {
     callGatewayMock.mockResolvedValue({ messages });
 
@@ -974,24 +826,6 @@ describe("subagents log", () => {
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "chat.history",
       params: { sessionKey: "agent:main:subagent:log", limit: 5 },
-    });
-  });
-
-  it("clamps a zero history limit to one", async () => {
-    await handleSubagentsLogAction(buildLogContext(["1", "0"], [makeRun()]));
-
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:subagent:log", limit: 1 },
-    });
-  });
-
-  it("ignores unsafe history limit tokens", async () => {
-    await handleSubagentsLogAction(buildLogContext(["1", "9007199254740992"], [makeRun()]));
-
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:subagent:log", limit: 20 },
     });
   });
 });

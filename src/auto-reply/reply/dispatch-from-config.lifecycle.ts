@@ -5,10 +5,8 @@ import {
   isRestartRecoveryTombstone,
   isSessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
-import {
-  loadSessionEntryReadOnly,
-  patchSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import {
@@ -144,7 +142,7 @@ async function restoreArchivedDispatchSession(params: {
                 actor.admissionSignal,
               )
             ).entry
-        : loadSessionEntryReadOnly(scope);
+        : await readSessionEntryReadOnlyInWorker(scope);
       metadata?.assertCurrent();
       if (
         !currentEntry ||
@@ -339,7 +337,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         resetTriggered: dispatchResetTriggered,
         allowRestartTombstoneParentFork,
         allowRestartTombstoneReset,
-      } = resolveDispatchResetAdmission({
+      } = await resolveDispatchResetAdmission({
         agentId: params.agentId,
         cfg: params.cfg,
         ctx: params.ctx,

@@ -28,7 +28,6 @@ const sharedClients = vi.hoisted(() => ({
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
   createIsolatedCodexAppServerClient: vi.fn(),
-  isCodexAppServerStartSelectionChangedError: () => false,
 }));
 
 vi.mock("./app-server/shared-client.js", () => sharedClients);

@@ -1,16 +1,21 @@
 // Load the Gateway's deferred runtime during collection, outside the RPC deadline.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { localStateOwnerFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import {
   getRuntimeConfig,
   readConfigFileSnapshot,
   registerConfigWriteListener,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import {
@@ -23,6 +28,10 @@ import * as configReload from "./config-reload.js";
 import * as agentDatabases from "./server-reload-agent-databases.js";
 import { startGatewayServer } from "./server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+
+const cliEntrypoint = resolveRuntimeWorkerArgv(
+  resolveRuntimeWorkerUrl(localStateOwnerFixtureEntrypoint),
+);
 
 it("publishes agent mutations before acknowledging immediate session and roster requests", async ({
   signal,
@@ -93,7 +102,14 @@ it("publishes agent mutations before acknowledging immediate session and roster 
         plugins: { slots: { memory: "none" } },
       });
       const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const owner = await acquireGatewayLock({
+        env: state.env,
+        port: claim.port,
+        allowInTests: true,
+      });
+      assert.isNotNull(owner);
       const server = await startGatewayServer(claim.port, {
+        gatewayStateOwner: owner,
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
@@ -109,10 +125,44 @@ it("publishes agent mutations before acknowledging immediate session and roster 
         try {
           const key = `agent:${agentId}:first-session`;
           let creationAcknowledged = false;
-          const creation = client.request("agents.create", {
-            name: "Readiness Agent",
-            workspace: path.join(state.home, "workspace-readiness"),
-            model: "openai/gpt-5.6-sol",
+          await expect(
+            client.request("agents.create", {
+              name: "Retired Owner",
+              workspace: path.join(state.home, "workspace-retired"),
+              expectedOwnerId: "retired-owner",
+            }),
+          ).rejects.toMatchObject({
+            code: "UNAVAILABLE",
+            details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
+          });
+          await expect(fs.stat(path.join(state.home, "workspace-retired"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          const creation = runCliProcessChild({
+            nodeArgs: [
+              ...cliEntrypoint,
+              "agents",
+              "add",
+              "Readiness Agent",
+              "--non-interactive",
+              "--json",
+              "--workspace",
+              path.join(state.home, "workspace-readiness"),
+              "--model",
+              "openai/gpt-5.6-sol",
+            ],
+            env: {
+              PATH: process.env.PATH,
+              SystemRoot: process.env.SystemRoot,
+              ...state.envVars,
+              OPENCLAW_GATEWAY_TOKEN: token,
+              OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:1",
+              OPENCLAW_NO_RESPAWN: "1",
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            },
+          }).then((result) => {
+            expect(result.code, result.stderr).toBe(0);
+            return JSON.parse(result.stdout);
           });
           const firstSession = creation
             .then(() => {
@@ -153,7 +203,10 @@ it("publishes agent mutations before acknowledging immediate session and roster 
           } finally {
             releasePublication.resolve();
           }
-          await expect(creation).resolves.toMatchObject({ ok: true, agentId });
+          await expect(creation).resolves.toMatchObject({ agentId });
+          await expect(client.request("agents.list", {})).resolves.toMatchObject({
+            agents: expect.arrayContaining([expect.objectContaining({ id: agentId })]),
+          });
           const createdSession = await withinTest(firstSession, signal);
           if (!createdSession.ok) {
             throw createdSession.error;
@@ -195,6 +248,68 @@ it("publishes agent mutations before acknowledging immediate session and roster 
             ).rejects.toThrow(`Unknown agent id "${agentId}"`);
           }
           expect(getRuntimeConfig().agents?.entries?.[agentId]).toBeUndefined();
+
+          const peer = await connectGatewayClient({
+            url: `ws://127.0.0.1:${claim.port}`,
+            token,
+            scopes: ["operator.admin", "operator.read", "operator.write"],
+          });
+          try {
+            await withinTest(
+              Promise.all(
+                [client, peer].map(async (operator, index) => {
+                  const otherOperator = index === 0 ? peer : client;
+                  for (let round = 0; round < 4; round += 1) {
+                    const overlapAgentId = `overlap-${index}-${round}`;
+                    await expect(
+                      operator.request("agents.create", {
+                        name: overlapAgentId,
+                        workspace: path.join(state.home, overlapAgentId),
+                      }),
+                    ).resolves.toMatchObject({ agentId: overlapAgentId });
+                    await expect(
+                      operator.request("sessions.create", {
+                        agentId: "main",
+                        key: `agent:main:${overlapAgentId}`,
+                      }),
+                    ).resolves.toMatchObject({ key: `agent:main:${overlapAgentId}` });
+                    const deletion = { agentId: overlapAgentId, deleteFiles: false };
+                    if (round === 0) {
+                      const results = await Promise.allSettled([
+                        operator.request("agents.delete", deletion),
+                        otherOperator.request("agents.delete", deletion),
+                      ]);
+                      expect(results).toEqual(
+                        expect.arrayContaining([
+                          {
+                            status: "fulfilled",
+                            value: expect.objectContaining({ ok: true, agentId: overlapAgentId }),
+                          },
+                          {
+                            status: "rejected",
+                            reason: expect.objectContaining({
+                              code: "INVALID_REQUEST",
+                              message: `agent "${overlapAgentId}" not found`,
+                            }),
+                          },
+                        ]),
+                      );
+                    } else {
+                      await expect(
+                        operator.request("agents.delete", deletion),
+                      ).resolves.toMatchObject({
+                        ok: true,
+                        agentId: overlapAgentId,
+                      });
+                    }
+                  }
+                }),
+              ),
+              signal,
+            );
+          } finally {
+            await disconnectGatewayClient(peer);
+          }
 
           assert.isDefined(reloadScheduler);
           const clock = createGatewaySchedulerClock();
@@ -284,6 +399,7 @@ it("publishes agent mutations before acknowledging immediate session and roster 
         }
       } finally {
         await server.close();
+        await owner.release();
         await claim.release();
       }
     },

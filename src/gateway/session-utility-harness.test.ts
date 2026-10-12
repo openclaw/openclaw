@@ -5,6 +5,7 @@ import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-me
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
+  readSessionTranscriptWatermark,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -75,11 +76,11 @@ describe("utility completion with an unavailable implicit harness", () => {
         name: "Utility fixture",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
-        reasoning: false,
+        reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
+        contextWindow: 32_768,
+        maxTokens: 16_384,
       },
       auth: { apiKey: "synthetic-utility-key", mode: "api-key", source: "test" },
     });
@@ -130,7 +131,10 @@ describe("utility completion with an unavailable implicit harness", () => {
         expect.anything(),
       );
       expect(transport).toHaveBeenCalledWith(
-        expect.objectContaining({ context: expect.objectContaining({ tools: [] }) }),
+        expect.objectContaining({
+          context: expect.objectContaining({ tools: [] }),
+          options: expect.objectContaining({ maxTokens: 8_492, temperature: 0.2 }),
+        }),
       );
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
     } finally {
@@ -173,20 +177,30 @@ describe("utility completion with an unavailable implicit harness", () => {
       completeModel: complete,
     });
     try {
-      recaps.ensure(target);
+      await recaps.ensure(target);
       await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
       await expect(complete.mock.results[0]?.value).resolves.toMatchObject({
         owner: { kind: "harness", id: "openclaw" },
       });
       await vi.waitFor(() => {
         const entry = loadSessionEntryReadOnly(scope);
-        expect(projectSessionActivitySummary({ ...target, cfg: config, entry })).toMatchObject({
+        expect(
+          projectSessionActivitySummary({
+            ...target,
+            cfg: config,
+            entry,
+            watermark: readSessionTranscriptWatermark(scope),
+          }),
+        ).toMatchObject({
           state: "current",
           text,
         });
       });
       expect(transport).toHaveBeenCalledWith(
-        expect.objectContaining({ context: expect.objectContaining({ tools: [] }) }),
+        expect.objectContaining({
+          context: expect.objectContaining({ tools: [] }),
+          options: expect.objectContaining({ maxTokens: 8_432, temperature: 0.2 }),
+        }),
       );
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
     } finally {

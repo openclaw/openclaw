@@ -63,7 +63,6 @@ describe("SQLite worker slots", () => {
     const close = (succeeded = true) =>
       lifecycle.closeHost({
         inputAdmission: {
-          invalidatePreparations() {},
           joinOpens: () =>
             succeeded ? Promise.resolve() : Promise.reject(new Error("fixture close refused")),
           joinPreparations: () => Promise.resolve(),

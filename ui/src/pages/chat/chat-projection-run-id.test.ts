@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { nothing, render } from "lit";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import * as chatThread from "./chat-thread.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
@@ -43,27 +45,41 @@ describe("transcript run identity", () => {
   it("does not project a session row's first active run without an explicit run id", () => {
     const build = vi.spyOn(chatThread, "buildCachedChatItems").mockReturnValue([]);
 
-    renderChatThread(
-      {
-        ...threadProps("run-id-projection"),
-        sessions: {
-          ts: 0,
-          path: "",
-          count: 1,
-          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-          sessions: [
-            {
-              key: "agent:main:main",
-              kind: "direct",
-              updatedAt: 1,
-              hasActiveRun: true,
-              activeRunIds: ["arbitrary-first", "other-run"],
-            },
-          ],
+    const container = document.body.appendChild(document.createElement("div"));
+    const transcript = createTestTranscript();
+    onTestFinished(() => {
+      render(nothing, container);
+      transcript.hostDisconnected();
+      container.remove();
+    });
+    render(
+      renderChatThread(
+        {
+          ...threadProps("run-id-projection"),
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                updatedAt: 1,
+                hasActiveRun: true,
+                activeRunIds: ["arbitrary-first", "other-run"],
+              },
+            ],
+          },
         },
-      },
-      createTestTranscript(),
+        transcript,
+      ),
+      container,
     );
+    flush();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    flush();
 
     expect(build).toHaveBeenCalledWith(expect.objectContaining({ runId: null }));
   });

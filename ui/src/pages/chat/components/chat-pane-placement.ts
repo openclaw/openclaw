@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import "../../../components/elapsed-time.ts";
+import "../../../components/elapsed-time.tsx";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
 import { resolveCloudWorkerStopAction } from "../../../components/cloud-worker-stop.ts";

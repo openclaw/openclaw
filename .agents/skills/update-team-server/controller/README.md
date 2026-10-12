@@ -104,7 +104,25 @@ persistent timer's catch-up invocation before applying its final snapshot checks
 The profile inspection change is transient; persisted arm records keep their existing shape.
 Tests cover these repairs and use one prepared lease expiry in custody fixtures.
 
+The controller delegates retired Workshop proposal preservation to native Doctor.
+Doctor owns draft export and recovery warnings before dropping the retired tables;
+the controller must not require those rows to remain in SQLite. Its original
+lossless backups, physical database ownership checks, and session witnesses still
+apply. See the [state schema history](../../../../docs/reference/database-schemas/state-schema-history.md#skill-workshop-proposal-retirement-state-schema-20-same-version)
+for the retirement contract.
+
 ## Complete-pair adoption
+
+Release publication now prewarms Node's release-scoped compile cache before
+cutover, including reuse of an already published release. The bounded import
+runs as `openclaw`, with the selected Gateway runtime, after publication at its
+final path. It loads the Gateway graph without starting a server or reading
+Gateway state; the existing cache owner chooses the build-ID namespace and
+retention policy. Missing prewarm entries in older releases are skipped, and
+prewarm failures warn and leave ordinary cold startup available. Bun does not
+use Node's compile cache. Night Watch must adopt this reviewed controller
+change through the complete-pair procedure below; landing it does not change
+the installed controller or authorize a Team deployment.
 
 Only the designated Night Watch executor performs these steps. Resolve its
 exact host and coordinator session from the private operator record, preserve
@@ -202,6 +220,12 @@ The lease and handoff fixtures retain their assertions while updating their
 canonical database layout, command responses, and independent capacity inputs.
 
 ## Source SHA-256
+
+The reviewed `release-lib.mjs` in this tree has SHA-256
+`53bd61bcaccd34cd1f0f21c5a0b998682bd5a700d99038e3a3b873a0e40eea96`.
+Verify that hash against the exact merged tree before adoption. This replaces
+the obsolete Workshop row-preservation check; the original import hash below
+remains provenance for the Manager source, not the installable library.
 
 These are the original Manager bytes, before the documented privacy edits,
 review repairs, and test extraction. `release.test.mjs` maps to original

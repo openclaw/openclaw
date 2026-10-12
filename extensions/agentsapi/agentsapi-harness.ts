@@ -265,10 +265,12 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     withSessionContextReset: async (params, run) => {
       params.assertCurrent();
       assertCurrent();
-      const sessionId = getBindings().resolveContextResetSessionId(
+      const sessionId = await getBindings().resolveContextResetSessionId(
         params.sessionId,
         params.previousSessionId,
       );
+      params.assertCurrent();
+      assertCurrent();
       return withSessionDeletion({ ...params, sessionId }, run, true);
     },
     dispose: async () => {

@@ -265,7 +265,13 @@ function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>) {
   );
   return call[1] as (
     event: { cleanedBody: string },
-    ctx: { agentId?: string; trigger?: string; workspaceDir?: string; sessionKey?: string },
+    ctx: {
+      agentId?: string;
+      trigger?: string;
+      workspaceDir?: string;
+      sessionKey?: string;
+      heartbeatEventQueueSessionKey?: string;
+    },
   ) => Promise<unknown>;
 }
 
@@ -580,7 +586,7 @@ describe("dreaming service reconciliation", () => {
 
   it("only triggers managed dreaming when the queued cron event is still pending", async () => {
     const { api, harness } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: false }),
+      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
     registerShortTermPromotionDreamingForTest(api);
@@ -603,7 +609,7 @@ describe("dreaming service reconciliation", () => {
 
     expect(first).toEqual({
       handled: true,
-      reason: "memory-core: short-term dreaming disabled",
+      reason: "memory-core: short-term dreaming disabled by limit",
     });
 
     resetSystemEventsForTest();
@@ -618,7 +624,7 @@ describe("dreaming service reconciliation", () => {
 
   it("resolves queued managed dreaming cron events from the base session for isolated heartbeats", async () => {
     const { api, harness } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: false }),
+      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
     registerShortTermPromotionDreamingForTest(api);
@@ -635,12 +641,17 @@ describe("dreaming service reconciliation", () => {
     const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
     const result = await beforeAgentReply(
       { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+      {
+        trigger: "heartbeat",
+        workspaceDir: ".",
+        sessionKey: "agent:main:main:heartbeat",
+        heartbeatEventQueueSessionKey: "agent:main:main",
+      },
     );
 
     expect(result).toEqual({
       handled: true,
-      reason: "memory-core: short-term dreaming disabled",
+      reason: "memory-core: short-term dreaming disabled by limit",
     });
   });
 

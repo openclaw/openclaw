@@ -1,6 +1,5 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { applySessionEntryMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-store.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import {
@@ -32,7 +31,6 @@ export function commitSessionAgentPurge(
     database: OpenClawAgentDatabase,
     wrapReceipt: (receipt: SessionEntryPatchReceipt) => Receipt,
   ): Receipt => {
-    assertSessionSubagentRunsCurrent(input, context.options.env ?? process.env);
     const result = commitSessionAgentPurgeInDatabase(database, input, (current) =>
       applySessionEntryMaintenanceInDatabase(current, input.maintenance, () => {
         if (!input.maintenance.preservation) {
@@ -65,7 +63,6 @@ export function commitSessionAgentPurge(
       candidate,
       wrapReceipt,
     );
-    assertSessionSubagentRunsCurrent(input, context.options.env ?? process.env);
     return receipt;
   };
   return input.nativeBindings

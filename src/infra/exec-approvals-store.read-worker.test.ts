@@ -296,6 +296,27 @@ it("binds assessment revisions to both policy bytes and their database owner", a
   );
 });
 
+it("reuses prepared policy until a native or worker policy write", async () => {
+  const { root, env } = fixture();
+  expect(await loadMcpToolGrants("main", { env })).toEqual([]);
+  seed(env);
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const initial = await loadExecApprovalsReadOnlyAsync({ env });
+  initial.agents!.main!.mcpTools!.length = 0;
+  expect((await loadExecApprovalsReadOnlyAsync({ env })).agents?.main?.mcpTools).toEqual([grant]);
+  expect(read).toHaveBeenCalledTimes(1);
+
+  seed(env, "native-change");
+  expect((await loadExecApprovalsReadOnlyAsync({ env })).agents?.main?.mcpTools).toEqual([
+    { ...grant, tool: "native-change" },
+  ]);
+  await updateExecApprovals({
+    update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
+  });
+  expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
+});
+
 it("joins an admitted policy read before its disposable source is released", async () => {
   const { env, databasePath } = fixture();
   seed(env);

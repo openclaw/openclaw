@@ -12,6 +12,10 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+The existing `live-cache` release job has a 30-minute budget for three sequential
+eight-minute checks on one runner: stored cache floors, transport prefixes, and
+agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
+
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
@@ -37,6 +41,12 @@ needed for an explicit admin landing. Add the `ci:no-fail-fast` label before a P
 run to keep its complete matrix running after a failure. Native matrix fail-fast
 applies only to unlabeled PRs in other repositories. Main and manual runs retain complete matrices. See
 [failure cancellation](/ci/pipeline#fail-fast-order).
+
+Add `ci:full` before a PR run to select every `checks-ui` unit shard, all
+`checks-ui-e2e` shards (Control UI and browser extension), and every
+`checks-ui-e2e-real-gateway` shard, including desktop resize proof. These use the
+same UI inventories and shard budgets as scheduled `main` CI. Unlabeled PRs keep
+change-selected UI coverage; the label does not expand unrelated platform lanes.
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
@@ -190,6 +200,11 @@ coverage plus qualified Bun coverage; see
 [test runtime selection](/ci/pipeline#test-runtime-selection).
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
+Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)
+to preserve memory headroom across the three native shards.
+Main runs UI on Node, so a PR changing the runtime owner
+(`scripts/lib/ci-test-runtime.mts`) selects the three existing UI unit shards on
+Bun; see [scope selection](/ci/scope-and-routing/selection).
 
 Frozen-target CI loads its Node shard planner, planning helpers, and measured
 costs from the pinned `workflow_sha` checkout. Test discovery and execution still

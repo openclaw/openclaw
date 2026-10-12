@@ -277,7 +277,8 @@ export async function prepareCodexMcpAppSession(params: {
     // resumes still acquire the native thread queue before the binding lease.
     const thread = await params.bindingStore.withLease(sessionBindingIdentity(input), async () => {
       assertCurrent();
-      const current = params.bindingStore.read(sessionBindingIdentity(input));
+      const current = await params.bindingStore.readAsync(sessionBindingIdentity(input));
+      assertCurrent();
       return current ?? (await prepareThread());
     });
     assertCurrent();

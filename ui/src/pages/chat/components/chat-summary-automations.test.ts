@@ -8,7 +8,8 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
-import { ChatSummaryAutomationsElement } from "./chat-summary-automations.ts";
+import type { ChatSummaryAutomationsElement } from "./chat-summary-automations.tsx";
+import "./chat-summary-automations.tsx";
 
 function job(overrides: Partial<CronCompactJob> = {}): CronCompactJob {
   return {
@@ -65,7 +66,9 @@ function source(request = createGatewayRequestMock(async () => page())) {
 const mounted: HTMLElement[] = [];
 const observers: MutationObserver[] = [];
 function component(gateway: ApplicationGateway, presented = true) {
-  const element = new ChatSummaryAutomationsElement();
+  const element = document.createElement(
+    "openclaw-chat-summary-automations",
+  ) as ChatSummaryAutomationsElement;
   element.gateway = gateway;
   element.sessionKey = "agent:ops:task";
   element.presented = presented;

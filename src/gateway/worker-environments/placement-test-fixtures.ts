@@ -21,13 +21,18 @@ import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js
 
 // Synchronous fault injection must remain in the transaction or callback under test.
 export function createPlacementTurnClaimFixtureOps(database: OpenClawStateDatabase) {
-  return createPlacementTurnClaimOps({
+  const operations = createPlacementTurnClaimOps({
     path: database.path,
     instanceId: randomUUID(),
     now: Date.now,
     read: () => database.db,
     write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
   });
+  return {
+    ...operations,
+    claimTurn: (input: Parameters<typeof operations.claimTurn>[0]) =>
+      operations.claimTurn(input).claim,
+  };
 }
 
 export async function advancePlacementFixtureToActive(

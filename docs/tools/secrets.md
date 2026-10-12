@@ -13,7 +13,7 @@ writes it straight into the shared secret store. The value never appears in the
 chat, the session transcript, the tool result, or the model's context — the
 agent receives only entry metadata and its store SecretRef.
 
-The tool is available in primary agent sessions, not just the canonical main
+The tool is available in primary agent sessions, not just the main
 conversation. Subagent and ACP worker sessions do not receive it.
 
 It is enabled by default and governed by the normal tool policy — there is no

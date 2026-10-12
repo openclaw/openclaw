@@ -30,6 +30,7 @@ import type {
 } from "./agent-runner-fallback-cycle.types.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
+  buildModelResolveContext,
   mintReplyMessageActionTurnCapability,
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
@@ -37,6 +38,7 @@ import {
 } from "./agent-runner-utils.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -123,6 +125,19 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   return params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       preparedRunAdmission: params.preparedRunAdmission,
+      modelResolve: {
+        prompt: turn.commandBody,
+        images: params.currentTurnImages.images,
+        cwd: turn.followupRun.run.cwd,
+        modelSelectionLocked: turn.followupRun.run.modelSelectionLocked,
+        context: buildModelResolveContext({
+          run: turn.followupRun.run,
+          replyRoute: turn.followupRun,
+          sessionCtx: turn.sessionCtx,
+          hasRepliedRef: turn.opts?.hasRepliedRef,
+          trigger: resolveReplyRunTrigger(turn),
+        }),
+      },
       selection: buildRunEntrySelection(selection, turn.followupRun.run),
       identity: {
         runId: params.runId,
@@ -310,6 +325,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,
               lifecycleGeneration: params.state.lifecycleGeneration,
+              onSessionWriter: (writer) => {
+                params.state.sessionWriter = writer;
+              },
             });
           } else {
             const candidate = await runEmbeddedFallbackCandidate({
@@ -322,6 +340,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
               messageToolDeliveryState,
               onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {
                 if (accounting) {
+                  if (accounting.kind === "durable") {
+                    params.state.sessionWriter = accounting.target;
+                  }
                   recordTurnCompaction(params.state.compaction, accounting);
                 }
                 params.state.postCompactionModelAttempted ||= postCompactionModelAttempted;

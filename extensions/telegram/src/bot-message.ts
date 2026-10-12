@@ -129,8 +129,8 @@ export const createTelegramMessageProcessor = (
     ...(telegramDeps.readSessionUpdatedAtAsync
       ? { readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync }
       : {}),
-    ...(telegramDeps.readAmbientTranscriptWatermark
-      ? { readAmbientTranscriptWatermark: telegramDeps.readAmbientTranscriptWatermark }
+    ...(telegramDeps.readAmbientTranscriptWatermarkAsync
+      ? { readAmbientTranscriptWatermarkAsync: telegramDeps.readAmbientTranscriptWatermarkAsync }
       : {}),
     ...(telegramDeps.recordInboundSession
       ? { recordInboundSession: telegramDeps.recordInboundSession }

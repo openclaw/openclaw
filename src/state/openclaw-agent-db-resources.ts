@@ -10,6 +10,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { reserveAgentCreationClaimAdmission } from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
+import { captureAgentDeletionResourceOwner } from "./agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
@@ -25,12 +26,13 @@ export type OpenClawAgentDatabaseReadCandidateResource = Omit<
   OpenClawAgentDatabaseAsyncResource,
   "agentId"
 > & { scope?: "sibling-family" };
-type AgentDatabaseResource =
+type AgentDatabaseResource = (
   | (OpenClawAgentDatabaseAsyncResource & { ownership: "known"; closeSync?: () => void })
   | (OpenClawAgentDatabaseReadCandidateResource & {
       ownership: "unresolved";
       agentId?: never;
-    });
+    })
+) & { cleanupOwner?: object };
 export type AgentDatabaseCloseSelection = {
   path?: string;
   rootPath?: string;
@@ -141,10 +143,13 @@ function registerAgentDatabaseResource(
   resource: AgentDatabaseResource,
   creationOptions?: OpenClawAgentDatabaseOptions,
 ): () => void {
-  const owned = {
+  const owned: AgentDatabaseResource = {
     ...resource,
     path: path.resolve(resource.path),
   };
+  owned.cleanupOwner = captureAgentDeletionResourceOwner((target) =>
+    matchesAgentDatabaseClose(target, owned),
+  );
   assertAgentDatabaseResourceAdmission(owned);
   const releaseCreation =
     creationOptions && owned.ownership === "known"
@@ -253,10 +258,13 @@ export function revokeAgentDatabaseResources(
 export async function drainAgentDatabaseResources<T>(
   selection: AgentDatabaseCloseSelection,
   closeNative: () => Promise<T>,
+  cleanupOwner?: object,
 ): Promise<T> {
   return withAgentDatabaseCloseFence(selection, async () => {
     const selected = [...new Set([...resources.active, ...resources.closing.keys()])].filter(
-      (resource) => matchesAgentDatabaseClose(selection, resource),
+      (resource) =>
+        matchesAgentDatabaseClose(selection, resource) &&
+        (!cleanupOwner || resource.cleanupOwner === cleanupOwner),
     );
     const nativeOwners = selected.filter((resource) => resource.retireAfterResources);
     for (const resource of nativeOwners) {

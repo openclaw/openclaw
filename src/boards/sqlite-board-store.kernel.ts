@@ -168,11 +168,26 @@ function upsertTabs(
 
 function updateWidgetLayouts(
   database: BoardDatabaseHandle,
+  previous: StoredBoard,
   snapshot: BoardSnapshot,
   updatedAt: number,
+  writtenName?: string,
 ): void {
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+  const previousRows = new Map(previous.widgetRows.map((row) => [row.name, row]));
   for (const widget of snapshot.widgets) {
+    const row = previousRows.get(widget.name);
+    if (
+      widget.name === writtenName ||
+      (row &&
+        row.tab_id === widget.tabId &&
+        row.title === (widget.title ?? null) &&
+        row.size_w === widget.sizeW &&
+        row.size_h === widget.sizeH &&
+        row.position === widget.position)
+    ) {
+      continue;
+    }
     executeSqliteQuerySync(
       database.db,
       db
@@ -358,9 +373,13 @@ export function applyBoardOpsToDatabase(
   database: BoardDatabaseHandle,
   sessionKey: string,
   ops: readonly BoardOp[],
+  expectedSession?: BoardSessionIdentity,
 ): BoardSnapshot {
-  if (!hasBoardSession(database, sessionKey)) {
-    throw new BoardValidationError("not_found", `board session not found: ${sessionKey}`);
+  if (!hasBoardSession(database, sessionKey, expectedSession)) {
+    throw new BoardValidationError(
+      expectedSession ? "invalid_operation" : "not_found",
+      expectedSession ? "board session changed; retry" : `board session not found: ${sessionKey}`,
+    );
   }
   const previous = readStoredBoard(database, sessionKey);
   const layout = applyBoardOps(previous.snapshot, ops);
@@ -372,7 +391,7 @@ export function applyBoardOpsToDatabase(
   const now = Date.now();
   upsertTabs(database, previous, next);
   deleteRemovedWidgets(database, previous, next);
-  updateWidgetLayouts(database, next, now);
+  updateWidgetLayouts(database, previous, next, now);
   updateWidgetHeightModes(database, previous, ops);
   deleteRemovedTabs(database, previous, next);
   return cloneBoardSnapshot(next);
@@ -383,9 +402,13 @@ export function putBoardWidgetInDatabase(
   sessionKey: string,
   canonicalInput: ReturnType<typeof normalizeBoardWidgetPutParams>,
   viewGeneration: string,
+  expectedSession?: BoardSessionIdentity,
 ) {
-  if (!hasBoardSession(database, sessionKey)) {
-    throw new BoardValidationError("not_found", `board session not found: ${sessionKey}`);
+  if (!hasBoardSession(database, sessionKey, expectedSession)) {
+    throw new BoardValidationError(
+      expectedSession ? "invalid_operation" : "not_found",
+      expectedSession ? "board session changed; retry" : `board session not found: ${sessionKey}`,
+    );
   }
   const previous = readStoredBoard(database, sessionKey);
   const canonicalParams = resolveSqliteBoardWidgetPutParams(
@@ -452,7 +475,7 @@ export function putBoardWidgetInDatabase(
         }),
       ),
   );
-  updateWidgetLayouts(database, next, now);
+  updateWidgetLayouts(database, previous, next, now, canonicalParams.name);
   return createBoardWidgetPutResult(next, canonicalParams.name);
 }
 
@@ -463,9 +486,13 @@ export function grantBoardWidgetInDatabase(
   decision: "granted" | "rejected",
   revision: number,
   instanceId?: string,
+  expectedSession?: BoardSessionIdentity,
 ): BoardSnapshot {
-  if (!hasBoardSession(database, sessionKey)) {
-    throw new BoardValidationError("not_found", `board session not found: ${sessionKey}`);
+  if (!hasBoardSession(database, sessionKey, expectedSession)) {
+    throw new BoardValidationError(
+      expectedSession ? "invalid_operation" : "not_found",
+      expectedSession ? "board session changed; retry" : `board session not found: ${sessionKey}`,
+    );
   }
   const previous = readStoredBoard(database, sessionKey);
   const next = createBoardGrantSnapshot(previous.snapshot, name, decision, revision, instanceId);

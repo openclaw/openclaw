@@ -6,7 +6,12 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { isWorkspaceInspectionCommand } from "../../worker/workspace-inspection-protocol.js";
-import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
+import {
+  type PreparedWorkerSsh,
+  runWorkerSshCandidates,
+  workerSshCommand,
+  workerSshCommandOptions,
+} from "./ssh.js";
 import type {
   WorkerTunnelHandle,
   WorkerWorkspaceCommand,
@@ -58,7 +63,6 @@ import {
   workerWorkspaceCommandSucceeded as success,
   workerWorkspaceRsyncRemoteCommand,
   workerWorkspaceRsyncReceiverEntryPath,
-  workerWorkspaceSshArgv,
   workspaceSyncError,
   type WorkerWorkspaceActionsOptions,
 } from "./workspace-sync-helpers.js";
@@ -179,7 +183,7 @@ export function createWorkerWorkspaceActions(
     // commands must stay pinned to one transport attempt.
     if (command.transportRetry === "never") {
       const operation = runTask(
-        workerWorkspaceSshArgv(prepared, command.argv),
+        workerSshCommand(prepared, command.argv),
         commandOptions(remainingCommandTimeoutMs()),
       );
       command.onDispatchReady?.();
@@ -191,7 +195,7 @@ export function createWorkerWorkspaceActions(
       async (port, remainingTimeoutMs) => {
         command.assertCurrent?.();
         return await runTask(
-          workerWorkspaceSshArgv(prepared, command.argv, port),
+          workerSshCommand(prepared, command.argv, port),
           commandOptions(remainingTimeoutMs),
         );
       },
@@ -378,7 +382,7 @@ export function createWorkerWorkspaceActions(
                 request.authorize?.();
                 const resetNonce = randomBytes(16).toString("hex");
                 const reset = await runTask(
-                  workerWorkspaceSshArgv(
+                  workerSshCommand(
                     prepared,
                     [
                       "node",

@@ -1,19 +1,10 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import {
   captureOpenClawStateReadWorkerContext,
   captureOpenClawStateWorkerContext,
@@ -22,11 +13,6 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { sealSecretSentinel } from "../sentinel.js";
 import { captureSecretStoreExpiryCutoffs } from "./secret-store-expiry.kernel.js";
-import {
-  classifyHiddenGitHubStoreName,
-  GITHUB_SETUP_HANDOFF_MAX_AGE_MS,
-} from "./secret-store-hidden-github.js";
-import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreEnvName,
@@ -65,8 +51,6 @@ export {
   SECRET_STORE_VALUE_MAX_BYTES,
   SecretStoreValidationError,
 } from "./secret-store-validation-error.js";
-
-type SecretStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
 
 export type SecretStoreEntryMetadata = {
   name: string;
@@ -123,7 +107,6 @@ export async function listSecretStoreEntries(
   },
 ): Promise<SecretStoreEntryMetadata[]> {
   const context = captureOpenClawStateReadWorkerContext(params.database);
-  params.assertCurrent?.();
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     {
@@ -147,54 +130,20 @@ export async function listSecretStoreEntries(
 }
 
 /** Atomically returns and hard-deletes one exact fresh, non-egress GitHub setup handoff. */
-export function consumeGitHubSetupHandoff(params: {
+export async function consumeGitHubSetupHandoff(params: {
   name: string;
   nowMs?: number;
   database?: OpenClawStateDatabaseOptions;
-}): string | undefined {
-  if (classifyHiddenGitHubStoreName(params.name) !== "setup") {
-    return undefined;
+}): Promise<string | undefined> {
+  const context = captureOpenClawStateWorkerContext(params.database);
+  const value = await executeOpenClawStateWorker(context, {
+    type: "githubSetup.consume",
+    input: { name: params.name, now: params.nowMs ?? Date.now() },
+  });
+  if (value !== undefined) {
+    registerSecretValueForRedaction(value);
   }
-  const now = params.nowMs ?? Date.now();
-  return withMissingSecretStoreFallback(() => {
-    const value = runOpenClawStateWriteTransaction(
-      ({ db: sqlite }) => {
-        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        const row = executeSqliteQueryTakeFirstSync(
-          sqlite,
-          db
-            .selectFrom("secret_store_entries")
-            .select("value")
-            .where("scope_kind", "=", "team")
-            .where("scope_id", "=", "")
-            .where("name", "=", params.name)
-            .where("kind", "=", "secret")
-            .where("allowed_hosts", "is", null)
-            .where("created_at_ms", ">=", now - GITHUB_SETUP_HANDOFF_MAX_AGE_MS)
-            .where("created_at_ms", "<=", now)
-            .where("deleted_at_ms", "is", null),
-        );
-        if (!row) {
-          return undefined;
-        }
-        executeSqliteQuerySync(
-          sqlite,
-          db
-            .deleteFrom("secret_store_entries")
-            .where("scope_kind", "=", "team")
-            .where("scope_id", "=", "")
-            .where("name", "=", params.name),
-        );
-        return row.value;
-      },
-      params.database,
-      { operationLabel: "secrets.store.consume-github-setup-handoff" },
-    );
-    if (value !== undefined) {
-      registerSecretValueForRedaction(value);
-    }
-    return value;
-  }, undefined);
+  return value;
 }
 
 /** Captures one coherent team-store snapshot for an agent run's exec environment. */
@@ -265,7 +214,6 @@ export async function readSecretStoreValue(params: {
     const name = params.name;
     assertSecretStoreEnvName(name);
     const context = params.context ?? captureOpenClawStateReadWorkerContext(params.database);
-    params.assertCurrent?.();
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       { type: "secrets.value", input: { name } },

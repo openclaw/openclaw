@@ -180,19 +180,6 @@ describe("manifest theme catalog", () => {
     expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("avatarHat");
   });
 
-  it("hides a disabled owner's themes without changing retained palette bytes", () => {
-    const snapshot = fixture().readSnapshot();
-    const disabled = {
-      ...snapshot,
-      index: {
-        ...snapshot.index,
-        plugins: snapshot.index.plugins.map((plugin) => ({ ...plugin, enabled: false })),
-      },
-    };
-    expect(withPluginMetadataSnapshotScope(disabled, listPluginThemes)).toEqual([]);
-    expect(withPluginMetadataSnapshotScope(snapshot, listPluginThemes)).toHaveLength(1);
-  });
-
   it("projects captured artwork URLs and changes only the edited content revision on publication", () => {
     const plugin = fixture(undefined, "@scope/pack");
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h20v10H0z"/></svg>';

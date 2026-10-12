@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
-import { resolveRealtimeVoiceProviderCapabilities } from "../../../talk/provider-resolver.js";
+import { resolveRealtimeVoiceProviderCapabilitiesAsync } from "../../../talk/provider-resolver.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -29,7 +28,7 @@ import { relaySessions } from "./state.js";
 
 const activeRelaySessions = new Map<string, string>();
 
-function createRelayFixture(transportOverrides: Partial<RealtimeVoiceBridge> = {}) {
+async function createRelayFixture(transportOverrides: Partial<RealtimeVoiceBridge> = {}) {
   let request: RealtimeVoiceBridgeCreateRequest | undefined;
   const transport = makeRelayTransport(transportOverrides);
   const provider = createIdleRelayProvider((bridgeRequest) => {
@@ -39,7 +38,7 @@ function createRelayFixture(transportOverrides: Partial<RealtimeVoiceBridge> = {
   const broadcastToConnIds = vi.fn();
   const warn = vi.fn();
   const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-  const capabilities = resolveRealtimeVoiceProviderCapabilities({
+  const capabilities = await resolveRealtimeVoiceProviderCapabilitiesAsync({
     provider,
     providerConfig: {},
     cfg,
@@ -96,7 +95,7 @@ function ensureActiveRelayTurnId(relaySessionId: string): string {
   return relay.harness.talk.activeTurnId ?? "turn-1";
 }
 
-async function cancelPastDeadline(fixture: ReturnType<typeof createRelayFixture>) {
+async function cancelPastDeadline(fixture: Awaited<ReturnType<typeof createRelayFixture>>) {
   const cancellation = cancelTalkRealtimeRelayTurn({
     relaySessionId: fixture.relaySessionId,
     connId: "conn-1",
@@ -107,7 +106,7 @@ async function cancelPastDeadline(fixture: ReturnType<typeof createRelayFixture>
 }
 
 /** The phone captures continuously; a microphone frame re-arms a turn, then the reply speaks. */
-async function speakFreshReply(fixture: ReturnType<typeof createRelayFixture>) {
+async function speakFreshReply(fixture: Awaited<ReturnType<typeof createRelayFixture>>) {
   await sendTalkRealtimeRelayAudio({
     relaySessionId: fixture.relaySessionId,
     connId: "conn-1",
@@ -134,7 +133,6 @@ describe("talk realtime relay cancellation recovery", () => {
       activeRelaySessions.clear();
       vi.useRealTimers();
       clientVoiceSessionTesting.reset();
-      resetClientVoiceConfirmationStateForTest();
       await testState?.cleanup();
       testState = undefined;
     }
@@ -144,7 +142,7 @@ describe("talk realtime relay cancellation recovery", () => {
     "accepts typed cancellation confirmation before the deadline for %s output",
     async (mode) => {
       vi.useFakeTimers();
-      const { relaySessionId, request, transport, payloadsOfType } = createRelayFixture();
+      const { relaySessionId, request, transport, payloadsOfType } = await createRelayFixture();
       await sendTalkRealtimeRelayAudio({
         relaySessionId,
         connId: "conn-1",
@@ -214,9 +212,10 @@ describe("talk realtime relay cancellation recovery", () => {
     async (mode) => {
       vi.useFakeTimers();
       const pending = createDeferred();
-      const { relaySessionId, relay, request, transport, payloadsOfType } = createRelayFixture(
-        mode === "turn-bound" ? { submitToolResult: vi.fn(() => pending.promise) } : {},
-      );
+      const { relaySessionId, relay, request, transport, payloadsOfType } =
+        await createRelayFixture(
+          mode === "turn-bound" ? { submitToolResult: vi.fn(() => pending.promise) } : {},
+        );
       if (mode === "exact-response") {
         request.onEvent?.({
           direction: "server",
@@ -302,7 +301,7 @@ describe("talk realtime relay cancellation recovery", () => {
 
   it("keeps a still-generating stale reply fenced and reconnects instead of admitting it", async () => {
     vi.useFakeTimers();
-    const fixture = createRelayFixture();
+    const fixture = await createRelayFixture();
     const { relaySessionId, request, transport, payloadsOfType } = fixture;
     await cancelPastDeadline(fixture);
     // Microphone input opened another turn; the cancelled reply is still generating.
@@ -330,7 +329,7 @@ describe("talk realtime relay cancellation recovery", () => {
 
   it("does not let an earlier cancellation's watchdog retire a later cancellation's fence", async () => {
     vi.useFakeTimers();
-    const fixture = createRelayFixture();
+    const fixture = await createRelayFixture();
     const { relaySessionId, request, payloadsOfType } = fixture;
     await cancelPastDeadline(fixture);
     // Cancellation A's generation ends at its provider boundary.
@@ -359,7 +358,7 @@ describe("talk realtime relay cancellation recovery", () => {
 
   it("clears the discard fence when provider continuity resets during a discard", async () => {
     vi.useFakeTimers();
-    const fixture = createRelayFixture();
+    const fixture = await createRelayFixture();
     const { relaySessionId, request, payloadsOfType } = fixture;
     await cancelPastDeadline(fixture);
 
@@ -382,7 +381,7 @@ describe("talk realtime relay cancellation recovery", () => {
     "keeps cancellation bound to the provider-owned turn for %s output",
     async (mode) => {
       vi.useFakeTimers();
-      const fixture = createRelayFixture();
+      const fixture = await createRelayFixture();
       const { relaySessionId, request, payloadsOfType } = fixture;
       await sendTalkRealtimeRelayAudio({ relaySessionId, connId: "conn-1", audioBase64: "AQI=" });
       if (mode === "exact-response") {
@@ -479,7 +478,7 @@ describe("talk realtime relay cancellation recovery", () => {
     async (phase) => {
       vi.useFakeTimers();
       const finalText = "Provider finalization transcript";
-      const { relaySessionId, payloadsOfType, request } = createRelayFixture({
+      const { relaySessionId, payloadsOfType, request } = await createRelayFixture({
         close: vi.fn(() => {
           request.onTranscript?.("assistant", finalText, true);
         }),

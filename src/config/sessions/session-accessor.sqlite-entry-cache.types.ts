@@ -1,9 +1,9 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
+import type { SessionActorHotState } from "./session-actor-state.types.js";
 import type { SessionMembershipFact } from "./session-membership-facts.types.js";
 import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
@@ -116,11 +116,15 @@ export type SessionEntryPublicationSource = {
   filename: string;
   canonicalPath?: string;
   revision?: number;
+  /** Complete postimages may be reused only at this committing writer's physical revision. */
+  writeToken?: string;
 };
 
 export type PreparedSessionEntryChanges = {
   source: SessionEntryPublicationSource;
   entries: ReadonlyMap<string, SessionEntry>;
+  fullEntries?: ReadonlyMap<string, SessionEntry>;
+  actorPostimages?: ReadonlyMap<string, SessionActorHotState>;
   sharing?: ReadonlyMap<string, SessionSharingEntry>;
   projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
 };
@@ -131,17 +135,16 @@ export type SessionEntryProjectionFacts = {
   activitySummaryWatermark: SessionTranscriptWatermark | undefined;
 };
 
-export type SessionEntryReplacementPostimage = { entry: SessionEntry } & (
-  | { projection: SessionEntryProjectionFacts; participantProjectionUnavailable?: never }
-  | { projection?: never; participantProjectionUnavailable: true }
-);
-
 export type SessionEntryReplacementPublication = {
   kind: "session-entry-replacements";
   transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
+  /** Full snapshots belong to bounded entry readers, not resident display rows. */
+  fullEntries?: ReadonlyMap<string, SessionEntry>;
+  /** Closed entry patches preserve the resident actor's unchanged custody and transcript facts. */
+  actorPostimages?: ReadonlyMap<string, SessionActorHotState>;
   /** Canonical metadata is committed, but these entries lack a valid display projection. */
   unavailableParticipantKeys?: readonly string[];
   ageChanges: SessionEntryMaintenanceAgeChange[];
@@ -151,11 +154,6 @@ export type SessionEntryReplacementPublication = {
   membershipInvalidatedKeys: string[];
   sharingUnchangedKeys: string[];
   generationUnchangedKeys: string[];
-  /** Scoped receipt; raw writers and other session domains remain incomplete. */
-  receipt?: import("../../infra/sqlite-commit-receipt.js").SqliteCommitReceipt<
-    SessionEntryReplacementPostimage,
-    SessionEntryPublicationSource
-  >;
 };
 
 export type CreationDatabase =
@@ -210,6 +208,8 @@ export type SessionEntryPublicationRecord = {
       readCurrent?: (sessionKey: string) =>
         | {
             entry?: SessionEntry;
+            fullEntry?: SessionEntry;
+            actorPostimage?: SessionActorHotState;
             sharing?: SessionSharingEntry;
             projection?: SessionEntryProjectionFacts;
           }
@@ -220,10 +220,7 @@ export type SessionEntryPublicationRecord = {
 );
 
 export type PendingSessionEntryPublication = {
-  superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;
-  metadataSuperseded: Set<string>;
-  projectionSuperseded: Set<string>;
-  ownerChanges: Map<string, Extract<SessionRowFacts, { kind: "owner" }>>;
+  superseded: Set<string>;
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
   /** Keys whose committed sessionId and lifecycleRevision are unchanged by this publication. */

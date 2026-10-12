@@ -8,9 +8,11 @@ import { testing } from "../../../auto-reply/reply/reply-run-registry.test-suppo
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
 import {
   loadSessionEntryReadOnly,
+  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
@@ -50,7 +52,7 @@ it.each([
       { agentId: "policy", sessionKey: policyKey },
       { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
     );
-    // Seed writes schedule maintenance; drain it before racing the foreign policy writer.
+    // Drain seed maintenance before measuring the final authority read.
     for (const agentId of ["main", "policy"]) {
       await closeOpenClawAgentDatabaseByPathAsync(
         resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
@@ -172,25 +174,32 @@ it.each([
     try {
       await awaitGateBeforeSettlement(entered.promise, outcome, "Final admission was not reached");
       calls.expectIdle();
-      if (change === "policy" || change === "metadata" || change === "malformed") {
-        // Setup starts worker maintenance; share its writer lane without publishing the mutation.
+      if (change === "policy" || change === "metadata") {
+        await updateSessionEntry({ agentId: "policy", sessionKey: policyKey }, () =>
+          change === "policy" ? { sandboxMode: undefined } : { label: "renamed" },
+        );
+        calls.clear();
+      } else if (change === "malformed") {
         await runOpenClawAgentWriteAdmission(
           { agentId: "policy", env: state.env },
           ({ canonicalPath }) => {
-            const foreign = new DatabaseSync(canonicalPath);
+            const corrupted = new DatabaseSync(canonicalPath);
             try {
-              foreign
+              corrupted
                 .prepare(
-                  change === "policy"
-                    ? "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?"
-                    : change === "metadata"
-                      ? "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'renamed') WHERE session_key = ?"
-                      : "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.sessionId', 42) WHERE session_key = ?",
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.sessionId', 42) WHERE session_key = ?",
                 )
                 .run(policyKey);
             } finally {
-              foreign.close();
+              corrupted.close();
             }
+            // Exercise malformed-row parsing rather than a warmed fact or revoked source.
+            sessionChanges.invalidate({
+              agentId: "policy",
+              sessionKey: policyKey,
+              storePath: canonicalPath,
+              factsInvalidated: true,
+            });
           },
         );
         calls.clear();
@@ -210,6 +219,14 @@ it.each([
         expect(consumed).toHaveBeenCalledOnce();
       } else {
         expect(result).toBeInstanceOf(Error);
+        if (change === "malformed") {
+          expect(result).toHaveProperty(
+            "message",
+            expect.stringContaining(
+              `invalid persisted session row requires repair for ${policyKey}`,
+            ),
+          );
+        }
         expect(consumed).not.toHaveBeenCalled();
       }
       expect(compatAssertCurrent).toHaveBeenCalledTimes(

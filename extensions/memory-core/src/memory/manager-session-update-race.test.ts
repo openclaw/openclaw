@@ -28,6 +28,7 @@ import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import {
   createManagerIndexFixture,
+  memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
@@ -241,12 +242,12 @@ describe("memory session update sync", () => {
             )
             .all(entry.path),
         ).toEqual([{ start_line: messages[0]!.line, end_line: messages[3]!.line }]);
-        database
+        memoryIndexFixtureWriter(manager)
           .prepare(
             "UPDATE memory_index_sources SET hash = ?, mtime = ?, size = ? WHERE path = ? AND source = 'sessions'",
           )
           .run(entry.hash, entry.mtimeMs, entry.size, entry.path);
-        database
+        memoryIndexFixtureWriter(manager)
           .prepare(
             "UPDATE memory_index_meta SET value = json_set(value, '$.chunkingVersion', 4) WHERE key = 'memory_index_meta_v1'",
           )
@@ -406,7 +407,11 @@ describe("memory session update sync", () => {
       );
       const database = Reflect.get(manager, "db") as DatabaseSync;
       const sessionPath = `sessions/main/${sessionId}.jsonl`;
-      seedIndexedSession(database, sessionPath, "Internal narrative violet fragment");
+      seedIndexedSession(
+        memoryIndexFixtureWriter(manager),
+        sessionPath,
+        "Internal narrative violet fragment",
+      );
 
       if (mode === "startup catch-up") {
         await (
@@ -507,14 +512,15 @@ describe("memory session update sync", () => {
         (entry) => entry.sessionId === sessionId,
       ),
     ).toMatchObject({ artifactKind: "archive-artifact", sessionKind: "unknown" });
-    seedIndexedSession(database, sessionPath, "Previously retained violet fragment");
-    database
+    const fixtureWriter = memoryIndexFixtureWriter(manager);
+    seedIndexedSession(fixtureWriter, sessionPath, "Previously retained violet fragment");
+    fixtureWriter
       .prepare(
         "UPDATE memory_index_chunk_provenance SET origin_class = 'owner', session_kind = 'unknown' WHERE chunk_id = ?",
       )
       .run(sessionPath);
     const archiveStat = await fs.stat(path.join(sessionsDir, archiveName!));
-    database
+    fixtureWriter
       .prepare("UPDATE memory_index_sources SET mtime = ?, size = ? WHERE path = ?")
       .run(archiveStat.mtimeMs, archiveStat.size, sessionPath);
 

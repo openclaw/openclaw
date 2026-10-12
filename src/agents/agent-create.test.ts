@@ -57,6 +57,11 @@ vi.mock("../state/agent-provenance.js", () => ({
   recordAgentProvenance: mocks.recordAgentProvenance,
 }));
 
+// mock-isolation: Workspace/config unit cases do not own a real SQLite worker or creation store.
+vi.mock("../state/openclaw-agent-execution.js", () => ({
+  prepareOpenClawAgentDatabaseExecution: async () => {},
+}));
+
 vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
   migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
 }));

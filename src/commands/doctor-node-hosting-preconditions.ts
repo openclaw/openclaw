@@ -98,7 +98,7 @@ export async function collectNodeHostingPreconditionFindings(
       path: "plugins.entries.device-pair.enabled",
       requirement: "node-onboarding-plugin",
       fixHint:
-        "Set plugins.entries.device-pair.enabled: true, ensure device-pair is not denied or excluded by plugins.allow, then restart the Gateway.",
+        "Set plugins.entries.device-pair.enabled: true, check that device-pair is not denied or excluded by plugins.allow, then restart the Gateway.",
     });
   }
   if (lacksDeviceCapableRuntimeRoute(cfg)) {
@@ -108,7 +108,7 @@ export async function collectNodeHostingPreconditionFindings(
       path: "agents",
       requirement: "device-session-runtime",
       fixHint:
-        'Select an agent/model route whose runtime supports paired-device placement, then ensure its plugin is enabled and its required node commands are explicitly allowed. Runtime policy is model/provider-scoped; whole-agent runtime keys are ignored. For a multi-agent roster, set agents.ownership: "explicit".',
+        'Select an agent/model route whose runtime supports paired-device placement, then check that its plugin is enabled and its required node commands are explicitly allowed. Runtime policy is model/provider-scoped; whole-agent runtime keys are ignored. For a multi-agent roster, set agents.ownership: "explicit".',
     });
   }
   if (usesIdentityHeadersWithoutMachineCredentials(cfg)) {

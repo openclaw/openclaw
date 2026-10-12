@@ -2,6 +2,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { resolveModelFallbackOptions } from "../../auto-reply/reply/agent-runner-run-params.js";
 import { handleDirectiveOnly } from "../../auto-reply/reply/directive-handling.impl.js";
 import { parseInlineSessionDirectives } from "../../auto-reply/reply/directive-handling.parse.js";
 import {
@@ -91,16 +93,16 @@ async function seedSession(thinkingLevel = "low", overrides: Partial<SessionEntr
   );
 }
 
-async function patchSession(patch: Record<string, unknown>) {
+async function patchSession(patch: Record<string, unknown>, config = cfg) {
   const params = { key: sessionKey, ...patch };
   const responses: Parameters<RespondFn>[] = [];
   const context = {
-    ...createSessionMutationTestContext(cfg),
+    ...createSessionMutationTestContext(config),
     loadGatewayModelCatalogSnapshot: async () => ({
       agentId: "main",
       agentDir: "/fixture/agent",
       workspaceDir: "/fixture/workspace",
-      config: cfg,
+      config,
       catalogComplete: true,
       entries: catalog,
       routeVariants: catalog,
@@ -286,24 +288,55 @@ it("changes only effort on a queued fallback route", async () => {
   });
 });
 
-it("clears queued model and thinking overrides after the reset commits", async () => {
-  await withState(async (state) => {
-    await seedSession("high");
-    const queued = enqueue(state, "reset", { thinkLevel: "high", hasAutoFallbackProvenance: true });
-    expect((await patchSession({ model: null, thinkingLevel: null }))[0]).toBe(true);
-    const stored = loadSessionEntry({ agentId: "main", sessionKey });
-    expect(stored?.modelOverride).toBeUndefined();
-    expect(stored?.thinkingLevel).toBeUndefined();
-    expect(queued.run).toMatchObject({
-      provider: "fixture",
-      model: "configured",
-      thinkLevel: "medium",
-      hasSessionModelOverride: false,
-      modelOverrideSource: undefined,
+it.each([null, "fixture/configured", "Fixture/configured", "preferred"])(
+  "follows the agent default and retains fallbacks after selecting %s",
+  async (model) => {
+    await withState(async (state) => {
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            ...cfg.agents?.defaults,
+            model: "fixture/x",
+            models: {
+              ...cfg.agents?.defaults?.models,
+              "fixture/configured": { alias: "preferred" },
+            },
+          },
+          entries: { main: { model: { primary: "fixture/configured", fallbacks: ["fixture/z"] } } },
+        },
+      };
+      await seedSession("high", { modelOverrideSource: "auto" });
+      const queued = enqueue(state, "reset", {
+        config,
+        thinkLevel: "high",
+        hasAutoFallbackProvenance: true,
+      });
+      expect((await patchSession({ model, thinkingLevel: null }, config))[0]).toBe(true);
+      const stored = loadSessionEntry({ agentId: "main", sessionKey });
+      expect(stored?.modelOverride).toBeUndefined();
+      expect(stored?.providerOverride).toBeUndefined();
+      expect(stored?.modelOverrideSource).toBe("default");
+      expect(stored?.thinkingLevel).toBeUndefined();
+      expect(queued.run).toMatchObject({
+        provider: "fixture",
+        model: "configured",
+        thinkLevel: "medium",
+        hasSessionModelOverride: false,
+        modelOverrideSource: undefined,
+      });
+      expect(queued.run.hasAutoFallbackProvenance).toBeUndefined();
+      expect(resolveModelFallbackOptions(queued.run).modelFallbackAvailability).toMatchObject({
+        kind: "active",
+        models: ["fixture/z"],
+      });
+      config.agents!.entries!.main!.model = "fixture/y";
+      expect(resolveSessionModelRef(config, stored, "main")).toEqual({
+        provider: "fixture",
+        model: "y",
+      });
     });
-    expect(queued.run.hasAutoFallbackProvenance).toBeUndefined();
-  });
-});
+  },
+);
 
 it.each([
   { patch: { thinkingLevel: "not-a-level" }, error: "invalid thinkingLevel" },

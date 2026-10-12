@@ -154,7 +154,8 @@ describe("offline device abandonment with retained physical cleanup", () => {
         );
       let service = createService();
       const restartDisconnectedService = async () => {
-        await expect(service.stop()).rejects.toThrow("not connected");
+        // Shutdown defers the unreachable node's stop; durable ownership keeps the cleanup.
+        await service.stop();
         support.testState.service = undefined;
         await support.reopenWorkerEnvironmentStore();
         placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });

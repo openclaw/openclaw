@@ -1,10 +1,12 @@
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type { ProgressCard } from "@openclaw/gateway-protocol";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatDetailsProgress } from "./chat-details-progress.ts";
-import type { ChatDetailsSession } from "./chat-details-session.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import type { ChatDetailsProgress } from "./chat-details-progress.tsx";
+import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import { ChatDetails } from "./chat-details.ts";
+import { ChatDetails } from "./chat-details.tsx";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
 import progressStyles from "../../../styles/chat/progress-card.css?inline";
@@ -43,11 +45,12 @@ async function fixture(value = props()) {
   const footer = document.createElement("div");
   footer.className = "chat-footer";
   footer.style.cssText = "position:absolute;bottom:0;width:100%;height:100px";
-  const element = new ChatDetails();
-  element.props = value;
-  element.presented = true;
-  frame.append(element, footer);
   document.body.append(frame);
+  const view = mountSolid(() => createComponent(ChatDetails, { props: value, presented: true }), {
+    container: frame,
+  });
+  const element = view.container.querySelector("openclaw-chat-details")!;
+  frame.append(footer);
   mounted.push(frame, styles);
   await element.updateComplete;
   const session = element.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;

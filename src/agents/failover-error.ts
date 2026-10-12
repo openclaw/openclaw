@@ -20,7 +20,6 @@ import {
 import {
   FailoverError,
   findErrorProperty,
-  getErrorMessage,
   isFailoverError,
   isTimeoutError,
   readDirectErrorCode,
@@ -253,19 +252,6 @@ function readDirectErrorDetails(err: unknown): string[] | undefined {
   );
 }
 
-function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
-  const message = readDirectErrorMessage(err);
-  const code = readDirectErrorCode(err);
-  return {
-    status: normalizeFailoverStatus(readDirectStatusCode(err), code),
-    code,
-    errorType: readDirectErrorType(err),
-    message: message || undefined,
-    provider: readDirectProvider(err),
-    details: readDirectErrorDetails(err),
-  };
-}
-
 function hasSessionTranscriptWriterClaimRebound(
   err: unknown,
   seen: Set<object> = new Set(),
@@ -360,7 +346,7 @@ function hasDirectProviderFailureIdentity(err: unknown): boolean {
   if (isFailoverError(err)) {
     return true;
   }
-  const signal = normalizeDirectErrorSignal(err);
+  const signal = normalizeErrorSignal(err, undefined, "direct");
   return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
 }
 
@@ -369,15 +355,21 @@ export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
   return resolveModelFallbackError(err).kind === "coordination";
 }
 
-function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
-  const message = getErrorMessage(err);
-  const code = findErrorProperty(err, readDirectErrorCode);
+function normalizeErrorSignal(
+  err: unknown,
+  providerHint?: string,
+  scope: "direct" | "nested" = "nested",
+): FailoverSignal {
+  const read = <T>(reader: (candidate: unknown) => T | undefined) =>
+    scope === "direct" ? reader(err) : findErrorProperty(err, reader);
+  const message = read(readDirectErrorMessage);
+  const code = read(readDirectErrorCode);
   return {
-    status: normalizeFailoverStatus(findErrorProperty(err, readDirectStatusCode), code),
+    status: normalizeFailoverStatus(read(readDirectStatusCode), code),
     code,
-    errorType: findErrorProperty(err, readDirectErrorType),
+    errorType: read(readDirectErrorType),
     message: message || undefined,
-    provider: findErrorProperty(err, readDirectProvider) ?? providerHint,
+    provider: read(readDirectProvider) ?? providerHint,
     details: readDirectErrorDetails(err),
   };
 }
@@ -409,7 +401,7 @@ function decideNestedFormatOverride(
     seen.add(candidate);
   }
 
-  const directSignal = normalizeDirectErrorSignal(candidate);
+  const directSignal = normalizeErrorSignal(candidate, undefined, "direct");
   const nestedCandidates = getNestedErrorCandidates(candidate);
   const nestedStatus = directSignal.status ?? inheritedStatus;
   const hasDirectMessage = Boolean(directSignal.message?.trim());

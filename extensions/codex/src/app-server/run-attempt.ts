@@ -57,8 +57,15 @@ export async function runCodexAppServerAttempt(
         prepareCodexAttemptPrompt(attemptContext),
       );
       const resources = prepareCodexAttemptResources(attemptPrompt);
-      attemptTools.runtimeYieldCompletionClaim.current = () =>
-        resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
+      // This turn's claimed children make the yield; otherwise report native
+      // children of earlier turns, whose completion still resumes the session.
+      attemptTools.runtimeYieldCompletionClaim.current = () => {
+        if (resources.state.nativeHookRelay?.hasClaimedDirectChild()) {
+          return true;
+        }
+        const pendingChildren = resources.state.nativeSubagentMonitor?.listPendingChildren() ?? [];
+        return pendingChildren.length > 0 ? { pendingChildren } : false;
+      };
       let activeTurnOwnsCleanup = false;
       try {
         await preparation.measure("runtime-start", () => startCodexAttemptRuntime(resources));

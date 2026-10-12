@@ -1,6 +1,5 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
-  registerSessionBindingAdapter,
   resolveThreadBindingFarewellText,
   resolveThreadBindingThreadName,
   unregisterSessionBindingAdapter,
@@ -15,6 +14,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { registerSessionBindingAdapterV2 } from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
 import {
@@ -598,9 +598,10 @@ function createLoadedThreadBindingManager(
     defaults: { idleTimeoutMs, maxAgeMs },
     resolveCurrentCfg,
     resolveCurrentToken,
+    assertCurrent: assertManagerCurrent,
   });
 
-  registerSessionBindingAdapter(sessionBindingAdapter);
+  registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
   return manager;

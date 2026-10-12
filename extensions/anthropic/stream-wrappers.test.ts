@@ -3,6 +3,7 @@ import { calculateUsageCost } from "@openclaw/llm-core";
 // Anthropic tests cover stream wrappers plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { type Model, streamSimple } from "openclaw/plugin-sdk/llm";
 import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -152,6 +153,7 @@ function runCompactionProviderWrapper(params?: {
   provider?: string;
   api?: string;
   baseUrl?: string;
+  modelId?: string;
   extraParams?: Record<string, unknown>;
   headers?: Record<string, string>;
   payload?: Record<string, unknown>;
@@ -161,10 +163,11 @@ function runCompactionProviderWrapper(params?: {
     payload?: Record<string, unknown>;
     options?: Parameters<StreamFn>[2];
   } = {};
+  const modelId = params?.modelId ?? "claude-sonnet-4-6";
   const wrapped = wrapAnthropicProviderStream({
     streamFn: createPayloadCapturingBaseStream(captured),
-    modelId: "claude-sonnet-4-6",
-    extraParams: params?.extraParams ?? { anthropicServerCompaction: true },
+    modelId,
+    extraParams: params?.extraParams ?? {},
   } as never);
   const payload = params?.payload ?? {};
   void wrapped?.(
@@ -172,7 +175,7 @@ function runCompactionProviderWrapper(params?: {
       provider: params?.provider ?? "anthropic",
       api: params?.api ?? "anthropic-messages",
       baseUrl: params?.baseUrl ?? "https://api.anthropic.com/v1",
-      id: "claude-sonnet-4-6",
+      id: modelId,
       contextWindow: 200_000,
     } as never,
     {} as never,
@@ -204,8 +207,16 @@ describe("anthropic stream wrappers", () => {
     expect(captured.payload).toMatchObject({ service_tier: "auto" });
   });
 
-  it("passes opt-in server compaction to the direct API-key transport", () => {
+  it.each([
+    { name: "a documented model by default", modelId: "claude-sonnet-4-6", extraParams: {} },
+    {
+      name: "an explicit opt-in on another Claude model",
+      modelId: "claude-opus-4-5",
+      extraParams: { anthropicServerCompaction: true },
+    },
+  ])("passes server compaction for $name to the direct API-key transport", (params) => {
     const captured = runCompactionProviderWrapper({
+      ...params,
       headers: { "Anthropic-Beta": "files-api-2025-04-14" },
     });
 
@@ -216,7 +227,96 @@ describe("anthropic stream wrappers", () => {
     });
   });
 
+  it.each([undefined, true, false])(
+    "honors server compaction at the final request with a configured threshold (enabled=%s)",
+    async (anthropicServerCompaction) => {
+      const previousHost = getAiTransportHost();
+      const requests: Array<{ headers: Headers; payload: Record<string, unknown> }> = [];
+      configureAiTransportHost({
+        ...previousHost,
+        buildModelFetch: () => async (_input, init) => {
+          if (typeof init?.body !== "string") {
+            throw new Error("expected a JSON Anthropic request body");
+          }
+          requests.push({
+            headers: new Headers(init.headers),
+            payload: JSON.parse(init.body) as Record<string, unknown>,
+          });
+          const events = [
+            {
+              type: "message_start",
+              message: {
+                id: "msg_compaction",
+                model: "claude-sonnet-4-6",
+                usage: { input_tokens: 1, output_tokens: 0 },
+              },
+            },
+            {
+              type: "message_delta",
+              delta: { stop_reason: "end_turn" },
+              usage: { output_tokens: 0 },
+            },
+            { type: "message_stop" },
+          ];
+          return new Response(
+            events
+              .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+              .join(""),
+            { headers: { "content-type": "text/event-stream" } },
+          );
+        },
+      });
+      const model = {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 4096,
+      } satisfies Model<"anthropic-messages">;
+      const wrapped = expectDefined(
+        wrapAnthropicProviderStream({
+          streamFn: streamSimple,
+          modelId: model.id,
+          extraParams: { anthropicServerCompaction, anthropicCompactThreshold: 150_000 },
+        } as never),
+        "Anthropic provider stream",
+      );
+      try {
+        const stream = await wrapped(
+          model,
+          { messages: [{ role: "user", content: "Remember this.", timestamp: 1 }] },
+          { apiKey: "sk-ant-api-synthetic" },
+        );
+        expect((await stream.result()).stopReason).toBe("stop");
+      } finally {
+        configureAiTransportHost(previousHost);
+      }
+
+      expect(requests).toHaveLength(1);
+      if (anthropicServerCompaction === false) {
+        expect(requests[0]?.payload).not.toHaveProperty("context_management");
+        expect(requests[0]?.headers.get("anthropic-beta") ?? "").not.toContain(
+          "compact-2026-01-12",
+        );
+      } else {
+        expect(requests[0]?.payload.context_management).toMatchObject({
+          edits: [{ type: "compact_20260112", trigger: { type: "input_tokens", value: 150_000 } }],
+        });
+        expect(requests[0]?.headers.get("anthropic-beta")).toContain("compact-2026-01-12");
+      }
+    },
+  );
+
   it.each([
+    {
+      name: "the model is not documented for compaction",
+      modelId: "claude-opus-4-5",
+    },
     {
       name: "OAuth auth is used",
       apiKey: "sk-ant-oat01-test-token",
@@ -359,7 +459,7 @@ describe("anthropic stream wrappers", () => {
       { apiKey: "sk-ant-api03-test-key" } as never,
     );
 
-    expect(captured.headers).toBeUndefined();
+    expect(captured.headers?.["anthropic-beta"] ?? "").not.toContain("fast-mode");
     expect(captured.payload).toEqual({});
   });
 });

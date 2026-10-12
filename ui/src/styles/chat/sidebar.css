@@ -646,6 +646,10 @@ openclaw-session-discussion {
   display: none;
 }
 
+openclaw-chat-html-preview {
+  display: contents;
+}
+
 .chat-html-preview {
   display: flex;
   flex: 1 1 auto;

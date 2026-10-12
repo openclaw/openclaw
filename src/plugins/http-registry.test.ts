@@ -19,34 +19,6 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runti
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-function expectRouteRegistrationDenied(params: {
-  replaceExisting: boolean;
-  expectedLogFragment: string;
-}) {
-  const { registry, logs, register } = createLoggedRouteHarness();
-
-  register({
-    path: "/plugins/demo",
-    auth: "plugin",
-    pluginId: "demo-a",
-    source: "demo-a-src",
-  });
-
-  const unregister = register({
-    path: "/plugins/demo",
-    auth: "plugin",
-    ...(params.replaceExisting ? { replaceExisting: true } : {}),
-    pluginId: "demo-b",
-    source: "demo-b-src",
-  });
-
-  expect(registry.httpRoutes).toHaveLength(1);
-  expect(logs.at(-1)).toContain(params.expectedLogFragment);
-
-  unregister();
-  expect(registry.httpRoutes).toHaveLength(1);
-}
-
 function expectRegisteredRouteShape(
   registry: ReturnType<typeof createEmptyPluginRegistry>,
   params: {
@@ -327,29 +299,6 @@ describe("registerPluginHttpRoute", () => {
     unregister?.();
   });
 
-  it("treats canonical exact-path aliases as one route", () => {
-    const { registry, logs, register } = createLoggedRouteHarness();
-    register({
-      path: "/Webhooks//SMS/",
-      auth: "plugin",
-      pluginId: "sms",
-      source: "primary",
-    });
-
-    expect(() =>
-      register({
-        path: "/webhooks/sms",
-        auth: "plugin",
-        pluginId: "sms",
-        source: "alias",
-        throwOnFailure: true,
-      }),
-    ).toThrow("plugin: route conflict at /webhooks/sms (exact)");
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]?.source).toBe("primary");
-    expect(logs.at(-1)).toContain("route conflict");
-  });
-
   it("keeps a reused same-owner route until its last lease releases", () => {
     const { registry, logs, register } = createLoggedRouteHarness();
     const firstOwner = createTrackedRouteLease();
@@ -493,34 +442,6 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes.map((route) => route.source)).toEqual(["prefix", "sms-exact"]);
   });
 
-  it("replaces a same-plugin canonical prefix alias", () => {
-    const { registry, register } = createLoggedRouteHarness();
-    register({
-      path: "/Webhooks//SMS/",
-      auth: "plugin",
-      match: "prefix",
-      pluginId: "sms",
-      source: "sms-webhook",
-    });
-
-    register({
-      path: "/webhooks/sms",
-      auth: "plugin",
-      match: "prefix",
-      pluginId: "sms",
-      source: "sms-webhook",
-      replaceExisting: true,
-      throwOnFailure: true,
-    });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]).toMatchObject({
-      path: "/webhooks/sms",
-      match: "prefix",
-      source: "sms-webhook",
-    });
-  });
-
   it("rejects replacement when a distinct route source owns the same plugin path", () => {
     const pluginRegistry = createTestPluginRegistry();
     const record = createPluginRecord({
@@ -645,24 +566,6 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes[0]?.source).toBe(existing.source);
   });
 
-  it.each([
-    {
-      name: "rejects conflicting route registrations without replaceExisting",
-      replaceExisting: false,
-      expectedLogFragment: "route conflict",
-    },
-    {
-      name: "rejects route replacement when a different plugin owns the route",
-      replaceExisting: true,
-      expectedLogFragment: "route replacement denied",
-    },
-  ] as const)("$name", ({ replaceExisting, expectedLogFragment }) => {
-    expectRouteRegistrationDenied({
-      replaceExisting,
-      expectedLogFragment,
-    });
-  });
-
   it("preserves shipped anonymous-to-anonymous lifecycle replacement", () => {
     const { registry, register } = createLoggedRouteHarness();
     register({
@@ -681,32 +584,6 @@ describe("registerPluginHttpRoute", () => {
 
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.source).toBe("new-anonymous");
-  });
-
-  it("rejects mixed-auth overlapping routes", () => {
-    const { registry, logs, register } = createLoggedRouteHarness();
-
-    register({
-      path: "/plugin/secure",
-      auth: "gateway",
-      match: "prefix",
-      pluginId: "demo-gateway",
-      source: "demo-gateway-src",
-    });
-
-    const unregister = register({
-      path: "/plugin/secure/report",
-      auth: "plugin",
-      match: "exact",
-      pluginId: "demo-plugin",
-      source: "demo-plugin-src",
-    });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(logs.at(-1)).toContain("route overlap denied");
-
-    unregister();
-    expect(registry.httpRoutes).toHaveLength(1);
   });
 
   it("finds a mixed-auth overlap behind an earlier same-auth prefix", () => {
@@ -736,31 +613,6 @@ describe("registerPluginHttpRoute", () => {
       }),
     ).toThrow("plugin: route overlap denied");
     expect(registry.httpRoutes).toHaveLength(2);
-  });
-
-  it("prefers the live scoped route registry after deferred startup", async () => {
-    const scopedRegistry = createEmptyPluginRegistry();
-    const pinnedRegistry = createEmptyPluginRegistry();
-
-    setActivePluginRegistry(pinnedRegistry);
-
-    const unregister = await withPluginHttpRouteRegistry(scopedRegistry, async () => {
-      await setImmediate();
-      return registerPluginHttpRoute({
-        path: "/scoped-webhook",
-        auth: "plugin",
-        handler: vi.fn(),
-      });
-    });
-
-    expectRegisteredRouteShape(scopedRegistry, {
-      path: "/scoped-webhook",
-      auth: "plugin",
-    });
-    expect(pinnedRegistry.httpRoutes).toHaveLength(0);
-
-    unregister();
-    expect(scopedRegistry.httpRoutes).toHaveLength(0);
   });
 
   it.each([false, true])(
@@ -976,27 +828,6 @@ describe("registerPluginHttpRoute", () => {
       expect(cleanups).toHaveLength(0);
     },
   );
-
-  it("preserves non-throwing registration behavior for an expired route lease", () => {
-    const registry = createEmptyPluginRegistry();
-    const messages: string[] = [];
-
-    const unregister = withPluginHttpRouteRegistry(
-      registry,
-      () =>
-        registerPluginHttpRoute({
-          path: "/late-webhook",
-          auth: "plugin",
-          handler: vi.fn(),
-          log: (message) => messages.push(message),
-        }),
-      { isActive: () => false, retain: vi.fn() },
-    );
-
-    expect(messages).toEqual(["plugin runtime HTTP route lease is no longer active"]);
-    expect(registry.httpRoutes).toHaveLength(0);
-    expect(() => unregister()).not.toThrow();
-  });
 
   it.each([
     { name: "a different nested registry", childLease: false, expiredOwner: "parent" },

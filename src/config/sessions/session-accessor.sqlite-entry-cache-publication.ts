@@ -1,3 +1,4 @@
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   sessionChanges,
   type SessionRowChange,
@@ -7,11 +8,9 @@ import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { invalidateOpenClawAgentWritableProjections } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateOpenClawAgentReadOnlyProjections } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
-  pendingSessionEntryPublications,
   publishRetainedSessionEntryChange,
   recordCommittedSessionEntryPublication,
   recordCommittedSessionMetadataPublication,
-  recordCommittedSessionOwnerPublication,
   retainedSharingReads,
   stageSessionSharingPublication,
   preparedSharingChanges,
@@ -40,7 +39,6 @@ import {
   publishIncognitoSessionEntryChange,
 } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
-  projectSessionEntryPredicateChange,
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
   revokePreparedSessionEntryPredicate,
@@ -49,6 +47,7 @@ import {
   recordAcquiringSessionMember,
   type CommittedSessionSharingFacts,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
+import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
 import type { SessionEntry } from "./types.js";
 
 export {
@@ -100,6 +99,18 @@ export function emitPreparedSessionSharingChange(
   };
   bindPreparedSessionEntryPublication(change, record);
   bindSessionEntryPublicationSource(change, database);
+  if (record.kind === "metadata") {
+    const seal = () => sealSessionEntryPublicationSource(record.prepared.source);
+    if (
+      !stageSqliteTransactionState(database.db, {
+        stage() {},
+        commit: seal,
+        rollback() {},
+      })
+    ) {
+      seal();
+    }
+  }
   sessionChanges.emit(change, database.db);
 }
 
@@ -237,7 +248,7 @@ export function publishSessionEntryPlaceholderInsertion(
   staged = publishTrackedCacheUpdate(
     database,
     () => {
-      recordCommittedSessionEntryPublication(database, sessionKey, undefined);
+      recordCommittedSessionEntryPublication(database, sessionKey);
       const facts: CommittedSessionSharingFacts | undefined = staged
         ? { entry: undefined, placeholder, membership: new Set() }
         : undefined;
@@ -273,26 +284,9 @@ export function publishSessionSharingFieldChange(
   publishTrackedCacheUpdate(
     database,
     () => {
-      if (change.kind === "owner") {
-        recordCommittedSessionOwnerPublication(database, sessionKey, change);
-      } else if (change.kind === "category") {
-        recordCommittedSessionMetadataPublication(database, sessionKey, change);
-      } else {
-        const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
-        if (typeof identity === "string") {
-          for (const pending of pendingSessionEntryPublications.get(
-            `file:${identity}\0${sessionKey}`,
-          ) ?? []) {
-            // The delayed entry postimage predates this membership publication.
-            pending.projectionSuperseded.add(sessionKey);
-          }
-        }
-      }
+      // A newer write invalidates a delayed cache receipt; the next read reloads it.
+      recordCommittedSessionMetadataPublication(database, sessionKey, change);
       for (const read of retainedSharingReads(database, sessionKey) ?? []) {
-        if (change.kind === "owner" && read.predicate) {
-          const entry = projectSessionEntryPredicateChange(read.predicate, change);
-          publishRetainedSessionEntryPredicate(read, entry, entry !== undefined);
-        }
         if (read.acquisition) {
           if (change.kind === "member") {
             recordAcquiringSessionMember(read.acquisition, change);

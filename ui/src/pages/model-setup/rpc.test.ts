@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as deviceIdentity from "../../lib/nodes/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createModelSetupVerifyTask } from "./rpc.ts";
+import type { ControllerHost, PageLifecycle } from "../model-providers/page-controller.ts";
+import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./rpc.ts";
 
 type RequestFrame = { id: string; method: string; params?: unknown };
 const sockets: VerificationSocket[] = [];
@@ -84,15 +86,11 @@ it.each([
           policy: { tickIntervalMs: 10_000 },
         },
       });
-      const task = createModelSetupVerifyTask({
+      const runVerification = createModelSetupVerifyRequest({
         addController: () => undefined,
-        removeController: () => undefined,
-        requestUpdate: () => undefined,
-        updateComplete: Promise.resolve(true),
       });
       const settled = vi.fn();
-      void task.run([client, "main", modelTarget]);
-      const verification = task.taskComplete;
+      const verification = runVerification([client, "main", modelTarget]);
       void verification.then(settled, settled);
       const request = socket.sent.at(-1)!;
       expect(request).toMatchObject({
@@ -114,11 +112,8 @@ it.each([
       expect(settled).not.toHaveBeenCalled();
       const result = { ok: true, modelRef: "provider/local-model", latencyMs: 45_000 };
       if (outcome === "abort") {
-        task.abort();
-        await expect(verification).resolves.toEqual({
-          client,
-          error: expect.objectContaining({ message: expect.stringContaining("aborted") }),
-        });
+        await runVerification([null, null, undefined]);
+        await expect(verification).resolves.toBeUndefined();
       } else if (outcome === "deadline") {
         await advanceHealthy(105_000);
         await expect(verification).resolves.toEqual({
@@ -132,9 +127,31 @@ it.each([
       }
       await vi.advanceTimersByTimeAsync(0);
       expect(settled).toHaveBeenCalledOnce();
-      expect(task.value).toEqual(settled.mock.calls[0]?.[0]);
     } finally {
       client.stop();
     }
   },
 );
+
+it("retires a disconnected detection before a transport that ignores abort replies", async () => {
+  const response = createDeferred<import("../../api/types.ts").SystemAgentSetupDetectResult>();
+  let lifecycle: PageLifecycle | undefined;
+  const host: Pick<ControllerHost, "addController"> = {
+    addController: (controller) => {
+      lifecycle = controller;
+    },
+  };
+  const onComplete = vi.fn();
+  const client = { request: () => response.promise } as unknown as GatewayBrowserClient;
+  const runDetection = createModelSetupDetectRequest(host, { getHello: () => null, onComplete });
+  const running = runDetection([client, "main", {}]);
+  lifecycle?.hostDisconnected?.();
+  response.resolve({
+    candidates: [],
+    manualProviders: [],
+    workspace: "/tmp/setup",
+    setupComplete: false,
+  });
+  await expect(running).resolves.toBeUndefined();
+  expect(onComplete).not.toHaveBeenCalled();
+});

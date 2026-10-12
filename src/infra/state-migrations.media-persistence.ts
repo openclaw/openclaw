@@ -452,6 +452,16 @@ export async function migrateLegacyMediaPersistence(
         preparedDiscovery,
       });
       recoverableWarningCount = discovery.recoverableWarningCount;
+      if (discovery.pendingDeletionTargets.length > 0) {
+        const { preparePendingAgentDeletionDatabasesForMaintenance } =
+          await import("../state/openclaw-agent-db-maintenance.js");
+        changes.push(
+          ...(await preparePendingAgentDeletionDatabasesForMaintenance(
+            { targets: discovery.pendingDeletionTargets, env },
+            maintenance,
+          )),
+        );
+      }
       const recoveries = recoverMisplacedAgentDatabaseCopies({
         targets: discovery.targets,
         maintenance,

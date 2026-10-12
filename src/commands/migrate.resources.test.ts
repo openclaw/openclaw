@@ -1,7 +1,9 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import * as config from "../config/config.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import * as gatewayLock from "../infra/gateway-lock.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { createMigrationResourceFixture } from "../plugins/migration-provider.test-support.js";
@@ -13,17 +15,60 @@ import {
   listSetupMigrationOptions,
 } from "../wizard/setup.migration-import.js";
 import { offerPostInstallMigrations } from "../wizard/setup.post-install-migration.js";
-import { migrateDefaultCommand } from "./migrate.js";
+import { migrateDefaultCommand, migrateListCommand } from "./migrate.js";
+import { withMemoryMigrationProviders } from "./migrate/memory-import.js";
 
 vi.mock("../cli/prompt.js", () => ({ promptYesNo: async () => true }));
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
 });
 
 describe("migration command resources", () => {
+  it.each(["command", "list", "memory"] as const)(
+    "refuses %s imports before provider loading when discovery finds a live Gateway",
+    async (surface) => {
+      const fixture = createMigrationResourceFixture();
+      fixture.state.resumeApply.resolve();
+      const loadConfig = vi.spyOn(config, "getRuntimeConfig");
+      const discover = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
+        pid: process.pid,
+        port: 18789,
+        ownerId: "synthetic-foreign-gateway",
+        createdAt: new Date().toISOString(),
+      });
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(fixture.root, "state") }, async () => {
+          const consume = vi.fn();
+          const operation =
+            surface === "memory"
+              ? withMemoryMigrationProviders(fixture.config, consume)
+              : surface === "list"
+                ? migrateListCommand(createNonExitingRuntime(), { json: true })
+                : migrateDefaultCommand(createNonExitingRuntime(), {
+                    provider: fixture.id,
+                    yes: true,
+                    json: true,
+                    noBackup: true,
+                    force: true,
+                  });
+          await expect(operation).rejects.toThrow("stop the Gateway");
+          expect(discover).toHaveBeenCalled();
+          expect(loadConfig).not.toHaveBeenCalled();
+          expect(fixture.state.connections).toEqual([]);
+          expect(consume).not.toHaveBeenCalled();
+          expect(fixture.state.applyCalls).toBe(0);
+        });
+      } finally {
+        discover.mockRestore();
+        fixture.cleanup();
+      }
+    },
+  );
+
   it.each([false, true])(
     "keeps native plan resources through apply and releases them after completion (failure: %s)",
     async (failApply) => {
@@ -56,6 +101,11 @@ describe("migration command resources", () => {
         );
         try {
           await Promise.race([fixture.state.applying.promise, completion]);
+          const ownerPath = gatewayLock.resolveGatewayLockPaths(process.env).ownerLockPath;
+          expect(gatewayLock.readLockPayloadSync(ownerPath)).toMatchObject({
+            pid: process.pid,
+            role: "agent-embedded",
+          });
           expect(fixture.state.applied).toBeDefined();
           expect(fixture.state.applied).toBe(fixture.state.planned);
           expect(fixture.state.connections).toHaveLength(1);
@@ -79,6 +129,7 @@ describe("migration command resources", () => {
           }
           expect(fixture.state.connections[0]?.disposals).toBe(1);
           expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
+          expect(gatewayLock.readLockPayloadSync(ownerPath)).toBeNull();
         } finally {
           fixture.state.resumeApply.resolve();
           await completion;
@@ -135,6 +186,14 @@ describe("migration command resources", () => {
         try {
           await Promise.race([fixture.state.preparationDisposing.promise, completion]);
           expect(fixture.state.applied).toBe(fixture.state.planned);
+          expect(
+            gatewayLock.readLockPayloadSync(
+              gatewayLock.resolveGatewayLockPaths(process.env).ownerLockPath,
+            ),
+          ).toMatchObject({
+            pid: process.pid,
+            role: "agent-embedded",
+          });
           expect(fixture.state.patchReads).toBeGreaterThan(0);
           expect(fixture.state.connections).toHaveLength(1);
           expect(fixture.state.connections[0]?.disposals).toBe(0);

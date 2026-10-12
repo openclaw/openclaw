@@ -241,6 +241,14 @@ have bounded inputs and must not wait for network, user input, or unbounded work
 
 ### SQLite worker stores
 
+For canonical agent databases, use `openOpenClawAgentSqliteWorkerStoreV2` with
+`{ version: 2, assertCurrent }`. It retains the existing agent execution owner,
+provides explicit worker-owned `prepare()` for creation, and checks live
+authority at transaction and commit admission. `executeExisting` leaves missing
+storage absent. See the [migration example](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+Released raw native callbacks retain their ordering and warn on use until their
+removal in the next Plugin SDK major.
+
 Use `openSqliteWorkerStore<Operations>` from
 `openclaw/plugin-sdk/sqlite-runtime` to move a feature's SQLite lifecycle off the
 application event loop. Call it from the main application thread with

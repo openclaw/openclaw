@@ -185,7 +185,7 @@ export async function waitForGatewayHealthyRestart(
   );
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
-  let migrationActivity: { owner: string; pid: number; heartbeatAt: number } | undefined;
+  let migrationHeartbeat: number | undefined;
   let observedStartupMigration = false;
   let observedRunning = false;
   let observedListener = false;
@@ -193,15 +193,10 @@ export async function waitForGatewayHealthyRestart(
   let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
   let updateStartupDeadlineMs: number | undefined;
   let observedOwner: string | undefined;
-  let observedPid: number | undefined;
   let observedBootId: string | undefined;
-  let generationChanged = false;
   let reportedStartupPhase: string | undefined;
   let lastProgressPhase: string | undefined;
   const expiredOutcome = (elapsedMs: number, atStartupCap: boolean): GatewayRestartWaitOutcome => {
-    if (generationChanged) {
-      return "generation-changed";
-    }
     if (
       snapshot.runtime.status !== "running" ||
       snapshot.versionMismatch ||
@@ -278,16 +273,7 @@ export async function waitForGatewayHealthyRestart(
         ...(signal ? { signal } : {}),
       });
       signal?.throwIfAborted();
-      // Preserve observed restarts across unavailable probes.
-      generationChanged ||=
-        (observedPid !== undefined &&
-          snapshot.runtime.pid !== undefined &&
-          observedPid !== snapshot.runtime.pid) ||
-        (observedBootId !== undefined &&
-          snapshot.gatewayBootId !== undefined &&
-          observedBootId !== snapshot.gatewayBootId);
       const identifiedBoot = observedBootId === undefined && snapshot.gatewayBootId !== undefined;
-      observedPid = snapshot.runtime.pid ?? observedPid;
       observedBootId = snapshot.gatewayBootId ?? observedBootId;
       // Health probes and state-DB reads are part of the operator-visible wait. A monotonic clock
       // keeps both the normal deadline and migration watchdog bounded when those operations stall.
@@ -471,8 +457,8 @@ export async function waitForGatewayHealthyRestart(
       if (snapshot.runtime.status !== "running") {
         migrationActive = false;
       } else if (elapsedMs >= nextMigrationActivityPollMs) {
-        const previousActivity = migrationActivity;
-        migrationActivity = undefined;
+        const previousHeartbeat = migrationHeartbeat;
+        migrationHeartbeat = undefined;
         try {
           migrationActive = (params.isStartupMigrationActive ?? hasActiveStartupMigrationLease)({
             env: params.env,
@@ -484,29 +470,16 @@ export async function waitForGatewayHealthyRestart(
               ) {
                 return;
               }
-              // Acquisition earns one heartbeat window; later credit requires renewed
-              // activity from the same lease, not merely a live process.
               migrationProgress =
-                previousActivity === undefined ||
-                (activity.owner === previousActivity.owner &&
-                  activity.heartbeatAt > previousActivity.heartbeatAt);
-              migrationActivity = {
-                owner: activity.owner,
-                pid: activity.pid,
-                heartbeatAt: activity.heartbeatAt,
-              };
+                previousHeartbeat === undefined || activity.heartbeatAt > previousHeartbeat;
+              migrationHeartbeat = activity.heartbeatAt;
             },
           });
-          // Consume an observed same-process release once. Foreign activity clears the
-          // observation; a failed read cannot establish completion or a new acquisition.
-          migrationCompleted =
-            !migrationActive &&
-            previousActivity !== undefined &&
-            previousActivity.pid === snapshot.runtime.pid;
+          migrationCompleted = !migrationActive && previousHeartbeat !== undefined;
         } catch {
           migrationActive = false;
           migrationProgress = false;
-          migrationActivity = previousActivity;
+          migrationHeartbeat = previousHeartbeat;
         }
         nextMigrationActivityPollMs = elapsedMs + STARTUP_MIGRATION_ACTIVITY_POLL_MS;
       }
@@ -536,9 +509,7 @@ export async function waitForGatewayHealthyRestart(
         attempt > 0 &&
         ((!observedRunning && running) || (!observedListener && ownsListener) || identifiedBoot);
       const stableRunning =
-        running &&
-        (snapshot.runtime.pid !== undefined || snapshot.gatewayBootId !== undefined) &&
-        !generationChanged;
+        running && (snapshot.runtime.pid !== undefined || snapshot.gatewayBootId !== undefined);
       if (
         !healthy &&
         stableRunning &&

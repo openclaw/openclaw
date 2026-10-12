@@ -21,6 +21,7 @@ import type {
   SessionTranscriptMessageAnchorPage,
 } from "./session-accessor.sqlite-projection-read.js";
 import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-window.js";
+import { createTranscriptEventInserter } from "./transcript-payload.js";
 
 export function readActiveTranscriptStats(scope: SessionTranscriptReadScope) {
   return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats);
@@ -68,9 +69,7 @@ export function insertSyntheticHistory(
   boundaryType: "compaction" | "custom_message" = "compaction",
 ): void {
   const lastSeq = count * (boundaries ? 2 : 1) + 1;
-  const insertEvent = database.db.prepare(
-    "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-  );
+  const insertEvent = createTranscriptEventInserter(database.db, sessionId);
   const insertIdentity = database.db.prepare(
     `INSERT INTO transcript_event_identities
        (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
@@ -101,7 +100,7 @@ export function insertSyntheticHistory(
               }
           : { message: { role: "user", content: "synthetic" } }),
       };
-      insertEvent.run(sessionId, seq, JSON.stringify(event), seq);
+      insertEvent({ seq, eventJson: JSON.stringify(event), createdAt: seq });
       insertIdentity.run(sessionId, id, seq, type, seq);
       insertActive.run(
         sessionId,

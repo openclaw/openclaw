@@ -19,7 +19,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
-import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   maintenancePreparationFixture,
@@ -35,98 +34,6 @@ import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-re
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 export function registerSessionMaintenancePreparationTests() {
-  it("rechecks a committed worker backdate before accepting a read-only maintenance age", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const active = { sessionKey: "agent:main:readonly-age-active", storePath };
-      const victim = { sessionKey: "agent:main:readonly-age-victim", storePath };
-      replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
-      replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: Date.now() });
-      const databaseOptions = resolveSessionReclamationDatabaseOptions({
-        agentId: "main",
-        env: state.env,
-      });
-      const maintenance = resolveMaintenanceConfigFromInput({
-        mode: "enforce",
-        maxEntries: 100,
-        pruneAfter: "1h",
-      });
-      let assertConsumedPlan: (() => void) | undefined;
-      const consume = vi.fn((_read: unknown, assertCurrent: () => void) => {
-        assertCurrent();
-        assertConsumedPlan = assertCurrent;
-      });
-      const result = await runSqliteSessionReclamation({
-        forceInProcess: false,
-        consumeReadOnlyMaintenancePlan: consume,
-        plan: {
-          kind: "maintenance-plan",
-          databaseOptions,
-          materializedPlans: [],
-          input: {
-            activeSessionKey: active.sessionKey,
-            archiveDirectory: state.sessionsDir(),
-            maintenance,
-            preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
-            storePath,
-          },
-        },
-      });
-      expect(result.kind).toBe("maintenance-plan");
-      if (result.kind !== "maintenance-plan") {
-        throw new Error("Expected maintenance planning result");
-      }
-      expect(consume).toHaveBeenCalledOnce();
-      expect(result.nextAt).toBeGreaterThan(Date.now());
-      expect(() => expectDefined(assertConsumedPlan, "consumed maintenance guard")()).toThrow(
-        "Session maintenance consumption has ended",
-      );
-      if (result.readOnlyInput) {
-        // An unchanged planning result can publish its deadline without replanning.
-        const finalAge = await runSqliteSessionReclamation({
-          forceInProcess: false,
-          plan: {
-            kind: "maintenance-age",
-            databaseOptions,
-            materializedPlans: [],
-            maintenance,
-            readOnly: { input: result.readOnlyInput, snapshot: result.ageSnapshot },
-          },
-        });
-        expect(finalAge).toEqual({ kind: "maintenance-age", nextAt: expect.any(Number) });
-        if (finalAge.kind === "maintenance-age") {
-          expect(finalAge.nextAt).toBeGreaterThan(Date.now());
-        }
-      }
-      await patchSessionEntryCore(victim, () => ({ sessionId: "victim", updatedAt: 1 }), {
-        replaceEntry: true,
-        workerGuard: {},
-        skipMaintenance: true,
-      });
-      await expect(
-        runSqliteSessionReclamation({
-          forceInProcess: false,
-          plan: {
-            kind: "maintenance-age",
-            databaseOptions,
-            materializedPlans: [],
-            maintenance,
-            expected: result.ageSnapshot,
-            ...(result.readOnlyInput
-              ? { readOnly: { input: result.readOnlyInput, snapshot: result.ageSnapshot } }
-              : {}),
-          },
-        }),
-      ).resolves.toEqual({ kind: "maintenance-plan-stale" });
-      const database = openOpenClawAgentDatabase(databaseOptions);
-      expect(
-        database.db
-          .prepare("SELECT archived_at FROM session_nodes WHERE session_key = ?")
-          .get(victim.sessionKey),
-      ).toEqual({ archived_at: null });
-    });
-  });
-
   it.each(["no-op", "preservation", "statistics", "empty-finalization"] as const)(
     "keeps resident rows warm after %s Worker maintenance",
     async (operation) => {

@@ -173,20 +173,20 @@ describe("normalizeSlackChannelType", () => {
 });
 
 describe("resolveSlackSystemEventRoute", () => {
-  it("uses the sole configured agent for fallback system-event sessions", () => {
+  it("uses the sole configured agent for fallback system-event sessions", async () => {
     const ctx = createSlackMonitorContext({
       ...baseParams(),
       cfg: {
         agents: { entries: { ops: {} } },
       },
     });
-    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
+    expect(await ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
       agentId: "ops",
       sessionKey: "agent:ops:slack:channel:c123",
     });
   });
 
-  it("routes DM system events through direct-peer bindings when sender is known", () => {
+  it("routes DM system events through direct-peer bindings when sender is known", async () => {
     const ctx = createSlackMonitorContext({
       ...baseParams(),
       accountId: "work",
@@ -204,7 +204,7 @@ describe("resolveSlackSystemEventRoute", () => {
       },
     });
     expect(
-      ctx.resolveSlackSystemEventRoute({
+      await ctx.resolveSlackSystemEventRoute({
         channelId: "D123",
         channelType: "im",
         senderId: "U123",

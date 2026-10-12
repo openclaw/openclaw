@@ -12,7 +12,7 @@ import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.type
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunContext,

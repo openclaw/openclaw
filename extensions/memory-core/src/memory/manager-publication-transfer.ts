@@ -1,5 +1,6 @@
 import type {
   MemoryEmbeddingCacheEntry,
+  MemoryEmbeddingCacheHeader,
   MemoryPublicationFragment,
 } from "./manager-publication-task.js";
 import type {
@@ -12,6 +13,29 @@ const FRAGMENT_CHARS = 16 * 1024;
 const BATCH_BYTES = 512 * 1024;
 // Numeric JSON uses fewer than 32 characters per item, including its separator.
 const NUMERIC_PART_ITEMS = 512;
+
+/** Bound the direct command before serializing; oversized vectors retain streamed staging. */
+export function memoryEmbeddingCacheFitsInline(
+  header: MemoryEmbeddingCacheHeader,
+  entries: readonly MemoryEmbeddingCacheEntry[],
+): boolean {
+  let bytes =
+    512 +
+    2 *
+      (header.agentId.length +
+        header.provider.id.length +
+        header.provider.model.length +
+        header.providerKey.length);
+  for (const entry of entries) {
+    bytes +=
+      128 + 2 * (entry.hash.length + (entry.sessionId?.length ?? 0)) + 32 * entry.embedding.length;
+    if (bytes > BATCH_BYTES) {
+      return false;
+    }
+  }
+  // The staged JSON path normalizes invalid numeric values; keep that legacy behavior.
+  return bytes <= BATCH_BYTES && entries.every((entry) => entry.embedding.every(Number.isFinite));
+}
 
 // Encode at most one bounded string slice at a time. A single oversized record
 // must not turn v8.serialize/JSON.stringify into a source-sized host operation.
@@ -93,20 +117,16 @@ function* rowFragments(
   }
 }
 
-export function memoryPublicationHeader(replacement: MemorySourceIndexReplacement): {
-  header: MemorySourceIndexHeader;
-  rows: number;
-} {
-  const { chunks, embeddings: _embeddings, ...fields } = replacement;
+export function memoryPublicationHeader(
+  replacement: MemorySourceIndexReplacement,
+): MemorySourceIndexHeader {
+  const { chunks: _chunks, embeddings: _embeddings, ...fields } = replacement;
   if (fields.source !== "sessions") {
-    return { header: fields, rows: chunks.length };
+    return fields;
   }
   // Retained rows travel in the bounded transfer, never the header.
   const { retained = [], ...header } = fields;
-  return {
-    header: { ...header, delta: retained.length > 0 },
-    rows: chunks.length + retained.length,
-  };
+  return { ...header, delta: retained.length > 0 };
 }
 
 export function* memoryPublicationBatches(
@@ -142,6 +162,16 @@ export function* memoryPublicationBatches(
   yield* publicationBatches(rows());
 }
 
+/** Ordinary sources fit one bounded command; larger sources retain chunked transfer. */
+export function memoryPublicationInline(replacement: MemorySourceIndexReplacement) {
+  const batches = memoryPublicationBatches(replacement);
+  const first = batches.next();
+  if (!batches.next().done) {
+    return undefined;
+  }
+  return { header: memoryPublicationHeader(replacement), fragments: first.value ?? [] };
+}
+
 export function* memoryEmbeddingCacheBatches(
   entries: readonly MemoryEmbeddingCacheEntry[],
 ): Generator<MemoryPublicationFragment[]> {
@@ -154,11 +184,9 @@ function* publicationBatches(
 ): Generator<MemoryPublicationFragment[]> {
   let batch: MemoryPublicationFragment[] = [];
   let bytes = 0;
-  let row = 0;
   for (const value of rows) {
     const fragments = rowFragments(value, preserveNegativeZero);
     let current = fragments.next();
-    let part = 0;
     while (!current.done) {
       const next = fragments.next();
       const cost = Math.max(Buffer.byteLength(current.value), current.value.length * 2) + 128;
@@ -167,11 +195,10 @@ function* publicationBatches(
         batch = [];
         bytes = 0;
       }
-      batch.push({ row, part: part++, json: current.value, last: next.done === true });
+      batch.push({ json: current.value, last: next.done === true });
       bytes += cost;
       current = next;
     }
-    row++;
   }
   if (batch.length) {
     yield batch;

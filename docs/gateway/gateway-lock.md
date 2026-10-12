@@ -58,6 +58,8 @@ During startup or restart, the Gateway waits up to five minutes for another Open
 
 On shutdown, the Gateway closes its server and settles owned work before releasing its process owner and compatibility projection. Offline maintenance closes admission and retains both sidecars through state, linked config/credential, and alias removal, then drains its remaining database resources before releasing ownership.
 
+In-process restarts run under the Gateway loop's lifetime, so closing the config reload or request that triggered a restart cannot cancel state-ownership reacquisition. Reacquisition failures include their underlying cause in the Gateway log. Contention with another owner retains the startup wait above.
+
 On Unix, destructive cleanup retains SQLite's native exclusion until the database is removed. On Windows, SQLite's open file handles prevent unlink; the cleanup command closes its own check before removal. Native cleanup must finish before process ownership is released.
 
 Normal upgrades preserve mutual exclusion with older state-local-lock runtimes through the compatibility projection and historical-owner checks. After releasing both sidecars, destructive cleanup removes only empty directories whose filesystem identities still match the directories it owned. A replacement directory or a new owner's files remain intact, and cleanup reports an interrupted removal. The managed update path stops the old service before mutation. Binaries predating state-local ownership retain their existing supported-upgrade stop checks.

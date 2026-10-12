@@ -2,7 +2,6 @@ import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
-import { releasePlacementPolicyRead } from "../test-helpers/control-ui-e2e.ts";
 import {
   WORKSPACE,
   captureDeviceRuntimeUiProof,
@@ -263,11 +262,9 @@ suite.define(() => {
         await page.clock.pauseAt(clockTime + 1_000);
         await gateway.deferNext("environments.list");
         const requestsBeforeRefresh = (await gateway.getRequests("environments.list")).length;
-        await releasePlacementPolicyRead(page, gateway, () =>
-          gateway.emitGatewayEvent("node.runnerInventory.changed", {
-            nodeId: "paired-runner",
-          }),
-        );
+        await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+          nodeId: "paired-runner",
+        });
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh });
         await expect.poll(() => start.isDisabled()).toBe(true);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
@@ -303,7 +300,7 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await gateway.deferNext("environments.list");
-        await releasePlacementPolicyRead(page, gateway, () => page.clock.runFor(1));
+        await page.clock.runFor(1);
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh + 1 });
         await gateway.resolveDeferred("environments.list", {
           environments: [

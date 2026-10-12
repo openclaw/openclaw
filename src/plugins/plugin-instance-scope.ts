@@ -58,7 +58,6 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
-  /** Retained consumers in this context are joined by a pending reload drain. */
   readonly holdsPendingReplacement?: boolean;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
@@ -86,14 +85,13 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
 
-/** Current work that a pending reload drain is joining, through nested calls or retained scopes. */
+/** Compatibility query for callers holding a published plugin invocation context. */
 export function currentPluginWorkHoldsPendingReplacement(): boolean {
-  for (let call = pluginInstanceInvocation.getStore(); call; call = call.parent) {
-    if (call.instance.holdsPendingReplacement(call.token)) {
-      return true;
-    }
-  }
-  return pluginInvocationContext.getStore()?.holdsPendingReplacement === true;
+  const call = pluginInstanceInvocation.getStore();
+  return (
+    (call?.instance.holdsPendingReplacement(call.token) ?? false) ||
+    pluginInvocationContext.getStore()?.holdsPendingReplacement === true
+  );
 }
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {

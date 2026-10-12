@@ -1,6 +1,27 @@
-import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import {
+  matchesAgentWorkAdmission,
+  type AgentWorkAdmissionIdentity,
+} from "./session-agent-work-admission.js";
+import {
+  collectSessionIdentityTargets,
+  normalizeSessionIdentities,
+} from "./session-lifecycle-identity.js";
+import type { HandoffSessionWorkAdmission } from "./session-work-admission-handoff.js";
 
-type ReleasableSessionWorkAdmission = {
+export type SessionWorkRun = Readonly<{
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  controlUiVisible?: boolean;
+}>;
+
+type ReleasableSessionWorkAdmission = Pick<
+  HandoffSessionWorkAdmission,
+  "interrupt" | "interrupted"
+> & {
+  run?: SessionWorkRun;
+  agent?: AgentWorkAdmissionIdentity;
   phase: "pending" | "acquired";
   owner?: symbol;
   released: Promise<void>;
@@ -30,6 +51,91 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
       }
     }
     return matching;
+  }
+
+  /** Capture exact run owners without interrupting unrelated or initiating admissions. */
+  function captureSessionWorkRunInterruptions(params: {
+    scope: string;
+    identities: Iterable<string | undefined>;
+    accept: (run: SessionWorkRun) => boolean;
+  }): Array<{ run: SessionWorkRun; interrupt: (reason: Error) => boolean }> {
+    const identities = normalizeSessionIdentities(params.scope, params.identities);
+    const current = currentAdmissions();
+    const isCurrent = (admission: T) =>
+      !admission.interrupted &&
+      identities.some((identity) => admissionsByIdentity.get(identity)?.has(admission));
+    const admissions = collectSessionWorkAdmissions(
+      identities,
+      (admission) => !current?.has(admission) && isCurrent(admission),
+    );
+    return Array.from(admissions).flatMap((admission) => {
+      const run = admission.run;
+      if (!run || !params.accept(run)) {
+        return [];
+      }
+      return [
+        {
+          run,
+          interrupt: (reason: Error) => {
+            // Awaited preparation cannot transfer Stop to a released or replaced owner.
+            if (!isCurrent(admission)) {
+              return false;
+            }
+            return admission.interrupt?.(reason)?.runId === run.runId;
+          },
+        },
+      ];
+    });
+  }
+
+  /** Active session identities grouped by their authoritative store/lifecycle scope. */
+  function collectActiveSessionWorkAdmissions(
+    owners?: ReadonlySet<object>,
+  ): Map<string, Set<string>> {
+    const identities = [...admissionsByIdentity]
+      .filter(([, admissions]) =>
+        [...admissions].some(
+          (admission) => admission.phase === "acquired" && (!owners || owners.has(admission)),
+        ),
+      )
+      .map(([identity]) => identity);
+    return collectSessionIdentityTargets(identities);
+  }
+
+  /** Unique admitted turns; one lease can be indexed under several identities. */
+  function getActiveSessionWorkAdmissionCount(): number {
+    return collectSessionWorkAdmissions(
+      admissionsByIdentity.keys(),
+      (admission) => admission.phase === "acquired",
+    ).size;
+  }
+
+  function isSessionWorkAdmissionActive(
+    scope: string,
+    identities: Iterable<string | undefined>,
+  ): boolean {
+    return normalizeSessionIdentities(scope, identities).some((identity) =>
+      [...(admissionsByIdentity.get(identity) ?? [])].some(
+        (admission) => admission.phase === "acquired",
+      ),
+    );
+  }
+
+  /** Whether another admitted turn currently owns any of these session identities. */
+  function isCompetingSessionWorkAdmissionActive(
+    scope: string,
+    identities: Iterable<string | undefined>,
+    agent?: AgentWorkAdmissionIdentity,
+  ): boolean {
+    const current = currentAdmissions();
+    return normalizeSessionIdentities(scope, identities).some((identity) =>
+      [...(admissionsByIdentity.get(identity) ?? [])].some(
+        (admission) =>
+          admission.phase === "acquired" &&
+          !current?.has(admission) &&
+          (!agent || matchesAgentWorkAdmission(agent, admission.agent)),
+      ),
+    );
   }
 
   function sessionWorkAdmissionRelease(
@@ -66,13 +172,14 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
 
   /** Wait for exact prior owners, including queued work, without waiting on inherited admission. */
   function getCompetingSessionWorkAdmissionRelease(
-    params: SessionWorkAdmissionReleaseParams & { excludePendingOwner?: symbol },
+    params: SessionWorkAdmissionReleaseParams & { owner?: symbol; excludePendingOwner?: symbol },
   ): Promise<void> | undefined {
     const current = currentAdmissions();
     return sessionWorkAdmissionRelease(
       params,
       (admission) =>
         !current?.has(admission) &&
+        (params.owner === undefined || admission.owner === params.owner) &&
         !(
           params.excludePendingOwner !== undefined &&
           admission.phase === "pending" &&
@@ -100,6 +207,11 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
 
   return {
     collectSessionWorkAdmissions,
+    captureSessionWorkRunInterruptions,
+    collectActiveSessionWorkAdmissions,
+    getActiveSessionWorkAdmissionCount,
+    isSessionWorkAdmissionActive,
+    isCompetingSessionWorkAdmissionActive,
     getSessionWorkAdmissionRelease,
     getSessionWorkAdmissionOwnerRelease,
     getCompetingSessionWorkAdmissionRelease,

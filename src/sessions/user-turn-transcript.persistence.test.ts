@@ -7,6 +7,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 import { formatChatWorkContext } from "../chat/work-context.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -14,6 +15,7 @@ import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { withSessionTranscriptSourcePublication } from "../config/sessions/transcript-write-context.js";
 import { stripEnvelopeFromMessages } from "../gateway/chat-sanitize.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
@@ -442,6 +444,69 @@ describe("persistUserTurnTranscript", () => {
     expect(attempts).toBe(1);
     expect(errors).toEqual([expect.objectContaining({ message: "notification failed" })]);
     expect(await readTranscriptMessages(target)).toHaveLength(1);
+  });
+
+  it("retains canonical input custody after committed source publication fails", async () => {
+    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const failure = new Error("committed source publication failed");
+    const sourcePublished = createDeferred();
+    const acceptedCompletion = createDeferred();
+    let approvals = 0;
+    const createRecorder = () =>
+      createUserTurnTranscriptRecorder({
+        input: { text: "original input", idempotencyKey: "publication-failure:user" },
+        target: { ...target, expectedSessionId: target.sessionId },
+        beforeMessageWrite: ({ message }) => {
+          approvals += 1;
+          return { ...message, content: "approved input" };
+        },
+        onPersistenceError: () => {},
+        updateMode: "none",
+      });
+    const recorder = createRecorder();
+    recorder.setAdmissionHandler?.(() => acceptedCompletion.promise);
+    let settled = false;
+    const pending = withSessionTranscriptSourcePublication(
+      target,
+      () => {
+        sourcePublished.resolve();
+        throw failure;
+      },
+      () => recorder.persistApproved(),
+    );
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const rejected = expect(pending).rejects.toThrow(failure.message);
+    try {
+      await sourcePublished.promise;
+      expect(recorder.hasPersisted()).toBe(true);
+      expect(settled).toBe(false);
+    } finally {
+      acceptedCompletion.resolve();
+    }
+    await rejected;
+
+    const [stored] = await readTranscriptMessages(target);
+    expect(stored).toMatchObject({ content: "approved input" });
+    expect(recorder.hasPersisted()).toBe(true);
+    expect(recorder.getPersistedMessage?.()).toEqual(stored);
+    const admission = recorder.getAdmissionReceipt();
+    expect(admission).toMatchObject({ sessionId: target.sessionId, role: "user" });
+    await recorder.persistFallback();
+
+    const reopened = createRecorder();
+    await expect(reopened.persistApproved()).resolves.toMatchObject({ appended: false });
+    expect(reopened.getPersistedMessage?.()).toEqual(stored);
+    expect(reopened.getAdmissionReceipt()?.entryId).toBe(admission?.entryId);
+    expect(approvals).toBe(1);
+    expect(await readTranscriptMessages(target)).toEqual([stored]);
   });
 
   it.each(["replace-text", "mutate-spans", "forge"] as const)(

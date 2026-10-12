@@ -167,6 +167,9 @@ it("retires live watchers and starts successor indexing without a search or turn
       search: {
         provider: "none",
         sources: ["memory"],
+        // Keep this watcher case memory-only; retirement during session startup
+        // discovery has its own deterministic case below.
+        rememberAcrossConversations: false,
         store: { vector: { enabled: false } },
       },
     },
@@ -246,6 +249,67 @@ it("retires live watchers and starts successor indexing without a search or turn
       await instance.dispose();
     }
     release();
+    vi.restoreAllMocks();
+    await state.cleanup();
+  }
+});
+
+it("retires Memory Core while session startup discovery is in flight", async ({ signal }) => {
+  const state = await createOpenClawTestState({ label: "memory-startup-retirement" });
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { workspace: state.workspaceDir } } },
+    memory: {
+      search: { provider: "none", sources: ["sessions"], store: { vector: { enabled: false } } },
+    },
+  };
+  const memory = loadMemory(registryHost(), config);
+  try {
+    // A transient manager exposes the shared prototype without scheduling startup work.
+    const probe = await memory.runtime.getMemorySearchManager({
+      cfg: config,
+      agentId: "main",
+      purpose: "cli",
+    });
+    assert(probe.manager, probe.error ?? "Expected a transient memory manager");
+    const discovery = Object.getPrototypeOf(
+      getPluginOriginalValue(probe.manager, memory.instance) ?? probe.manager,
+    ) as {
+      listSessionCorpusEntries(): Promise<unknown[]>;
+      awaitManagerIdle(): Promise<void>;
+    };
+    await probe.manager.close?.();
+    const listed = createDeferredCore();
+    const closing = createDeferredCore();
+    // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
+    const list = discovery.listSessionCorpusEntries;
+    vi.spyOn(discovery, "listSessionCorpusEntries").mockImplementationOnce(async function (
+      this: object,
+    ) {
+      const entries = await list.call(this);
+      listed.resolve();
+      await closing.promise;
+      return entries;
+    });
+    // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
+    const awaitIdle = discovery.awaitManagerIdle;
+    vi.spyOn(discovery, "awaitManagerIdle").mockImplementation(function (this: object) {
+      closing.resolve();
+      return awaitIdle.call(this);
+    });
+    const opened = await memory.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
+    assert(opened.manager, opened.error ?? "Expected the startup memory manager");
+    await withinTest(listed.promise, signal);
+    const { database } = (getPluginOriginalValue(opened.manager, memory.instance) ??
+      opened.manager) as unknown as { database: object };
+    const sourceState = vi.spyOn(
+      Object.getPrototypeOf(database) as { readSourceState(): unknown },
+      "readSourceState",
+    );
+
+    await expect(memory.instance.dispose()).resolves.toEqual({ errors: [] });
+    expect(sourceState).not.toHaveBeenCalled();
+  } finally {
+    await memory.instance.dispose();
     vi.restoreAllMocks();
     await state.cleanup();
   }

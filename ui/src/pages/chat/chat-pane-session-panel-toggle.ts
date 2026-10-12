@@ -56,6 +56,15 @@ const panelToggleEvents = [
 
 type PanelTagName = (typeof panelToggleEvents)[number][2];
 
+function canOpenLinkReader(owner: ActivePanelOwner | null, url: string | undefined): boolean {
+  return Boolean(
+    owner?.state.connected &&
+    owner.state.client &&
+    owner.linkReaders.length > 0 &&
+    (url === undefined || resolveLinkReaderTarget(url, owner.linkReaders)),
+  );
+}
+
 /** Owns shell-to-pane panel intent handoff for the active chat presentation. */
 export class ChatPaneSessionPanelToggleController {
   constructor(private readonly options: SessionPanelToggleControllerOptions) {}
@@ -128,10 +137,7 @@ export class ChatPaneSessionPanelToggleController {
     if (
       slot === "link-reader" &&
       detail?.open !== false &&
-      (!owner.state.connected ||
-        !owner.state.client ||
-        owner.linkReaders.length === 0 ||
-        (detail?.url !== undefined && !resolveLinkReaderTarget(detail.url, owner.linkReaders)))
+      !canOpenLinkReader(owner, detail?.url)
     ) {
       clearSessionPanelToggle(slot, event);
       return false;
@@ -234,14 +240,7 @@ export class ChatPaneSessionPanelToggleController {
           }
           const current = this.options.current();
           const pendingDetail = pendingEvent instanceof CustomEvent ? pendingEvent.detail : null;
-          if (
-            slot === "link-reader" &&
-            (!current?.state.connected ||
-              !current.state.client ||
-              current.linkReaders.length === 0 ||
-              (pendingDetail?.url !== undefined &&
-                !resolveLinkReaderTarget(pendingDetail.url, current.linkReaders)))
-          ) {
+          if (slot === "link-reader" && !canOpenLinkReader(current, pendingDetail?.url)) {
             continue;
           }
           region?.deliverPanelEvent(slot, pendingEvent);

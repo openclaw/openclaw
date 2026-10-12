@@ -9,7 +9,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
@@ -46,7 +46,7 @@ import {
 import { writeSubagentSessionEntry } from "../../subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptPromptError,
@@ -154,7 +154,9 @@ async function invalidateCompletion(error: string) {
 function submissionInput(
   leasedSteering: Awaited<ReturnType<typeof prepareSteering>>["leasedSteering"],
 ) {
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+  const promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+  onTestFinished(() => promptStateLease[Symbol.dispose]());
+  const sessionPromptState = promptStateLease.state;
   const prompt = prependAgentSteeringPrompt({
     steeringPrompt: leasedSteering.prompt,
     prompt: "Use the findings to finish the answer.",
@@ -516,7 +518,8 @@ it("submits deferred child results after canonical archive pruning without poiso
     );
   });
   const onSteeringAcknowledged = vi.fn();
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+  using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+  const sessionPromptState = promptStateLease.state;
   const prompt = prependAgentSteeringPrompt({
     steeringPrompt: leased.prompt,
     prompt: "Use the findings to finish the answer.",

@@ -11,6 +11,7 @@ type WidgetProperties = Pick<
   | "messageTimestamp"
   | "title"
   | "preferredHeight"
+  | "onHeightChange"
   | "allowScripts"
   | "connectionGeneration"
 >;
@@ -93,6 +94,10 @@ class CanvasWidgetMountDirective extends AsyncDirective {
         : undefined;
     const element = parked?.element ?? document.createElement("openclaw-canvas-widget-view");
     Object.assign(element, properties);
+    // Reserve the box even while the lazy custom element is still unregistered.
+    if (!customElements.get("openclaw-canvas-widget-view")) {
+      element.style.cssText = `display:block;min-height:${properties.preferredHeight ?? 420}px`;
+    }
     element.presentationActive = true;
     if (parked && parent instanceof Element) {
       parent.moveBefore(element, part.endNode);

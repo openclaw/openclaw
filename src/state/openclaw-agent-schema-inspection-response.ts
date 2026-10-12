@@ -1,22 +1,32 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { z } from "zod";
-import { nativeErrorResponseSchema } from "../infra/native-error-response-schema.js";
+import type { NativeErrorResponse } from "../infra/native-error-response-schema.js";
 import {
   restoreNativeErrorResponse,
   serializeNativeErrorResponse,
 } from "../infra/native-error-response.js";
 import { formatSqliteReadOnlyInspectionFailure } from "../infra/sqlite-error-diagnostics.js";
+import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
+import type { StateSchemaInspection } from "./openclaw-state-schema-preflight.js";
 import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
-export const agentSchemaInspectionErrorSchema = nativeErrorResponseSchema.extend({
-  stateError: z.unknown().optional(),
-});
+type InspectionError = NativeErrorResponse & { stateError?: unknown };
 
-type InspectionError = z.infer<typeof agentSchemaInspectionErrorSchema>;
+/** Private IPC between the bundled inspection child and its scheduler. */
+export type AgentSchemaInspectionResponse =
+  | { requestId: number; ok: false; error: InspectionError }
+  | {
+      requestId: number;
+      ok: true;
+      inspection: (Omit<AgentSchemaInspection, "failure"> & { failure?: InspectionError }) | null;
+      stateInspection?: Omit<StateSchemaInspection, "inspectionErrors"> & {
+        inspectionErrors: InspectionError[];
+      };
+      schemaContracts?: StateSchemaInspection["schemaContracts"];
+    };
 
 export function serializeAgentSchemaInspectionError(value: unknown): InspectionError {
   const error = toStringifiedError(value);

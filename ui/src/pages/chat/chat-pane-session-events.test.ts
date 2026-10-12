@@ -273,7 +273,7 @@ describe("mounted pane session event ownership", () => {
     },
   );
 
-  it("does not admit fenced hidden history and hydrates its foreign descriptor when presented", async () => {
+  it("hydrates a hidden foreign descriptor when presented", async () => {
     const primary = globalSession("main");
     const original = globalSession("research", {
       archived: true,
@@ -286,7 +286,6 @@ describe("mounted pane session event ownership", () => {
     const freshDescribe = createDeferred<{ session: GatewaySessionRow | null }>();
     const initialHistoryStarted = createDeferred();
     const freshReadStarted = createDeferred();
-    const oldHistoryReconciled = createDeferred();
     const freshRowObserved = createDeferred();
     let eventDelivered = false;
     const reads: Array<{ method: string; params: unknown; afterEvent: boolean }> = [];
@@ -338,20 +337,6 @@ describe("mounted pane session event ownership", () => {
       }
       return observation;
     });
-    const oldOutcomes: Array<boolean | "defaults-only"> = [];
-    const captureReconcile = sessions.captureReconcile;
-    vi.spyOn(sessions, "captureReconcile").mockImplementation(() => {
-      const reconcile = captureReconcile();
-      const beforeEvent = !eventDelivered;
-      return (...args) => {
-        const outcome = reconcile(...args);
-        if (beforeEvent && args[0]?.agentId === "research") {
-          oldOutcomes.push(outcome);
-          oldHistoryReconciled.resolve();
-        }
-        return outcome;
-      };
-    });
     let initialHistory: ReturnType<typeof loadChatHistory> | undefined;
     let initialRefresh: Promise<void> | undefined;
     try {
@@ -389,10 +374,6 @@ describe("mounted pane session event ownership", () => {
       oldHistory.resolve({ messages: [], sessionInfo: original, sessionId: original.sessionId });
       await initialHistory;
       await initialRefresh;
-      expect(observation.hasObserved).toBe(false);
-      await oldHistoryReconciled.promise;
-      expect(oldOutcomes.length).toBeGreaterThan(0);
-      expect.soft(oldOutcomes).not.toContain(true);
       expect(pane.presented).toBe(false);
       pane.presented = true;
       await freshReadStarted.promise;

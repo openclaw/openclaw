@@ -50,6 +50,7 @@ it.each(["answer", "reasoning"] as const)(
           },
         ),
     );
+    const earlierReasoning = { itemId: "earlier", text: "Earlier thought", startedAt: 3_500 };
     const props = {
       ...threadProps("projection-scale", "agent:main:projection-scale", messages),
       runId: "active",
@@ -65,7 +66,10 @@ it.each(["answer", "reasoning"] as const)(
       },
       reasoning:
         kind === "reasoning"
-          ? { runId: "active", itemId: "thinking", text: "Reply", startedAt: 4_000 }
+          ? {
+              runId: "active",
+              items: [earlierReasoning, { itemId: "thinking", text: "Reply", startedAt: 4_000 }],
+            }
           : null,
     };
     const transcript = createTestTranscript(props.paneId);
@@ -92,7 +96,10 @@ it.each(["answer", "reasoning"] as const)(
         if (kind === "answer") {
           props.stream = stream;
         } else {
-          props.reasoning = { runId: "active", itemId: "thinking", text: stream, startedAt: 4_000 };
+          props.reasoning = {
+            runId: "active",
+            items: [earlierReasoning, { itemId: "thinking", text: stream, startedAt: 4_000 }],
+          };
         }
         reads = 0;
         project();

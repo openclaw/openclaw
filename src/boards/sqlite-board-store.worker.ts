@@ -19,7 +19,6 @@ import {
   applyBoardOpsToDatabase,
   ensureBoardSchema,
   grantBoardWidgetInDatabase,
-  hasBoardSession,
   putBoardWidgetInDatabase,
   type BoardSessionIdentity,
 } from "./sqlite-board-store.kernel.js";
@@ -81,27 +80,21 @@ export function bindSqliteWorkerBackend(
       if (closed) {
         throw new Error("Board publication scope is closed");
       }
-      const assertSessionCurrent = () => {
-        if (
-          input &&
-          (command.input.sessionKey !== input.sessionKey ||
-            !hasBoardSession(database, input.sessionKey, input.expectedSession))
-        ) {
-          throw new BoardValidationError("invalid_operation", "board session changed; retry");
-        }
-      };
+      if (input && command.input.sessionKey !== input.sessionKey) {
+        throw new BoardValidationError("invalid_operation", "board session changed; retry");
+      }
       // Nested actor publication scopes flush after this receipt has returned.
       const { result: value, changes } = captureSessionRowChanges(database.db, () =>
         withSqlitePostCommitPublications(database.db, () =>
           runSqliteWorkerTransactionSync(
             admission,
             () => {
-              assertSessionCurrent();
               if (command.type === "boards.applyOps") {
                 return applyBoardOpsToDatabase(
                   database,
                   command.input.sessionKey,
                   command.input.ops,
+                  input?.expectedSession,
                 );
               }
               if (command.type === "boards.putWidget") {
@@ -110,6 +103,7 @@ export function bindSqliteWorkerBackend(
                   command.input.sessionKey,
                   normalizeBoardWidgetPutParams(command.input.params, command.input.sessionKey),
                   command.input.viewGeneration,
+                  input?.expectedSession,
                 );
               }
               return grantBoardWidgetInDatabase(
@@ -119,15 +113,12 @@ export function bindSqliteWorkerBackend(
                 command.input.decision,
                 command.input.revision,
                 command.input.instanceId,
+                input?.expectedSession,
               );
             },
             {
               databaseLabel: database.path,
               operationLabel: command.type,
-              withCommit(commit) {
-                assertSessionCurrent();
-                return commit();
-              },
             },
           ),
         ),

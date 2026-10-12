@@ -17,6 +17,7 @@ import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
   TranscriptEvent,
+  TranscriptEventAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -41,6 +42,7 @@ import {
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
+import { resolveTranscriptEventAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequencesInTransaction,
@@ -106,7 +108,7 @@ export type SessionMessageRewriteOperations = {
     output: ReturnType<typeof prepareLockedTranscriptAppend>;
   };
   "session.transcript.lock.facts": {
-    input: LockedTranscriptTarget & { idempotencyKeys: readonly string[] };
+    input: LockedTranscriptTarget & { idempotencyKeys: readonly string[]; sourceRunId?: string };
     output: ReturnType<typeof readTranscriptMirrorFacts>;
   };
   "session.transcript.lock.commit": {
@@ -121,6 +123,7 @@ export type SessionMessageRewriteOperations = {
     input: {
       scope: ResolvedTranscriptScope;
       eventJson: string;
+      appendIntent?: TranscriptEventAppendOptions["appendIntent"];
       fence?: SessionTranscriptWriteScope;
     };
     output: ReturnType<typeof commitSessionTranscriptEvent>;
@@ -425,28 +428,35 @@ export function applySessionTranscriptEvent<T>(
   const event: TranscriptEvent = JSON.parse(input.eventJson);
   assertNonMessageTranscriptEvent(event);
   return writeTransaction("session.transcript.event-append", "Transcript event", (database) => {
-    assertSessionTranscriptHot(database.db, input.scope.sessionId);
     if (input.fence) {
-      assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
+      const entry =
+        assertLockedTranscriptWriteAllowed(database, input.scope, input.fence) ??
+        readSessionEntryRow(database, input.scope.sessionKey, "list")?.entry;
+      if (entry?.sessionId !== input.scope.sessionId) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+    } else {
+      assertSessionTranscriptHot(database.db, input.scope.sessionId);
     }
-    const entry = readSessionEntryRow(database, input.scope.sessionKey, "list");
-    if (entry?.entry.sessionId !== input.scope.sessionId) {
-      throw new SessionTranscriptWriterClaimReboundError();
-    }
+    const resolvedEvent = resolveTranscriptEventAppendParent(
+      database,
+      input.scope.sessionId,
+      event,
+      input,
+    );
     const candidate: SessionTranscriptEventCommitted = {
       kind: "session-transcript-event",
+      appended: false,
       projectionNeedsReconcile: false,
     };
-    appendTranscriptEventInTransaction(database, input.scope, event, {
-      eventJson: input.eventJson,
-      scheduleProjectionReconcile: false,
-      onProjectionReconcileNeeded: () => {
-        candidate.projectionNeedsReconcile = true;
-      },
-    });
-    if (input.fence) {
-      assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
-    }
+    candidate.appended =
+      appendTranscriptEventInTransaction(database, input.scope, resolvedEvent, {
+        eventJson: resolvedEvent === event ? input.eventJson : undefined,
+        scheduleProjectionReconcile: false,
+        onProjectionReconcileNeeded: () => {
+          candidate.projectionNeedsReconcile = true;
+        },
+      }) !== false;
     return publish(database, candidate);
   });
 }
@@ -495,10 +505,9 @@ export function applySessionTranscriptCorrection(
     }
     return { ...row, seq: identity.seq };
   });
-  rewriteSqliteTranscriptEventRowsInTransaction(database, input.scope, rows);
+  const generation = rewriteSqliteTranscriptEventRowsInTransaction(database, input.scope, rows);
   assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
-  candidate.generation =
-    readTranscriptGenerationInTransaction(database, input.scope.sessionId) ?? null;
+  candidate.generation = generation ?? current.generation;
   return candidate;
 }
 
@@ -616,8 +625,9 @@ export function applySessionMessageRewrite<T>(
         throw new SessionTranscriptWriterClaimReboundError();
       }
       const changed = input.message !== undefined;
+      let generation: string | undefined;
       if (changed) {
-        rewriteSqliteTranscriptEventRowsInTransaction(database, input.scope, [
+        generation = rewriteSqliteTranscriptEventRowsInTransaction(database, input.scope, [
           {
             event: { ...current.event, message: input.message },
             expectedEventJson: current.eventJson,
@@ -625,7 +635,7 @@ export function applySessionMessageRewrite<T>(
           },
         ]);
       }
-      const generation = readTranscriptGenerationInTransaction(database, input.scope.sessionId);
+      generation ??= readTranscriptGenerationInTransaction(database, input.scope.sessionId);
       const candidate: SessionMessageRewriteCommitted = {
         kind: "session-message-rewrite",
         result:

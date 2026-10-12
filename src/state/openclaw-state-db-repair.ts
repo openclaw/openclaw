@@ -96,7 +96,12 @@ export function repairStateSchema(
     const closeReadAdmission =
       scope === "automatic" ? undefined : openDoctorStateSchemaReadAdmission(db);
     try {
-      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      assertOpenClawStateWriteAllowed({
+        database: db,
+        databasePath: pathname,
+        env,
+        inspectOwnership: scope === "automatic" ? undefined : true,
+      });
       assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
     } finally {
       closeReadAdmission?.();
@@ -115,7 +120,12 @@ export function repairStateSchema(
       scope !== "readability" && !hasDanglingSkillWorkshopCollectionReviewIndex(db);
     const assertIndexRepairCurrent = () => {
       assertOpenClawStateDatabaseOwner(db, { pathname });
-      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      assertOpenClawStateWriteAllowed({
+        database: db,
+        databasePath: pathname,
+        env,
+        inspectOwnership: true,
+      });
     };
     indexChanges = canInspectIndexes
       ? repairDoctorSqliteIndexCorruption(db, pathname, {
@@ -176,7 +186,12 @@ export function repairStateSchema(
         ...runSqliteImmediateTransactionSync(
           db,
           () => {
-            assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+            assertOpenClawStateWriteAllowed({
+              database: db,
+              databasePath: pathname,
+              env,
+              inspectOwnership: true,
+            });
             return recoverOrphanTaskDeliveryRows(db, pathname);
           },
           {

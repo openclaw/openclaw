@@ -1,7 +1,6 @@
 import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
-  assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
@@ -166,7 +165,7 @@ export function assertAgentDatabaseExecutionCreationIdentity(
   }
 }
 
-/** Each alias and retained file receipt must still name the borrower's original store. */
+/** Keep the borrower's captured file constraints bound to its native owner. */
 export function assertBorrowedAgentDatabaseFileIdentity({
   borrowedPath,
   identity,
@@ -211,10 +210,6 @@ export function assertBorrowedAgentDatabaseFileIdentity({
         (birthtime !== undefined && nativeIdentity.birthtime !== birthtime))
     ) {
       throw new Error("Agent database borrower belongs to another physical file");
-    }
-    // The native owner validates its own path last; a borrowed alias has a separate lifetime.
-    if (!nativeIdentity || borrowedPath !== nativeIdentity.nativeLocation) {
-      assertExistingDatabaseIdentity(borrowedPath, `file:${file.physicalIdentity}`, birthtime);
     }
   }
 }

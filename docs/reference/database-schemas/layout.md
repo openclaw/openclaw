@@ -45,6 +45,9 @@ After readiness, the Gateway samples Linux file-cache residency and checks it ag
 every 15 minutes. The sample observes up to 256 file pages without reading their
 contents; it estimates whole-file residency, not the residency of every hot query.
 Other platforms do not run this maintenance.
+Sampling requires effective write permission to the file; Linux can otherwise mask
+residency as fully cached. A denied or unavailable sample produces a maintenance
+warning instead of a residency estimate.
 
 A cold sample (below 80%) or a slow bounded session-projection read starts background
 warming through an independent read-only SQLite worker. Shared state is read

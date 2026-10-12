@@ -1,29 +1,12 @@
-import { performance } from "node:perf_hooks";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
-import {
-  formatGatewayPendingCloseSteps,
-  measureGatewayCloseStep,
-} from "../../gateway/restart-trace.js";
 import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   GATEWAY_SIGNAL_REPEAT_WINDOW_MS,
   formatGatewayRepeatedSignalHint,
-  type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
-import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import { flushLogger } from "../../logging/logger.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
-import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { sleep } from "../../utils/sleep.js";
-import type { GatewayRunSignalRequest } from "./run-loop-request.js";
-import { formatShutdownCompletion } from "./run-loop-shutdown-format.js";
-
-type ExitLogger = Pick<SubsystemLogger, "info" | "warn">;
-type ExitRuntime = Pick<
-  typeof import("./lifecycle.runtime.js"),
-  "stopActiveManagedProviderLocalServices"
->;
 
 export async function waitForLaunchdRestartHandoff(handoffSpawned?: Promise<boolean>) {
   const delay = sleep(1_500);
@@ -35,93 +18,22 @@ export async function waitForLaunchdRestartHandoff(handoffSpawned?: Promise<bool
   return spawned;
 }
 
-export async function prepareGatewayExit(
-  runtime: ExitRuntime,
-  logger: ExitLogger,
-  skipLocalServices = false,
-  handoff?: { releaseLock: () => Promise<void>; exit: () => void },
-): Promise<void> {
-  const exitTimer = handoff
-    ? setTimeout(() => {
-        logger.warn(
-          `shutdown exit deadline reached; pending close steps: ${formatGatewayPendingCloseSteps()}`,
-        );
-        handoff.exit();
-      }, 5_000)
-    : undefined;
-  const step = (name: string, run: () => Promise<void>) =>
-    measureGatewayCloseStep(`restart.close.${name}`, run);
-  try {
-    if (!skipLocalServices) {
-      await step("managed-local-services", () =>
-        runWithProcessCleanupBudget(
-          handoff
-            ? { deadline: performance.now() + 3_000, warn: (message) => logger.warn(message) }
-            : undefined,
-          runtime.stopActiveManagedProviderLocalServices,
-        ).catch((error: unknown) => {
-          logger.warn(`managed local service shutdown failed: ${formatErrorMessage(error)}`);
-        }),
-      );
-    }
-    if (handoff) {
-      await step("gateway-lock-release", handoff.releaseLock);
-    } else {
-      await step("snapshot-operations", cleanupSnapshotOperations);
-    }
-    await step("log-flush", () => flushGatewayLogsBeforeExit(logger, handoff ? 1_000 : 4_000));
-    handoff?.exit();
-  } finally {
-    clearTimeout(exitTimer);
-  }
-}
-
-/** Only a process-owning stop can leave native retirement to process exit. */
-export function shutdownExitOptions(params: {
-  request: GatewayRunSignalRequest;
-  drainCutShort: boolean;
-  ownsProcessLifecycle?: boolean;
-  runtime: ExitRuntime;
-  logger: ExitLogger;
-  releaseLock: () => Promise<void>;
-  completeBoot: (completion: GatewayBootLifecycleCompletion) => void;
-  exit: (code: number) => void;
-}): { exitAfterClose?: boolean; onProcessExitReady?: () => Promise<void> } {
-  if (
-    params.request.action === "restart" ||
-    params.request.hostedStop ||
-    params.ownsProcessLifecycle !== true
-  ) {
-    return {};
-  }
-  if (!params.drainCutShort) {
-    return { exitAfterClose: true };
-  }
-  return {
-    exitAfterClose: true,
-    onProcessExitReady: async () => {
-      // Boot outcome is a write: retain state authority until it commits.
-      params.completeBoot(formatShutdownCompletion(params.request, false));
-      await prepareGatewayExit(params.runtime, params.logger, false, {
-        releaseLock: params.releaseLock,
-        exit: () => params.exit(0),
-      });
-    },
-  };
-}
-
 export async function flushGatewayLogsBeforeExit(
   logger: { warn: (message: string) => void },
   timeoutMs = 4_000,
 ) {
   flushDiagnosticsTimeline();
+  const completion = flushLogger();
   const flushed = await raceWithTimeout(
-    flushLogger().then(() => true),
+    completion.then(() => true),
     timeoutMs,
     () => false,
   );
   if (!flushed) {
-    logger.warn(`log flush did not settle within ${timeoutMs}ms; continuing shutdown`);
+    logger.warn(`log flush did not settle within ${timeoutMs}ms; waiting for accepted writes`);
+    // A file append already accepted by the transport cannot be replayed by an
+    // exit hook. The reporting grace does not release its physical custody.
+    await completion;
   }
 }
 

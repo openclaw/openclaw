@@ -6,6 +6,7 @@ import {
   validateSkillsWorkshopListParams,
   validateSkillsWorkshopReadParams,
   validateSkillsWorkshopRestoreParams,
+  validateSkillsWorkshopUndoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   archiveWorkshopSkill,
@@ -14,6 +15,7 @@ import {
   viewWorkshopSkill,
   WorkshopWriteError,
 } from "../../skills/workshop/library.js";
+import { undoWorkshopReview } from "../../skills/workshop/review-undo.js";
 import { buildSkillsWorkshopListResult } from "../../skills/workshop/workshop-list.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./shared-types.js";
@@ -115,5 +117,11 @@ export const skillsWorkshopHandlers: GatewayRequestHandlers = {
         versionId: params.versionId,
       }),
     }),
+  ),
+  "skills.workshop.undo": defineWorkshopHandler(
+    "skills.workshop.undo",
+    validateSkillsWorkshopUndoParams,
+    (params, resolved, invocation) =>
+      undoWorkshopReview(workshopWriteContext(resolved, invocation), { runId: params.runId }),
   ),
 };

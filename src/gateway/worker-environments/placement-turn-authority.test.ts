@@ -657,11 +657,7 @@ it.each(["preparing", "bound", "final source check"] as const)(
           phase === "preparing" ? "worker turn authority changed" : "run closed during binding",
         );
       }
-      if (phase === "final source check") {
-        expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
-      } else {
-        expect(assertSourceCurrent).not.toHaveBeenCalled();
-      }
+      expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
     } finally {
       preparation?.mockRestore();
       releaseAgentRunDelegatedAuthority(delegated);

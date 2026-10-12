@@ -231,20 +231,6 @@ export function createMergeOutcomeFixtureHarness() {
       previewBody: "Fixture body",
       previewHeadline: "Configured squash headline (#123)" as string | null,
       tamperMergeBody: false,
-      issueComments: [
-        {
-          id: 1,
-          body: `<!-- clawsweeper-review-version item=123 reviewed_at=${new Date().toISOString()} sha=${head} source_revision=${"b".repeat(64)} lease_owner=github-run-1 lease_comment_id=1 v=1 -->
-
-<!-- clawsweeper-review item=123 -->`,
-          user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        },
-      ],
-      issueCommentsAfterFirst: null as null | Array<{
-        id: number;
-        body: string;
-        user: { id: number; login: string; type: string };
-      }>,
       issueCommentReads: 0,
       tamperCorrectionAtFinalReview: false,
       issueCommentsErrorAt: 0,
@@ -687,6 +673,11 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing independent fresh merge observation");
     if(args.find(arg=>arg.startsWith("query="))!==${JSON.stringify(landingSnapshotQuery)}) fail("landing snapshot query is not supported by the shipped Octopool shim");
     s.observationReads++;
+    if(s.observationReads===2&&s.tamperCorrectionAtFinalReview) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/correction-review.json","\\n");
+    if(s.tamperMergeBody) {
+      const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
+      for(const name of fs.readdirSync(local).filter(name=>name.startsWith("merge-body."))) fs.writeFileSync(local+name,"Tampered");
+    }
     const step=s.observations.shift();
     if(step?.pr) Object.assign(s.pr,step.pr);
     if(step?.priorCi) Object.assign(s.priorCi,step.priorCi);
@@ -712,15 +703,9 @@ else if(args[0]==="pr"&&args[1]==="view") {
   } else {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing live comment header");
     s.issueCommentReads++;
-    if(s.issueCommentReads>1&&s.tamperCorrectionAtFinalReview) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/correction-review.json","\\n");
-    if(s.tamperMergeBody) {
-      const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
-      for(const name of fs.readdirSync(local).filter(name=>name.startsWith("merge-body."))) fs.writeFileSync(local+name,"Tampered");
-    }
     if(s.issueCommentReads===s.issueCommentsErrorAt) fail("comment API unavailable");
-    if(s.issueCommentReads>1&&s.issueCommentsAfterFirst) s.issueComments=s.issueCommentsAfterFirst;
     save();
-    out([[...s.issueComments,...s.comments]]);
+    out([s.comments]);
   }
 } else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/commits?"))) {
   const query=new URL(args.find(arg=>arg.startsWith("repos/fixture/repo/commits?")),"https://github.com").searchParams;
@@ -822,7 +807,7 @@ if [ "\${9:-}" = verify ]; then
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}"
 fi
 `,
       true,
@@ -871,6 +856,7 @@ fi
       verifyOnly = false,
       adminEvidence = "",
       confirmedAdmin = false,
+      mergedHead = "",
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -890,6 +876,7 @@ fi
           verifyOnly ? "verify" : "",
           adminEvidence,
           String(confirmedAdmin),
+          mergedHead,
         ],
         {
           cwd,
@@ -954,7 +941,6 @@ fi
       prepare(replacement, main);
       const next = state();
       next.pr.headRefOid = replacement;
-      next.issueComments[0]!.body = next.issueComments[0]!.body.replace(head, replacement);
       save(next);
       return replacement;
     };
@@ -1036,6 +1022,8 @@ fi
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),
+      acceptHeadDrift: (oid: string, mergedHead: string) =>
+        run(false, repo, "squash", oid, "", "", "", "", false, "", false, "", false, mergedHead),
       recover,
       advance,
       record,

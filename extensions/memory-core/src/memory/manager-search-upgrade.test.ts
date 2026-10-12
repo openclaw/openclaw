@@ -87,6 +87,23 @@ describe.each(versions)("memory search after a %s upgrade", (versionKey) => {
       );
       expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
       expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(currentVersion);
+
+      await manager.close();
+      await closeAllMemorySearchManagers();
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      const publication = () =>
+        withDatabase(dbPath, (db) => ({
+          meta: readMeta(db),
+          revision: db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get(),
+        }));
+      const rebuilt = publication();
+      const embedded = fixture.provider.embedBatchCalls;
+      const reopened = await fixture.getFreshManager(cfg, purpose);
+      await reopened.sync({ reason: "watch" });
+      expect(await reopened.search("alpha", { lexicalOnly: true })).not.toEqual([]);
+      expect(fixture.provider.embedBatchCalls).toBe(embedded);
+      expect(publication()).toEqual(rebuilt);
     },
   );
 

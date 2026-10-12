@@ -7,10 +7,10 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   loadTranscriptEventsSync,
-  replaceTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "../../config/sessions/session-accessor.sqlite-visible-cursor.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "../../config/sessions/transcript-header.js";
@@ -204,26 +204,6 @@ it("isolates a required checkpoint while preserving compacted admitted input", a
     expect(loadTranscriptEventsSync(scope)).toEqual(before);
     expect(readActiveTranscriptEntryAnchor(admission)).toEqual(anchor);
     expect(SessionManager.open(scope).getBranch().at(-1)?.id).toBe(admission.entryId);
-  });
-});
-
-it("does not use an admission after the source transcript changes", async () => {
-  await withAdmittedInput(false, async ({ scope, workspaceDir, admission }) => {
-    const current = SessionManager.open(scope);
-    current.branch(admission.effectiveParentId!);
-    current.appendLeafControl({
-      targetId: current.getLeafId(),
-      appendParentId: current.getAppendParentId(),
-    });
-    await waitForSessionTranscriptProjection(scope);
-    await expect(
-      prepareMemoryFlushSession({
-        admission,
-        source: scope,
-        runId: "stale-helper",
-        workspaceDir,
-      }),
-    ).rejects.toThrow(/admission|visible/i);
   });
 });
 

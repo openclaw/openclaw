@@ -1,11 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
@@ -13,13 +16,24 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
-import { acquireAuthProfileReadDatabase } from "./auth-profiles/sqlite-read-pool.js";
+import {
+  inspectAgentAuthProfileJsonCellReadOnly,
+  readAuthProfileRowsReadOnly,
+  writeAuthProfileJsonCell,
+} from "./auth-profiles/sqlite-json.js";
+import {
+  acquireAuthProfileReadDatabase,
+  closeAuthProfileReadDatabase,
+} from "./auth-profiles/sqlite-read-pool.js";
 import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import { apiKeyStore, withAgentDirEnv } from "./auth-profiles/sqlite.test-support.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { PersistedAuthProfileStoreInspection } from "./auth-profiles/types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   listExternalCliSyncProviderIds: () => [],
@@ -55,6 +69,67 @@ function withReaders(
 }
 
 describe("auth profile sqlite reader lifecycle", () => {
+  it("reuses admitted auth table facts across readers and refreshes them after owner writes", () => {
+    const databasePath = path.join(tempDirs.make("auth-schema-facts-"), "agent.sqlite");
+    const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+    const storeSchema = `CREATE TABLE auth_profile_store (
+      store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL
+    )`;
+    const first = { version: 1, profiles: {} };
+    const updated = { version: 1, profiles: { synthetic: { type: "api_key", key: "fixture" } } };
+    const missingTable = { status: "missing", reason: "table" } as const;
+    let observation: ReturnType<typeof observeSqliteReadSql> | undefined;
+    try {
+      writer.exec(storeSchema);
+      admitSqliteSchema(writer);
+      runSqliteImmediateTransactionSync(writer, () =>
+        writeAuthProfileJsonCell(writer, "store", "agent", first),
+      );
+      observation = observeSqliteReadSql(StatementSync.prototype);
+      const reads = observation;
+      const assertRows = (
+        store: PersistedAuthProfileStoreInspection,
+        state: PersistedAuthProfileStoreInspection = missingTable,
+      ) => {
+        reads.queries.length = 0;
+        expect(inspectAgentAuthProfileJsonCellReadOnly(databasePath, "store")).toEqual(store);
+        expect(readAuthProfileRowsReadOnly(databasePath)).toMatchObject({ store, state });
+        // The batched reader closes its native handle; the next read borrows the same facts.
+        expect(inspectAgentAuthProfileJsonCellReadOnly(databasePath, "store")).toEqual(store);
+        expect(
+          reads.queries.filter((sql) => /\b(?:sqlite_master|sqlite_schema)\b/iu.test(sql)),
+        ).toEqual([]);
+      };
+
+      assertRows({ status: "readable", raw: first });
+      runSqliteImmediateTransactionSync(writer, () =>
+        writeAuthProfileJsonCell(writer, "store", "agent", updated),
+      );
+      assertRows({ status: "readable", raw: updated });
+
+      writer.exec(
+        "DROP TABLE auth_profile_store; CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json",
+      );
+      assertRows({ status: "unreadable" });
+      writer.exec("DROP VIEW auth_profile_store");
+      assertRows(missingTable);
+
+      writer.exec(`${storeSchema}; CREATE TABLE auth_profile_state (
+        state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL
+      )`);
+      const state = { lastGood: { fixture: "synthetic" } };
+      runSqliteImmediateTransactionSync(writer, () => {
+        writeAuthProfileJsonCell(writer, "store", "agent", updated);
+        writeAuthProfileJsonCell(writer, "state", "agent", state);
+      });
+      assertRows({ status: "readable", raw: updated }, { status: "readable", raw: state });
+    } finally {
+      observation?.restore();
+      closeAuthProfileReadDatabase(databasePath);
+      writer.close();
+    }
+  });
+
   it("reuses format admission across pool reopen and validates a replacement file", async () => {
     await withReaders((agentDir) => {
       const pathname = resolveAuthProfileDatabasePath(agentDir);

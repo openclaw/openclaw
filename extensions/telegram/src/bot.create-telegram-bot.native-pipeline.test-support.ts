@@ -21,10 +21,7 @@ import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
-import {
-  enqueueTelegramMenuSync,
-  resolveTelegramMenuRemoteOwner,
-} from "./bot-native-command-menu-state.js";
+import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import { apiThrottler } from "./bot.runtime.js";
@@ -59,8 +56,14 @@ const http = useTelegramHttpFixture();
 type ReplyResolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
 const replySpy = vi.fn<ReplyResolver>();
 const buildModelsProviderData = vi.fn(defaultTelegramBotDeps.buildModelsProviderData);
-const listSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.listSkillCommandsForAgents);
+const prepareSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.prepareSkillCommandsForAgents);
 const pendingUpdates = new Set<Promise<void>>();
+const pendingMenuSyncs = new Set<Promise<void>>();
+
+export async function settleMenuSyncs(): Promise<void> {
+  await Promise.all(pendingMenuSyncs);
+  pendingMenuSyncs.clear();
+}
 
 async function settleUpdates(): Promise<void> {
   while (pendingUpdates.size > 0) {
@@ -73,7 +76,7 @@ export const harness: {
   replySpy: Mock<ReplyResolver>;
   transcribeFirstAudio: typeof transcribeFirstAudio;
   settleUpdates: typeof settleUpdates;
-  listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
+  prepareSkillCommandsForAgents: typeof prepareSkillCommandsForAgents;
   telegramBotDepsForTest: TelegramBotDeps;
 } = {
   get state() {
@@ -82,15 +85,19 @@ export const harness: {
   replySpy,
   transcribeFirstAudio,
   settleUpdates,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   telegramBotDepsForTest: {
     ...defaultTelegramBotDeps,
     buildModelsProviderData,
-    listSkillCommandsForAgents,
+    prepareSkillCommandsForAgents,
+    syncTelegramMenuCommands: (params) => {
+      const pending = syncTelegramMenuCommands(params);
+      pendingMenuSyncs.add(pending);
+      return pending;
+    },
   },
 };
 const bots: Array<{ bot: Bot; abort: AbortController }> = [];
-const menuOwnerIds = new Set<number>();
 export const chat = { id: 42001, type: "private", first_name: "Alice" } as const;
 export const from = { id: 42001, is_bot: false, first_name: "Alice" } as const;
 export const groupChat = {
@@ -189,7 +196,6 @@ export async function createBot(
     );
     return pending;
   };
-  menuOwnerIds.add(botInfo.id);
   bots.push({ bot, abort });
   return bot;
 }
@@ -295,9 +301,9 @@ beforeEach(async () => {
   };
   replySpy.mockReset().mockResolvedValue({ text: "Test response" });
   transcribeFirstAudio.mockReset();
-  listSkillCommandsForAgents
+  prepareSkillCommandsForAgents
     .mockReset()
-    .mockImplementation(defaultTelegramBotDeps.listSkillCommandsForAgents);
+    .mockImplementation(defaultTelegramBotDeps.prepareSkillCommandsForAgents);
   buildModelsProviderData.mockReset().mockResolvedValue({
     byProvider: new Map(),
     providers: [],
@@ -320,16 +326,7 @@ afterEach(async () => {
     abort.abort();
   }
   await settleUpdates();
-  for (const botId of menuOwnerIds) {
-    await new Promise<void>((resolve, reject) => {
-      enqueueTelegramMenuSync({
-        ownerKey: resolveTelegramMenuRemoteOwner({ botId }).queueKey,
-        sync: async () => resolve(),
-        onError: reject,
-      });
-    });
-  }
-  menuOwnerIds.clear();
+  await settleMenuSyncs();
   await Promise.all(bots.splice(0).map(({ bot }) => bot.stop()));
   clearRuntimeConfigSnapshot();
   clearTelegramRuntimeForTest();

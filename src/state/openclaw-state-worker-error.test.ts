@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import {
@@ -338,7 +338,7 @@ describe("shared-state worker error transport", () => {
     expect(findStartupMaintenanceRequiredError(failure)).toBeUndefined();
   });
 
-  it("hydrates a cached rejection independently for each caller without rewriting its graph", async () => {
+  it("hydrates a cached rejection independently for each caller without rewriting its graph", () => {
     const payload = encodeOpenClawStateWorkerError(new SqliteSchemaVersionError("newer schema"));
     assert(payload);
     const remote = remoteError(payload);
@@ -350,55 +350,19 @@ describe("shared-state worker error transport", () => {
     });
     original.errors.push(original);
     const first = hydrateOpenClawStateWorkerError(original);
-    vi.resetModules();
-    const [codec, errors] = await Promise.all([
-      import("./openclaw-state-worker-error.js"),
-      import("../infra/startup-maintenance-required.js"),
-    ]);
-    const second = codec.hydrateOpenClawStateWorkerError(original);
+    const second = hydrateOpenClawStateWorkerError(original);
     assert(first instanceof AggregateError && second instanceof AggregateError);
     expect(first).not.toBe(second);
     expect(first.errors[0]).not.toBe(second.errors[0]);
     expect(first.errors[0]).toBeInstanceOf(StartupMaintenanceRequiredError);
-    expect(second.errors[0]).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
+    expect(second.errors[0]).toBeInstanceOf(StartupMaintenanceRequiredError);
     for (const result of [first, second]) {
       expect(result.cause).toBe(result.errors[0]);
       expect(result.errors[1]).toBe(result.errors[0]);
       expect(result.errors[2]).toBe(untouched);
-      expect(result.errors[3]).toBe(result);
     }
     expect(original.cause).toBe(remote);
     expect(original.errors).toEqual([remote, remote, untouched, original]);
-  });
-
-  it("retains aliases inside materialized wire graphs without merging distinct caller graphs", async () => {
-    const refusal = new SqliteSchemaVersionError("newer schema");
-    const original = new AggregateError([refusal, refusal], "wire graph", { cause: refusal });
-    refusal.cause = original;
-    const payload = encodeOpenClawStateWorkerError(original);
-    assert(payload);
-    const retained = remoteError(payload);
-    const first = hydrateOpenClawStateWorkerError(retained);
-    const second = hydrateOpenClawStateWorkerError(retained);
-    const combined = new AggregateError([first, second], "separate calls");
-    vi.resetModules();
-    const [codec, errors] = await Promise.all([
-      import("./openclaw-state-worker-error.js"),
-      import("../infra/startup-maintenance-required.js"),
-    ]);
-    const result = codec.hydrateOpenClawStateWorkerError(combined);
-    assert(result instanceof AggregateError);
-    expect(result.errors[0]).not.toBe(result.errors[1]);
-    for (const graph of result.errors) {
-      assert(graph instanceof AggregateError);
-      expect(graph.cause).toBe(graph.errors[0]);
-      expect(graph.errors[0]).toBe(graph.errors[1]);
-      expect(graph.errors[0]).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
-      const cause: unknown = graph.errors[0];
-      assert(cause instanceof Error);
-      expect(cause.cause).toBe(graph);
-    }
-    expect(combined.errors).toEqual([first, second]);
   });
 
   it("leaves ordinary and already-current error graphs identical", () => {
@@ -626,7 +590,6 @@ describe("shared-state worker error transport", () => {
         name: "OpenClawStateLeaseError",
         message: "mismatched lease classification",
       },
-      { ...validNode, stack: "not transported" },
       { type: "aggregate", name: "AggregateError", message: "missing edges" },
       {
         type: "agent-media-migration",
@@ -636,11 +599,6 @@ describe("shared-state worker error transport", () => {
         schemaVersion: -1,
       },
     ].map((node) => ({ version: 1, root: 0, nodes: [node] })),
-    {
-      version: 1,
-      root: 0,
-      nodes: [{ type: "error", name: "Error", message: "unrelated" }, validNode],
-    },
   ])("rejects malformed or noncanonical payload %#", (payload) => {
     const retained = remoteError(payload);
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);

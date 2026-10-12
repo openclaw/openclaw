@@ -16,12 +16,12 @@ import {
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
 import {
   resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import {
@@ -392,8 +392,9 @@ describe("pending spawn preparation authority", () => {
         ],
       );
     }
-    const readChildKey = () =>
-      listSessionChildEntriesReadOnly({ storePath, sessionKey: parentSessionKey })[0]!.sessionKey;
+    const readChildKey = async () =>
+      (await listSessionChildEntriesReadOnly({ storePath, sessionKey: parentSessionKey }))[0]!
+        .sessionKey;
     const attachmentFixture = hasAttachments
       ? installSpawnAttachmentFixture({
           stateDir: fixture.stateDir,
@@ -404,7 +405,7 @@ describe("pending spawn preparation authority", () => {
               : closure === "native attachment files"
                 ? "files"
                 : undefined,
-          entered: () => entered.resolve(readChildKey()),
+          entered: async () => entered.resolve(await readChildKey()),
           release: release.promise,
         })
       : undefined;
@@ -431,7 +432,7 @@ describe("pending spawn preparation authority", () => {
       },
       resolveContextEngine: async () => {
         if (closure === "native engine resolution") {
-          entered.resolve(readChildKey());
+          entered.resolve(await readChildKey());
           await release.promise;
         }
         return Object.assign(new LegacyContextEngine(), { prepareSubagentSpawn: prepare });

@@ -24,8 +24,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { resolveServerUiPrefWriteStatus, retryServerUiPrefWrite } from "./server-prefs-controls.ts";
+import { applyServerUiPrefs } from "./server-prefs-reconcile.ts";
 import { createServerPrefsWriter } from "./server-prefs.test-support.ts";
-import { applyServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
+import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 const scope = "ws://background-cas";

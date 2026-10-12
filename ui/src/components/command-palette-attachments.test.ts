@@ -266,7 +266,7 @@ describe("command palette paste-only images", () => {
   ] as const)("settles a cold submit exactly once after %s preparation", async (outcome) => {
     const delayedPolicy = outcome === "policy-delayed" || outcome === "text-policy-delayed";
     const policy = createDeferred<{ sessionPlacement: Record<string, never> }>();
-    const { palette, context } = await mount(
+    const { palette, context, publish } = await mount(
       delayedPolicy ? { placementPolicy: () => policy.promise } : {},
     );
     palette.togglePalette();
@@ -326,6 +326,8 @@ describe("command palette paste-only images", () => {
     if (delayedPolicy) {
       expect(context.sessions.createResult).not.toHaveBeenCalled();
       policy.resolve({ sessionPlacement: {} });
+      await context.agents.refreshList();
+      publish();
     }
     if (outcome === "oversized" || outcome === "partial") {
       // A valid text/remaining-image prompt could be sent explicitly, but the

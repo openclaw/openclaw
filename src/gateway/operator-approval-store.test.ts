@@ -410,29 +410,50 @@ describe("operator approval store", () => {
 
   it("returns the first terminal answer and distinguishes same and conflicting retries", async () => {
     const databaseOptions = getSuiteDatabaseOptions();
-    await insertOperatorApproval({ approval: approval("first-wins"), databaseOptions });
+    const inserted = await Promise.all([
+      insertOperatorApproval({ approval: approval("first-wins"), databaseOptions }),
+      insertOperatorApproval({ approval: approval("first-wins"), databaseOptions }),
+    ]);
+    expect(inserted.map((result) => result.outcome)).toEqual(["inserted", "existing"]);
+    for (const result of inserted) {
+      expect(result).toMatchObject({ record: { id: "first-wins", status: "pending" } });
+    }
 
-    const winner = await resolveOperatorApproval({
+    const winnerPending = resolveOperatorApproval({
       id: "first-wins",
       decision: "allow-once",
       resolver: { kind: "device", id: "winner-device" },
       nowMs: 2_000,
       databaseOptions,
     });
-    const sameRetry = await resolveOperatorApproval({
+    const sameRetryPending = resolveOperatorApproval({
       id: "first-wins",
       decision: "allow-once",
       resolver: { kind: "channel", id: "telegram:loser" },
       nowMs: 2_001,
       databaseOptions,
     });
-    const conflictingRetry = await resolveOperatorApproval({
+    const conflictingRetryPending = resolveOperatorApproval({
       id: "first-wins",
       decision: "deny",
       resolver: { kind: "channel", id: "telegram:loser" },
       nowMs: 2_002,
       databaseOptions,
     });
+
+    const denialPending = forceDenyOperatorApproval({
+      id: "first-wins",
+      reason: "run-aborted",
+      resolver: { kind: "system", id: "late-denial" },
+      nowMs: 2_003,
+      databaseOptions,
+    });
+    const [winner, sameRetry, conflictingRetry, denial] = await Promise.all([
+      winnerPending,
+      sameRetryPending,
+      conflictingRetryPending,
+      denialPending,
+    ]);
 
     expect(winner).toMatchObject({
       outcome: "resolved",
@@ -451,6 +472,10 @@ describe("operator approval store", () => {
       outcome: "already-resolved",
       retry: "conflict",
       record: { decision: "allow-once" },
+    });
+    expect(denial).toMatchObject({
+      outcome: "already-terminal",
+      record: { decision: "allow-once", resolver: { id: "winner-device" } },
     });
   });
 
@@ -578,20 +603,22 @@ describe("operator approval store", () => {
       record: { resolvedAtMs: 5_000, updatedAtMs: 5_000 },
     });
 
-    const first = await consumeOperatorApprovalAllowOnce({
+    const firstPending = consumeOperatorApprovalAllowOnce({
       id: "consume",
       consumerId: "run-1:tool-call-1",
       redemptionWindowMs: 15_000,
       nowMs: 3_000,
       databaseOptions,
     });
-    const replay = await consumeOperatorApprovalAllowOnce({
+    const replayPending = consumeOperatorApprovalAllowOnce({
       id: "consume",
-      consumerId: "run-1:tool-call-1",
+      consumerId: "run-2:tool-call-2",
       redemptionWindowMs: 15_000,
       nowMs: 3_001,
       databaseOptions,
     });
+
+    const [first, replay] = await Promise.all([firstPending, replayPending]);
 
     expect(first).toMatchObject({
       outcome: "consumed",
@@ -604,7 +631,7 @@ describe("operator approval store", () => {
     });
     expect(replay).toMatchObject({
       outcome: "already-consumed",
-      record: { decision: "allow-once", consumedAtMs: 5_000 },
+      record: { decision: "allow-once", consumedAtMs: 5_000, consumedBy: "run-1:tool-call-1" },
     });
   });
 

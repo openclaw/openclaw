@@ -3,14 +3,12 @@ import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import type { OpenClawStateReadReply } from "../state/openclaw-state-read.types.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { configureNodeHost, loadNodeHostConfig } from "./config.js";
@@ -170,36 +168,26 @@ it.each([
   expect(failure).toMatchObject({ message: expect.stringMatching(row.message) });
 });
 
-it.each([true, false])(
-  "retains the selected state root while reading (original marker=%s)",
-  async (markerAtOriginal) => {
-    const original = fixture();
-    const other = fixture();
-    const env = { ...original.env };
-    const reply = createDeferredCore<OpenClawStateReadReply>();
-    const execute = vi
-      .spyOn(stateReads, "executeExistingOpenClawStateRead")
-      .mockReturnValue(reply.promise);
-    const result = loadNodeHostConfig(env);
-    env.OPENCLAW_STATE_DIR = other.root;
-    fs.writeFileSync(path.join(markerAtOriginal ? original.root : other.root, "node.json"), "{}\n");
-    reply.resolve({
-      ok: true,
-      type: "nodeHost.config",
-      sourceAdmitted: true,
-      row: {
-        // The original-root legacy gate must run before decoding the returned row.
-        value_json: markerAtOriginal ? "{" : '{"version":1,"nodeId":"original-node"}',
-        updated_at_ms: 1,
-      },
+it("configures without host SQL and refreshes previously read configuration", async () => {
+  const { env } = fixture();
+  const initial = await seed(env);
+  expect(await loadNodeHostConfig(env)).toEqual(initial);
+  await withoutParentSql(async () => {
+    const configured = await configureNodeHost({
+      env,
+      displayName: "Updated Node",
+      fallbackDisplayName: "fallback",
+      gateway: { host: "new.gateway.example", port: 19443, tls: true },
+      commands: ["fixture.updated"],
+      nowMs: 5678,
     });
-    if (markerAtOriginal) {
-      await expect(result).rejects.toThrow(
-        `retired node-host state remains at ${path.join(original.root, "node.json")}`,
-      );
-    } else {
-      await expect(result).resolves.toMatchObject({ nodeId: "original-node" });
-    }
-    expect(execute.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(original.root);
-  },
-);
+    expect(configured).toMatchObject({
+      nodeId: initial.nodeId,
+      displayName: "Updated Node",
+      commands: ["fixture.updated"],
+      installedAppsSharing: true,
+      gateway: { host: "new.gateway.example", port: 19443, tls: true },
+    });
+    expect(await loadNodeHostConfig(env)).toEqual(configured);
+  });
+});

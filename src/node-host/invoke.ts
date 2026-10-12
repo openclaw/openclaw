@@ -195,10 +195,7 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-function resolveExecutable(bin: string, env?: Record<string, string>) {
-  if (bin.includes("/") || bin.includes("\\")) {
-    return null;
-  }
+async function handleSystemWhich(rawBins: unknown[], env?: Record<string, string>) {
   const extensions =
     process.platform === "win32"
       ? (
@@ -214,24 +211,20 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
       : [""];
   const envPath =
     env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
-  for (const dir of envPath.split(path.delimiter).filter(Boolean)) {
-    for (const ext of extensions) {
-      const candidate = path.join(dir, bin + ext);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
-}
-
-async function handleSystemWhich(rawBins: unknown[], env?: Record<string, string>) {
-  const bins = normalizeStringEntries(rawBins);
+  const directories = envPath.split(path.delimiter).filter(Boolean);
   const found: Record<string, string> = {};
-  for (const bin of bins) {
-    const pathLocal = resolveExecutable(bin, env);
-    if (pathLocal) {
-      found[bin] = pathLocal;
+  bins: for (const bin of normalizeStringEntries(rawBins)) {
+    if (bin.includes("/") || bin.includes("\\")) {
+      continue;
+    }
+    for (const dir of directories) {
+      for (const ext of extensions) {
+        const candidate = path.join(dir, bin + ext);
+        if (fs.existsSync(candidate)) {
+          found[bin] = candidate;
+          continue bins;
+        }
+      }
     }
   }
   return { bins: found };

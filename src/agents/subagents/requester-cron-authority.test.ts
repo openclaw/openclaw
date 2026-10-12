@@ -356,7 +356,7 @@ describe("requester cron authority lifetime", () => {
       }
 
       const continued = structuredClone(paused);
-      continued.runId = "continued-child";
+      continued.runId = `continued-child-${outcome}`;
       continued.taskRunId = paused.runId;
       continued.pauseReason = undefined;
       const nextBatch = [continued, structuredClone(batch[1]!)];
@@ -682,7 +682,7 @@ describe("requester cron authority lifetime", () => {
       const batch = await capture();
       const previous = batch[0]!;
       const next = structuredClone(previous);
-      next.runId = "child-successor";
+      next.runId = `child-successor-${preserve}`;
       next.taskRunId = previous.runId;
       next.requesterSettleWake!.batchRunIds = [next.runId];
       const replacement = [next];

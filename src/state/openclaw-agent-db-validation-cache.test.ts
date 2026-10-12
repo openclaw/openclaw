@@ -287,7 +287,10 @@ describe("canonical proof on physical database validation", () => {
           expect(adopt(receipt.identity, receipt)).toBe(true);
         }
         closeOpenClawAgentDatabaseByPath(database.path);
+        const blockedDirectory = path.join(source.dir, "not-a-directory");
+        fs.writeFileSync(blockedDirectory, "synthetic non-directory");
         const candidates = [
+          { path: path.join(blockedDirectory, "unreadable.sqlite") },
           { path: database.path, ...(selection === "sibling-family" ? { scope: selection } : {}) },
         ];
 

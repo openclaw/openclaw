@@ -238,7 +238,7 @@ true: provider prose (`title`, `snippet`, `siteName`, `content`, citation
 titles, error `message`) is stripped of any pre-existing envelope lines and
 re-wrapped exactly once at the core boundary, so no provider metadata can spoof
 the marker. `query` is always the requested query, citation and result URLs
-must parse as http(s), `published` must be ISO-date shaped, URLs are emitted canonicalized, and a
+must parse as http(s), `published` must be ISO-date shaped, URLs are normalized before output, and a
 payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
@@ -353,7 +353,7 @@ namespace.
 - When `allowedDomains` is set, it restricts both hosted `web_search` and
   managed `web_fetch` on turns where native hosted search is active. Turns
   using a managed search provider are unchanged. Automatic managed search
-  fallback also fails closed if hosted search is unavailable.
+  fallback is also blocked if hosted search is unavailable.
 - Tool-disabled LLM-only runs disable both native and managed search
 - `tools.web.search.enabled: false` disables both managed and native search
 

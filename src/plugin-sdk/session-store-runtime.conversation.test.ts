@@ -25,6 +25,7 @@ import {
 import {
   deleteSessionEntry,
   getConversationSession,
+  getConversationSessionAsync,
   getSessionEntry,
   normalizeSessionDeliveryState,
   patchSessionEntry,
@@ -91,6 +92,24 @@ describe("current conversation session binding", () => {
       sessionId: "original",
     });
     expect(getSessionEntry(replacementScope)).toBeUndefined();
+    const hostSql = observeHostDataSql();
+    try {
+      expect(await getConversationSessionAsync(address)).toEqual({
+        sessionKey: scope.sessionKey,
+        sessionId: "original",
+      });
+      await upsertSessionEntry({
+        ...replacementScope,
+        entry: { sessionId: "replacement", updatedAt: 200, chatType: "group", delivery },
+      });
+      expect(await getConversationSessionAsync(address)).toEqual({
+        sessionKey: replacementScope.sessionKey,
+        sessionId: "replacement",
+      });
+    } finally {
+      hostSql.restore();
+    }
+    expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
   });
 
   it("keeps prepared guards on the canonical row selected by shorthand and normalized keys", async () => {

@@ -366,7 +366,8 @@ it.each(["state migration is pending", "data/settings upgrade is unfinished"])(
       await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
       const repaired = await output();
       expect(repaired).not.toContain(warnings[3]);
-      for (const warning of warnings.slice(0, 3)) {
+      expect(repaired).not.toContain(warnings[0]);
+      for (const warning of warnings.slice(1, 3)) {
         expect(repaired).toContain(warning);
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
@@ -385,7 +386,7 @@ it.each(["state migration is pending", "data/settings upgrade is unfinished"])(
       });
       const laterHistory = finishUpdateRun(later.runId, { status: "succeeded" });
       latestRunId = later.runId;
-      expect(await output()).toContain(warnings[3]);
+      expect(await output()).not.toContain(warnings[3]);
       expect(getUpdateRun(later.runId)).toEqual(laterHistory);
     });
   },

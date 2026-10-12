@@ -1312,22 +1312,20 @@ describe("ollama plugin", () => {
     expect(streamFn).not.toHaveBeenCalled();
   });
 
-  it("owns replay policy for OpenAI-compatible and native Ollama routes", () => {
-    const provider = registerProvider();
-    const replay = (modelApi: "ollama" | "openai-completions") =>
-      provider.buildReplayPolicy?.({
+  it.each(["ollama", "openai-completions"] as const)(
+    "owns replay policy for %s routes",
+    (modelApi) => {
+      const provider = registerProvider();
+      const policy = provider.buildReplayPolicy?.({
         provider: "ollama",
         modelApi,
         modelId: "qwen3:32b",
       });
-    expect(replay("openai-completions")).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-    });
-    const nativePolicy = replay("ollama");
-    expect(nativePolicy?.sanitizeToolCallIds).toBe(false);
-    expect(nativePolicy?.toolCallIdMode).toBeUndefined();
-  });
+      expect(policy?.sanitizeToolCallIds).toBe(modelApi !== "ollama");
+      expect(policy?.toolCallIdMode).toBe(modelApi === "ollama" ? undefined : "strict");
+      expect(policy?.dropReasoningFromHistory ?? false).toBe(modelApi !== "ollama");
+    },
+  );
 
   it("selects cloud native transport with the default URL only for api=ollama", () => {
     const provider = registerOllamaCloudProvider();

@@ -10,11 +10,11 @@ import {
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
 import {
+  renderIdentityAvatar,
   identityAvatarClass,
   renderAgentIdentityAvatar,
   renderAgentAvatarHat,
   renderIdentityAvatarImage,
-  resolveIdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
@@ -39,6 +39,7 @@ import {
   readSessionDefaults,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { renderChatAuthorAvatar, renderUserAvatarSlot } from "./components/chat-author-avatar.ts";
 
 export function renderChatAvatar(
@@ -56,7 +57,9 @@ export function renderChatAvatar(
     if (sender.identity?.type === "agent") {
       return renderChatAuthorAvatar(sender, "chat-avatar assistant");
     }
-    return renderUserAvatarSlot(resolveIdentityAvatarView(sender), formatSenderLabel(sender) ?? "");
+    return renderIdentityAvatar(sender, (view) =>
+      renderUserAvatarSlot(view, formatSenderLabel(sender) ?? ""),
+    );
   }
   if (normalized === "assistant") {
     const name = assistant?.name?.trim() || "Assistant";
@@ -268,7 +271,7 @@ export function invalidateChatAvatarCache(host: ChatAvatarHost): void {
 
 async function loadChatAvatarSnapshot(host: ChatAvatarHost, agentId: string) {
   const client = host.client;
-  const epoch = host.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
   const sessionAgentId = resolveAgentIdForSession(host);
   if (!client || !host.connected) {
     return null;
@@ -276,13 +279,7 @@ async function loadChatAvatarSnapshot(host: ChatAvatarHost, agentId: string) {
   let release: () => void = () => undefined;
   try {
     const identity = await fetchAssistantIdentity(client, agentId);
-    if (
-      !identity ||
-      !host.connected ||
-      host.client !== client ||
-      host.connectionEpoch !== epoch ||
-      resolveAgentIdForSession(host) !== sessionAgentId
-    ) {
+    if (!identity || !connectionIsCurrent() || resolveAgentIdForSession(host) !== sessionAgentId) {
       return null;
     }
     const avatar = identity.avatar?.trim() ?? "";
@@ -335,8 +332,7 @@ export async function refreshSenderAgentAvatars(
   senderAvatarRequests.set(host, request);
   const sessionKey = host.sessionKey;
   const agentId = resolveAgentIdForSession(host);
-  const client = host.client;
-  const epoch = host.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
   const agents = host.agentsList?.agents;
   const remainingIds = new Set(agents?.map((agent) => agent.id));
   // Consume each sender once, reserving one cache slot for the current agent.
@@ -362,9 +358,7 @@ export async function refreshSenderAgentAvatars(
     : [];
   if (
     ids.length &&
-    (!host.connected ||
-      host.client !== client ||
-      host.connectionEpoch !== epoch ||
+    (!connectionIsCurrent() ||
       host.agentsList?.agents !== agents ||
       host.sessionKey !== sessionKey ||
       resolveAgentIdForSession(host) !== agentId ||
@@ -407,8 +401,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     return;
   }
   const sessionKey = host.sessionKey;
-  const client = host.client;
-  const epoch = host.connectionEpoch;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
   const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
   const showingSameAgent = chatAvatarDisplayedAgents.get(host) === agentId;
@@ -417,9 +410,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   }
   const snapshot = await loadChatAvatarSnapshot(host, agentId);
   if (
-    !host.connected ||
-    host.client !== client ||
-    host.connectionEpoch !== epoch ||
+    !connectionIsCurrent() ||
     chatAvatarRequestVersions.get(host) !== requestVersion ||
     host.sessionKey !== sessionKey ||
     resolveAgentIdForSession(host) !== agentId

@@ -9,7 +9,7 @@ title: "Memory wiki"
 ---
 
 `memory-wiki` is a bundled plugin that compiles durable knowledge into a
-navigable wiki: deterministic pages, structured claims with evidence,
+navigable wiki: pages built from saved data, structured claims with evidence,
 provenance, dashboards, and machine-readable digests.
 
 It does not replace the active memory plugin. Recall, promotion, indexing, and
@@ -48,7 +48,7 @@ then confirm the active memory plugin supports public artifacts.
 ## Vault modes
 
 - `isolated` (default): own vault, own sources, no dependency on the active memory plugin. Use this for a self-contained curated knowledge store.
-- `bridge`: reads public memory artifacts and event logs from the active memory plugin through public plugin SDK seams. Use this to compile the memory plugin's exported artifacts without reaching into private plugin internals.
+- `bridge`: reads public memory artifacts and event logs from the active memory plugin through public plugin SDK interfaces. Use this to compile the memory plugin's exported artifacts without reaching into private plugin internals.
 - `unsafe-local`: explicit same-machine escape hatch for local private paths. Intentionally experimental and non-portable; use only when you understand the trust boundary and specifically need local filesystem access bridge mode cannot provide.
 
 Vault mode and vault scope are separate choices:
@@ -167,7 +167,7 @@ aliases:
   - example-handle
 privacyTier: local-private
 bestUsedFor:
-  - Example ecosystem routing
+  - Example project routing
 notEnoughFor:
   - legal approval
 lastRefreshedAt: "2026-04-29T00:00:00.000Z"
@@ -179,7 +179,7 @@ personCard:
   emails:
     - alex@example.com
   timezone: America/Chicago
-  lane: Example ecosystem
+  lane: Example project
   askFor:
     - Example rollout questions
   avoidAskingFor:
@@ -194,7 +194,7 @@ relationships:
     evidenceKind: discrawl-stat
 claims:
   - id: claim.example.routing
-    text: Alex is useful for example-ecosystem routing.
+    text: Alex is useful for example-project routing.
     status: supported
     confidence: 0.9
     evidence:
@@ -279,7 +279,7 @@ Search modes (`--mode` / tool `mode` param):
 | Mode              | Boosts                                                         |
 | ----------------- | -------------------------------------------------------------- |
 | `auto`            | balanced default                                               |
-| `find-person`     | person-like entities, aliases, handles, socials, canonical IDs |
+| `find-person`     | person-like entities, aliases, handles, socials, primary IDs   |
 | `route-question`  | agent cards, ask-for/best-used-for hints, relationship context |
 | `source-evidence` | source pages and structured evidence metadata                  |
 | `raw-claim`       | matching structured claims; returns claim/evidence metadata    |
@@ -417,7 +417,7 @@ Key toggles:
 | `search.backend`                           | `shared` (default), `local`                    | `shared` uses the shared memory search flow when available; `local` searches the wiki only |
 | `search.corpus`                            | `wiki` (default), `memory`, `all`              | which corpus wiki search covers                                                            |
 | `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections              |
-| `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                                                      |
+| `render.createBacklinks`                   | default `true`                                 | generate related blocks from saved data                                                    |
 | `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                                   |
 
 The state directory is `~/.openclaw` by default. When `OPENCLAW_STATE_DIR` is

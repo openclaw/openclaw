@@ -6,7 +6,6 @@ import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
-import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -26,6 +25,12 @@ import { resolveSessionStorePathCore } from "./paths.js";
 import { withConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import { selectConversationRowsFromDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import type { SessionActorMemoryConversationRegistration } from "./session-actor-memory-conversation-contract.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -47,19 +52,6 @@ export type PreparedConversationRegistryScope = {
   storePath: string;
 };
 
-export function resolveConversationRegistryScope(params: {
-  agentId: string;
-  config: OpenClawConfig;
-}): PreparedConversationRegistryScope {
-  const scope = {
-    agentId: params.agentId,
-    storePath: resolveSessionStorePathCore(params.config.session?.store, {
-      agentId: params.agentId,
-    }),
-  };
-  return pinConversationDatabaseScope(scope).scope;
-}
-
 export async function prepareConversationRegistryScope(params: {
   agentId: string;
   config: OpenClawConfig;
@@ -70,6 +62,15 @@ export async function prepareConversationRegistryScope(params: {
       agentId: params.agentId,
     }),
   };
+  const memory = captureSessionActorStorageOwner(input);
+  if (memory) {
+    return {
+      agentId: memory.agentId,
+      databaseAgentId: memory.agentId,
+      storePath: memory.path,
+      env: captureSessionTranscriptStorageEnvironment(process.env),
+    };
+  }
   if (isIncognitoOpenClawAgentSqlitePath(input.storePath, input)) {
     return pinConversationDatabaseScope(input).scope;
   }
@@ -121,11 +122,26 @@ function withConversationRead<T>(
   );
 }
 
-function selectConversationRowsInWorker(
+function readConversationsAsync(
   scope: ConversationRegistryScope,
   query: ConversationReadQuery,
 ): Promise<ConversationRecord[]> {
   const capturedQuery = structuredClone(query);
+  const selected = captureSessionActorStorageOwner({
+    agentId: scope.databaseAgentId ?? scope.agentId,
+    storePath: scope.storePath,
+  });
+  if (selected) {
+    if (selected.agentId === selected.binding.agentId && selected.path === selected.binding.path) {
+      return selected.binding.actor.storage!.read(
+        { type: "session.conversation.read", input: capturedQuery },
+        selected.authority,
+      );
+    }
+    return Promise.resolve(
+      selected.owner?.readConversations(capturedQuery, selected.authority) ?? [],
+    );
+  }
   if (scope.storePath && isIncognitoOpenClawAgentSqlitePath(scope.storePath, scope)) {
     // Process-held databases retain their native owner until the incognito cutover.
     return Promise.resolve(selectConversationRows(scope, capturedQuery));
@@ -149,19 +165,23 @@ export function pinConversationDatabaseScope(input: ConversationRegistryScope) {
   };
 }
 
-/** Keep the logical agent and physical store fixed while its synchronous write waits. */
-export function runConversationDatabaseWrite<T>(
-  input: ConversationRegistryScope,
-  operation: (scope: PreparedConversationRegistryScope) => T,
-): Promise<T> {
-  const { options, scope } = pinConversationDatabaseScope(input);
-  return withOpenClawAgentDatabaseWrite(options, () => operation(scope));
-}
-
 function selectConversationRows(
   scope: ConversationRegistryScope,
   options: Parameters<typeof selectConversationRowsFromDatabase>[1] = {},
 ): ConversationRecord[] {
+  const selected = captureSessionActorStorageOwner({
+    agentId: scope.databaseAgentId ?? scope.agentId,
+    storePath: scope.storePath,
+  });
+  if (selected) {
+    if (selected.agentId === selected.binding.agentId && selected.path === selected.binding.path) {
+      return selected.binding.actor.storage!.readCurrent(
+        { type: "session.conversation.read", input: options },
+        selected.authority,
+      );
+    }
+    return selected.owner?.readConversations(options, selected.authority) ?? [];
+  }
   const resolved = resolveSqliteReadScope({
     agentId: scope.agentId,
     ...(scope.env ? { env: scope.env } : {}),
@@ -191,6 +211,35 @@ export async function registerConversationAddresses(
 ): Promise<ConversationRecord[] | undefined> {
   if (identities.length === 0) {
     return undefined;
+  }
+  const memory = getSessionActorStorageBinding({
+    agentId: scope.databaseAgentId ?? scope.agentId,
+    storePath: scope.storePath,
+  });
+  if (memory) {
+    return readSessionActorStorageResult(
+      await memory.actor.storage.mutate(
+        {
+          type: "session.conversation.register",
+          input: {
+            identities: structuredClone(identities),
+            discoveredAt,
+            query: query && structuredClone(query),
+          },
+        },
+        {
+          ...memory.authority,
+          authorize(stage, facts, publication) {
+            memory.authority.authorize(stage, facts, publication);
+            if (isRecord(publication) && publication.kind === "session.conversation.registration") {
+              // SAFETY: The paired registry command owns this synchronous publication.
+              const registration = publication as SessionActorMemoryConversationRegistration;
+              registration.eligible = selectEligible(structuredClone(registration.identities));
+            }
+          },
+        },
+      ),
+    );
   }
   const { options } = pinConversationDatabaseScope(scope);
   const input = {
@@ -267,6 +316,17 @@ export async function withConversationAuthority<T>(
     facts: AgentDatabaseOperations["conversation.authority"]["output"],
   ) => () => T | Promise<T>,
 ): Promise<T> {
+  const memory = getSessionActorStorageBinding({
+    agentId: scope.databaseAgentId ?? scope.agentId,
+    storePath: scope.storePath,
+  });
+  if (memory) {
+    const facts = memory.actor.storage.readCurrent(
+      { type: "session.conversation.authority", input: structuredClone(query) },
+      memory.authority,
+    );
+    return await select(facts)();
+  }
   const { options } = pinConversationDatabaseScope(scope);
   const input = structuredClone(query);
   const execution = captureOpenClawAgentDatabaseExecution(options);
@@ -349,14 +409,14 @@ export function listConversations(
   scope: ConversationRegistryScope,
   options: { channel?: string; limit?: number } = {},
 ): Promise<ConversationRecord[]> {
-  return selectConversationRowsInWorker(scope, options);
+  return readConversationsAsync(scope, options);
 }
 
 export async function readConversation(
   scope: ConversationRegistryScope,
   conversationRef: string,
 ): Promise<ConversationRecord | undefined> {
-  return (await selectConversationRowsInWorker(scope, { conversationRef, limit: 1 }))[0];
+  return (await readConversationsAsync(scope, { conversationRef, limit: 1 }))[0];
 }
 
 /** Reads only an authoritative association on an address's current session window. */
@@ -376,11 +436,26 @@ export function resolveCurrentConversationSession(
     : undefined;
 }
 
+/** Reads an address's current binding through the existing session reader worker. */
+export async function resolveCurrentConversationSessionAsync(
+  scope: ConversationRegistryScope,
+  conversationRef: string,
+): Promise<{ sessionKey: string; sessionId: string } | undefined> {
+  const [conversation] = await readConversationsAsync(scope, {
+    conversationRef,
+    currentBindingOnly: true,
+    limit: 1,
+  });
+  return conversation?.sessionKey && conversation.sessionId
+    ? { sessionKey: conversation.sessionKey, sessionId: conversation.sessionId }
+    : undefined;
+}
+
 /** Reads only the primary address bound to this exact current session window. */
 export async function resolveCurrentSessionPrimaryConversation(
   scope: ConversationRegistryScope & { sessionId: string; sessionKey: string },
 ): Promise<ConversationRecord | undefined> {
-  const [conversation] = await selectConversationRowsInWorker(scope, {
+  const [conversation] = await readConversationsAsync(scope, {
     primarySession: { sessionId: scope.sessionId, sessionKey: scope.sessionKey },
   });
   return conversation?.sessionId === scope.sessionId && conversation.sessionKey === scope.sessionKey

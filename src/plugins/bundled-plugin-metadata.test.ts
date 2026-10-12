@@ -275,6 +275,7 @@ describe("bundled plugin metadata", () => {
     expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
       specifier: "./auth-presence",
       exportName: "hasAnyMatrixAuth",
+      exportNameAsync: "hasAnyMatrixAuthAsync",
       backingStore: "plugin-state",
     });
   });

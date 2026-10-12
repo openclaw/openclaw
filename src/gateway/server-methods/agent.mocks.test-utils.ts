@@ -118,6 +118,42 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) =>
+    loadAgentSessionFixture(params.key, {
+      agentId: params.agentId,
+      projection: params.projection,
+      clone: false,
+    }),
+}));
+
+vi.mock("../../config/sessions/session-transcript-anchor-read.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../config/sessions/session-transcript-anchor-read.js")
+    >();
+  return {
+    ...actual,
+    readSessionTranscriptAnchorsAsync: (
+      ...args: Parameters<typeof actual.readSessionTranscriptAnchorsAsync>
+    ) =>
+      args[1].includeMetadata
+        ? Promise.resolve({
+            anchors: [],
+            metadata: {
+              present: mocks.hasSessionTranscriptEventsSync(args[0]),
+              ...mocks.readTranscriptMutationStateSync(args[0]),
+            },
+          })
+        : actual.readSessionTranscriptAnchorsAsync(...args),
+  };
+});
+
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
     "../../config/sessions.js",

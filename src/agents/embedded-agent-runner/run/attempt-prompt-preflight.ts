@@ -1,5 +1,5 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
-import type { AssembleResult, ContextEngine } from "../../../context-engine/types.js";
+import type { AssembleResult } from "../../../context-engine/types.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -137,9 +137,8 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   appendOnlyRuntimeContext?: boolean;
   attempt: AttemptPromptPreflightParams &
     Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
-  activeContextEngine?: Pick<ContextEngine, "info">;
   compactionReplayEnabled: boolean;
-  contextEngineAssemblySucceeded: boolean;
+  providerCompactionAtRequestBoundary?: boolean;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
   contextTokenBudget: number;
   hookMessagesForCurrentPrompt: AgentMessage[];
@@ -172,6 +171,11 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     return { ...input.state };
   }
   if ((input.pendingInputTokens ?? 0) >= input.contextTokenBudget) {
+    if (input.providerCompactionAtRequestBoundary) {
+      log.warn(
+        "ChatGPT V2 compaction unavailable; falling back to client compaction: pending input exceeds the context budget",
+      );
+    }
     return {
       ...input.state,
       preflightRecovery: { route: "compact_only" },
@@ -211,18 +215,6 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       skipPromptSubmission: true,
     };
   }
-  if (
-    input.contextEngineAssemblySucceeded &&
-    input.activeContextEngine?.info.ownsCompaction &&
-    input.contextEnginePromptAuthority !== "preassembly_may_overflow" &&
-    !preemptiveCompaction.compactionReplay
-  ) {
-    log.info(
-      `[context-overflow-precheck] skipped: context engine "${input.activeContextEngine.info.id}" owns compaction`,
-    );
-    return { ...input.state };
-  }
-
   const precheckSummary = {
     result: preemptiveCompaction,
     provider: attempt.provider,
@@ -242,7 +234,11 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     }),
   );
   const checkpointPressure = preemptiveCompaction.compactionReplay;
-  if (checkpointPressure && checkpointPressure.route !== "fits") {
+  if (
+    checkpointPressure &&
+    checkpointPressure.route !== "fits" &&
+    !input.providerCompactionAtRequestBoundary
+  ) {
     // Only the actual canonical window can require recovery; the raw-history
     // maximum above remains diagnostic even when it exceeds this window.
     return {

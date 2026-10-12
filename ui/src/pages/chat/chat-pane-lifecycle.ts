@@ -462,6 +462,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           // Revoked readers receive only a redacted catalog invalidation. Retire
           // preview admission before the roster refresh can publish access loss.
           state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
+          this.invalidateSessionSharing(event.payload);
           state.requestUpdate?.();
         }
         if (event.event === "sessions.changed" || event.event === "session.message") {

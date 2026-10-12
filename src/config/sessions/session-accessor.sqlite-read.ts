@@ -51,12 +51,16 @@ import {
   readTranscriptStatsBatchFromDatabase,
   readTranscriptStatsFromDatabase,
 } from "./session-accessor.sqlite-transcript-stats.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
-import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import {
+  captureSessionTranscriptQuestionAnswers,
+  resolveSqliteSessionTranscriptReadFence,
+} from "./session-transcript-read-fence.js";
 import {
   transcriptEventJsonSql,
   transcriptEventNavigationSql,
@@ -80,6 +84,19 @@ export function createTranscriptIdentityReader(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ) {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    return (eventId: string) => {
+      if (readSessionActorTransactionState(database, { sessionId }) !== actor) {
+        throw new Error("Transcript identity reader escaped its actor transaction");
+      }
+      if (actor.transcript.coldArchive) {
+        throw new SessionTranscriptColdError(sessionId);
+      }
+      const row = actor.transcript.identities.get(eventId);
+      return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+    };
+  }
   const db = getSessionKysely(database.db);
   const read = prepareSqliteQuerySync<
     string,
@@ -248,6 +265,11 @@ export function validatePreparedAssistantAppendSync(
 ): number | null | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const questionAnswers = captureSessionTranscriptQuestionAnswers(
+    database,
+    resolved.sessionId,
+    admittedUserId,
+  );
   return runSqliteDeferredTransactionSync(
     database.db,
     () =>
@@ -256,6 +278,7 @@ export function validatePreparedAssistantAppendSync(
         resolved.sessionId,
         preparedParentId,
         admittedUserId,
+        questionAnswers?.answers,
       )
         ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
         : undefined,

@@ -23,13 +23,9 @@ import {
 } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
-  deleteSessionEntryLifecycle,
-  loadExactSessionEntryFromStoreReadOnly,
-  resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
@@ -72,6 +68,7 @@ import {
   prepareSessionPatchRuntimeSelection,
   refreshSessionPatchQueuedSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
+import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
   existingSessionSelectionWouldChange,
   sessionCreatePolicyAdoptionError,
@@ -84,6 +81,7 @@ import {
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
+import { buildSessionCreateLifecycleTargets } from "./session-create-lifecycle-targets.js";
 import {
   resolveSessionCreationCommitGuard,
   prepareSessionCreateDefaultAccount,
@@ -99,7 +97,12 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
-import { finalizeSessionCreateTarget, readSessionCreateTarget } from "./session-create-target.js";
+import {
+  readRequestedSessionCreateTarget,
+  readSessionCreateTarget,
+  withSessionCreateAdmission,
+  validateSessionCreateIncognitoTarget,
+} from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
   prepareGatewaySessionLifecycleTargets,
@@ -118,14 +121,23 @@ import {
   sessionCreationFailure,
   unavailableSessionRequest,
 } from "./session-request-error.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
-export async function createGatewaySession(
+export function createGatewaySession(
   params: CreateGatewaySessionParams,
+): Promise<CreateGatewaySessionResult> {
+  return withSessionCreateAdmission(params, createAdmittedGatewaySession);
+}
+
+async function createAdmittedGatewaySession(
+  params: CreateGatewaySessionParams,
+  agentId: string,
 ): Promise<CreateGatewaySessionResult> {
   const { personalAccountDefaults, onPhase } = params;
   let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
@@ -153,15 +165,6 @@ export async function createGatewaySession(
   const projectId = normalizeOptionalString(params.projectId);
   const pendingProjectGitUrl = normalizeOptionalString(params.pendingProjectGitUrl);
   const requestedToolOverrides = params.toolOverrides !== undefined;
-  const selectedAgent = sessionAgent.resolveSessionCreateAgentId(params.cfg, {
-    key: requestedKey,
-    agentId: params.agentId,
-    parentSessionKey,
-  });
-  if (!selectedAgent.ok) {
-    return selectedAgent;
-  }
-  const agentId = selectedAgent.agentId;
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
   const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
@@ -177,28 +180,16 @@ export async function createGatewaySession(
     agentId,
     requestedKey,
   });
-  const explicitTargetParts = parseAgentSessionKey(explicitTargetKey);
   const explicitIncognito = isIncognitoSessionKey(explicitTargetKey);
-  const explicitDashboardIncognito =
-    explicitIncognito &&
-    explicitTargetParts?.agentId === agentId &&
-    explicitTargetParts.rest.startsWith("dashboard:");
-  if (explicitIncognito && params.incognito !== true) {
-    return invalidSessionRequest("incognito-shaped session keys require incognito: true");
-  }
-  if (params.incognito === true && explicitTargetKey) {
-    if (!explicitDashboardIncognito) {
-      return invalidSessionRequest("incognito sessions are web-only");
-    }
-    const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const durableEntry = loadExactSessionEntryFromStoreReadOnly({
+  if (explicitIncognito || params.incognito === true) {
+    const incognitoTarget = await validateSessionCreateIncognitoTarget(
+      params,
       agentId,
-      storePath: durableStorePath,
-      sessionKey: explicitTargetKey,
-      projection: "list",
-    });
-    if (durableEntry || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
-      return invalidSessionRequest("incognito is immutable and requires a new session key");
+      explicitTargetKey,
+      commitGuard,
+    );
+    if (!incognitoTarget.ok) {
+      return incognitoTarget;
     }
   }
   if (
@@ -224,14 +215,8 @@ export async function createGatewaySession(
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
-  // Capture the requested incarnation before worker discovery yields to authority preparation.
-  const initialTargetEntry = explicitTargetKey
-    ? resolveSessionEntryAccessTarget({
-        cfg: params.cfg,
-        sessionKey: explicitTargetKey,
-        agentId,
-      }).entry
-    : undefined;
+  const explicitTarget = await readRequestedSessionCreateTarget(params, agentId, explicitTargetKey);
+  const initialTargetEntry = explicitTarget?.entry;
   if (
     explicitTargetKey &&
     isAgentHarnessSessionKey(explicitTargetKey) &&
@@ -305,12 +290,14 @@ export async function createGatewaySession(
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: targetSessionKey,
-    agentId,
-    assertActive: commitGuard,
-  });
+  const target =
+    explicitTarget ??
+    (await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: targetSessionKey,
+      agentId,
+      assertActive: commitGuard,
+    }));
   const initializingSessionFailure = () =>
     unavailableSessionRequest(
       `Session ${target.canonicalKey} is still initializing; retry creation later.`,
@@ -477,10 +464,12 @@ export async function createGatewaySession(
     onPhase?.("entry");
     let currentParentSessionEntry = parentSessionEntry;
     if (canonicalParentSessionKey && parentSessionTarget && holdParentLifecycle) {
-      const currentParent = loadGatewaySessionEntryReadOnly(
-        canonicalParentSessionKey,
-        parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
-      );
+      const currentParent = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: params.cfg,
+        key: canonicalParentSessionKey,
+        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
+        assertActive: commitGuard,
+      });
       const currentParentEntry = currentParent.entry;
       if (
         !currentParentEntry?.sessionId ||
@@ -789,6 +778,7 @@ export async function createGatewaySession(
           personalModelSelection: params.personalModelSelection,
           operatorAuthority,
           preparedModelSelection: params.preparedModelSelection?.ref,
+          pinModelSelection: true,
         });
         if (!patched.ok) {
           return patched;
@@ -1185,23 +1175,14 @@ export async function createGatewaySession(
     ...(requestedKey ? [requestedKey] : []),
     ...(initialTargetEntry?.sessionId ? [initialTargetEntry.sessionId] : []),
   ];
-  const lifecycleTargets = [
-    {
-      scope: target.storePath,
-      identities: targetLifecycleIdentities,
-    },
-  ];
-  if (
-    canonicalParentSessionKey &&
-    parentSessionEntry?.sessionId &&
-    parentSessionTarget &&
-    holdParentLifecycle
-  ) {
-    lifecycleTargets.push({
-      scope: parentSessionTarget.storePath,
-      identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
-    });
-  }
+  const lifecycleTargets = buildSessionCreateLifecycleTargets({
+    target,
+    targetLifecycleIdentities,
+    canonicalParentSessionKey,
+    parentSessionEntry,
+    parentSessionTarget,
+    holdParentLifecycle,
+  });
   // Generated, keyed, same-store, and cross-agent creations all share the
   // lifecycle owner's canonical identity order and one active mutation fence.
   onPhase?.("lifecycleAdmission");
@@ -1221,77 +1202,6 @@ export async function createGatewaySession(
     return result;
   }
   onPhase?.("initialTurn");
-  if (result.resetExisting || !createdContext || !params.afterCreate) {
-    return params.atomicInitialization === true
-      ? unavailableSessionRequest("atomic session initialization did not create a session")
-      : { ...result, postCommit: { status: "completed" } };
-  }
-  if (params.atomicInitialization === true) {
-    const initializingSession = createdContext;
-    const stored = loadGatewaySessionEntryReadOnly(initializingSession.key, {
-      agentId: initializingSession.agentId,
-    }).entry;
-    if (
-      !stored ||
-      stored.sessionId !== initializingSession.entry.sessionId ||
-      stored.initializationPending !== true
-    ) {
-      return unavailableSessionRequest("atomic session initialization lost its owner");
-    }
-    const expectedEntry = structuredClone(stored);
-    try {
-      await params.afterCreate(initializingSession);
-      const finalized = await finalizeSessionCreateTarget(
-        initializingSession,
-        expectedEntry,
-        params.commitGuard,
-      );
-      return {
-        ...result,
-        entry: projectPublicSessionEntry(finalized),
-        postCommit: { status: "completed" },
-      };
-    } catch (error) {
-      try {
-        const rollback = await deleteSessionEntryLifecycle({
-          agentId: initializingSession.agentId,
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-          expectedEntry,
-          expectedSessionId: expectedEntry.sessionId,
-          expectedUpdatedAt: expectedEntry.updatedAt,
-          requireWriteSuccess: true,
-          storePath: initializingSession.storePath,
-          target: {
-            canonicalKey: initializingSession.key,
-            storeKeys: [initializingSession.key],
-          },
-        });
-        if (!rollback.deleted) {
-          throw new Error(`created session ${initializingSession.key} changed before rollback`, {
-            cause: error,
-          });
-        }
-      } catch (rollbackError) {
-        return unavailableSessionRequest(
-          `session initialization failed and rollback did not complete: ${formatErrorMessage(
-            new AggregateError([error, rollbackError]),
-          )}`,
-        );
-      }
-      return unavailableSessionRequest(
-        `session initialization failed: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
-  // The row, transcript, and prepared lifecycle are already durable here. A
-  // fallible initializer must report that committed identity instead of making
-  // callers infer that creation never happened and retry the key.
-  try {
-    await params.afterCreate(createdContext);
-    return { ...result, postCommit: { status: "completed" } };
-  } catch (error) {
-    return { ...result, postCommit: { status: "failed", error } };
-  }
+  return await completeGatewaySessionCreation(params, result, createdContext, commitGuard);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

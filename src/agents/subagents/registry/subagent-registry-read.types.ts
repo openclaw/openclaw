@@ -148,9 +148,3 @@ export type SubagentRunsDurableBasis = Readonly<{
   }>[];
   digest: string | null;
 }>;
-
-/** Maintenance compares its compact physical projection, without descendant topology. */
-export type SubagentMaintenanceDurableBasis = Pick<
-  SubagentRunsDurableBasis,
-  "databasePath" | "databaseIdentity" | "databaseBirthtime" | "digest"
->;

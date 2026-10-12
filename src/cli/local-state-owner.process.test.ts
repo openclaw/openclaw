@@ -540,6 +540,18 @@ describe("same-root local mutation routing", () => {
     ["mcp logout", ["mcp", "logout", "synthetic-server"]],
     ["models auth logout", ["models", "auth", "logout", "synthetic:manual", "--yes"]],
     ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
+    [
+      "migration import",
+      [
+        "migrate",
+        "apply",
+        "synthetic-missing-provider",
+        "--yes",
+        "--no-backup",
+        "--force",
+        "--json",
+      ],
+    ],
     ["exec-policy preset", ["exec-policy", "preset", "deny-all"]],
   ])(
     "refuses live %s before changing local state or dispatching to the owner",

@@ -1,10 +1,8 @@
 // Process-local grants retain their durable parent and exact placement authority.
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   readPlacementGrantRows,
   type PlacementGrantReadInput,
@@ -182,10 +180,10 @@ export function createPlacementStandingGrantRuntime(params: {
   const grants = new Map<string, PlacementStandingGrantRecord>();
   const now = params.now ?? Date.now;
   const read = (input: PlacementGrantReadInput) =>
-    runOpenClawStateWriteTransaction(
+    withExistingOpenClawStateDatabaseCurrentReadOnly(
       (database) => readPlacementGrantRows(database.db, input),
-      params.databaseOptions,
-    );
+      { ...params.databaseOptions, allowNativeRead: true },
+    ) ?? [];
   const readAsync = (input: PlacementGrantReadInput) =>
     readPlacementStandingGrant(input, {
       databaseOptions: params.databaseOptions,

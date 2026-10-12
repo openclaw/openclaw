@@ -27,7 +27,7 @@ function retainIncognitoScopedRead(
   const claim = actor?.sessions.captureCurrent(sessionKey);
   const entry = actor?.sessions.readSharing(sessionKey)?.entry;
   const revision = actor?.sessions.readEntryRevision(sessionKey);
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [{ sessionKey }]);
   let released = false;
   return {
     entry,

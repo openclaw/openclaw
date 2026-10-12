@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { resolveChannelAllowFrom } from "../account-resolution.js";
 import { writeChannelSection } from "./config-helpers.js";
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
@@ -485,7 +486,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
           );
         }
-        const existingAllowFrom = plugin.config.resolveAllowFrom?.(accountContext()) ?? [];
+        const existingAllowFrom =
+          (await resolveChannelAllowFrom({ plugin, ...accountContext() })) ?? [];
         const unique = await promptResolvedAllowFrom({
           prompter,
           existing: existingAllowFrom,

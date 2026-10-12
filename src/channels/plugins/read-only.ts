@@ -12,6 +12,7 @@ import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import {
   hasExplicitChannelConfig,
   listConfiguredChannelIdsForReadOnlyScope,
+  listConfiguredChannelIdsForReadOnlyScopeAsync,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
@@ -319,72 +320,63 @@ function rebindChannelPluginConfig(
 ): ChannelPlugin["config"] {
   const rebind = (cfg: OpenClawConfig) =>
     rebindChannelConfig(cfg, sourceChannelId, targetChannelId);
-  const rebindWriter = <Params extends { cfg: OpenClawConfig }>(
-    read: () => ((params: Params) => OpenClawConfig) | undefined,
+  function withConfig<Args extends unknown[], Result>(
+    method: (cfg: OpenClawConfig, ...args: Args) => Result,
+  ): (cfg: OpenClawConfig, ...args: Args) => Result;
+  function withConfig<Args extends unknown[], Result>(
+    method: ((cfg: OpenClawConfig, ...args: Args) => Result) | undefined,
+  ): ((cfg: OpenClawConfig, ...args: Args) => Result) | undefined;
+  function withConfig<Args extends unknown[], Result>(
+    method: ((cfg: OpenClawConfig, ...args: Args) => Result) | undefined,
+  ) {
+    return (
+      method && ((cfg: OpenClawConfig, ...args: Args) => method.call(config, rebind(cfg), ...args))
+    );
+  }
+  const withAccount = <Account, Result>(
+    method: ((account: Account, cfg: OpenClawConfig) => Result) | undefined,
   ) =>
-    read()
+    method &&
+    ((account: Account, cfg: OpenClawConfig) => method.call(config, account, rebind(cfg)));
+  const withParams = <Params extends { cfg: OpenClawConfig }, Result>(
+    method: ((params: Params) => Result) | undefined,
+  ) => method && ((params: Params) => method.call(config, { ...params, cfg: rebind(params.cfg) }));
+  const rebindWriter = <Params extends { cfg: OpenClawConfig }>(
+    method: ((params: Params) => OpenClawConfig) | undefined,
+  ) =>
+    method
       ? (params: Params) =>
           restoreReboundChannelConfig({
             original: params.cfg,
-            updated: read()?.call(config, { ...params, cfg: rebind(params.cfg) }) ?? params.cfg,
+            updated: method.call(config, { ...params, cfg: rebind(params.cfg) }),
             sourceChannelId,
             targetChannelId,
           })
       : undefined;
   return {
     ...config,
-    listAccountIds: (cfg) => config.listAccountIds(rebind(cfg)),
-    resolveAccount: (cfg, accountId) => config.resolveAccount(rebind(cfg), accountId),
-    resolveAccountAsync: config.resolveAccountAsync
-      ? (cfg, accountId) => config.resolveAccountAsync!(rebind(cfg), accountId)
-      : undefined,
-    inspectAccount: config.inspectAccount
-      ? (cfg, accountId) => config.inspectAccount?.(rebind(cfg), accountId)
-      : undefined,
-    defaultAccountId: config.defaultAccountId
-      ? (cfg) => config.defaultAccountId?.(rebind(cfg)) ?? ""
-      : undefined,
-    setAccountEnabled: rebindWriter(() => config.setAccountEnabled),
-    deleteAccount: rebindWriter(() => config.deleteAccount),
-    isEnabled: config.isEnabled
-      ? (account, cfg) => config.isEnabled?.(account, rebind(cfg)) ?? false
-      : undefined,
-    disabledReason: config.disabledReason
-      ? (account, cfg) => config.disabledReason?.(account, rebind(cfg)) ?? ""
-      : undefined,
-    isConfigured: config.isConfigured
-      ? (account, cfg) => config.isConfigured?.(account, rebind(cfg)) ?? false
-      : undefined,
-    isLinked: config.isLinked
-      ? (account, cfg) => config.isLinked?.(account, rebind(cfg)) ?? "unknown"
-      : undefined,
-    unconfiguredReason: config.unconfiguredReason
-      ? (account, cfg) => config.unconfiguredReason?.(account, rebind(cfg)) ?? ""
-      : undefined,
-    unlinkedReason: config.unlinkedReason
-      ? (account, cfg) => config.unlinkedReason?.(account, rebind(cfg)) ?? ""
-      : undefined,
-    describeAccount: config.describeAccount
-      ? (account, cfg) => config.describeAccount!(account, rebind(cfg))
-      : undefined,
-    resolveAllowFrom: config.resolveAllowFrom
-      ? (params) => config.resolveAllowFrom?.({ ...params, cfg: rebind(params.cfg) })
-      : undefined,
-    formatAllowFrom: config.formatAllowFrom
-      ? (params) => config.formatAllowFrom?.({ ...params, cfg: rebind(params.cfg) }) ?? []
-      : undefined,
-    hasConfiguredState: config.hasConfiguredState
-      ? (params) => config.hasConfiguredState?.({ ...params, cfg: rebind(params.cfg) }) ?? false
-      : undefined,
-    hasConfiguredStateAsync: config.hasConfiguredStateAsync
-      ? (params) => config.hasConfiguredStateAsync!({ ...params, cfg: rebind(params.cfg) })
-      : undefined,
-    hasPersistedAuthState: config.hasPersistedAuthState
-      ? (params) => config.hasPersistedAuthState?.({ ...params, cfg: rebind(params.cfg) }) ?? false
-      : undefined,
-    resolveDefaultTo: config.resolveDefaultTo
-      ? (params) => config.resolveDefaultTo?.({ ...params, cfg: rebind(params.cfg) })
-      : undefined,
+    listAccountIds: withConfig(config.listAccountIds),
+    resolveAccount: withConfig(config.resolveAccount),
+    resolveAccountAsync: withConfig(config.resolveAccountAsync),
+    inspectAccount: withConfig(config.inspectAccount),
+    defaultAccountId: withConfig(config.defaultAccountId),
+    setAccountEnabled: rebindWriter(config.setAccountEnabled),
+    deleteAccount: rebindWriter(config.deleteAccount),
+    isEnabled: withAccount(config.isEnabled),
+    disabledReason: withAccount(config.disabledReason),
+    isConfigured: withAccount(config.isConfigured),
+    isLinked: withAccount(config.isLinked),
+    unconfiguredReason: withAccount(config.unconfiguredReason),
+    unlinkedReason: withAccount(config.unlinkedReason),
+    describeAccount: withAccount(config.describeAccount),
+    describeAccountAsync: withAccount(config.describeAccountAsync),
+    resolveAllowFrom: withParams(config.resolveAllowFrom),
+    resolveAllowFromAsync: withParams(config.resolveAllowFromAsync),
+    formatAllowFrom: withParams(config.formatAllowFrom),
+    hasConfiguredState: withParams(config.hasConfiguredState),
+    hasConfiguredStateAsync: withParams(config.hasConfiguredStateAsync),
+    hasPersistedAuthState: withParams(config.hasPersistedAuthState),
+    resolveDefaultTo: withParams(config.resolveDefaultTo),
   };
 }
 
@@ -516,11 +508,42 @@ export function resolveReadOnlyChannelPluginsForConfig(
   cfg: OpenClawConfig,
   options: ReadOnlyChannelPluginOptions = {},
 ): ReadOnlyChannelPluginResolution {
+  const context = resolveReadOnlyChannelContext(cfg, options);
+  const configuredChannelIds = listReadOnlyChannelConfiguredIds(cfg, options, context);
+  return resolveReadOnlyChannelPluginsFromIds(cfg, options, context, configuredChannelIds);
+}
+
+export async function listReadOnlyChannelPluginsForConfigAsync(
+  cfg: OpenClawConfig,
+  options?: ReadOnlyChannelPluginOptions,
+): Promise<ChannelPlugin[]> {
+  return (await resolveReadOnlyChannelPluginsForConfigAsync(cfg, options)).plugins;
+}
+
+async function resolveReadOnlyChannelPluginsForConfigAsync(
+  cfg: OpenClawConfig,
+  options: ReadOnlyChannelPluginOptions = {},
+): Promise<ReadOnlyChannelPluginResolution> {
+  const context = resolveReadOnlyChannelContext(cfg, options);
+  const listConfiguredIds = (config: OpenClawConfig) =>
+    listConfiguredChannelIdsForReadOnlyScopeAsync({
+      config,
+      ...context,
+      includePersistedAuthState: options.includePersistedAuthState,
+    });
+  const configuredChannelIds = uniqueStrings([
+    ...(await listConfiguredIds(cfg)),
+    ...(context.activationSourceConfig === cfg
+      ? []
+      : await listConfiguredIds(context.activationSourceConfig)),
+  ]).filter(isSafeManifestChannelId);
+  return resolveReadOnlyChannelPluginsFromIds(cfg, options, context, configuredChannelIds);
+}
+
+function resolveReadOnlyChannelContext(cfg: OpenClawConfig, options: ReadOnlyChannelPluginOptions) {
   const env = options.env ?? process.env;
   const workspaceDir =
     options.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(cfg, options.env);
-  const includeSetupFallbackPlugins = options.includeSetupFallbackPlugins === true;
-  const loadedChannelPlugins = listChannelPlugins();
   const manifestRecords =
     options.metadataSnapshot?.plugins ??
     (options.workspaceDir !== undefined
@@ -536,13 +559,16 @@ export function resolveReadOnlyChannelPluginsForConfig(
           stateDir: options.stateDir,
           env,
         }).plugins);
-  const bundledManifestRecords = manifestRecords.filter(
-    (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
-  );
-  const externalManifestRecords = manifestRecords.filter(
-    (plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0,
-  );
   const activationSourceConfig = options.activationSourceConfig ?? cfg;
+  return { env, workspaceDir, manifestRecords, activationSourceConfig };
+}
+
+function listReadOnlyChannelConfiguredIds(
+  cfg: OpenClawConfig,
+  options: ReadOnlyChannelPluginOptions,
+  context: ReturnType<typeof resolveReadOnlyChannelContext>,
+) {
+  const { activationSourceConfig, workspaceDir, env, manifestRecords } = context;
   const listConfiguredIds = (config: OpenClawConfig) =>
     listConfiguredChannelIdsForReadOnlyScope({
       config,
@@ -552,10 +578,27 @@ export function resolveReadOnlyChannelPluginsForConfig(
       includePersistedAuthState: options.includePersistedAuthState,
       manifestRecords,
     });
-  const configuredChannelIds = uniqueStrings([
+  return uniqueStrings([
     ...listConfiguredIds(cfg),
     ...(activationSourceConfig === cfg ? [] : listConfiguredIds(activationSourceConfig)),
   ]).filter(isSafeManifestChannelId);
+}
+
+function resolveReadOnlyChannelPluginsFromIds(
+  cfg: OpenClawConfig,
+  options: ReadOnlyChannelPluginOptions,
+  context: ReturnType<typeof resolveReadOnlyChannelContext>,
+  configuredChannelIds: string[],
+): ReadOnlyChannelPluginResolution {
+  const { activationSourceConfig, workspaceDir, env, manifestRecords } = context;
+  const includeSetupFallbackPlugins = options.includeSetupFallbackPlugins === true;
+  const loadedChannelPlugins = listChannelPlugins();
+  const bundledManifestRecords = manifestRecords.filter(
+    (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
+  );
+  const externalManifestRecords = manifestRecords.filter(
+    (plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0,
+  );
   const byId = new Map<string, ChannelPlugin>();
   const loadFailures: ChannelSetupPluginLoadFailure[] = [];
 

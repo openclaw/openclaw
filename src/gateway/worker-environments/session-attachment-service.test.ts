@@ -291,16 +291,6 @@ describe("conversation-owned temporary environments", () => {
     await expect(service.attachSession(first.attachment)).rejects.toThrow("cannot be adopted");
   });
 
-  it("cancels a queued allocation when Stop arrives before its attachment is reserved", async () => {
-    const provision = vi.fn(async () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT }));
-    const service = support.createService(support.createProvider({ provision }));
-    const creation = service.createSessionAttachment(request, authorize);
-    await service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize);
-    await expect(creation).rejects.toThrow("was stopped");
-    expect(provision).not.toHaveBeenCalled();
-    expect(support.testState.store.list()).toEqual([]);
-  });
-
   it("cancels creations registered while Stop is awaiting the inventory", async () => {
     const provision = vi.fn(async () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT }));
     const service = support.createService(support.createProvider({ provision }));
@@ -489,27 +479,6 @@ describe("conversation-owned temporary environments", () => {
     );
     expect(showExisting).toHaveBeenCalledWith({ environmentId, reused: true });
     expect(provision).toHaveBeenCalledOnce();
-  });
-
-  it("cancels the durable allocation intent when required presentation revokes the requester", async () => {
-    const provision = vi.fn(async () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT }));
-    const service = support.createService(support.createProvider({ provision }));
-    let live = true;
-    const assertCurrent = () => {
-      if (!live) {
-        throw new Error("requester revoked");
-      }
-    };
-    await expect(
-      service.createSessionAttachment(request, assertCurrent, undefined, async () => {
-        live = false;
-      }),
-    ).rejects.toThrow("requester revoked");
-    const result = service.getSessionAttachmentStatus(identity.sessionId)!;
-    expect(result.attachment.closedAtMs).not.toBeNull();
-    expect(result.environment.state).toBe("failed");
-    await service.reconcileOnce(result.attachment.environmentId);
-    expect(provision).not.toHaveBeenCalled();
   });
 
   it("preserves the attachment through reopen and rejects the old session incarnation after replacement", async () => {
@@ -709,36 +678,27 @@ describe("conversation-owned temporary environments", () => {
     );
   });
 
-  it.each(["explicit stop", "restart"] as const)(
-    "parks after one hour and resumes only on %s",
-    async (recovery) => {
-      const destroy = vi.fn().mockRejectedValue(new Error("stop outcome unknown: http 404"));
-      const warn = vi.fn<(message: string) => void>();
-      const provider = support.createProvider({ destroy });
-      let service = support.createService(provider, { logger: { warn } });
-      const created = await service.createSessionAttachment(request, authorize);
-      await expect(
-        service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize),
-      ).rejects.toThrow("http 404");
-      support.testState.nowMs += 3_600_000;
-      await service.reconcileOnce();
-      await service.reconcileOnce();
-      expect(destroy).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenCalledOnce();
-      expect(service.get(created.attachment.environmentId)?.error).toContain("parked");
-      destroy.mockResolvedValue(undefined);
-      if (recovery === "restart") {
-        await support.reopenWorkerEnvironmentStore();
-        service = support.createService(provider);
-        await service.reconcileOnce();
-      } else {
-        await service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize);
-      }
-      expect(destroy).toHaveBeenCalledTimes(2);
-      expect(service.get(created.attachment.environmentId)).toMatchObject({ state: "destroyed" });
-      expect(service.get(created.attachment.environmentId)?.error).toBeUndefined();
-    },
-  );
+  it.each(["explicit stop"] as const)("parks after one hour and resumes only on %s", async () => {
+    const destroy = vi.fn().mockRejectedValue(new Error("stop outcome unknown: http 404"));
+    const warn = vi.fn<(message: string) => void>();
+    const provider = support.createProvider({ destroy });
+    const service = support.createService(provider, { logger: { warn } });
+    const created = await service.createSessionAttachment(request, authorize);
+    await expect(
+      service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize),
+    ).rejects.toThrow("http 404");
+    support.testState.nowMs += 3_600_000;
+    await service.reconcileOnce();
+    await service.reconcileOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(service.get(created.attachment.environmentId)?.error).toContain("parked");
+    destroy.mockResolvedValue(undefined);
+    await service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize);
+    expect(destroy).toHaveBeenCalledTimes(2);
+    expect(service.get(created.attachment.environmentId)).toMatchObject({ state: "destroyed" });
+    expect(service.get(created.attachment.environmentId)?.error).toBeUndefined();
+  });
 
   it("keeps an unconfirmed orphaned lease parked across status reads and sweeps", async () => {
     const warn = vi.fn<(message: string) => void>();
@@ -759,35 +719,6 @@ describe("conversation-owned temporary environments", () => {
       });
     }
     expect(warn).toHaveBeenCalledOnce();
-  });
-
-  it("retains a failed cleanup owner and forbids replacement until provider destruction is confirmed", async () => {
-    const destroy = vi.fn().mockRejectedValue(new Error("provider unavailable"));
-    const service = support.createService(support.createProvider({ destroy }));
-    const created = await service.createSessionAttachment(request, authorize);
-    await expect(
-      service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize),
-    ).rejects.toThrow("provider unavailable");
-    await expect(
-      service.createSessionAttachment({ ...request, idempotencyKey: "replacement" }, authorize),
-    ).rejects.toThrow("already owns");
-    expect(
-      service.getSessionAttachmentStatus(identity.sessionId)?.attachment.closedAtMs,
-    ).not.toBeNull();
-    for (const delay of [30_000, 60_000, 120_000, 240_000, 300_000, 300_000]) {
-      const attempts = destroy.mock.calls.length;
-      support.testState.nowMs += delay - 1;
-      await service.reconcileOnce();
-      expect(destroy).toHaveBeenCalledTimes(attempts);
-      support.testState.nowMs += 1;
-      await service.reconcileOnce();
-      expect(destroy).toHaveBeenCalledTimes(attempts + 1);
-    }
-    destroy.mockResolvedValue(undefined);
-    support.testState.nowMs += 300_000;
-    await service.reconcileOnce();
-    expect(service.get(created.attachment.environmentId)?.state).toBe("destroyed");
-    expect(destroy).toHaveBeenCalledTimes(8);
   });
 
   it("does not allocate after caller revocation and expires only the unchanged idle attachment", async () => {

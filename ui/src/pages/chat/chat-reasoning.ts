@@ -9,23 +9,28 @@ import type { AgentEventPayload, ChatReasoning } from "./tool-stream-contract.ts
 export type ChatReasoningHost = { chatReasoning?: ChatReasoning | null };
 
 function reconcilePersistedReasoning(host: ChatReasoningHost, messages: readonly unknown[]): void {
-  const current = host.chatReasoning;
-  const receipt = current?.receipt;
-  if (!current || !receipt || receipt.persisted) {
+  const reasoning = host.chatReasoning;
+  if (!reasoning) {
     return;
   }
-  if (
-    messages.some((message) => {
-      const identity = readSessionMessageIdentity(message);
-      return (
-        identity?.role === "assistant" &&
-        !identity.isImported &&
-        identity.runId === receipt.runId &&
-        identity.id === receipt.messageId
-      );
-    })
-  ) {
-    host.chatReasoning = { ...current, receipt: { ...receipt, persisted: true } };
+  const items = reasoning.items.map((item) => {
+    const receipt = item.receipt;
+    return receipt &&
+      !receipt.persisted &&
+      messages.some((message) => {
+        const identity = readSessionMessageIdentity(message);
+        return (
+          identity?.role === "assistant" &&
+          !identity.isImported &&
+          identity.runId === receipt.runId &&
+          identity.id === receipt.messageId
+        );
+      })
+      ? { ...item, receipt: { ...receipt, persisted: true as const } }
+      : item;
+  });
+  if (items.some((item, index) => item !== reasoning.items[index])) {
+    host.chatReasoning = { ...reasoning, items };
   }
 }
 
@@ -37,31 +42,39 @@ export function updateChatReasoning(
   if (!itemId) {
     return false;
   }
-  const current = host.chatReasoning;
-  const sameItem = current?.runId === payload.runId && current.itemId === itemId;
+  const items = host.chatReasoning?.runId === payload.runId ? host.chatReasoning.items : [];
+  const index = items.findIndex((item) => item.itemId === itemId);
+  const current = items[index];
   if (payload.data.phase === "persisted") {
     const messageId = normalizeNullableString(payload.data.messageId);
     const messageRunId = normalizeNullableString(payload.data.messageRunId);
-    if (!sameItem || !messageId || !messageRunId) {
+    if (!current || !messageId || !messageRunId) {
       return false;
     }
-    host.chatReasoning = { ...current, receipt: { runId: messageRunId, messageId } };
+    host.chatReasoning = {
+      runId: payload.runId,
+      items: items.with(index, { ...current, receipt: { runId: messageRunId, messageId } }),
+    };
     reconcilePersistedReasoning(host, host.chatMessages ?? []);
     return true;
   }
   if (typeof payload.data.text !== "string") {
     return false;
   }
-  const text = normalizeNullableString(payload.data.text);
-  if (!text) {
-    // Workers can replace a streamed draft with an empty final snapshot.
-    host.chatReasoning = null;
-    return Boolean(current);
-  }
-  host.chatReasoning = sameItem
-    ? { ...current, text }
-    : { runId: payload.runId, itemId, text, startedAt: payload.ts };
+  // Keep an explicitly empty tail: clearing a worker draft must not promote
+  // an earlier tool occurrence into the final answer's reasoning.
+  const text = normalizeNullableString(payload.data.text) ?? "";
+  const item = current ? { ...current, text } : { itemId, text, startedAt: payload.ts };
+  host.chatReasoning = {
+    runId: payload.runId,
+    items: current ? items.with(index, item) : [...items, item],
+  };
   return true;
+}
+
+export function activeChatReasoning(reasoning: ChatReasoning | null | undefined) {
+  const current = reasoning?.items.at(-1);
+  return current?.text && !current.receipt ? current : null;
 }
 
 /** Transfer only the still-live occurrence through the final answer's reducer entry. */
@@ -70,12 +83,11 @@ export function withChatReasoning(
   message: Record<string, unknown> | null,
   runId: string | undefined,
 ): Record<string, unknown> | null {
-  const reasoning = host.chatReasoning;
+  const reasoning = activeChatReasoning(host.chatReasoning);
   if (
     !message ||
     !reasoning ||
-    reasoning.runId !== runId ||
-    reasoning.receipt !== undefined ||
+    host.chatReasoning?.runId !== runId ||
     extractThinkingCached(message)
   ) {
     return message;
@@ -117,9 +129,6 @@ export function projectChatReasoning(props: {
   const showReasoning = props.showThinking && level === "on";
   const reasoning = props.reasoning;
   const ownsPreview = !props.runId || props.runId === reasoning?.runId;
-  const showPreview =
-    props.showThinking &&
-    ownsPreview &&
-    ((level === "on" && !reasoning?.receipt?.persisted) || level === "stream");
+  const showPreview = props.showThinking && ownsPreview && (level === "on" || level === "stream");
   return { showReasoning, reasoning: showPreview ? reasoning : null };
 }

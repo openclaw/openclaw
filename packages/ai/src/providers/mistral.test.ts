@@ -4,6 +4,7 @@ import {
   type ToolCall,
 } from "@mistralai/mistralai/models/components";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost } from "../host.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model } from "../types.js";
@@ -219,6 +220,56 @@ function makeMistralToolResultContext(
 }
 
 describe("Mistral provider", () => {
+  it("exposes cumulative tool input before the provider completes the call", async ({
+    onTestFinished,
+  }) => {
+    const gates = [createDeferred(), createDeferred()];
+    onTestFinished(() => gates.forEach((gate) => gate.resolve()));
+    const source = mistralToolStream(
+      "progress",
+      [
+        parseMistralToolCall({
+          id: "progress",
+          type: "function",
+          function: { name: "write", arguments: '{"content":"line' },
+        }),
+      ],
+      [
+        parseMistralToolCall({
+          id: "progress",
+          type: "function",
+          function: { name: "write", arguments: ' end"}' },
+        }),
+      ],
+    );
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        let index = 0;
+        for await (const event of source) {
+          yield event;
+          await gates[index++]?.promise;
+        }
+      },
+    };
+    const stream = streamMistral(makeMistralModel(), context, { apiKey: crypto.randomUUID() });
+    const inputs: unknown[] = [];
+    try {
+      for await (const event of stream) {
+        if (event.type === "toolcall_delta") {
+          inputs.push(structuredClone(event.partial.content[event.contentIndex]));
+          gates[inputs.length - 1]?.resolve();
+        }
+      }
+    } finally {
+      gates.forEach((gate) => gate.resolve());
+    }
+    expect(inputs).toMatchObject([
+      { partialJson: '{"content":"line' },
+      { partialJson: '{"content":"line end"}' },
+    ]);
+    expect((await stream.result()).content[0]).not.toHaveProperty("partialJson");
+  });
+
   beforeEach(() => {
     mistralMockState.payloads = [];
     mistralMockState.requestOptions = [];

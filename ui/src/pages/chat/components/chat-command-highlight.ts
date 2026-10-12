@@ -1,14 +1,12 @@
-import { html } from "lit";
-
 // ── Command syntax highlighting ──
 
 type CommandToken = { text: string; cls: "name" | "flag" | "str" | "num" | "op" | "plain" | "ws" };
 
-const COMMAND_HIGHLIGHT_MAX_CHARS = 2_000;
+export const COMMAND_HIGHLIGHT_MAX_CHARS = 2_000;
 const COMMAND_OP_CHARS = new Set(["|", ";", "&", "<", ">"]);
 
 /** Small shell-ish tokenizer for display colors only; never used for execution. */
-function tokenizeCommand(command: string): CommandToken[] {
+export function tokenizeCommand(command: string): CommandToken[] {
   const tokens: CommandToken[] = [];
   let index = 0;
   let expectName = true;
@@ -59,15 +57,4 @@ function tokenizeCommand(command: string): CommandToken[] {
     index = end;
   }
   return tokens;
-}
-
-export function renderHighlightedCommand(command: string) {
-  if (command.length > COMMAND_HIGHLIGHT_MAX_CHARS) {
-    return html`${command}`;
-  }
-  return html`${tokenizeCommand(command).map((token) =>
-    token.cls === "ws" || token.cls === "plain"
-      ? html`${token.text}`
-      : html`<span class="chat-cmd--${token.cls}">${token.text}</span>`,
-  )}`;
 }

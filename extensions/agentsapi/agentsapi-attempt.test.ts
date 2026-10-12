@@ -524,29 +524,22 @@ describe("Agents API retry prompt history", () => {
       } else if (retryScope === "revoked") {
         fixture.revoke(interruption);
       }
+      const historyReads = vi.spyOn(SessionManager, "openModelContextAsync");
       const retried = await fixture.run();
 
-      if (retryScope !== "same run") {
+      if (retryScope === "cancelled" || retryScope === "revoked") {
         expect(retried.terminal).toEqual(
           retryScope === "cancelled"
             ? { kind: "aborted", source: "external" }
-            : {
-                kind: "failed",
-                source: "prompt",
-                error:
-                  retryScope === "revoked"
-                    ? interruption
-                    : expect.objectContaining({
-                        message: expect.stringContaining(
-                          "Current-turn transcript admission identity changed:",
-                        ),
-                      }),
-              },
+            : { kind: "failed", source: "prompt", error: interruption },
         );
         expect(createSession).toHaveBeenCalledTimes(1);
         return;
       }
 
+      // Steering confirmation keeps the foreground admission, so a changed scope
+      // rereads the same fenced prefix instead of reusing the first attempt's history.
+      expect(historyReads).toHaveBeenCalledTimes(retryScope === "same run" ? 0 : 1);
       expect(retried.terminal).toEqual({ kind: "ok" });
       expect(retried.assistantTexts).toEqual(["The completed answer."]);
       expect(histories[1]).toEqual([

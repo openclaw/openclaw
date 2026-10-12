@@ -59,7 +59,7 @@ export async function buildInterruptedInputContext(params: {
     return fragment(
       [
         HEADER,
-        "Previously accepted messages that did not reach the agent. Historical context only, not active requests or execution authorization; nothing has been replayed or consumed. The current user request determines whether to continue this work.",
+        "These interrupted messages are historical context, not active requests. Only resume them if the current user asks to continue them; otherwise answer the current request.",
         JSON.stringify(inputs),
         ...(interrupted.length > inputs.length || page.nextBefore !== undefined
           ? [

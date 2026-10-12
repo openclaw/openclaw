@@ -309,7 +309,7 @@ describe("session progress card refresh", () => {
     },
   );
 
-  it.each(["reconnect", "replace", "reset", "detach"])(
+  it.each(["replace", "reset", "detach"])(
     "retires stale retry reads and acceptance after %s",
     async (transition) => {
       vi.useFakeTimers();
@@ -336,13 +336,7 @@ describe("session progress card refresh", () => {
         store.unwatch(owner);
         store.watch(owner, [target]);
       } else {
-        if (transition === "replace") {
-          gateway.snapshot.client = createTestGatewayClient(request);
-        } else {
-          gateway.snapshot.phase = "reconnecting";
-          snapshotChanged();
-          gateway.snapshot.phase = "connected";
-        }
+        gateway.snapshot.client = createTestGatewayClient(request);
         snapshotChanged();
       }
       await store.load(target);
@@ -720,9 +714,6 @@ describe("session progress card Gateway response boundary", () => {
     expect(replacementLifetime).toBeDefined();
     expect(replacement.request).toHaveBeenCalledTimes(1);
 
-    const staleDismiss = createDeferred<{ card: null }>();
-    replacement.request.mockReturnValueOnce(staleDismiss.promise);
-    const dismissal = store.dismiss(reconnectTarget, store.get(reconnectTarget)!);
     const interruptedRead = createDeferred<{ card: typeof nextCard }>();
     replacement.request.mockReturnValueOnce(interruptedRead.promise);
     replacement.opts.onEvent?.(
@@ -742,11 +733,9 @@ describe("session progress card Gateway response boundary", () => {
     await vi.waitFor(() => expect(store.get(reconnectTarget)).toEqual(refreshedCard));
     interruptedRead.resolve({ card: nextCard });
     await expect(reconnectRead).resolves.toBeNull();
-    staleDismiss.resolve({ card: null });
-    await expect(dismissal).resolves.toBe(false);
     expect(store.get(reconnectTarget)).toEqual(refreshedCard);
     expect(store.getLifetime(reconnectTarget)).toBe(replacementLifetime);
-    expect(replacement.request).toHaveBeenCalledTimes(4);
+    expect(replacement.request).toHaveBeenCalledTimes(3);
   });
 
   it.each([

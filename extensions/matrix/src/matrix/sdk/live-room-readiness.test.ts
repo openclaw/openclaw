@@ -94,54 +94,47 @@ describe("Matrix live encrypted room ownership", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    "same-state revision",
-    "room replacement",
-    "missing room",
-    "membership",
-    "encryption",
-    "offline",
-  ])("revalidates %s after a held crypto probe", async (change) => {
-    liveSync();
-    const started = createDeferred<void>();
-    const finish = createDeferred<boolean>();
-    fixture.probe.mockImplementationOnce(() => {
-      started.resolve();
-      return finish.promise;
-    });
-    const send = vi.fn(async () => "$sent");
-    const operation = client.withLiveEncryptedRoom(roomId, send);
-    const settled = Promise.allSettled([operation]);
-    try {
-      await started.promise;
-      if (change === "same-state revision") {
-        fixture.probe.mockResolvedValue(false);
-        liveSync();
-      } else if (change === "room replacement") {
-        fixture.room = makeRoom();
-        fixture.probe.mockResolvedValue(false);
-      } else if (change === "missing room") {
-        fixture.room = undefined;
-      } else if (change === "membership") {
-        vi.mocked(fixture.room!).getMyMembership.mockReturnValue("leave");
-      } else if (change === "encryption") {
-        vi.mocked(fixture.room!).hasEncryptionStateEvent.mockReturnValue(false);
-      } else {
-        sdk.emit(ClientEvent.Sync, SyncState.Reconnecting, SyncState.Syncing);
-      }
-      finish.resolve(true);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(send).not.toHaveBeenCalled();
-      fixture.room = makeRoom();
-      fixture.probe.mockResolvedValue(true);
+  it.each(["room replacement", "missing room", "membership", "encryption", "offline"])(
+    "revalidates %s after a held crypto probe",
+    async (change) => {
       liveSync();
-      await expect(operation).resolves.toBe("$sent");
-    } finally {
-      finish.resolve(false);
-      client.abortPendingRequests();
-      await settled;
-    }
-  });
+      const started = createDeferred<void>();
+      const finish = createDeferred<boolean>();
+      fixture.probe.mockImplementationOnce(() => {
+        started.resolve();
+        return finish.promise;
+      });
+      const send = vi.fn(async () => "$sent");
+      const operation = client.withLiveEncryptedRoom(roomId, send);
+      const settled = Promise.allSettled([operation]);
+      try {
+        await started.promise;
+        if (change === "room replacement") {
+          fixture.room = makeRoom();
+          fixture.probe.mockResolvedValue(false);
+        } else if (change === "missing room") {
+          fixture.room = undefined;
+        } else if (change === "membership") {
+          vi.mocked(fixture.room!).getMyMembership.mockReturnValue("leave");
+        } else if (change === "encryption") {
+          vi.mocked(fixture.room!).hasEncryptionStateEvent.mockReturnValue(false);
+        } else {
+          sdk.emit(ClientEvent.Sync, SyncState.Reconnecting, SyncState.Syncing);
+        }
+        finish.resolve(true);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(send).not.toHaveBeenCalled();
+        fixture.room = makeRoom();
+        fixture.probe.mockResolvedValue(true);
+        liveSync();
+        await expect(operation).resolves.toBe("$sent");
+      } finally {
+        finish.resolve(false);
+        client.abortPendingRequests();
+        await settled;
+      }
+    },
+  );
 
   it("cancels one waiter without canceling a sibling's shared crypto initialization", async () => {
     const initialization = createDeferred<void>();

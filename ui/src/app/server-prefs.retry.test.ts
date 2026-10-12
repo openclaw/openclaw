@@ -7,16 +7,12 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { resolveServerUiPrefWriteStatus, retryServerUiPrefWrite } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
+import { applyServerUiPrefs } from "./server-prefs-reconcile.ts";
 import {
   createServerPrefsWriter,
   initializeServerPrefsProfile,
 } from "./server-prefs.test-support.ts";
-import {
-  applyServerUiPrefs,
-  flushServerUiPrefs,
-  pushServerUiPrefs,
-  resetServerUiPrefsSync,
-} from "./server-prefs.ts";
+import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 const scope = "ws://background-retry";

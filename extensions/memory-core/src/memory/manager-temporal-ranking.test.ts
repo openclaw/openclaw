@@ -17,6 +17,41 @@ describe("memory source temporal ranking", () => {
     closeAllMemorySearchManagers,
   });
 
+  it.each(["keyword-only", "hybrid", "vector-only"])(
+    "keeps old dated notes above the relevance threshold through %s",
+    async (mode) => {
+      fixture.provider.forceNoProvider = mode === "keyword-only";
+      const cfg = fixture.createConfig({
+        provider: mode === "keyword-only" ? "none" : "openai",
+        vectorEnabled: false,
+        minScore: 0.35,
+      });
+      const dated = "memory/records/2000-01-01-alpha.md";
+      await fs.writeFile(path.join(fixture.paths.memory, "2026-01-12.md"), "Beta unrelated note.");
+      await fs.mkdir(path.join(fixture.paths.workspace, "memory/records"), { recursive: true });
+      await fs.writeFile(path.join(fixture.paths.workspace, dated), "Alpha cobalt orchid.");
+      await fs.writeFile(path.join(fixture.paths.memory, "evergreen.md"), "Alpha cobalt orchid.");
+      let manager = await fixture.getFreshManager(cfg);
+      await manager.sync({ reason: "test", force: true });
+      if (mode === "vector-only") {
+        await manager.close();
+        openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
+          DROP TABLE memory_index_chunks_fts;
+          CREATE VIEW memory_index_chunks_fts AS
+            SELECT text, id, path, source, model, start_line, end_line FROM memory_index_chunks;
+        `);
+        manager = await fixture.getFreshManager(cfg, "cli");
+        expect(manager.status().fts?.available).toBe(false);
+      }
+
+      const results = await manager.search("alpha cobalt orchid", { maxResults: 2 });
+      expect(results.map((entry) => entry.path)).toEqual(["memory/evergreen.md", dated]);
+      expect(results[1]?.score).toBeLessThan(0.35);
+      expect(results[1]?.snippet).toContain("Alpha cobalt orchid.");
+      expect(results[1]).not.toHaveProperty("eligibilityScore");
+    },
+  );
+
   it.each([
     {
       name: "keyword-only",

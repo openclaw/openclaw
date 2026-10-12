@@ -13,7 +13,6 @@ import {
 } from "./native-hook-relay-client.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import {
-  clearNativeHookRelayBridgeRecordsForTests,
   deleteNativeHookRelayBridgeRecordIfOwned,
   pruneNativeHookRelayBridgeRecords,
   readNativeHookRelayBridgeRecord as readNativeHookRelayBridgeRecordFromStore,
@@ -408,5 +407,4 @@ export async function clearNativeHookRelayBridgesForTests(): Promise<void> {
   while (pendingOperations.size > 0) {
     await Promise.allSettled(pendingOperations);
   }
-  await clearNativeHookRelayBridgeRecordsForTests();
 }

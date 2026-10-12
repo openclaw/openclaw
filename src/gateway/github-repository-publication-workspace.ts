@@ -10,12 +10,15 @@ import {
   readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
-import { projectGitHubPublicationResult } from "./github-publication-store.js";
+import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import {
+  failRepositoryGitHubPublicationPreparationAsync,
+  type GitHubPublicationTransitionAuthority,
+} from "./github-publication-store-async.js";
 import {
   readGitHubRepositoryPublicationMetadata,
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
-import { failRepositoryGitHubPublicationPreparation } from "./github-repository-publication-store.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 
 export async function prepareRepositoryOwner(session: PublicationSessionIdentity) {
@@ -78,8 +81,13 @@ export async function captureCheckpoint<T>(
       | "source_index_tree"
       | "workspace_tree"
     >,
-    prepared: { snapshot: GitHubRepositoryPublicationSnapshot; snapshotRoot: string },
+    prepared: {
+      snapshot: GitHubRepositoryPublicationSnapshot;
+      snapshotRoot: string;
+      authority: GitHubPublicationTransitionAuthority;
+    },
   ) => Promise<T>,
+  authority: GitHubPublicationTransitionAuthority,
 ): Promise<T | SessionGitHubPublicationResult> {
   let checkpointRef = row.checkpoint_ref;
   let assertSelected = assertCurrent;
@@ -104,6 +112,10 @@ export async function captureCheckpoint<T>(
       }
     };
   }
+  const selectedAuthority: GitHubPublicationTransitionAuthority = {
+    ...authority,
+    assertAction: assertSelected,
+  };
   return await withSessionRepositoryCheckpoint(
     {
       workspaceId: row.workspace_id,
@@ -121,11 +133,11 @@ export async function captureCheckpoint<T>(
         throw new Error("GitHub publication accepted checkpoint is unavailable.");
       }
       if (!payload.publicationStagingRoot || !payload.publicationDigest) {
+        const nextAction =
+          "Save a new checkpoint and request publication again. If capture remains unavailable, resolve any merge conflicts and review the repository's Git clean filters and transport configuration. Your session changes remain recoverable.";
         return projectGitHubPublicationResult(
-          failRepositoryGitHubPublicationPreparation(
-            row,
-            "Save a new checkpoint and request publication again. If capture remains unavailable, resolve any merge conflicts and review the repository's Git clean filters and transport configuration. Your session changes remain recoverable.",
-            assertSelected,
+          await failRepositoryGitHubPublicationPreparationAsync(row, nextAction, () =>
+            selectedAuthority.assertCustody(),
           ),
         );
       }
@@ -142,7 +154,7 @@ export async function captureCheckpoint<T>(
           source_index_tree: snapshot.baseTree,
           workspace_tree: snapshot.workspaceTree,
         },
-        { snapshot, snapshotRoot: payload.publicationStagingRoot },
+        { snapshot, snapshotRoot: payload.publicationStagingRoot, authority: selectedAuthority },
       );
     },
   );

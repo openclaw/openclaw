@@ -16,8 +16,8 @@ import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ToolPolicyConfig } from "../../../config/types.tools.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "../../../plugins/official-runtime-plugins.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
-import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 import {
   collectUnavailableSourceReplyTargets,

@@ -141,7 +141,7 @@ describe("cron timer outcome and failure policy regressions", () => {
     },
   );
 
-  it("records failure diagnostics and auto-disables on the tenth consecutive failure", () => {
+  it("records failure diagnostics and auto-disables on the tenth consecutive failure", async () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: DeferredCronNotifications = [];
     const enqueueSystemEvent = vi.fn();
@@ -218,7 +218,7 @@ describe("cron timer outcome and failure policy regressions", () => {
       consecutiveErrors: 10,
     });
     expect(deferredNotifications).toHaveLength(1);
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });

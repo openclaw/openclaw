@@ -133,7 +133,6 @@ function loadSessionEntryWithMode(
   sessionKey: string,
   opts:
     | (Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
-        includeStoreChildEntries?: boolean;
         targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
       })
     | undefined,
@@ -151,7 +150,6 @@ function loadSessionEntryWithMode(
     targetDiscoveryCache: opts?.targetDiscoveryCache,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
@@ -191,7 +189,6 @@ export function loadGatewaySessionEntry(
 export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: {
-    includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   } & Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env">,
   cfg?: OpenClawConfig,
@@ -218,7 +215,9 @@ export async function withGatewaySessionEntry<T>(
   cfg: OpenClawConfig = getRuntimeConfig(),
   assertConfigCurrent?: () => void,
 ): Promise<T> {
-  const assertRoutingCurrent = captureSessionMutationRouting(cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId: opts?.agentId },
+  ]);
   const assertConfig = assertConfigCurrent ?? (() => assertRoutingCurrent(getRuntimeConfig()));
   return withGatewaySessionStoreTarget(
     { cfg, key: sessionKey, ...opts },

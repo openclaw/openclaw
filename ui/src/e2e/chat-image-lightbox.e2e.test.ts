@@ -144,7 +144,7 @@ suite.define(() => {
       await expect.poll(() => openOriginal.getAttribute("href")).toMatch(/^blob:/);
       const readControlContrast = () =>
         page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
-          const root = lightbox.shadowRoot!;
+          const root = lightbox;
           return [".open-original", ".close", '[aria-label="Zoom in"]'].map((selector) => {
             const style = getComputedStyle(root.querySelector(selector)!);
             return {
@@ -294,10 +294,10 @@ suite.define(() => {
       const mobileImage = page.locator("openclaw-image-lightbox .image");
       const readMobileLayout = () =>
         page.locator("openclaw-image-lightbox .stage").evaluate((stage) => {
-          const root = stage.getRootNode();
+          const root = stage.closest("openclaw-image-lightbox");
           const image = stage.querySelector("img");
-          const header = root instanceof ShadowRoot ? root.querySelector(".header") : null;
-          const controls = root instanceof ShadowRoot ? root.querySelector(".zoom-controls") : null;
+          const header = root?.querySelector(".header");
+          const controls = root?.querySelector(".zoom-controls");
           if (!image || !header || !controls) {
             throw new Error("missing lightbox geometry");
           }
@@ -648,10 +648,8 @@ suite.define(() => {
     });
     const headerOverlaps = () =>
       lightbox.evaluate((element) => {
-        const counterBounds = element
-          .shadowRoot!.querySelector(".gallery-counter")!
-          .getBoundingClientRect();
-        const actions = element.shadowRoot!.querySelector(".actions")!.getBoundingClientRect();
+        const counterBounds = element.querySelector(".gallery-counter")!.getBoundingClientRect();
+        const actions = element.querySelector(".actions")!.getBoundingClientRect();
         return (
           Math.min(counterBounds.right, actions.right) >
             Math.max(counterBounds.left, actions.left) &&

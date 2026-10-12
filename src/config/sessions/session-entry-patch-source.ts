@@ -3,6 +3,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
+import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
@@ -28,6 +29,7 @@ import type {
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import type { SessionSourceAssertion } from "./session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
@@ -56,7 +58,10 @@ export type SqliteSessionEntrySnapshotPatchParams = {
   validateCanonicalKeys: boolean;
   options: SqliteSessionEntryPatchOptions;
   selection: SessionEntryPatchSelection;
-  readSnapshot: (database: OpenClawAgentDatabase) => SqliteLifecycleTargetSnapshot;
+  readSnapshot: (
+    database: OpenClawAgentDatabase,
+    includeWindowFacts?: true,
+  ) => SqliteLifecycleTargetSnapshot;
   resolved: ResolvedSqliteScope;
   sessionKey: string;
   storePath: string;
@@ -75,6 +80,7 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
   };
   resolved.env.OPENCLAW_STATE_DIR = resolveStateDir(resolved.env);
   const databaseOptions = toDatabaseOptions(resolved);
+  assertAgentSessionWriteAdmission(databaseOptions, resolved.agentId);
   const databasePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const targetIdentity = readDatabasePathIdentitySync(databasePath);
   resolved.path = databasePath;
@@ -86,12 +92,13 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
     sessionKey,
     storePath: databasePath,
   });
-  // Released session-store callbacks retain their native synchronous transaction boundary.
+  const commitGuard: SessionSourceAssertion | undefined = options.assertCommitAllowed;
+  // Released opaque storage callbacks retain native atomicity. Host-only guards
+  // participate in the existing worker admission instead of selecting a second writer.
   const useWorker =
     !incognitoBinding &&
     isMainThread &&
-    !options.shouldCommit &&
-    !options.assertCommitAllowed &&
+    !commitGuard?.nativeSource &&
     supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const ensure = options.workerGuard?.ensureIdentitySource;
   if (

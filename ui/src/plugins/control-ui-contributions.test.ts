@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginControlUiDiagnostic } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
@@ -17,15 +16,11 @@ import {
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
-import "./control-ui-contributions.ts";
-import "./control-ui-view.runtime.ts";
+import "./control-ui-manager.solid.tsx";
+import "./control-ui-view.solid.tsx";
+import "./control-ui-contributions.solid.tsx";
 
-type ContributionsElement = LitElement & {
-  kind: "header" | "composer";
-  sessionKey: string;
-  agentId?: string;
-  presented: boolean;
-};
+type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions"];
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
 
@@ -69,8 +64,8 @@ it("renders customization inline and retains pending reload state", async () => 
     basePath: "/console",
     navigate,
   } as unknown as ApplicationContext);
-  // SAFETY: the imported contributions module registers this Lit element.
-  const manager = document.createElement("openclaw-plugin-manager") as LitElement;
+  // The compatibility entry registers the Solid-backed custom element.
+  const manager = document.createElement("openclaw-plugin-manager");
   const button = (label: string) => {
     const found = [...manager.querySelectorAll("button")].find(
       (element) => element.textContent?.trim() === label,
@@ -98,6 +93,25 @@ it("renders customization inline and retains pending reload state", async () => 
     if (!select) {
       throw new Error("Missing replacement selector");
     }
+    plugins.selectReplacement("composer", replacement.key);
+    await vi.waitFor(() => expect(select.value).toBe(replacement.key));
+    plugins.selectReplacement("composer", null);
+    await vi.waitFor(() => expect(select.value).toBe(""));
+
+    plugins.errors = [];
+    listeners.forEach((listener) => listener());
+    await vi.waitFor(() => expect(manager.querySelector('[role="status"]')).toBeNull());
+    plugins.errors = [{ pluginId: "custom-review", message: "Synthetic activation failure" }];
+    listeners.forEach((listener) => listener());
+    await vi.waitFor(() =>
+      expect(manager.querySelector('[role="alert"]')?.textContent).toContain(
+        "Synthetic activation failure",
+      ),
+    );
+    plugins.errors = [];
+    listeners.forEach((listener) => listener());
+    await vi.waitFor(() => expect(manager.querySelector('[role="alert"]')).toBeNull());
+
     select.value = replacement.key;
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(plugins.selectReplacement).toHaveBeenLastCalledWith("composer", replacement.key);
@@ -467,12 +481,12 @@ describe("native plugin session actions", () => {
     await element.updateComplete;
 
     element.remove();
-    expect(invocation.signal.aborted).toBe(true);
-    await expect(invocation.host.request("fixture.retired-action")).rejects.toThrow(
-      "view has ended",
-    );
+    const retiredRequest = invocation.host.request("fixture.retired-action");
     expect(
       request.mock.calls.filter(([method]) => method === "fixture.retired-action"),
     ).toHaveLength(0);
+    await expect(retiredRequest).rejects.toThrow("view has ended");
+    await Promise.resolve();
+    expect(invocation.signal.aborted).toBe(true);
   });
 });

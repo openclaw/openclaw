@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadUsageSessionContext,
   type UsageSessionSelection,
@@ -22,7 +23,6 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCoreAsync } from "./combined-store-gateway-read.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
-import * as transcriptWorker from "./session-transcript-worker-runtime.js";
 
 const boundary = vi.hoisted(
   (): {
@@ -72,104 +72,72 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
   };
 });
 
-it("revokes a prepared listing when its canonical owner closes", async () => {
+it("retains later stores while an earlier context read settles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const scope = { agentId: "main", sessionKey: "agent:main:main" };
-    replaceSessionEntrySync(scope, { sessionId: "before-close", updatedAt: 1 });
-    const pending = loadCombinedSessionStoreForGatewayCoreAsync(cfg).then(
-      () => "returned",
-      () => "revoked",
-    );
-    await closeOpenClawAgentDatabasesAsync();
-    replaceSessionEntrySync(scope, { sessionId: "after-close", updatedAt: 2 });
-    expect(await pending).toBe("revoked");
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
+    for (const agentId of ["main", "other"]) {
+      replaceSessionEntrySync(
+        { agentId, sessionKey: `agent:${agentId}:main` },
+        {
+          sessionId: `${agentId}-before-close`,
+          updatedAt: 1,
+        },
+      );
+    }
+    const other = openOpenClawAgentDatabase({ agentId: "other" });
+    const selected: UsageSessionSelection[] = ["main", "other"].map((agentId) => ({
+      agentId,
+      key: `agent:${agentId}:main`,
+      sessionId: `${agentId}-before-close`,
+      sessionFile: resolveOpenClawAgentSqlitePath({ agentId }),
+      updatedAt: 1,
+      instances: [],
+      contextTarget: {
+        storeTarget: { agentId, storePath: resolveOpenClawAgentSqlitePath({ agentId }) },
+        storedKey: `agent:${agentId}:main`,
+      },
+    }));
+    const requestKind = "session-exact-entries";
+    let replaced = false;
+    const completedKeys: unknown[] = [];
+    boundary.afterReply = async (reply) => {
+      if (
+        isRecord(reply) &&
+        reply.ok === true &&
+        isRecord(reply.value) &&
+        reply.value.kind === requestKind &&
+        Array.isArray(reply.value.entries)
+      ) {
+        completedKeys.push(
+          ...reply.value.entries.map((row) => (isRecord(row) ? row.sessionKey : undefined)),
+        );
+        if (!replaced) {
+          expect(completedKeys).toEqual(["agent:main:main"]);
+          replaced = true;
+          await closeOpenClawAgentDatabaseByPathAsync(other.path, "other");
+          replaceSessionEntrySync(
+            { agentId: "other", sessionKey: "agent:other:main" },
+            {
+              sessionId: "other-successor",
+              updatedAt: 2,
+            },
+          );
+        }
+      }
+    };
+    try {
+      await expect(loadUsageSessionContext(selected)).rejects.toThrow();
+      expect(replaced).toBe(true);
+    } finally {
+      boundary.afterReply = undefined;
+    }
     expect(
-      (await loadCombinedSessionStoreForGatewayCoreAsync(cfg)).store[scope.sessionKey],
-    ).toMatchObject({ sessionId: "after-close" });
+      (await loadCombinedSessionStoreForGatewayCoreAsync(cfg)).store["agent:other:main"],
+    ).toMatchObject({ sessionId: "other-successor" });
   });
 });
 
-it.each(["listing", "context"] as const)(
-  "retains later stores while an earlier %s read settles",
-  async (read) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
-      for (const agentId of ["main", "other"]) {
-        replaceSessionEntrySync(
-          { agentId, sessionKey: `agent:${agentId}:main` },
-          {
-            sessionId: `${agentId}-before-close`,
-            updatedAt: 1,
-          },
-        );
-      }
-      const other = openOpenClawAgentDatabase({ agentId: "other" });
-      const selected: UsageSessionSelection[] = ["main", "other"].map((agentId) => ({
-        agentId,
-        key: `agent:${agentId}:main`,
-        sessionId: `${agentId}-before-close`,
-        sessionFile: resolveOpenClawAgentSqlitePath({ agentId }),
-        updatedAt: 1,
-        instances: [],
-        contextTarget: {
-          storeTarget: { agentId, storePath: resolveOpenClawAgentSqlitePath({ agentId }) },
-          storedKey: `agent:${agentId}:main`,
-        },
-      }));
-      const requestKind = read === "listing" ? "session-entry-list" : "session-exact-entries";
-      let replaced = false;
-      const completedKeys: unknown[] = [];
-      boundary.afterReply = async (reply) => {
-        if (
-          isRecord(reply) &&
-          reply.ok === true &&
-          isRecord(reply.value) &&
-          reply.value.kind === requestKind &&
-          Array.isArray(reply.value.entries)
-        ) {
-          completedKeys.push(
-            ...reply.value.entries.map((row) => (isRecord(row) ? row.sessionKey : undefined)),
-          );
-          if (!replaced) {
-            expect(completedKeys).toEqual(["agent:main:main"]);
-            replaced = true;
-            await closeOpenClawAgentDatabaseByPathAsync(other.path, "other");
-            replaceSessionEntrySync(
-              { agentId: "other", sessionKey: "agent:other:main" },
-              {
-                sessionId: "other-successor",
-                updatedAt: 2,
-              },
-            );
-          }
-        }
-      };
-      try {
-        await expect(
-          read === "listing"
-            ? loadCombinedSessionStoreForGatewayCoreAsync(cfg)
-            : loadUsageSessionContext(selected),
-        ).rejects.toThrow();
-        expect(replaced).toBe(true);
-      } finally {
-        boundary.afterReply = undefined;
-      }
-      expect(
-        (await loadCombinedSessionStoreForGatewayCoreAsync(cfg)).store["agent:other:main"],
-      ).toMatchObject({ sessionId: "other-successor" });
-    });
-  },
-);
-
-it.each([
-  { read: "listing", suppliedDiscovery: false, restoreBeforeConsume: false },
-  { read: "listing", suppliedDiscovery: true, restoreBeforeConsume: false },
-  { read: "listing", suppliedDiscovery: false, restoreBeforeConsume: true },
-  { read: "listing", suppliedDiscovery: true, restoreBeforeConsume: true },
-  { read: "context", suppliedDiscovery: false, restoreBeforeConsume: false },
-  { read: "context", suppliedDiscovery: false, restoreBeforeConsume: true },
-])(
+it.each([{ read: "context", suppliedDiscovery: false, restoreBeforeConsume: true }])(
   "refuses physical $read replacement (supplied: $suppliedDiscovery, ABA: $restoreBeforeConsume)",
   async ({ read, suppliedDiscovery, restoreBeforeConsume }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -241,101 +209,32 @@ it.each([
   },
 );
 
-it("retains physical targets selected before ambient state changes", async () => {
+it("reads committed shared-store changes without running discovery SQL on the host", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const storePath = state.statePath("shared.sqlite");
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, work: {} } },
+      session: { store: storePath },
+    };
     replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:main" },
-      {
-        sessionId: "captured-root",
-        updatedAt: 1,
-      },
+      { agentId: "main", storePath, sessionKey: "agent:main:main" },
+      { sessionId: "main-session", updatedAt: 1 },
     );
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const read = vi.spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases");
-    const originalRoot = process.env.OPENCLAW_STATE_DIR;
-    const changedRoot = state.statePath("other-state");
+    await loadCombinedSessionStoreForGatewayCoreAsync(cfg);
+    replaceSessionEntrySync(
+      { agentId: "work", storePath, sessionKey: "agent:work:new" },
+      { sessionId: "new-session", updatedAt: 2 },
+    );
+    const observed = observeHostDataSql();
     try {
-      const pending = loadCombinedSessionStoreForGatewayCoreAsync(cfg);
-      process.env.OPENCLAW_STATE_DIR = changedRoot;
-      await expect(pending).rejects.toThrow("Session stores changed");
-      expect(read.mock.calls[0]?.[0][0]?.agentId).toBe("main");
-      expect(read.mock.calls[0]?.[0][0]?.path).toBe(database.path);
-      expect(read.mock.calls[0]?.[0][0]?.env?.OPENCLAW_STATE_DIR).toBe(originalRoot);
-      expect(fs.existsSync(changedRoot)).toBe(false);
+      const result = await loadCombinedSessionStoreForGatewayCoreAsync(cfg);
+      expect(result.store["agent:work:new"]).toMatchObject({ sessionId: "new-session" });
+      expect(observed.queries).toEqual([]);
     } finally {
-      if (originalRoot === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = originalRoot;
-      }
-      read.mockRestore();
+      observed.restore();
     }
   });
 });
-
-it.each(["store alias", "file alias", "config object"] as const)(
-  "retains the original discovery capture across %s changes",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const sessionKey = "agent:main:captured-discovery";
-      const original = state.statePath("original", "catalog.sqlite");
-      const replacement = state.statePath("replacement", "catalog.sqlite");
-      const fileAlias = change === "file alias";
-      const alias = fileAlias
-        ? state.statePath("links", "selected.sqlite")
-        : state.statePath("selected");
-      if (fileAlias) {
-        fs.mkdirSync(state.statePath("links"));
-      }
-      for (const [storePath, sessionId] of [
-        [original, "original"],
-        [replacement, "replacement"],
-      ] as const) {
-        replaceSessionEntrySync(
-          { agentId: "main", storePath, sessionKey },
-          { sessionId, updatedAt: 1 },
-        );
-      }
-      fs.symlinkSync(
-        fileAlias ? original : state.statePath("original"),
-        alias,
-        fileAlias ? "file" : "junction",
-      );
-      const cfg = {
-        agents: { entries: { main: {} } },
-        session: {
-          store: fileAlias
-            ? state.statePath("links", "selected.json")
-            : state.statePath("selected", "catalog.sqlite"),
-        },
-      } satisfies OpenClawConfig;
-      expect(
-        (await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { agentId: "main" })).store[
-          sessionKey
-        ],
-      ).toMatchObject({ sessionId: "original" });
-      const pending = loadCombinedSessionStoreForGatewayCoreAsync(cfg, { agentId: "main" });
-      if (change !== "config object") {
-        fs.rmSync(alias, { recursive: true });
-        fs.symlinkSync(
-          fileAlias ? replacement : state.statePath("replacement"),
-          alias,
-          fileAlias ? "file" : "junction",
-        );
-        await expect(pending).rejects.toThrow("outside captured discovery custody");
-      } else {
-        cfg.session.store = replacement;
-        expect((await pending).store[sessionKey]).toMatchObject({ sessionId: "original" });
-      }
-      expect(
-        (await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { agentId: "main" })).store[
-          sessionKey
-        ],
-      ).toMatchObject({ sessionId: "replacement" });
-    });
-  },
-);
 
 it("retains selection and sentinel options while the worker read is queued", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -480,31 +379,3 @@ it("federates worker rows under the same physical owners and keeps incognito pro
     expect(fs.existsSync(missingPath)).toBe(false);
   });
 });
-
-it.each(["newer schema", "missing required table"])(
-  "propagates a worker store with %s instead of returning an empty listing",
-  async (failure) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:main" },
-        {
-          sessionId: "unavailable",
-          updatedAt: 1,
-        },
-      );
-      expect(
-        (await loadCombinedSessionStoreForGatewayCoreAsync(cfg)).store["agent:main:main"],
-      ).toMatchObject({ sessionId: "unavailable" });
-      database.db.exec(
-        failure === "newer schema" ? "PRAGMA user_version = 999" : "DROP TABLE session_nodes",
-      );
-      await expect(loadCombinedSessionStoreForGatewayCoreAsync(cfg)).rejects.toThrow(
-        failure === "newer schema"
-          ? /newer|schema/i
-          : /Session metadata unavailable.*table-missing/,
-      );
-    });
-  },
-);

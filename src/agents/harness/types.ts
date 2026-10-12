@@ -185,6 +185,8 @@ type AgentHarnessIsolatedCompletionParams = {
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
   outputTextPolicy?: "strict-visible";
+  /** Report inference dispatch through settlement, excluding preparation and cleanup. */
+  onRequestComplete?: (durationMs: number) => void;
   streamParams?: {
     maxTokens?: number;
     temperature?: number;
@@ -409,7 +411,12 @@ export type AgentHarnessSessionDeletionParams = {
 };
 
 export type AgentHarnessSessionDeletionMutation = {
-  /** Synchronously remove only the prepared owner's state at the session commit edge. */
+  /**
+   * Synchronously remove only the prepared owner's state at the session commit edge.
+   * @deprecated Opaque transaction callbacks retain the legacy synchronous adapter.
+   * Use createNativeSessionBindingLifecycleV2 for stored bindings or
+   * createNativeSessionCommitFinalizer for commit-only effects.
+   */
   commit: () => void;
   /** Restore only that removal when the authoritative session transaction rolls back. */
   rollback: () => void;
@@ -491,7 +498,10 @@ type AgentHarnessContract<
   /** OpenClaw tool capabilities an indivisible native surface requires from effective profiles. */
   conversationToolPolicyNativeTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
-  /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
+  /**
+   * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync; removed in the next Plugin SDK major.
+   */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;
     agentId?: string;
@@ -502,6 +512,19 @@ type AgentHarnessContract<
     readPreviousSessionId?: () => string | undefined;
     assertCurrent: () => void;
   }): AgentHarnessSessionRuntimeOwnership | undefined;
+  /** Worker-backed private ownership read, without discovery or native connection setup. */
+  resolveSessionRuntimeOwnershipAsync?(params: {
+    version: 2;
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionId: string;
+    sessionKey?: string;
+    storePath?: string;
+    /** Latest predecessor of this exact physical session; valid only during this invocation. */
+    readPreviousSessionId: () => Promise<string | undefined>;
+    /** Revalidate the retained caller after awaited work and before returning ownership. */
+    assertCurrent: () => void;
+  }): Promise<AgentHarnessSessionRuntimeOwnership | undefined>;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   /**

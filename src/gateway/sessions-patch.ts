@@ -116,6 +116,8 @@ type SessionPatchProjectionParams = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Resolved spawn identity supplied only by the trusted creation owner. */
   preparedModelSelection?: ModelRef;
+  /** Creation snapshots selected models, including the configured default. */
+  pinModelSelection?: boolean;
 };
 
 type SessionPatchProjectionResult =
@@ -530,7 +532,7 @@ function* projectSessionPatchSteps(
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      selection = resolved;
+      selection = { ...resolved, isDefault: !params.pinModelSelection && resolved.isDefault };
     }
     if (selection) {
       const prepared = prepareSessionPatchModelSelection({
@@ -584,10 +586,21 @@ function* projectSessionPatchSteps(
       }
       // Catalog membership does not guarantee an activatable harness. Reject before
       // committing the session so sticky defaults cannot retain an unusable selection.
+      // Use the execution decision: a turn runs an unavailable implicit harness on OpenClaw.
       const harnessSelection = {
         provider: selection.provider,
         modelId: selection.model,
-        runtime: resolveThinkingRuntime(selection.provider, selection.model, next),
+        runtime:
+          params.preparedAgentRuntime ??
+          resolveEffectiveAgentRuntime({
+            cfg,
+            provider: selection.provider,
+            modelId: selection.model,
+            agentId: sessionAgentId,
+            sessionKey: storeKey,
+            sessionEntry: next,
+            mode: "execution",
+          }),
         agentId: sessionAgentId,
       };
       if (
@@ -613,7 +626,7 @@ function* projectSessionPatchSteps(
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection,
-        explicitDefaultSelection: raw === null || (statusModelPatch && selection.isDefault),
+        explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }

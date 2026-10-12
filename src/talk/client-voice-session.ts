@@ -6,6 +6,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import type { SessionTranscriptWriteScope } from "../config/sessions/session-accessor.types.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -25,14 +26,6 @@ import {
 import { captureGatewayRootWorkReleaseObserver } from "../process/gateway-work-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import {
-  type ClientVoiceConfirmationUtteranceContext,
-  deactivateClientVoiceConfirmationSession,
-  noteClientVoiceConfirmationUtterance,
-  prepareClientVoiceConfirmationTranscript,
-  recordClientVoiceConfirmationTranscriptAppend,
-  releaseClientVoiceConfirmationRun,
-} from "./client-voice-confirmation.js";
 import {
   CLIENT_VOICE_MUTATION_DIGEST_POLICY,
   ClientVoiceMutationDigestOwner,
@@ -55,7 +48,6 @@ import {
   type ClientVoiceSessionRecord,
   operationKey,
   readVoiceSessionRecord as readRecord,
-  readVoiceSessionFacts,
   VOICE_SESSION_STALE_AFTER_MS as STALE_AFTER_MS,
 } from "./client-voice-session-store.js";
 import {
@@ -150,7 +142,6 @@ function retireClientVoiceRun(runId: string, owner: ClientVoiceRun, retry = true
   owner.stopObserving?.();
   try {
     const { binding } = owner;
-    releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, runId);
     if (retry) {
       const retryDigest = () => mutationDigestDeliveryOwner.retry(binding);
       if (owner.settlement) {
@@ -186,7 +177,7 @@ function ensureToolEffectSubscription(): void {
 
 export { createOrResumeClientVoiceSession } from "./client-voice-session-write.js";
 
-/** Correlate a consult run with its open call for confirmation and mutation evidence. */
+/** Correlate a consult run with its open call for voice identity and mutation evidence. */
 export async function registerClientVoiceConsultRun(
   input: ClientVoiceSessionMutationAuthority & {
     agentId: string;
@@ -303,20 +294,6 @@ export function resolveClientVoiceRunBinding(runId?: string): ClientVoiceRunBind
   return runId ? voiceSessionByRunId.get(runId)?.binding : undefined;
 }
 
-/**
- * Confirmation applies only when the session can observe spoken approvals:
- * relay sessions (server hears utterances) or clients that report transcripts.
- * Legacy clients without transcript reporting keep pre-gate behavior.
- */
-export function isClientVoiceSessionConfirmable(binding: ClientVoiceRunBinding): boolean {
-  const record = readVoiceSessionFacts(binding.agentId, binding.voiceSessionId);
-  return (
-    record?.origin === "relay" ||
-    record?.transcriptCapable === true ||
-    record?.hasUserTranscript === true
-  );
-}
-
 function appendVoiceTranscript(
   params: {
     agentId: string;
@@ -329,7 +306,6 @@ function appendVoiceTranscript(
     text: string;
     timestamp?: number;
     config?: OpenClawConfig;
-    confirmation?: ClientVoiceConfirmationUtteranceContext | null;
   },
   retainedWriter?: ClientVoiceSessionWriter,
 ): Promise<void> {
@@ -342,15 +318,6 @@ function appendVoiceTranscript(
   if (!normalized.text) {
     return Promise.resolve();
   }
-  const confirmation =
-    normalized.role === "user"
-      ? prepareClientVoiceConfirmationTranscript({
-          agentId: normalized.agentId,
-          voiceSessionId: normalized.voiceSessionId,
-          entryId: normalized.entryId,
-          confirmation: normalized.confirmation,
-        })
-      : null;
   return withClientVoiceSessionSettlement(
     async () => {
       const writer = retainedWriter ?? captureClientVoiceSessionWriter(normalized);
@@ -429,14 +396,6 @@ function appendVoiceTranscript(
                 throw new Error("agent session changed before voice transcript append");
               }
               // The worker publishes the transcript and its bookkeeping only after their shared commit.
-              if (confirmation) {
-                recordClientVoiceConfirmationTranscriptAppend({
-                  confirmation,
-                  entryId: normalized.entryId,
-                  text: normalized.text,
-                  appended: appended.appended,
-                });
-              }
               if (appended.appended) {
                 await publishTranscriptUpdate(transcriptTarget, {
                   message: appended.message,
@@ -445,29 +404,45 @@ function appendVoiceTranscript(
                 assertFresh();
               }
 
-              const confirmed = workerTranscript
-                ? turn?.voiceSession
-                : await writer.mutate({
-                    agentId: normalized.agentId,
-                    sessionKey: normalized.sessionKey,
-                    voiceSessionId: normalized.voiceSessionId,
-                    kind: "confirm",
-                    role: normalized.role,
-                    failureKey,
-                    now: Date.now(),
-                  });
-              if (normalized.role === "user" && confirmation) {
-                if (!confirmed?.hasUserTranscript) {
-                  throw new Error("voice transcript confirmation was not committed");
-                }
-                noteClientVoiceConfirmationUtterance({
+              if (!workerTranscript) {
+                await writer.mutate({
                   agentId: normalized.agentId,
+                  sessionKey: normalized.sessionKey,
                   voiceSessionId: normalized.voiceSessionId,
-                  timestamp: Date.now(),
-                  confirmation,
+                  kind: "confirm",
+                  role: normalized.role,
+                  failureKey,
+                  now: Date.now(),
                 });
               }
             };
+            const memory = getSessionActorStorageBinding(sessionTarget);
+            if (memory) {
+              const entry = memory.actor.snapshot(memory.authority)?.entry;
+              if (!entry?.sessionId) {
+                throw new Error(`agent session not found (${normalized.sessionKey})`);
+              }
+              const record = await writer.mutate(reservation);
+              const assertFresh = () => {
+                writer.assertCurrent();
+                const current = memory.actor.snapshot(memory.authority)?.entry;
+                if (
+                  current?.sessionId !== entry.sessionId ||
+                  current.lifecycleRevision !== entry.lifecycleRevision
+                ) {
+                  throw new Error("agent session changed before voice transcript append");
+                }
+              };
+              assertFresh();
+              await appendReserved(
+                record,
+                entry,
+                { ...sessionTarget, storePath: memory.path },
+                assertFresh,
+                false,
+              );
+              return;
+            }
             const nativeTranscript = isNativeSessionEntryRead(sessionTarget, normalized.agentId);
             const transcriptStore = resolveUnsuffixedSqliteTargetFromSessionStorePath(
               sessionTarget.storePath ||
@@ -615,14 +590,6 @@ async function closeClientVoiceSessionInternal(params: {
   if (!closed) {
     return false;
   }
-  // Transport close does not end consult runs: live bindings keep effect capture active,
-  // approved grants stay valid for those runs, and the digest waits for the last run.completed.
-  const liveRunIds = closed.consultRunIds.filter((runId) => {
-    const binding = voiceSessionByRunId.get(runId)?.binding;
-    return binding?.voiceSessionId === params.voiceSessionId && binding.agentId === params.agentId;
-  });
-  deactivateClientVoiceConfirmationSession(params.agentId, params.voiceSessionId, liveRunIds);
-  // Record retry ownership only after canonical close and confirmation cleanup.
   // Channel delivery is best-effort and must never delay this durable boundary.
   mutationDigestDeliveryOwner.record({
     agentId: params.agentId,

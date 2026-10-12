@@ -143,6 +143,7 @@ export function retainAvatarImageUrl(value: string | Promise<string | null> | nu
 
 /** View ownership for agent cards/selectors; bytes remain in the shared Gateway image cache. */
 export class IdentityAvatarController implements ReactiveController {
+  private readonly requestUpdate: () => void;
   private connected = false;
   private unsubscribeGatewayReset?: () => void;
   private routes = new Map<
@@ -152,14 +153,17 @@ export class IdentityAvatarController implements ReactiveController {
   private activeRoutes: Set<string> | null = null;
   private generation = identityAvatarGeneration;
 
-  constructor(private readonly host: ReactiveControllerHost) {
-    host.addController(this);
+  constructor(host: ReactiveControllerHost | (() => void)) {
+    this.requestUpdate = typeof host === "function" ? host : () => host.requestUpdate();
+    if (typeof host !== "function") {
+      host.addController(this);
+    }
   }
 
   hostConnected() {
     this.connected = true;
-    this.unsubscribeGatewayReset = registerAvatarGatewayReset(() => this.host.requestUpdate());
-    this.host.requestUpdate();
+    this.unsubscribeGatewayReset = registerAvatarGatewayReset(this.requestUpdate);
+    this.requestUpdate();
   }
 
   hostDisconnected() {
@@ -204,7 +208,7 @@ export class IdentityAvatarController implements ReactiveController {
         return;
       }
       route.url = null;
-      this.host.requestUpdate();
+      this.requestUpdate();
     };
   }
 
@@ -242,7 +246,7 @@ export class IdentityAvatarController implements ReactiveController {
       void result.then((url) => {
         apply(url);
         if (this.connected && this.routes.get(value) === route) {
-          this.host.requestUpdate();
+          this.requestUpdate();
         }
       });
     }

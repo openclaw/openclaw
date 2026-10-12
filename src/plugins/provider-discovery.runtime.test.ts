@@ -445,6 +445,22 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     },
   );
 
+  it("retains a native catalog beside a different runtime provider from the same plugin", async () => {
+    configureCapturedRuntimeManifest();
+    const native = createProvider({ id: "fixture-cli", mode: "catalog" });
+    const hosted = { ...createProvider({ id: "fixture", mode: "catalog" }), pluginId: "fixture" };
+    mocks.loadSource.mockReturnValue(native);
+    mocks.resolvePluginProvidersCore.mockReturnValue([hosted]);
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      onlyPluginIds: ["fixture"],
+      includeSyntheticAuthProviders: true,
+    });
+
+    expect(providers.map(({ id }) => id)).toEqual(["fixture-cli", "fixture"]);
+    expect(providers[0]?.catalog).toBe(native.catalog);
+    expect(providers[1]?.catalog).toBe(hosted.catalog);
+  });
   it.each(["none", "sync", "async"] as const)(
     "composes lightweight auth with runtime catalog replacement (runtime auth: %s)",
     async (runtimeAuth) => {

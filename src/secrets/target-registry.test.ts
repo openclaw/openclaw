@@ -51,6 +51,22 @@ describe("secret target registry", () => {
     expect(target).toBeNull();
   });
 
+  it.each([{ prefix: [] }, { prefix: ["agents", "entries", "main"] }])(
+    "does not offer string-only memory headers as structured SecretRef apply targets ($prefix)",
+    ({ prefix }) => {
+      expect(
+        resolveConfigSecretTargetByPath([
+          ...prefix,
+          "memory",
+          "search",
+          "remote",
+          "headers",
+          "Authorization",
+        ]),
+      ).toBeNull();
+    },
+  );
+
   it("resolves plan targets by owning config document", () => {
     const configTarget = resolveSecretPlanTargetByPathCore({
       configFile: "openclaw.json",

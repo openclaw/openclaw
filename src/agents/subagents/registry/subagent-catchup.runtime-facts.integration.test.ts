@@ -25,7 +25,10 @@ import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -99,10 +102,10 @@ describe("parent runtime facts from retained completion obligations", () => {
           provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
         },
       });
-      if (!receipt?.complete) {
+      if (!receipt?.completeAsync) {
         throw new Error("Expected a private processing completion owner");
       }
-      receipt.complete(buildAgentRunTerminalOutcome({ status: "ok" }));
+      await receipt.completeAsync(buildAgentRunTerminalOutcome({ status: "ok" }));
       receipt.finish("interrupted");
       await resetSubagentRegistryForTests({ persist: false });
       await closeOpenClawAgentDatabasesAsync();
@@ -424,7 +427,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     expect(await read(PARENT)).toContain(RESULT);
     expect(await read(controller)).toContain(RESULT);
     expect(await read("agent:main:other-parent")).not.toContain(RESULT);
-    await addSubagentRunForTests(child);
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true });
     await mutateSubagentRuns([child.runId], (rows) => {
       const current = rows.get(child.runId);
       if (!current) {

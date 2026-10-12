@@ -27,7 +27,10 @@ import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "../gateway/server/ws-types.js";
 import type { WorkerInstallationArtifact } from "../gateway/worker-environments/bundle.js";
-import type { WorkerConnectionIdentity } from "../gateway/worker-environments/connection-identity.js";
+import type {
+  WorkerConnectionIdentity,
+  WorkerInferenceExecutor,
+} from "../gateway/worker-environments/connection-identity.js";
 import { hashWorkerCredential } from "../gateway/worker-environments/credential.js";
 import { createWorkerInferenceStore } from "../gateway/worker-environments/inference-store.js";
 import { createWorkerChatProjection } from "../gateway/worker-environments/live-chat.test-support.js";
@@ -342,7 +345,12 @@ export class ComposedGatewayHarness {
     }
     let source = this.turnSources.get(claim.claimId);
     if (!source) {
-      source = await bindWorkerFixtureTurnSource(this.placementStore, claim, this.sessionTarget);
+      source = await bindWorkerFixtureTurnSource(
+        this.placementStore,
+        claim,
+        this.sessionTarget,
+        this.executeInference,
+      );
       this.turnSources.set(claim.claimId, source);
     }
     const descriptor: WorkerLaunchDescriptor = {
@@ -532,49 +540,48 @@ export class ComposedGatewayHarness {
     await fs.rm(this.root, { recursive: true, force: true });
   }
 
+  private executeInference: WorkerInferenceExecutor = async (params) => {
+    if (this.useReplacementExecutor) {
+      this.replacementProviderCalls += 1;
+    } else {
+      this.providerCalls += 1;
+    }
+    const plan = this.providerPlan;
+    if (plan.kind === "immediate") {
+      return structuredClone(plan.outcome ?? doneOutcome(plan.text));
+    }
+    if (plan.kind === "pending") {
+      plan.started.resolve();
+      return await plan.release.promise;
+    }
+    if (plan.kind === "live-preview") {
+      params.emit({
+        type: "start",
+        resolvedModel: { api: "openai-responses", ...MODEL_REF },
+        timestamp: Date.now(),
+      });
+      params.emit({ type: "text_start", contentIndex: 0 });
+      params.emit({ type: "text_delta", contentIndex: 0, delta: "preview " });
+      await plan.nextRelease.promise;
+      params.emit({ type: "text_delta", contentIndex: 0, delta: "reply" });
+      params.emit({ type: "text_end", contentIndex: 0 });
+      plan.produced.resolve();
+      return doneOutcome(plan.text);
+    }
+    plan.started.resolve();
+    params.emit({ type: "text_delta", contentIndex: 0, delta: "first" });
+    await plan.firstRelease.promise;
+    params.emit({ type: "text_delta", contentIndex: 0, delta: "second" });
+    await plan.secondRelease.promise;
+    return doneOutcome(plan.text);
+  };
+
   private createService(): workerEnv.WorkerEnvironmentService {
     const ledger = createWorkerTranscriptCommitStore({ database: this.database });
     const committer = createWorkerTranscriptCommitter({
       getConfig: () => this.cfg,
       store: ledger,
     });
-    const executeInference: Parameters<
-      typeof workerEnv.createWorkerEnvironmentService
-    >[0]["executeInference"] = async (params) => {
-      if (this.useReplacementExecutor) {
-        this.replacementProviderCalls += 1;
-      } else {
-        this.providerCalls += 1;
-      }
-      const plan = this.providerPlan;
-      if (plan.kind === "immediate") {
-        return structuredClone(plan.outcome ?? doneOutcome(plan.text));
-      }
-      if (plan.kind === "pending") {
-        plan.started.resolve();
-        return await plan.release.promise;
-      }
-      if (plan.kind === "live-preview") {
-        params.emit({
-          type: "start",
-          resolvedModel: { api: "openai-responses", ...MODEL_REF },
-          timestamp: Date.now(),
-        });
-        params.emit({ type: "text_start", contentIndex: 0 });
-        params.emit({ type: "text_delta", contentIndex: 0, delta: "preview " });
-        await plan.nextRelease.promise;
-        params.emit({ type: "text_delta", contentIndex: 0, delta: "reply" });
-        params.emit({ type: "text_end", contentIndex: 0 });
-        plan.produced.resolve();
-        return doneOutcome(plan.text);
-      }
-      plan.started.resolve();
-      params.emit({ type: "text_delta", contentIndex: 0, delta: "first" });
-      await plan.firstRelease.promise;
-      params.emit({ type: "text_delta", contentIndex: 0, delta: "second" });
-      await plan.secondRelease.promise;
-      return doneOutcome(plan.text);
-    };
     return workerEnv.createWorkerEnvironmentService({
       scheduler: createTestGatewayScheduler(),
       store: this.store,
@@ -597,7 +604,6 @@ export class ComposedGatewayHarness {
         return result;
       },
       liveEvents: this.liveEventsValue,
-      executeInference,
       inferenceStore: createWorkerInferenceStore({ path: this.database.path }),
       ...(this.placementGateValue ? { placementStore: this.placementGateValue } : {}),
     });

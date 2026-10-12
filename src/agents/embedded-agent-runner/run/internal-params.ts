@@ -9,6 +9,7 @@ import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-
 import type { BoundAgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import type { ResolvedRunEntryModelSelection } from "../run-entry.types.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
@@ -33,12 +34,16 @@ export type CompactionAccountingFact = Readonly<
         target: CompactionAccountingTarget;
         /** Present only when the host committed a successor session rotation. */
         previousSessionId?: string;
+        /** Native-thread compaction leaves the host transcript unchanged. */
+        hostCompactionCommitted?: boolean;
       }
     | { kind: "presentation-only" }
   )
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** The logical run already invoked model routing before preparing its candidate chain. */
+  resolvedModelSelection?: ResolvedRunEntryModelSelection;
   preparedTtsPreferences?: PreparedTtsPreferences;
   /** Fail-closed caller input admission against the actual prepared model, before dispatch. */
   assertModelInput?: (model: Pick<Model, "input">) => void;

@@ -34,13 +34,13 @@ export async function createRuntimeSessionEntry(
   // keeping that heavier runtime out of plugin discovery and cold startup.
   const [
     { createGatewaySession },
-    { resolveGatewaySessionStoreTarget },
+    { resolveGatewaySessionStoreTargetInWorker },
     { readAcpSessionMetaForEntry },
     { upsertAcpSessionMeta },
     { resolveSandboxedSessionCreation },
   ] = await Promise.all([
     import("../../gateway/session-create-service.js"),
-    import("../../gateway/session-utils.js"),
+    import("../../gateway/session-utils-store-worker.js"),
     import("../../acp/runtime/session-meta-readonly.js"),
     import("../../acp/runtime/session-meta.js"),
     import("../../gateway/operator-session-run.js"),
@@ -61,9 +61,10 @@ export async function createRuntimeSessionEntry(
         storeKeys: [resolveSqliteSessionKey(params.key, selectedActor.agentId)],
         storePath: selectedActor.path,
       }
-    : resolveGatewaySessionStoreTarget({
+    : await resolveGatewaySessionStoreTargetInWorker({
         cfg: params.cfg,
         key: params.key,
+        assertActive: creationOwner.assertCurrent,
         ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
       });
   const cliInitial = "cliBackendId" in params.initialEntry ? params.initialEntry : undefined;

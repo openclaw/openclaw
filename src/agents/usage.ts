@@ -144,14 +144,21 @@ export function hasObservedModelUsage(usage?: NormalizedUsage | null): usage is 
 
 const normalizeTokenCount = (value: unknown): number | undefined => {
   const numeric = asFiniteNumber(value);
-  if (numeric === undefined) {
-    return undefined;
-  }
-  if (numeric <= 0) {
-    return 0;
-  }
-  return Math.min(Math.trunc(numeric), Number.MAX_SAFE_INTEGER);
+  return numeric === undefined
+    ? undefined
+    : Math.min(Math.max(0, Math.trunc(numeric)), Number.MAX_SAFE_INTEGER);
 };
+
+function normalizeContextUsage(raw?: ContextUsage): ContextUsage | undefined {
+  if (raw?.state !== "available") {
+    return raw?.state === "unavailable" ? { state: "unavailable" } : undefined;
+  }
+  const promptTokens = normalizeTokenCount(raw.promptTokens);
+  const totalTokens = normalizeTokenCount(raw.totalTokens);
+  return promptTokens !== undefined && totalTokens !== undefined && totalTokens >= promptTokens
+    ? { state: "available", promptTokens, totalTokens }
+    : undefined;
+}
 
 export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefined {
   if (!raw) {
@@ -224,26 +231,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.predicted_n ??
       raw.timings?.predicted_n,
   );
-  const contextPromptTokens =
-    raw.contextUsage?.state === "available"
-      ? normalizeTokenCount(raw.contextUsage.promptTokens)
-      : undefined;
-  const contextTotalTokens =
-    raw.contextUsage?.state === "available"
-      ? normalizeTokenCount(raw.contextUsage.totalTokens)
-      : undefined;
-  const contextUsage =
-    raw.contextUsage?.state === "unavailable"
-      ? ({ state: "unavailable" } as const)
-      : contextPromptTokens !== undefined &&
-          contextTotalTokens !== undefined &&
-          contextTotalTokens >= contextPromptTokens
-        ? ({
-            state: "available",
-            promptTokens: contextPromptTokens,
-            totalTokens: contextTotalTokens,
-          } as const)
-        : undefined;
+  const contextUsage = normalizeContextUsage(raw.contextUsage);
   const reasoningTokens = normalizeTokenCount(
     raw.reasoningTokens ??
       raw.reasoning_tokens ??

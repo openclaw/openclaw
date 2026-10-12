@@ -9,7 +9,7 @@ import {
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  captureAgentRunTerminalWriteContext,
+  captureAgentRunTerminalPersistence,
   type CapturedAgentRunTerminalWriteContext,
 } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -44,7 +44,7 @@ it.each([false, true])(
     }>();
     core.mockImplementation(async (params) => {
       const admitted = await resolvePreparedRunAdmission({ ...params, runtimeKind: "embedded" });
-      const writeContext = captureAgentRunTerminalWriteContext(params.runId);
+      const writeContext = captureAgentRunTerminalPersistence(params.runId).writeContext;
       assert(writeContext);
       const persistence = commit.promise.then(() =>
         writeContext.run(() => writeContext.assertCurrent()),

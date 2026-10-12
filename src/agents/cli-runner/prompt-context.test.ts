@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { prepareCliTurnPromptContext } from "./prompt-context.js";
+import { createCliCurrentPromptRenderer, prepareCliTurnPromptContext } from "./prompt-context.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -36,3 +36,14 @@ it.each([false, true])(
     }
   },
 );
+
+it("keeps a transient session notice at the top of the native user prompt", () => {
+  const session = { mode: "reuse", sessionId: "native-session" } as const;
+  const note = "[OpenClaw: Messages occurred outside this Claude session.]";
+  const render = createCliCurrentPromptRenderer({}, session, note);
+  expect(render("Read the latest token.")).toBe(`${note}\n\nRead the latest token.`);
+  expect(render("Read the latest token.", true)).toBe(`${note}\n\nRead the latest token.`);
+  expect(createCliCurrentPromptRenderer({}, session)("Read the latest token.")).toBe(
+    "Read the latest token.",
+  );
+});

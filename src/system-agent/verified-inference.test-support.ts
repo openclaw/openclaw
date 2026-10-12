@@ -1,28 +1,18 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginOrigin } from "../plugins/types.js";
-
-type TestPluginRecord = {
-  pluginId: string;
-  origin: PluginOrigin;
-  rootDir: string;
-  manifestPath: string;
-  manifestHash: string;
-  source: string;
-  packageName: string;
-  packageVersion: string;
-  installRecordHash?: string;
-  packageJson: { path: string; hash: string };
-};
+import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 
 export function pluginRecord(
   pluginId: string,
-  overrides: Partial<TestPluginRecord> = {},
-): TestPluginRecord {
+  overrides: Partial<InstalledPluginIndexRecord> = {},
+): InstalledPluginIndexRecord {
   const rootDir = `/plugins/${pluginId}`;
   return {
     pluginId,
     origin: "global",
+    enabled: true,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    compat: [],
     rootDir,
     manifestPath: `${rootDir}/openclaw.plugin.json`,
     manifestHash: `${pluginId}-manifest-v1`,

@@ -60,7 +60,6 @@ export function createStateDomainPublication<T>(codec: {
     () => ({
       sources: new WeakMap<DatabaseSync, SqliteCommitSource>(),
       capture: new AsyncLocalStorage<{ db: DatabaseSync; facts: Facts }>(),
-      installing: 0,
       facts: new Set<(change: StateDomainChange<T>) => void>(),
       observers: new Set<(change: StateDomainChange<T>) => void>(),
     }),
@@ -85,12 +84,7 @@ export function createStateDomainPublication<T>(codec: {
     });
   const install = (change: StateDomainChange<T>) => {
     const errors: unknown[] = [];
-    state.installing++;
-    try {
-      notifyListeners(state.facts, change, (error) => errors.push(error));
-    } finally {
-      state.installing--;
-    }
+    notifyListeners(state.facts, change, (error) => errors.push(error));
     if (errors.length) {
       throw new AggregateError(errors, "State domain fact installation failed");
     }
@@ -109,9 +103,6 @@ export function createStateDomainPublication<T>(codec: {
   const stage = (db: DatabaseSync, facts: Facts) => {
     if (!facts.size) {
       return;
-    }
-    if (state.installing) {
-      throw new Error("State domains cannot mutate during fact installation");
     }
     const capture = state.capture.getStore();
     if (capture?.db === db) {

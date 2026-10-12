@@ -87,7 +87,7 @@ broader Docker container privileges just to satisfy nested `bwrap`.
 
 ## Sandboxed native execution
 
-The stable default is fail-closed: active OpenClaw sandboxing disables native
+The default blocks unsupported execution: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
@@ -116,7 +116,7 @@ When the flag is on and the current OpenClaw session is sandboxed, OpenClaw
 starts a local loopback exec-server backed by the active sandbox, registers it
 with Codex app-server, and starts the Codex thread and turn with that
 OpenClaw-owned environment. If the app-server cannot register the environment,
-the run fails closed instead of silently falling back to host execution.
+the run stops with an error instead of silently falling back to host execution.
 
 Sandboxed process output streams as ordered stdout, stderr, or PTY
 notifications. OpenClaw retains only a bounded recent-output buffer for polling
@@ -141,7 +141,7 @@ and exec-approvals floors allow full/off execution. Ordinary and raw callers
 still require human approval. Local deny blocks either launch; local ask and
 allowlist policies cannot be bypassed with Full access. Changed local policy
 during setup refuses the launch. Gateway and node must both support this
-authorization path; missing node policy support fails closed. The node receives a
+authorization path; missing node policy support blocks launch. The node receives a
 fresh private home and sanitized environments, never Gateway provider, cloud,
 or GitHub credentials. A lost node connection terminates the attempt and
 process instead of resuming it. Each node-backed attempt uses its own Gateway

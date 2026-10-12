@@ -94,8 +94,6 @@ type SharedChatHistoryRegistry = {
 type SharedChatHistoryConsumer = {
   isCurrent: () => boolean;
   captureRun?: () => ChatHistoryRunObservation | undefined;
-  retryDeadlineMs: number;
-  lastRetryableError?: unknown;
   onRetry?: () => void;
 };
 
@@ -111,19 +109,16 @@ function updateChatHistoryOwnerRequestCount(
   requestKey: string,
   delta: 1 | -1,
 ) {
-  let counts = registry.ownerRequestCounts.get(owner);
-  const nextCount = (counts?.get(requestKey) ?? 0) + delta;
+  const counts = registry.ownerRequestCounts.get(owner) ?? new Map<string, number>();
+  const nextCount = (counts.get(requestKey) ?? 0) + delta;
   if (nextCount <= 0) {
-    counts?.delete(requestKey);
-    if (counts?.size === 0) {
+    counts.delete(requestKey);
+    if (counts.size === 0) {
       registry.ownerRequestCounts.delete(owner);
     }
     return;
   }
-  if (!counts) {
-    counts = new Map();
-    registry.ownerRequestCounts.set(owner, counts);
-  }
+  registry.ownerRequestCounts.set(owner, counts);
   counts.set(requestKey, nextCount);
 }
 
@@ -181,10 +176,7 @@ export function requestSharedHistory(
   const requests = registry.requests;
   let shared = requests.get(requestKey);
   const existingOwner = (registry.ownerRequestCounts.get(consumerOwner)?.get(requestKey) ?? 0) > 0;
-  const consumer: SharedChatHistoryConsumer = {
-    ...consumerObservation,
-    retryDeadlineMs: Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS,
-  };
+  const consumer: SharedChatHistoryConsumer = { ...consumerObservation };
   if (!shared || existingOwner) {
     const params = {
       sessionKey,
@@ -196,11 +188,23 @@ export function requestSharedHistory(
     };
     const controller = new AbortController();
     const consumers = new Set([consumer]);
-    const shouldContinue = () => [...consumers].some((entry) => entry.isCurrent());
-    // A pane joining older shared work still owns a full retry window. Otherwise
-    // it could inherit the first consumer's nearly expired startup deadline.
+    let lastRetryableError: unknown;
+    const deadlineAt = Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS;
+    // Readers joining near the shared deadline may need Retry; one read owns one budget.
+    const timeout = setTimeout(() => {
+      controller.abort(
+        isAgentDatabaseInspectionPendingError(lastRetryableError)
+          ? lastRetryableError
+          : new GatewayProtocolRequestTimeoutError(
+              { method, timeoutMs: CHAT_HISTORY_RETRY_WINDOW_MS, requestSent: true },
+              t("chat.historyRequestTimedOut"),
+            ),
+      );
+    }, CHAT_HISTORY_RETRY_WINDOW_MS);
     const shouldRetry = () =>
-      [...consumers].some((entry) => entry.isCurrent() && Date.now() < entry.retryDeadlineMs);
+      !controller.signal.aborted &&
+      Date.now() < deadlineAt &&
+      [...consumers].some((entry) => entry.isCurrent());
     const attempt = async () => {
       // Each attempt observes only its present consumers and their current runs.
       // A late join acquires custody on a retry, never from an earlier read.
@@ -225,22 +229,23 @@ export function requestSharedHistory(
         try {
           return await attempt();
         } catch (error) {
-          if (!shouldContinue() || !shouldRetry() || !isRetryableChatReadError(error, method)) {
+          if (!shouldRetry() || !isRetryableChatReadError(error, method)) {
             throw error;
           }
+          lastRetryableError = error;
           for (const entry of consumers) {
             if (entry.isCurrent()) {
-              entry.lastRetryableError = error;
               entry.onRetry?.();
             }
           }
           await sleepWithAbort(resolveGatewayReadRetryDelayMs(error, attemptNumber++), signal);
-          if (!shouldContinue() || !shouldRetry()) {
+          if (!shouldRetry()) {
             throw error;
           }
         }
       }
     })().finally(() => {
+      clearTimeout(timeout);
       if (requests?.get(requestKey)?.promise === promise) {
         requests.delete(requestKey);
       }
@@ -254,30 +259,12 @@ export function requestSharedHistory(
   // The client owns this bounded in-flight map, while every pane remains responsible
   // for applying the shared payload under its own session/version ownership checks.
   // Owner counts outlive displaced map entries so overlapping refreshes never reuse stale work.
-  const deadline = new AbortController();
-  const timeout = setTimeout(
-    () => {
-      const timeoutError = new GatewayProtocolRequestTimeoutError(
-        { method, timeoutMs: CHAT_HISTORY_RETRY_WINDOW_MS, requestSent: true },
-        t("chat.historyRequestTimedOut"),
-      );
-      deadline.abort(
-        isAgentDatabaseInspectionPendingError(consumer.lastRetryableError)
-          ? consumer.lastRetryableError
-          : timeoutError,
-      );
-    },
-    Math.max(0, consumer.retryDeadlineMs - Date.now()),
-  );
-  // A shared producer can outlive its first reader, but each reader's loading
-  // state has its own deadline. The final departing reader cancels transport.
   const pending = shared;
   return subscribeToSharedRequest(
     { controller: pending.controller, promise: pending.promise, subscribers: pending.consumers },
     consumer,
-    deadline.signal,
+    pending.controller.signal,
     () => {
-      clearTimeout(timeout);
       updateChatHistoryOwnerRequestCount(registry, consumerOwner, requestKey, -1);
       if (pending.consumers.size === 0 && requests.get(requestKey) === pending) {
         requests.delete(requestKey);

@@ -122,8 +122,8 @@ export function renderSessionLeadingState(
           .routeUrl=${session.channelAvatarUrl}
           .authTokens=${avatarAuth?.authTokens ?? []}
           .authReady=${avatarAuth?.authReady ?? false}
-          .fallback=${ownerChip ?? nothing}
-        ></openclaw-channel-avatar>`,
+          >${ownerChip ?? nothing}</openclaw-channel-avatar
+        >`,
         ...runState,
         badge: session.unread && !running && !trailingState ? renderSessionUnreadBadge() : nothing,
         circular: true,

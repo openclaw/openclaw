@@ -120,15 +120,12 @@ type StandaloneSocket = Awaited<ReturnType<typeof createWaDirectorySocket>>;
 
 type ManagedStandaloneCleanup = {
   authDir: string;
-  inFlight: Promise<void> | null;
   ownerLease: WhatsAppConnectionOwnerLease;
-  retryTimer: ReturnType<typeof setTimeout> | null;
   sock: StandaloneSocket | null;
   socketClosed: boolean;
 };
 
 const pendingStandaloneCleanups = new Map<string, ManagedStandaloneCleanup>();
-const STANDALONE_CLEANUP_RETRY_MS = 1_000;
 
 async function completeStandaloneCleanup(cleanup: ManagedStandaloneCleanup): Promise<void> {
   if (cleanup.sock && !cleanup.socketClosed) {
@@ -148,38 +145,6 @@ async function completeStandaloneCleanup(cleanup: ManagedStandaloneCleanup): Pro
   if (pendingStandaloneCleanups.get(cleanup.authDir) === cleanup) {
     pendingStandaloneCleanups.delete(cleanup.authDir);
   }
-  if (cleanup.retryTimer) {
-    clearTimeout(cleanup.retryTimer);
-    cleanup.retryTimer = null;
-  }
-}
-
-function runStandaloneCleanup(cleanup: ManagedStandaloneCleanup): Promise<void> {
-  if (cleanup.inFlight) {
-    return cleanup.inFlight;
-  }
-  const task = completeStandaloneCleanup(cleanup).finally(() => {
-    if (cleanup.inFlight === task) {
-      cleanup.inFlight = null;
-    }
-  });
-  cleanup.inFlight = task;
-  return task;
-}
-
-function scheduleStandaloneCleanupRetry(cleanup: ManagedStandaloneCleanup): void {
-  if (cleanup.retryTimer) {
-    return;
-  }
-  cleanup.retryTimer = setTimeout(() => {
-    cleanup.retryTimer = null;
-    void runStandaloneCleanup(cleanup).catch(() => {
-      scheduleStandaloneCleanupRetry(cleanup);
-    });
-  }, STANDALONE_CLEANUP_RETRY_MS);
-  // Gateway processes stay alive and retry; standalone CLI processes may exit.
-  // A later process safely reclaims the unchanged lock from the definitely dead PID.
-  cleanup.retryTimer.unref?.();
 }
 
 async function finishStandaloneCleanupOrThrow(
@@ -187,10 +152,10 @@ async function finishStandaloneCleanupOrThrow(
   operationError?: unknown,
 ): Promise<void> {
   try {
-    await runStandaloneCleanup(cleanup);
+    await completeStandaloneCleanup(cleanup);
   } catch (cleanupError) {
+    // Keep credentials exclusively owned; the next lookup retries cleanup.
     pendingStandaloneCleanups.set(cleanup.authDir, cleanup);
-    scheduleStandaloneCleanupRetry(cleanup);
     const cause =
       operationError === undefined
         ? cleanupError
@@ -244,9 +209,7 @@ async function listGroupsThroughStandaloneOwner(
 
   const cleanup: ManagedStandaloneCleanup = {
     authDir,
-    inFlight: null,
     ownerLease,
-    retryTimer: null,
     sock: null,
     socketClosed: true,
   };

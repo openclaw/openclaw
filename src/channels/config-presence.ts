@@ -7,6 +7,7 @@ import {
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   hasBundledChannelPersistedAuthState,
+  hasBundledChannelPersistedAuthStateAsync,
   listBundledChannelIdsWithPersistedAuthState,
 } from "../channels/plugins/persisted-auth-state.js";
 import { hasMeaningfulChannelConfig } from "../config/channel-config-activation.js";
@@ -34,7 +35,7 @@ type ChannelPresenceOptions = {
 /** Source that made a channel look potentially configured. */
 export type ChannelPresenceSignalSource = "config" | "env" | "persisted-auth";
 
-type ChannelPresenceSignal = {
+export type ChannelPresenceSignal = {
   channelId: string;
   source: ChannelPresenceSignalSource;
 };
@@ -165,4 +166,51 @@ export function listPotentialConfiguredChannelPresenceSignals(
   }
 
   return [...signals.values()];
+}
+
+/** Reads persisted credential presence off-thread before publishing channel signals. */
+export async function listPotentialConfiguredChannelPresenceSignalsAsync(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+  options: ChannelPresenceOptions = {},
+): Promise<ChannelPresenceSignal[]> {
+  const signals = listPotentialConfiguredChannelPresenceSignals(cfg, env, {
+    ...options,
+    includePersistedAuthState: false,
+  });
+  const persistedChannelIds = new Set<string>();
+  if (
+    options.includePersistedAuthState === false ||
+    !fs.existsSync(resolveStateDir(env, os.homedir))
+  ) {
+    return signals;
+  }
+  for (const channelId of listBundledChannelIdsWithPersistedAuthState(options.discovery)) {
+    const normalizedChannelId = channelId.trim();
+    if (
+      !normalizedChannelId ||
+      isChannelConfigMetadataKey(normalizedChannelId) ||
+      persistedChannelIds.has(normalizedChannelId)
+    ) {
+      continue;
+    }
+    if (
+      options.persistedAuthChannelIds &&
+      !options.persistedAuthChannelIds.has(normalizeOptionalLowercaseString(channelId) ?? "")
+    ) {
+      continue;
+    }
+    if (
+      await hasBundledChannelPersistedAuthStateAsync({
+        channelId,
+        cfg,
+        env,
+        discovery: options.discovery,
+      })
+    ) {
+      persistedChannelIds.add(normalizedChannelId);
+      signals.push({ channelId: normalizedChannelId, source: "persisted-auth" });
+    }
+  }
+  return signals;
 }

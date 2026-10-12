@@ -190,7 +190,9 @@ export function createChatSendReplyDispatch(params: {
     if (!(reader || assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
       return "missing";
     }
-    const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig());
+    const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig(), undefined, [
+      scope,
+    ]);
     let decision: ReplyDeliveryState = "pending";
     await readSessionTranscriptAnchorsAsync(
       scope,

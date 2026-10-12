@@ -1,5 +1,6 @@
 // Dashboard link tests cover dashboard command URL resolution and config snapshot handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../runtime.js";
 import { dashboardCommand } from "./dashboard.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -259,6 +260,30 @@ describe("dashboardCommand", () => {
     );
     expectNoLogWith("Token auto-auth unavailable");
     expectNoLogWith("missing env var");
+  });
+
+  it("emits one JSON readiness failure before an exiting runtime unwinds", async () => {
+    mockSnapshot("abc");
+    const reason = "Gateway is not running.";
+    ensureDashboardGatewayReadyMock.mockResolvedValueOnce({
+      ready: false,
+      status: {},
+      reason,
+      recoverable: true,
+    });
+    const exit = new ExitError(1);
+    await runtime.exit.withImplementation(
+      () => {
+        throw exit;
+      },
+      async () => {
+        await expect(dashboardCommand(runtime, { json: true })).rejects.toBe(exit);
+      },
+    );
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ ok: false, reason }));
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   it("does not copy or open when gateway readiness fails", async () => {

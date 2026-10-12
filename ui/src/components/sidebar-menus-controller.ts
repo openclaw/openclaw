@@ -39,8 +39,7 @@ type AgentMenuInteractionState = "closed" | "hover-pending" | "open-hover" | "op
 type MenuPosition = { x: number; y: number };
 type CatalogMenuPosition = MenuPosition & { catalogId: string };
 type PositionedMenu =
-  | "customize"
-  | "more"
+  | "railPin"
   | "pluginNavigation"
   | "sessionSort"
   | "peopleFilter"
@@ -60,8 +59,8 @@ type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 
 /** Popup ownership and stateless menu-renderer wiring. */
 export class SidebarMenusController implements ReactiveController {
-  customizeMenuPosition: { x: number; y: number } | null = null;
-  moreMenuPosition: { x: number; y: number } | null = null;
+  railPinMenuPosition: (MenuPosition & { entry: string; label: string }) | null = null;
+  railPinMenuTrigger: HTMLElement | null = null;
   pluginNavigationMenuPosition:
     | (MenuPosition & { entry: ControlUiRegistration<ControlUiNavigationItem> })
     | null = null;
@@ -77,8 +76,6 @@ export class SidebarMenusController implements ReactiveController {
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
 
-  customizeMenuTrigger: HTMLElement | null = null;
-  moreMenuTrigger: HTMLElement | null = null;
   pluginNavigationMenuTrigger: HTMLElement | null = null;
   sessionMenuTrigger: HTMLElement | null = null;
   private sessionMenuWorkVersion = 0;
@@ -178,8 +175,7 @@ export class SidebarMenusController implements ReactiveController {
   // keep document-level shortcuts alive even when an ancestor is hidden.
   dismissTransientMenus(): boolean {
     const hadTransientMenu = Boolean(
-      this.customizeMenuPosition ||
-      this.moreMenuPosition ||
+      this.railPinMenuPosition ||
       this.pluginNavigationMenuPosition ||
       this.sessionMenu ||
       this.catalogMenu.isOpen ||
@@ -190,8 +186,7 @@ export class SidebarMenusController implements ReactiveController {
       this.agentMenuPosition ||
       this.identityMenuPosition,
     );
-    this.closePositionedMenu("customize");
-    this.closePositionedMenu("more");
+    this.closePositionedMenu("railPin");
     this.closePositionedMenu("pluginNavigation");
     this.closeSessionMenu();
     this.catalogMenu.close();
@@ -223,19 +218,14 @@ export class SidebarMenusController implements ReactiveController {
     return this.host.enabledRouteIds?.includes(routeId) ?? true;
   }
 
-  readonly openCustomizeMenuFromContext = (event: MouseEvent) => {
-    event.preventDefault();
-    this.openCustomizeMenu(event.clientX, event.clientY);
-  };
-
-  openCustomizeMenu(x: number, y: number, trigger: HTMLElement | null = null) {
+  openRailPinMenu(entry: string, label: string, x: number, y: number, trigger: HTMLElement | null) {
     this.loadMenuRenderer();
     this.dismissTransientMenus();
-    this.customizeMenuTrigger = trigger;
-    this.updateState("customizeMenuPosition", menuPosition(x, y, 240, 420));
+    this.railPinMenuTrigger = trigger;
+    this.updateState("railPinMenuPosition", { ...menuPosition(x, y, 200, 140), entry, label });
   }
 
-  togglePositionedMenu(menu: "more" | "peopleFilter" | "sessionSort", trigger: HTMLElement) {
+  togglePositionedMenu(menu: "peopleFilter" | "sessionSort", trigger: HTMLElement) {
     if (this[`${menu}MenuPosition`]) {
       this.closePositionedMenu(menu);
       return;
@@ -248,7 +238,6 @@ export class SidebarMenusController implements ReactiveController {
     }
     const [width, height] = (
       {
-        more: [240, 420],
         peopleFilter: [320, 160],
         sessionSort: [200, 280],
       } as const
@@ -256,7 +245,7 @@ export class SidebarMenusController implements ReactiveController {
     this[`${menu}MenuTrigger`] = trigger;
     this.updateState(
       `${menu}MenuPosition`,
-      menuPosition(menu === "more" ? rect.left : rect.right, rect.bottom + 4, width, height),
+      menuPosition(rect.right, rect.bottom + 4, width, height),
     );
   }
 
@@ -446,8 +435,6 @@ export class SidebarMenusController implements ReactiveController {
     this.loadMenuRenderer();
     const menuWidth = AGENT_MENU_WIDTH_PX;
     const rect = trigger.getBoundingClientRect();
-    this.closePositionedMenu("customize");
-    this.closePositionedMenu("more");
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closePositionedMenu("sessionSort");
@@ -591,8 +578,7 @@ export class SidebarMenusController implements ReactiveController {
   render() {
     const renderer = this.menuRenderer;
     return html`
-      ${renderer?.renderSidebarCustomizeMenuForController(this) ?? nothing}
-      ${renderer?.renderSidebarMoreMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarRailPinMenuForController(this) ?? nothing}
       ${renderer?.renderSidebarPluginNavigationMenuForController(this) ?? nothing}
       ${this.agentMenuAvatars.withActiveRoutes(
         () => renderer?.renderSidebarAgentMenuForController(this) ?? nothing,

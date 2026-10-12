@@ -288,60 +288,61 @@ describe("provider attribution", () => {
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("identifies OpenClaw only on native OpenCode Go routes", () => {
-    const nativeGo = resolveProviderRequestPolicy(
-      {
-        provider: "opencode-go",
-        api: "openai-completions",
-        baseUrl: "https://opencode.ai/zen/go/v1",
-        transport: "stream",
-        capability: "llm",
-      },
-      { OPENCLAW_VERSION: "2026.3.22" },
-    );
+  it.each([
+    [
+      "opencode-go",
+      "https://opencode.ai/zen/go/v1",
+      "opencode-go-native",
+      "https://opencode.ai/zen/v1",
+    ],
+    ["opencode", "https://opencode.ai/zen/v1", "opencode-native", "https://opencode.ai/zen/go/v1"],
+  ])(
+    "identifies OpenClaw only on %s native routes",
+    (provider, baseUrl, endpointClass, otherUrl) => {
+      const nativeGo = resolveProviderRequestPolicy(
+        {
+          provider,
+          api: "openai-completions",
+          baseUrl,
+          transport: "stream",
+          capability: "llm",
+        },
+        { OPENCLAW_VERSION: "2026.3.22" },
+      );
 
-    expectRecordFields(nativeGo, {
-      endpointClass: "opencode-go-native",
-      attributionProvider: "opencode-go",
-      allowsHiddenAttribution: false,
-    });
-    expect(nativeGo.attributionHeaders).toEqual({
-      "User-Agent": "openclaw/2026.3.22",
-    });
+      expectRecordFields(nativeGo, {
+        endpointClass,
+        attributionProvider: provider,
+        allowsHiddenAttribution: false,
+      });
+      expect(nativeGo.attributionHeaders).toEqual({
+        "User-Agent": "openclaw/2026.3.22",
+      });
 
-    expect(
-      resolveProviderRequestPolicy({
-        provider: "opencode-go",
-        api: "openai-completions",
-        baseUrl: "https://proxy.example.com/v1",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toBeUndefined();
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "opencode-go",
-        api: "openai-completions",
-        baseUrl: "https://opencode.ai/zen/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-      {
-        endpointClass: "opencode-native",
-        attributionProvider: undefined,
-        attributionHeaders: undefined,
-      },
-    );
-    expect(
-      resolveProviderRequestPolicy({
-        provider: "opencode",
-        api: "openai-completions",
-        baseUrl: "https://opencode.ai/zen/v1",
-        transport: "stream",
-        capability: "llm",
-      }).attributionHeaders,
-    ).toBeUndefined();
-  });
+      expect(
+        resolveProviderRequestPolicy({
+          provider,
+          api: "openai-completions",
+          baseUrl: "https://proxy.example.com/v1",
+          transport: "stream",
+          capability: "llm",
+        }).attributionHeaders,
+      ).toBeUndefined();
+      expectRecordFields(
+        resolveProviderRequestPolicy({
+          provider,
+          api: "openai-completions",
+          baseUrl: otherUrl,
+          transport: "stream",
+          capability: "llm",
+        }),
+        {
+          attributionProvider: undefined,
+          attributionHeaders: undefined,
+        },
+      );
+    },
+  );
 
   it("authorizes hidden xAI attribution on api.x.ai and the default xAI route", () => {
     expectRecordFields(

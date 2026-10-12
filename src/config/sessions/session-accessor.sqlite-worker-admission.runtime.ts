@@ -16,10 +16,8 @@ export function withWorkerWriteAdmission<T>(
   operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
   assertSourceCurrent?: () => void,
 ): Promise<T> {
-  let admissionId = 0;
   let finalAdmission = false;
   const withAdmission: OpenClawAgentDatabaseWriteAdmission = async (run) => {
-    const requestedId = ++admissionId;
     const admission = await new Promise<{
       allowed: boolean;
       validation?: OpenClawAgentDatabaseValidation;
@@ -28,20 +26,11 @@ export function withWorkerWriteAdmission<T>(
       const receive = (admissionMessage: {
         type: string;
         operationId: number;
-        admissionId: number;
         allowed: boolean;
         validation?: OpenClawAgentDatabaseValidation;
         databaseAdmissionPort?: MessagePort;
       }) => {
         cleanup();
-        if (
-          admissionMessage.type !== "admission" ||
-          admissionMessage.operationId !== operationId ||
-          admissionMessage.admissionId !== requestedId
-        ) {
-          reject(new Error("SQLite reclamation Worker received invalid write admission"));
-          return;
-        }
         resolve(admissionMessage);
       };
       const closed = () => {
@@ -57,7 +46,6 @@ export function withWorkerWriteAdmission<T>(
       port.postMessage({
         type: "admission-request",
         operationId,
-        admissionId: requestedId,
       });
     });
     const invoke = () =>
@@ -83,7 +71,6 @@ export function withWorkerWriteAdmission<T>(
       port.postMessage({
         type: "admission-release",
         operationId,
-        admissionId: requestedId,
       });
     }
     return value;

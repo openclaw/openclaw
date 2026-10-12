@@ -5,11 +5,14 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import {
   personalGitHubPublicationSelection,
   selectedGitHubPublisher,
   type GitHubPublicationView,
 } from "../../../lib/sessions/github-publication-controller.ts";
+
+registerGitHubEnglish();
 
 function sourceLabel(source: string): string {
   return t(

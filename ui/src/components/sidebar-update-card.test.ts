@@ -52,8 +52,9 @@ beforeEach(() => {
   originalWebkit = Object.getOwnPropertyDescriptor(window, "webkit");
 });
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.useRealTimers();
   vi.restoreAllMocks();
   if (originalWebkit) {
@@ -409,9 +410,11 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector("summary time")?.textContent?.trim()).toBe("6m ago");
 
     element.remove();
+    await Promise.resolve();
+    expect(element.isConnected).toBe(false);
     expect(vi.getTimerCount()).toBe(timersBefore);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(element.querySelector("summary time")?.textContent?.trim()).toBe("6m ago");
+    expect(vi.getTimerCount()).toBe(timersBefore);
   });
 
   it("keeps an unauthorized update discoverable without allowing activation", async () => {

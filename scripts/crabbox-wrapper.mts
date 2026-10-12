@@ -1315,9 +1315,6 @@ function restoreTemporaryLeaseClaimPath(claimPath: string) {
       encoding: "utf8",
       mode: 0o600,
     });
-    if (readFileSync(claimPath, "utf8") !== original) {
-      return;
-    }
     renameSync(temporaryPath, claimPath);
   } finally {
     rmSync(temporaryPath, { force: true });
@@ -4331,8 +4328,7 @@ const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const spawnManagedChild = await loadManagedChildSpawner();
 await preparationCheckpoint();
 try {
-  // Preparation can yield while a receipt or source changes. Keep the original
-  // capsule provenance and refuse before native Testbox I/O if it no longer matches.
+  // Verify the allocation still belongs to this caller before native Testbox I/O.
   testboxLeaseFreshness?.assertCurrent();
 } catch (error) {
   cleanupOnce();

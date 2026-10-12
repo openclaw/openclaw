@@ -21,6 +21,7 @@ import { showToast } from "../lib/toast.ts";
 import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
+  createModalDialogTestFixture,
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../test-helpers/modal-dialog.ts";
@@ -120,6 +121,8 @@ function createHarness(
       auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] },
     },
   } as ApplicationGatewaySnapshot;
+  const finishArchive = vi.fn();
+  const beginArchive = vi.fn(() => finishArchive);
   const patch = vi.fn(async (key: string) => ({ ok: true, key }));
   const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
   const refreshTheme = vi.fn();
@@ -140,6 +143,7 @@ function createHarness(
     },
     gateway: { snapshot },
     sessions: {
+      beginArchive,
       captureConnectionScope: () => connection,
       isConnectionScopeCurrent: () => current,
       patch,
@@ -170,6 +174,8 @@ function createHarness(
     replaceCurrentSession,
   } as unknown as SessionOrganizerControllerHost;
   return {
+    beginArchive,
+    finishArchive,
     deleteMany,
     deleteOne,
     groupsDelete,
@@ -861,6 +867,69 @@ describe("session organizer destructive confirmations", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(harness.request).not.toHaveBeenCalled();
   });
+});
+
+describe("session organizer batch archive confirmation", () => {
+  it.each([
+    { activity: { hasActiveRun: true }, decision: "cancel" },
+    { activity: { gatewayHasActiveRun: true }, decision: "confirm" },
+    { activity: { hasActiveSubagentRun: true }, decision: "retire" },
+  ] as const)(
+    "waits for $decision before archiving active work",
+    async ({ activity, decision }) => {
+      const modal = createModalDialogTestFixture();
+      const h = createHarness();
+      const rows = [sessionRow(0), { ...sessionRow(1), ...activity }];
+      vi.mocked(showToast).mockClear();
+      try {
+        const pending = modal.track(
+          runBatchSessionAction(h.host, { kind: "toggle-archived" }, rows, false, h.scope),
+        );
+        const actions = await waitForConfirmDialogActions();
+        expect(document.body.textContent).toContain("This selection contains active work.");
+        expect(h.beginArchive).not.toHaveBeenCalled();
+        expect(h.request).not.toHaveBeenCalled();
+        if (decision === "retire") {
+          h.retireScope();
+        } else {
+          answerConfirmDialog(actions, decision);
+        }
+        await pending;
+        if (decision === "confirm") {
+          expect(h.request.mock.calls.map(([method, params]) => [method, params])).toEqual([
+            ["sessions.patchMany", { targets: rows.map(sessionTarget), patch: { archived: true } }],
+          ]);
+          expect(h.finishArchive).toHaveBeenCalledTimes(rows.length);
+        } else {
+          expect(h.beginArchive).not.toHaveBeenCalled();
+          expect(h.request).not.toHaveBeenCalled();
+          expect(h.reconcileMutation).not.toHaveBeenCalled();
+          expect(h.pruneSidebarSessionEntry).not.toHaveBeenCalled();
+          expect(showToast).not.toHaveBeenCalled();
+        }
+      } finally {
+        await modal.cleanup();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps idle archive and archived=%s restore immediate",
+    async (archived) => {
+      const h = createHarness();
+      const rows = [sessionRow(0), sessionRow(1)].map((row) =>
+        Object.assign(row, { archived, hasActiveRun: true, gatewayHasActiveRun: false }),
+      );
+      await runBatchSessionAction(h.host, { kind: "toggle-archived" }, rows, false, h.scope);
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(h.request.mock.calls.map(([method, params]) => [method, params])).toEqual([
+        [
+          "sessions.patchMany",
+          { targets: rows.map(sessionTarget), patch: { archived: !archived } },
+        ],
+      ]);
+    },
+  );
 });
 
 describe("session organizer snooze", () => {

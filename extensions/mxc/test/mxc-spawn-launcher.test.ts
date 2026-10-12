@@ -1,7 +1,9 @@
+import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
@@ -14,20 +16,14 @@ const launcherPath = path.resolve(
 const loadLauncher = () =>
   require(launcherPath) as {
     decodePayload: (argv: string[]) => unknown;
-    exitOnChildProcessClose: (
-      child: {
-        on: (event: string, listener: (exitCode: number | null, signal?: string) => void) => void;
-      },
-      options?: { exit?: (code: number) => void },
-    ) => void;
     forwardSignals: (
       spawned: { kill: (signal: string) => void },
       options?: {
-        exit?: (code: number) => void;
         exitGraceMs?: number;
         setTimeout?: (callback: () => void, ms: number) => { unref?: () => void };
+        clearTimeout?: (timer: unknown) => void;
       },
-    ) => void;
+    ) => { exitCode: () => number | undefined; dispose: () => void };
     launchSandbox: (
       spawnSandboxFromConfig: (config: unknown, options: unknown) => unknown,
       config: unknown,
@@ -122,7 +118,7 @@ describe("mxc-spawn-launcher", () => {
       return process;
     });
     const spawned = { kill: vi.fn() };
-    const exit = vi.fn();
+    const clearTimeoutMock = vi.fn();
     const timers: Array<{ callback: () => void; ms: number; unref: ReturnType<typeof vi.fn> }> = [];
     const setTimeoutMock = vi.fn((callback: () => void, ms: number) => {
       const timer = { callback, ms, unref: vi.fn() };
@@ -130,7 +126,11 @@ describe("mxc-spawn-launcher", () => {
       return timer;
     });
     try {
-      forwardSignals(spawned, { exit, exitGraceMs: 25, setTimeout: setTimeoutMock });
+      const signals = forwardSignals(spawned, {
+        exitGraceMs: 25,
+        setTimeout: setTimeoutMock,
+        clearTimeout: clearTimeoutMock,
+      });
 
       listeners.get("SIGTERM")?.();
       listeners.get("SIGINT")?.();
@@ -143,29 +143,52 @@ describe("mxc-spawn-launcher", () => {
 
       timers[0]?.callback();
 
-      expect(exit).toHaveBeenCalledWith(143);
+      expect(spawned.kill).toHaveBeenLastCalledWith("SIGKILL");
+      expect(signals.exitCode()).toBe(143);
+      signals.dispose();
+      expect(clearTimeoutMock).toHaveBeenCalledWith(timers[0]);
     } finally {
       processOn.mockRestore();
     }
   });
 
-  it("exits non-PTY child processes after stdio close", () => {
-    const { exitOnChildProcessClose } = loadLauncher();
-    const listeners = new Map<string, (exitCode: number | null, signal?: string) => void>();
-    const child = {
-      on: vi.fn((event: string, listener: (exitCode: number | null, signal?: string) => void) => {
-        listeners.set(event, listener);
-      }),
-    };
-    const exit = vi.fn();
-
-    exitOnChildProcessClose(child, { exit });
-
-    expect(child.on).toHaveBeenCalledWith("close", expect.any(Function));
-    expect(child.on).not.toHaveBeenCalledWith("exit", expect.any(Function));
-
-    listeners.get("close")?.(null, "SIGTERM");
-
-    expect(exit).toHaveBeenCalledWith(143);
+  it("waits for child stdio closure and releases launcher input and signal listeners", async () => {
+    const { launchSandbox } = loadLauncher();
+    const originalCode = process.exitCode;
+    const inputListeners = process.stdin.listeners("data");
+    const signalListeners = process.listeners("SIGTERM");
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("forced launcher exit");
+    });
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      kill: vi.fn(),
+    });
+    let settled = false;
+    const running = launchSandbox(() => child, {}, {}).then(() => {
+      settled = true;
+    });
+    try {
+      await Promise.resolve();
+      child.emit("exit", 7, null);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(exit).not.toHaveBeenCalled();
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 7, null);
+      await running;
+      expect(process.exitCode).toBe(7);
+      expect(process.stdin.listeners("data")).toEqual(inputListeners);
+      expect(process.listeners("SIGTERM")).toEqual(signalListeners);
+      expect(child.stdin.destroyed).toBe(true);
+    } finally {
+      child.emit("close", 7, null);
+      await running;
+      process.exitCode = originalCode;
+      exit.mockRestore();
+    }
   });
 });

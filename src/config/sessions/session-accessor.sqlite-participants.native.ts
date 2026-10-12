@@ -2,6 +2,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
@@ -118,21 +119,23 @@ function recordSessionParticipantWithAliasRead(
       "sum",
     );
     const writeGeneration = trackSessionEntryCacheWrite(database, () =>
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .insertInto("session_participants")
-          .values({
-            session_key: resolved.sessionKey,
-            identity_namespace: namespace,
-            actor_id: existing?.actor_id ?? actorId,
-            ...aggregate,
-          })
-          .onConflict((conflict) =>
-            conflict
-              .columns(["session_key", "identity_namespace", "actor_id"])
-              .doUpdateSet(aggregate),
-          ),
+      withSqliteDatabaseWriteScope(database.db, [resolved.sessionKey], () =>
+        executeSqliteQuerySync(
+          database.db,
+          kysely
+            .insertInto("session_participants")
+            .values({
+              session_key: resolved.sessionKey,
+              identity_namespace: namespace,
+              actor_id: existing?.actor_id ?? actorId,
+              ...aggregate,
+            })
+            .onConflict((conflict) =>
+              conflict
+                .columns(["session_key", "identity_namespace", "actor_id"])
+                .doUpdateSet(aggregate),
+            ),
+        ),
       ),
     );
     publishSessionEntryCacheParticipantUpdate(database, resolved.sessionKey, {

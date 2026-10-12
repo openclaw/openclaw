@@ -238,6 +238,10 @@ context window. The selected memory provider supplies the prompts and
 persistence target or tools. It inherits host timing unless it deliberately
 overrides an optional timing field.
 
+When a model server omits usage data, OpenClaw estimates context pressure from
+the active conversation so the memory checkpoint can still run. These estimates
+do not replace provider-reported token usage in session status.
+
 The flush uses a private copy of the conversation, so its housekeeping messages
 never appear in later user turns, even if interrupted. Its writes to memory
 are still saved normally.

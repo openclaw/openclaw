@@ -77,7 +77,23 @@ export function runOpenClawAgentWriteAdmission<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
 ): Promise<T> {
-  const pathname = resolveOpenClawAgentSqlitePath(options);
+  return runOpenClawAgentPathWriteAdmission(
+    resolveOpenClawAgentSqlitePath(options),
+    run,
+    reentrant,
+    timing,
+    signal,
+  );
+}
+
+/** A captured physical actor needs no logical agent or ambient path resolution. */
+export function runOpenClawAgentPathWriteAdmission<T>(
+  pathname: string,
+  run: (identity: DatabasePathIdentity, assertCurrent: () => void) => Promise<T> | T,
+  reentrant = false,
+  timing?: StoreWriterTiming,
+  signal?: AbortSignal,
+): Promise<T> {
   const identity = readDatabasePathIdentitySync(pathname);
   const storePath = identity.canonicalPath;
   const assertCurrent = () => {

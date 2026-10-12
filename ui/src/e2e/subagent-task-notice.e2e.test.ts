@@ -1,4 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -10,6 +14,10 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width, height: 900 }, colorScheme: "dark" },
       async ({ page }) => {
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const proofDir = artifactRoot
+          ? createControlUiE2eArtifactDir("subagent-task-notice", artifactRoot)
+          : undefined;
         const parent = { key: "agent:main:task-parent", kind: "direct", label: "Workspace review" };
         const child = {
           key: "agent:main:subagent:task-child",
@@ -61,12 +69,23 @@ suite.define(() => {
         if (!(await progress.evaluate((element) => element.hasAttribute("open")))) {
           await progress.locator("summary").click();
         }
+        if (proofDir) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            pane,
+            [details, progress, notice],
+            {
+              animations: "disabled",
+            },
+          );
+          await writeFile(path.join(proofDir, `subagent-${width}.png`), frame.png);
+        }
         await expect
           .poll(() =>
             details.evaluate((element) => {
               const bounds = element.getBoundingClientRect();
               const footer = element
-                .closest(".chat-main__conversation-frame")!
+                .closest("openclaw-chat-pane")!
                 .querySelector(".agent-chat__disabled-banner--replacement")!
                 .getBoundingClientRect();
               return (
@@ -107,7 +126,7 @@ suite.define(() => {
             input.evaluate((element) => {
               const inputBounds = element.getBoundingClientRect();
               const detailsBounds = element
-                .closest(".chat-main__conversation-frame")!
+                .closest("openclaw-chat-pane")!
                 .querySelector(".chat-details")!
                 .getBoundingClientRect();
               return (

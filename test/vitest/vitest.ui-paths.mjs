@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const inventories = new Map();
 
-function sourceInventory(cwd) {
+// Share one process snapshot across UI ownership and fast-lane discovery.
+export function getRepositoryFileInventory(directory = repoRoot) {
+  const cwd = resolve(directory);
   if (!inventories.has(cwd)) {
     // Share working-tree facts without probing each inventoried owner. Include
     // untracked destinations and remove indexed paths deleted by unstaged renames.
@@ -21,7 +23,7 @@ function sourceInventory(cwd) {
       },
     );
     let files = null;
-    if (result.status === 0) {
+    if (!result.error && result.status === 0) {
       const entries = result.stdout.split("\0").filter(Boolean);
       files = new Set(entries.map((entry) => entry.slice(2)));
       for (const entry of entries) {
@@ -40,7 +42,7 @@ export function resolveUiTypeScriptPath(file, cwd = repoRoot) {
   if (!/\.tsx?$/u.test(file)) {
     return file;
   }
-  const inventory = sourceInventory(cwd);
+  const inventory = getRepositoryFileInventory(cwd);
   const exists = (candidate) =>
     inventory ? inventory.has(candidate) : existsSync(resolve(cwd, candidate));
   if (exists(file)) {

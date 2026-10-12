@@ -357,7 +357,7 @@ describe("plugin-state-store.authority", () => {
       },
     );
 
-    it.each(["observe", "update conflict", "delete conflict"] as const)(
+    it.each(["update conflict", "delete conflict"] as const)(
       "withholds a %s observation when authority closes after transaction admission",
       async (operation) => {
         await withOpenClawTestState(
@@ -385,13 +385,10 @@ describe("plugin-state-store.authority", () => {
                 current = false;
               }
             });
-            const reading =
-              operation === "observe"
-                ? action.observe("key")
-                : action.compareAndApply("key", observed.comparison, {
-                    operation: operation === "update conflict" ? "update" : "delete",
-                    action: "keep",
-                  });
+            const reading = action.compareAndApply("key", observed.comparison, {
+              operation: operation === "update conflict" ? "update" : "delete",
+              action: "keep",
+            });
             await expect(reading).rejects.toThrow();
             expect(current).toBe(false);
             expect(await store.lookup("key")).toBe("private current value");

@@ -22,6 +22,7 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
+import type { PreparedSessionTranscriptModelContext } from "../../config/sessions/session-transcript-context-read.js";
 import { withSessionContextAdmission } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
@@ -33,14 +34,17 @@ import {
 import {
   withOwnedSessionTranscriptWriterFence,
   captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptReader,
 } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
+import { cloneSessionModelContextEntries } from "./session-manager-codec.js";
 import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
 import {
   sessionManagerReadInitialContext,
@@ -95,6 +99,10 @@ export type {
 } from "./session-manager-types.js";
 
 export class SessionManager extends SessionManagerBranching {
+  private preparedInitialContext:
+    | (PreparedSessionTranscriptModelContext & { view: object })
+    | undefined;
+
   private constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
@@ -123,6 +131,8 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   async [sessionManagerReadInitialContext]() {
+    const prepared = this.preparedInitialContext;
+    this.preparedInitialContext = undefined;
     if (!this.persistenceTarget || !this.boundedContextLimits || this.pendingDeliberateAppend) {
       return this.buildSessionContext();
     }
@@ -133,7 +143,15 @@ export class SessionManager extends SessionManagerBranching {
     const cwd = this.cwd;
     const context = await readSessionManagerModelContextAsync(
       target,
-      { limits: this.boundedContextLimits },
+      {
+        limits: this.boundedContextLimits,
+        ...(prepared &&
+        Object.keys(prepared.view).every(
+          (key) => Reflect.get(prepared.view, key) === Reflect.get(initial, key),
+        )
+          ? { prepared }
+          : {}),
+      },
       (snapshot) => SessionManager.fromSelectedEntries(snapshot.events, cwd),
       this,
     );
@@ -171,7 +189,7 @@ export class SessionManager extends SessionManagerBranching {
   flushPendingPersistence(): void {}
 
   // Worker rollback instrumentation wraps the method on this public prototype.
-  /** @deprecated Await appendMessageAsync. Removal: next Plugin SDK major. */
+  /** @deprecated Await appendMessageAsync. This method will be removed in the next Plugin SDK major. */
   override appendMessage(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -179,7 +197,7 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessage(message, options);
   }
 
-  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. Removal: next Plugin SDK major. */
+  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. This method will be removed in the next Plugin SDK major. */
   override appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -187,7 +205,7 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessageWithTranscriptAnchor(message, options);
   }
 
-  /** @deprecated Use prepareTranscriptRewriteAsync; removed at the next Plugin SDK major. */
+  /** @deprecated Use prepareTranscriptRewriteAsync; removed in the next Plugin SDK major. */
   prepareTranscriptRewrite() {
     prepareSessionManagerSync("prepareTranscriptRewrite", this.persistenceTarget, this);
     this.assertTranscriptWriteActive();
@@ -489,7 +507,7 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** @deprecated Runtime callers should await openAsync. */
+  /** @deprecated Runtime callers should await openAsync; removed in the next Plugin SDK major. */
   static open(
     target: SessionTranscriptRuntimeTarget,
     cwdOverride?: string,
@@ -517,7 +535,7 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** @deprecated Runtime callers should await openBoundedAsync. */
+  /** @deprecated Runtime callers should await openBoundedAsync; removed in the next Plugin SDK major. */
   static openBounded(
     target: SessionTranscriptRuntimeTarget,
     options: SessionManagerBoundedContextLimits & { cwd?: string; onTruncated?: () => void },
@@ -553,8 +571,21 @@ export class SessionManager extends SessionManagerBranching {
     return openSessionManagerBoundedView(
       target,
       options,
-      (cwd, captured, context, limits) =>
-        new SessionManager(cwd, captured, context.events, { ...context, limits }),
+      (cwd, captured, context, limits) => {
+        const manager = new SessionManager(cwd, captured, context.events, { ...context, limits });
+        const branch = manager.getBranch();
+        const reader = context.completeActivePath && getOwnedSessionTranscriptReader(captured);
+        const writeToken = reader && readSqliteDatabaseWriteTokenForPath(reader.database.path);
+        if (writeToken && !manager.migrated && branch.length === context.totalEvents) {
+          const events = cloneSessionModelContextEntries(manager.getHeader(), branch);
+          manager.preparedInitialContext = {
+            context: { events, version: context.version },
+            writeToken,
+            view: manager.captureTranscriptView(),
+          };
+        }
+        return manager;
+      },
       { selection, consume, captureView: (manager) => manager.captureTranscriptView() },
     );
   }
@@ -593,7 +624,7 @@ export class SessionManager extends SessionManagerBranching {
     return SessionManager.detachBounded(await SessionManager.openBoundedAsync(target, options));
   }
 
-  /** @deprecated Runtime callers should await openDetachedBoundedAsync. */
+  /** @deprecated Runtime callers should await openDetachedBoundedAsync; removed in the next Plugin SDK major. */
   static openDetachedBounded(
     target: SessionTranscriptRuntimeTarget,
     options: Parameters<typeof SessionManager.openBounded>[1],
@@ -602,7 +633,7 @@ export class SessionManager extends SessionManagerBranching {
     return SessionManager.detachBounded(SessionManager.openBounded(target, options));
   }
 
-  /** @deprecated Await openModelContextAsync. Removal: next Plugin SDK major. */
+  /** @deprecated Await openModelContextAsync. This method will be removed in the next Plugin SDK major. */
   static openModelContext(
     target: SessionTranscriptRuntimeTarget,
     options: {
@@ -650,7 +681,7 @@ export class SessionManager extends SessionManagerBranching {
     return manager;
   }
 
-  /** @deprecated Await readSessionContextAsync. Removal: next Plugin SDK major. */
+  /** @deprecated Await readSessionContextAsync. This method will be removed in the next Plugin SDK major. */
   static readSessionContext<T>(
     target: SessionTranscriptRuntimeTarget,
     read: (messages: Iterable<AgentMessage>, header: unknown) => T,
@@ -672,7 +703,7 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   /**
-   * @deprecated Await appendMessageToTranscriptAsync. Removal: next Plugin SDK major.
+   * @deprecated Await appendMessageToTranscriptAsync. This method will be removed in the next Plugin SDK major.
    */
   static appendMessageToTranscript(
     target: SessionTranscriptRuntimeTarget,

@@ -418,15 +418,18 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   }
 }
 
-.sidebar-session-filter-panel .picker-select__options[data-fade-start] {
+:is(.sidebar-session-filter-panel, .sidebar-session-owner-filter)
+  .picker-select__options[data-fade-start] {
   mask-image: linear-gradient(to bottom, transparent, black 16px);
 }
 
-.sidebar-session-filter-panel .picker-select__options[data-fade-end] {
+:is(.sidebar-session-filter-panel, .sidebar-session-owner-filter)
+  .picker-select__options[data-fade-end] {
   mask-image: linear-gradient(to top, transparent, black 16px);
 }
 
-.sidebar-session-filter-panel .picker-select__options[data-fade-start][data-fade-end] {
+:is(.sidebar-session-filter-panel, .sidebar-session-owner-filter)
+  .picker-select__options[data-fade-start][data-fade-end] {
   mask-image: linear-gradient(transparent, black 16px, black calc(100% - 16px), transparent);
 }
 

@@ -147,11 +147,19 @@ describe("plugin SDK surface report", () => {
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {
+    const core = surfaceReport.publicStats.byEntrypoint.get("core")!;
+    const report = {
+      ...surfaceReport,
+      publicStats: {
+        ...surfaceReport.publicStats,
+        byEntrypoint: new Map([["core", { ...core, deprecatedExports: 3 }]]),
+      },
+    };
     const budgetConfig = readPluginSdkSurfaceBudgets({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 1 }),
     });
 
-    expect(evaluatePluginSdkSurfaceReport(surfaceReport, budgetConfig)).toContain(
+    expect(evaluatePluginSdkSurfaceReport(report, budgetConfig)).toContain(
       "public deprecated exports in core 3 > 1",
     );
   });

@@ -18,6 +18,7 @@ import {
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import * as mentionStore from "./mention-inbox-store.js";
 import {
   readMentionStoreSnapshot,
   writeMentionStoreChanges,
@@ -114,6 +115,11 @@ describe("temporary human mention Inbox", () => {
         const commitChanges = mentionWorker.commitMentionChanges;
         const committed = createDeferred();
         const release = createDeferred();
+        const readHead = mentionStore.getMentionStoreHeadAdmission;
+        let staleHead: mentionStore.MentionStoreHead | undefined;
+        const head = vi
+          .spyOn(mentionStore, "getMentionStoreHeadAdmission")
+          .mockImplementation((databasePath) => staleHead ?? readHead(databasePath));
         const spy = vi
           .spyOn(mentionWorker, "commitMentionChanges")
           .mockImplementationOnce(async (...args) => {
@@ -121,6 +127,8 @@ describe("temporary human mention Inbox", () => {
             committed.resolve();
             await release.promise;
             if (lost) {
+              // Native commit can outlive its worker's last head publication.
+              staleHead = { ...args[1].expectedHead };
               throw new SqliteWorkerError("synthetic lost Mention Inbox reply", "outcome-unknown");
             }
             return result;
@@ -133,10 +141,16 @@ describe("temporary human mention Inbox", () => {
           release.resolve();
           await pending;
           expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
+          const snapshots = vi.spyOn(mentionWorker, "readMentionSnapshot");
           expect((await read(f.inbox, f.bobClient)).items.map((item) => item.messageId)).toEqual([
             "message-awaiting-receipt",
             "message-original",
           ]);
+          if (lost) {
+            expect(snapshots.mock.calls[0]?.[1]).toBe(-1);
+          }
+          staleHead = undefined;
+          snapshots.mockRestore();
           expect(
             spy.mock.calls.filter(([, mutation]) =>
               mutation.changes.some(
@@ -150,6 +164,7 @@ describe("temporary human mention Inbox", () => {
           release.resolve();
           await pending;
           spy.mockRestore();
+          head.mockRestore();
         }
       });
     },
@@ -253,25 +268,10 @@ describe("temporary human mention Inbox", () => {
     await withInbox(async (f) => {
       await f.post("distant-expiry");
       const snapshot = readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)!;
-      const { db } = openOpenClawStateDatabase();
-      const headKey = "notifications.mentions.head";
-      const saved = db
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-        .get(headKey)?.value_json;
-      if (typeof saved !== "string") {
-        throw new Error("Expected persisted Mention Inbox head JSON");
-      }
-      db.prepare("UPDATE config_machine_state SET value_json = '{}' WHERE state_key = ?").run(
-        headKey,
+      vi.spyOn(mentionWorker, "readMentionSnapshot").mockRejectedValueOnce(
+        new SqliteWorkerError("Mention snapshot is temporarily unavailable", "unavailable"),
       );
-      try {
-        await f.inbox.invalidateAsync();
-      } finally {
-        db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?").run(
-          saved,
-          headKey,
-        );
-      }
+      await f.inbox.invalidateAsync();
       runOpenClawStateWriteTransaction(({ db: writer }) =>
         writeMentionStoreChanges(
           writer,

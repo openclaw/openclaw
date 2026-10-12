@@ -2,17 +2,17 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { loadCronJobsStore, resolveCronJobsStorePath } from "./store.js";
+import { loadCronJobsStore } from "./store.js";
 
 const log = createSubsystemLogger("cron/maintenance");
 
@@ -57,8 +57,7 @@ type RunningCronJobIds =
 
 async function readRunningCronJobIds(): Promise<RunningCronJobIds> {
   try {
-    const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
+    const runningJobs = (await loadCronJobsStore()).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );
     // A running detached job may have been retargeted after its session was created. Keep its
@@ -124,7 +123,7 @@ export async function runSessionRegistryMaintenance(params: {
       const deletedAgents = new Map(
         snapshot?.deletedAgents.map(({ agentId, status }) => [agentId, status]),
       );
-      for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, {
+      for (const target of await resolveAllAgentSessionStoreTargetsAsync(cfg, {
         env,
         registeredDatabases,
       })) {

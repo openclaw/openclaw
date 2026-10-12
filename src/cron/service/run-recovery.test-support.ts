@@ -12,11 +12,11 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cronStoreKey } from "../store/key.js";
+import { releaseLocalCronRunReceiptOwnership } from "../store/run-receipt-store.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
-  releaseLocalCronRunReceiptOwnership,
-} from "../store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
+} from "../store/run-receipt-store.test-support.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
 import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";

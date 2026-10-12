@@ -4,6 +4,7 @@ import {
   mutateBindingsForTargetSession,
   updateBindingsForTargetSessionSync,
 } from "./thread-bindings.session-shared.js";
+import { ensureBindingsLoaded } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 function createDurationUpdate(field: "idleTimeoutMs" | "maxAgeMs", raw: number) {
@@ -27,6 +28,7 @@ function createDurationSetters<Field extends "idleTimeoutMs" | "maxAgeMs">(field
       return mutateBindingsForTargetSession(params, createDurationUpdate(field, params[field]));
     },
     set: (params: Params): ThreadBindingRecord[] => {
+      ensureBindingsLoaded();
       const ids = resolveBindingIdsForTargetSession(params);
       return updateBindingsForTargetSessionSync(ids, createDurationUpdate(field, params[field]));
     },
@@ -39,8 +41,8 @@ const maxAgeSetters = createDurationSetters("maxAgeMs");
 export const setThreadBindingIdleTimeoutBySessionKeyAsync = idleSetters.setAsync;
 export const setThreadBindingMaxAgeBySessionKeyAsync = maxAgeSetters.setAsync;
 
-/** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
+/** @deprecated Use setThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
 export const setThreadBindingIdleTimeoutBySessionKey = idleSetters.set;
 
-/** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
+/** @deprecated Use setThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
 export const setThreadBindingMaxAgeBySessionKey = maxAgeSetters.set;

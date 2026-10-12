@@ -594,6 +594,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
       storePath: params.storePath,
       ctxPayload: params.ctxPayload,
       recordInboundSession: params.recordInboundSession,
+      assertAuthority: params.assertAuthority,
       afterRecord: params.afterRecord,
       record: params.record,
       history: params.history,

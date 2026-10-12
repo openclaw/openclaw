@@ -124,6 +124,8 @@ describe("resolveCopilotForwardCompatModel", () => {
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("future-model");
     expect(result.name).toBe("future-model");
+    expect(result.contextWindow).toBe(128_000);
+    expect(result.contextWindowSource).toBe("synthetic");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
   });
@@ -751,6 +753,46 @@ describe("fetchCopilotModelCatalog", () => {
     });
   });
 
+  it.each<[unknown, string, string, string]>([
+    [undefined, "OpenAI", "endpoint-fixture", "openai-responses"],
+    [null, "OpenAI", "endpoint-fixture", "openai-responses"],
+    [[], "OpenAI", "endpoint-fixture", "openai-responses"],
+    [{ unknown: true }, "OpenAI", "endpoint-fixture", "openai-responses"],
+    [["/future-api"], "OpenAI", "endpoint-fixture", "openai-responses"],
+    [[42, " /v1/chat/completions/ "], "OpenAI", "endpoint-fixture", "openai-completions"],
+    [["/chat/completions", "/responses"], "OpenAI", "endpoint-fixture", "openai-responses"],
+    [["/responses", "/v1/messages"], "Anthropic", "endpoint-fixture", "anthropic-messages"],
+    [["/v1/messages"], "OpenAI", "endpoint-fixture", "anthropic-messages"],
+    [["/v1/responses"], "OpenAI", "endpoint-fixture", "openai-responses"],
+    [["/responses"], "Google", "gemini-endpoint-fixture", "openai-responses"],
+    [["/chat/completions"], "Anthropic", "claude-sonnet-4.5", "openai-completions"],
+    [["/responses"], "Anthropic", "claude-sonnet-4.5", "openai-responses"],
+  ])("uses advertised transport %s for %s/%s (%s)", async (endpoints, vendor, id, api) => {
+    const out = await fetchSelectionFixture([
+      {
+        id,
+        vendor,
+        supported_endpoints: endpoints,
+        capabilities: {
+          type: "chat",
+          limits: { max_context_window_tokens: 1_048_576, max_prompt_tokens: 917_504 },
+        },
+      },
+    ]);
+    const model = expectDefined(out[0], "discovered endpoint fixture");
+    expect(model).toMatchObject({ api, contextWindow: 1_048_576, contextTokens: 917_504 });
+    if (api === "openai-completions") {
+      expect(model.compat).toEqual({
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
+        maxTokensField: "max_tokens",
+      });
+    } else {
+      expect(model.compat?.maxTokensField).toBeUndefined();
+      expect(model.compat?.supportsEagerToolInputStreaming).toBeUndefined();
+    }
+  });
   it("routes each listed model through an endpoint the account lists", async () => {
     const models = await fetchSelectionFixture([
       {
@@ -877,7 +919,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(expectDefined(out[0], "GitHub Copilot model").name).toBe("GPT-5.5");
   });
 
-  it("falls back from malformed live token limits", async () => {
+  it("omits malformed native limits while retaining the output fallback", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       makeResponse(200, {
         data: [
@@ -920,16 +962,16 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out).toHaveLength(2);
     expect(out[0]).toMatchObject({
       id: "gpt-bad-window",
-      contextWindow: 128000,
       maxTokens: 8192,
     });
     expect(out[0]).not.toHaveProperty("contextTokens");
+    expect(out[0]).not.toHaveProperty("contextWindow");
     expect(out[1]).toMatchObject({
       id: "gpt-bad-output",
-      contextWindow: 128000,
       maxTokens: 8192,
     });
     expect(out[1]).not.toHaveProperty("contextTokens");
+    expect(out[1]).not.toHaveProperty("contextWindow");
   });
 
   it.each(["redirect", "metadata DNS"] as const)(

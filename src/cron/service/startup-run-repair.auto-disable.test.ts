@@ -25,7 +25,7 @@ import {
 import { runPostPersistCronNotifications } from "./store.js";
 
 describe("startup run repair auto-disable", () => {
-  it("records the tenth restart-interrupted recurring failure before notification", () => {
+  it("records the tenth restart-interrupted recurring failure before notification", async () => {
     const runningAtMs = Date.parse("2026-08-01T16:00:00.000Z");
     const nowMs = runningAtMs + 30_000;
     const enqueueSystemEvent = vi.fn();
@@ -94,7 +94,7 @@ describe("startup run repair auto-disable", () => {
 
     const notificationIntents = structuredClone(deferredNotifications);
     expect(Buffer.byteLength(JSON.stringify(notificationIntents))).toBeLessThan(4096);
-    runPostPersistCronNotifications(state, notificationIntents);
+    await runPostPersistCronNotifications(state, notificationIntents);
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(enqueueSystemEvent.mock.calls[0]?.[0]).toContain(
       "Check automation history for details.",
@@ -202,7 +202,7 @@ describe("startup run repair auto-disable", () => {
       });
       expect(job.sessionKey).toBe(testCase.creatorSessionKey);
       expect(deferredNotifications).toHaveLength(1);
-      runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+      await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
       await vi.advanceTimersByTimeAsync(1);
       await Promise.all(pendingWakes);
 
@@ -233,7 +233,7 @@ describe("startup run repair auto-disable", () => {
     }
   });
 
-  it("disables a job instead of restoring an invalid finalized next run", () => {
+  it("disables a job instead of restoring an invalid finalized next run", async () => {
     const runningAtMs = Date.parse("2026-08-01T16:00:00.000Z");
     const state = createCronServiceState({
       scheduler: createTestGatewayScheduler(),
@@ -291,7 +291,7 @@ describe("startup run repair auto-disable", () => {
     expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
     expect(deferredNotifications).toHaveLength(1);
 
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
   });

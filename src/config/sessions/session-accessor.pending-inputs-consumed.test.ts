@@ -19,7 +19,6 @@ import {
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -32,7 +31,9 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 describe("committed pending input release", () => {
   const fixture = useTempSessionsFixture("pending-input-consumed-release-");
@@ -490,9 +491,12 @@ describe("committed pending input release", () => {
         if (difference === "malformed") {
           database()
             .db.prepare(
-              "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant') WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
+              "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant'), message_role = ? WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
             )
-            .run(`${runId}:user`);
+            .run(
+              deriveTranscriptPredicateFields('{"message":{"role":"assistant"}}').message_role,
+              `${runId}:user`,
+            );
         }
       } else {
         await first.completeAsync!(buildAgentRunTerminalOutcome({ status: "ok" }));

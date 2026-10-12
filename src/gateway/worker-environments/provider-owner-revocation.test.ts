@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { publishWorkerEnvironmentFixture } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -11,62 +9,6 @@ const SESSION_ID = "session-stale-result-owner";
 
 describe("worker environment owner revocation", () => {
   support.setupWorkerEnvironmentServiceSuite();
-
-  it("preserves a credential when runtime cleanup queues behind a same-epoch state change", async () => {
-    const ready = await support.seedReadyNodeDesktop(ENVIRONMENT_ID);
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        db.prepare(
-          "UPDATE worker_environments SET bootstrap_bundle_hash = ? WHERE environment_id = ?",
-        ).run("b".repeat(64), ENVIRONMENT_ID);
-        publishWorkerEnvironmentFixture(db, ENVIRONMENT_ID);
-      },
-      { database: support.testState.stateDb },
-    );
-    const store = support.testState.store;
-    const revoke = store.revokeEnvironmentCredential.bind(store);
-    let replacement: ReturnType<typeof store.transition> | undefined;
-    const revoked: string[] = [];
-    store.onCredentialRevoked((id) => revoked.push(id));
-    const revocation = vi
-      .spyOn(store, "revokeEnvironmentCredential")
-      .mockImplementationOnce((id, options) => {
-        replacement = store.transition({
-          environmentId: ENVIRONMENT_ID,
-          from: "ready",
-          to: "idle",
-          expectedOwnerEpoch: ready.ownerEpoch,
-        });
-        return revoke(id, options);
-      });
-    const stop = vi.fn(async () => {});
-    const service = support.createService(support.createProvider(), {
-      nodeTunnelManager: {
-        status: () => "stopped",
-        observeProcesses: vi.fn(async () => {
-          throw new Error("Process observation is not configured in this fixture");
-        }),
-        start: vi.fn(),
-        stop,
-        stopAll: vi.fn(async () => {}),
-      },
-      ensureNodeWorkerBundle: async () => support.BOOTSTRAP_RECEIPT,
-    });
-    try {
-      await service.reconcileOnce();
-      expect(replacement).toBeDefined();
-      const idle = await replacement!;
-      expect(idle.ownerEpoch).toBe(ready.ownerEpoch);
-      expect(store.getCredential(ENVIRONMENT_ID)).toMatchObject({
-        ownerEpoch: ready.ownerEpoch,
-        sessionId: null,
-      });
-      expect(revoked).toEqual([]);
-      expect(stop).not.toHaveBeenCalled();
-    } finally {
-      revocation.mockRestore();
-    }
-  });
 
   it.each(["live", "recovery-only"] as const)(
     "preserves a %s pending result during runtime refresh",

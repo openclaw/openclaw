@@ -131,6 +131,27 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
               },
             }
           : {}),
+        ...(scenario === "handle-hang"
+          ? {
+              interact: async (
+                child: import("node:child_process").ChildProcessWithoutNullStreams,
+              ) => {
+                try {
+                  await waitForCliProcessStderrMarker(
+                    child,
+                    "Process still alive after terminal output:",
+                  );
+                  const pid = Number(
+                    await fs.readFile(path.join(root, "blocked-child.pid"), "utf8"),
+                  );
+                  expect(isPidAlive(pid)).toBe(true);
+                  expect(child.exitCode).toBeNull();
+                } finally {
+                  child.stdin.end();
+                }
+              },
+            }
+          : {}),
         ...(scenario === "phase-hang"
           ? {
               interact: async (
@@ -364,6 +385,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           command: expect.stringMatching(/^node(?:\.exe)?$/u),
         });
         expect(payload.unsettledDisposers, failure).toContain("fixture-stdin-child");
+        expect(isPidAlive(pid), failure).toBe(false);
         expect(result.stdout + result.stderr, failure).not.toContain("fixture-private-argument");
         expect(readRun()).toMatchObject({
           status: "succeeded",
@@ -408,10 +430,10 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
             { phase: "exit-listeners-return", pid: tracedChildPid, exitCode: 1 },
           ]);
           const nativeExit = `(node:${tracedChildPid}) WARNING: Exited the environment with code 1`;
-          const nativeExitLine = stderrLines.findIndex((line) => line.includes(nativeExit));
-          for (const boundary of exitBoundaries) {
-            expect(nativeExitLine, failure).toBeGreaterThan(boundary.lineIndex);
-          }
+          // Listener ordering still must be complete; normal completion must not
+          // invoke process.exit merely to produce Node's --trace-exit diagnostic.
+          expect(exitBoundaries, failure).toHaveLength(2);
+          expect(result.stderr, failure).not.toContain(nativeExit);
         }
         return;
       }

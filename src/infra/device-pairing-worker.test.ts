@@ -6,7 +6,7 @@ import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
   isPairedDeviceTokenIdentityCurrent,
-  resolvePairedDeviceTokenIdentity,
+  resolveAuthenticatedDeviceTokenIdentity,
 } from "./device-pairing-identity.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
@@ -303,7 +303,7 @@ test("reconnects without replacing paired rows or changing unrelated device fiel
   }
 });
 
-test("reconnect receipts ignore pending rows while invalidating sibling pairing changes", async () => {
+test("reconnect receipts ignore pending rows and leave sibling pairing changes to their own receipts", async () => {
   await listDevicePairing(baseDir);
   const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   expect(previousBinding).not.toBeNull();
@@ -323,9 +323,6 @@ test("reconnect receipts ignore pending rows while invalidating sibling pairing 
     await expect(
       updatePairedDeviceMetadata("paired-minimal", { displayName: "Reconnected" }, baseDir),
     ).resolves.toBe(true);
-    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
-      "requires a current worker publication",
-    );
     const tokenParams = {
       deviceId: "paired-rich",
       role: "operator",
@@ -444,7 +441,12 @@ test("rechecks the original operator generation through reopened read-only pairi
   });
   try {
     const original = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
-    const identity = resolvePairedDeviceTokenIdentity(original, "operator");
+    const identity = resolveAuthenticatedDeviceTokenIdentity(original, {
+      role: "operator",
+      publicKey: "synthetic-recovery-public-key",
+      token: original!.tokens!.operator!.token,
+      scopes,
+    });
     if (!identity) {
       throw new Error("Original admitted operator token has no generation");
     }

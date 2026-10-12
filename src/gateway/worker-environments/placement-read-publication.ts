@@ -1,5 +1,5 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
+import type { SessionRowChange } from "../../sessions/session-row-changes.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 
 const publications = new WeakMap<
@@ -12,47 +12,16 @@ export function preparePlacementProjectionPublication(
   identity: DatabasePathIdentity,
   projection: WorkerSessionPlacementProjection,
 ) {
-  let current = true;
   let publishedChange: SessionRowChange | undefined;
-  const invalidate = () => {
-    current = false;
-    if (publishedChange) {
-      publications.delete(publishedChange);
-    }
-  };
-  const unsubscribe = sessionChanges.subscribeFacts((change) => {
-    if (change === publishedChange) {
-      return;
-    }
-    if ("all" in change) {
-      if (
-        change.scope === "worker-placements" ||
-        change.scope === "worker-environments" ||
-        change.scope === "stores"
-      ) {
-        invalidate();
-      }
-    } else if (change.scope === undefined || change.factsInvalidated) {
-      for (const placement of projection.placements.values()) {
-        if (
-          change.sessionKey === placement.sessionKey &&
-          (!change.agentId || change.agentId === placement.agentId)
-        ) {
-          invalidate();
-        }
-      }
-    }
-  });
   return {
     publish(change: SessionRowChange) {
-      if (current) {
-        publishedChange = change;
-        publications.set(change, { identity, projection });
-      }
+      publishedChange = change;
+      publications.set(change, { identity, projection });
     },
     release() {
-      unsubscribe();
-      invalidate();
+      if (publishedChange) {
+        publications.delete(publishedChange);
+      }
       publishedChange = undefined;
     },
   };

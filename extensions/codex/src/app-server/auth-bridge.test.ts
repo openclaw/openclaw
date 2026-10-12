@@ -555,9 +555,7 @@ describe("Codex auth bridge", () => {
     expect(desktop.marketplace).not.toHaveBeenCalled();
   });
 
-  it("does not let a stale desktop generation publish artifacts after its successor", async ({
-    agentDir,
-  }) => {
+  it("checks caller authority after queued artifact work", async ({ agentDir }) => {
     const firstMarketplaceStarted = createDeferred<void>();
     const releaseFirstMarketplace = createDeferred<void>();
     let activeMarketplaceCalls = 0;
@@ -580,7 +578,7 @@ describe("Codex auth bridge", () => {
         activeMarketplaceCalls -= 1;
         return "/managed/openai-bundled";
       });
-    let currentEpoch = 1;
+    let callerCurrent = true;
     const startOptions = createStartOptions();
     const first = reconcileArtifacts({
       startOptions,
@@ -588,27 +586,22 @@ describe("Codex auth bridge", () => {
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
       assertCurrent: () => {
-        if (currentEpoch !== 1) {
-          throw new Error("desktop generation X is stale");
+        if (!callerCurrent) {
+          throw new Error("caller authority revoked");
         }
       },
     });
     await firstMarketplaceStarted.promise;
-    currentEpoch = 2;
+    callerCurrent = false;
     const second = reconcileArtifacts({
       startOptions,
       agentDir,
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       desktopGeneration: { epoch: 2, fingerprint: "desktop-y" },
-      assertCurrent: () => {
-        if (currentEpoch !== 2) {
-          throw new Error("desktop generation Y is stale");
-        }
-      },
     });
     releaseFirstMarketplace.resolve();
 
-    await expect(first).rejects.toThrow("desktop generation X is stale");
+    await expect(first).rejects.toThrow("caller authority revoked");
     await expect(second).resolves.toBeUndefined();
     expect(maxActiveMarketplaceCalls).toBe(1);
     expect(desktop.service).toHaveBeenCalledTimes(1);

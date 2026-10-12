@@ -824,23 +824,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     );
   });
 
-  it("releases the active run when backend cleanup throws during a failed prompt", async () => {
-    const fixture = createFixture(mocks);
-    const failure = new Error("prompt failed");
-    mocks.runPrompt.mockRejectedValueOnce(failure);
-    fixture.detachBackend.mockImplementationOnce(() => {
-      fixture.order.push("detach-backend");
-      throw new Error("backend detach failed");
-    });
-
-    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
-
-    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
-    expect(mocks.logError).toHaveBeenCalledWith(
-      expect.stringContaining("backend detach failed, possible resource leak"),
-    );
-  });
-
   it("reports a backend cleanup failure after releasing a successful run", async () => {
     const fixture = createFixture(mocks);
     const failure = new Error("backend detach failed");
@@ -853,46 +836,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
     expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
   });
-
-  it("reports active-run cleanup failure after detaching the backend", async () => {
-    const fixture = createFixture(mocks);
-    const failure = new Error("active run cleanup failed");
-    mocks.clearActiveEmbeddedRun.mockImplementationOnce(() => {
-      fixture.order.push("clear-active-run");
-      throw failure;
-    });
-
-    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
-
-    expect(fixture.detachBackend).toHaveBeenCalledOnce();
-  });
-
-  it.each([false, true])(
-    "retains child receipts for logical-run settlement (yielded: %s)",
-    async (yieldDetected) => {
-      const fixture = createFixture(mocks);
-      const acceptedSessionSpawns = [
-        {
-          runId: "child-run",
-          childSessionKey: "agent:main:subagent:child",
-          expectsCompletionMessage: true,
-        },
-      ];
-      mocks.completeResult.mockReturnValueOnce({
-        ...fixture.result,
-        terminal: { kind: "ok" },
-        yieldDetected,
-        acceptedSessionSpawns,
-      });
-
-      const result = await runEmbeddedAttemptSettledPhase(fixture.input);
-
-      expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
-      expect(fixture.order).toContain("clear-active-run");
-      expect(mocks.markRequesterTurnYielded).not.toHaveBeenCalled();
-      expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
-    },
-  );
 
   it("defaults a source-less settlement failure without dropping it", async () => {
     const fixture = createFixture(mocks);

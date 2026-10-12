@@ -4,14 +4,14 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEventForTest } from "../../audit/message-audit-events.test-support.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
 } from "../../config/sessions/conversation-delivery-store.js";
 import {
   registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../../config/sessions/conversation-route-fingerprint.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,8 +28,10 @@ import {
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookHandlerMap } from "../../plugins/types.js";
+import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryOwnersInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
@@ -53,6 +55,11 @@ import {
   readQueuedEntries,
 } from "./delivery-queue.test-helpers.js";
 import * as messageActionRunner from "./message-action-runner.js";
+
+const { clickClackPlugin } = await loadBundledPluginFacade<{ clickClackPlugin: ChannelPlugin }>({
+  pluginId: "clickclack",
+  artifactBasename: "channel-plugin-api.ts",
+});
 
 describe("conversation completion through the real delivery queue", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
@@ -90,20 +97,21 @@ describe("conversation completion through the real delivery queue", () => {
     operationId: string,
     message: string,
     config: OpenClawConfig = {},
+    destination = conversation,
   ) {
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const scope = resolveConversationRegistryScope({ agentId: "main", config });
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config });
     onTestFinished(async () => {
       await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     });
     await registerConversationAddresses(scope, [
-      { ...conversation, deliveryTarget: conversation.target },
+      { ...destination, deliveryTarget: destination.target },
     ]);
     await beginConversationDeliveryOperation(scope, {
       operationId,
       operationKind: "send",
-      conversationRef: conversation.conversationRef,
+      conversationRef: destination.conversationRef,
       message,
     });
     return { stateDir, scope };
@@ -126,6 +134,74 @@ describe("conversation completion through the real delivery queue", () => {
     resetPluginRuntimeStateForTest();
     vi.unstubAllEnvs();
   });
+
+  it.each(["message", "outbound"] as const)(
+    "settles ClickClack scaffold-only text as suppressed through the %s adapter",
+    async (adapter) => {
+      const address = {
+        channel: "clickclack",
+        accountId: "default",
+        kind: "direct" as const,
+        peerId: "usr_synthetic",
+      };
+      const destination = {
+        ...conversation,
+        ...address,
+        conversationRef: buildConversationRef(address),
+        target: "dm:usr_synthetic",
+      };
+      const config = {
+        channels: {
+          clickclack: {
+            baseUrl: "https://clickclack.example",
+            workspace: "wsp_synthetic",
+            token: "synthetic-token",
+          },
+        },
+      };
+      const operationId = `clickclack-scaffold-${adapter}`;
+      const message = "⚠️ 🛠️ `search repos (agent)` failed";
+      const { stateDir, scope } = await createConversationOperation(
+        operationId,
+        message,
+        config,
+        destination,
+      );
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "clickclack",
+            source: "test",
+            plugin:
+              adapter === "message"
+                ? clickClackPlugin
+                : { ...clickClackPlugin, message: undefined },
+          },
+        ]),
+      );
+      const transport = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("unexpected send"));
+      onTestFinished(() => transport.mockRestore());
+
+      const result = await runGatewayConversationSend({
+        config,
+        readCurrentConfig: () => config,
+        agentId: "main",
+        senderIsOwner: true,
+        operationId,
+        conversationRef: destination.conversationRef,
+        message,
+      });
+
+      expect(result.status).toBe("suppressed");
+      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        status: "suppressed",
+      });
+      expect(readQueuedEntries(stateDir)).toEqual([]);
+      expect(transport).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails closed for an unfinished conversation intent without route authority", async () => {
     const operationId = "missing-route-operation";
@@ -398,7 +474,7 @@ describe("conversation completion through the real delivery queue", () => {
     fs.mkdirSync(originalRoot);
     fs.mkdirSync(replacementRoot);
     vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config: {} });
     const replacementScope = {
       agentId: "main",
       storePath: path.join(replacementRoot, "agents", "main", "agent", "openclaw-agent.sqlite"),

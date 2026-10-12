@@ -15,6 +15,7 @@ import {
   parseAssistantTextSignature,
   readAssistantTextBlocksForPhase,
 } from "../shared/chat-message-content.js";
+import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
 import { trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
   findDirectiveCodePrefix,
@@ -54,18 +55,6 @@ export function isResponsesApiAssistantMessage(message: AgentMessage | undefined
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
   const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
-}
-
-export function isAssistantTextPhasePending(
-  message: AgentMessage | undefined,
-  eventType: string,
-): boolean {
-  const api = readAssistantMessageApi(message);
-  return (
-    api === "ollama" ||
-    isOpenAiCompletionsAssistantMessage(message) ||
-    (api === "anthropic-messages" && eventType !== "text_end")
-  );
 }
 
 export function extractStandaloneMessageToolText(
@@ -380,7 +369,10 @@ export function resolveStreamingReply(params: {
     const source =
       params.rawDirectiveSource === undefined
         ? params.next
-        : stripDowngradedToolCallText(params.rawDirectiveSource);
+        : toolCallXmlTextFilter(
+            { stripFunctionCallsXmlPayloads: true },
+            params.evtType !== "text_end",
+          ).transform(stripDowngradedToolCallText(params.rawDirectiveSource));
     const parsed = parseReplyDirectives(
       params.evtType === "text_end" ? source : splitTrailingDirective(source).text,
       {

@@ -7,10 +7,7 @@ import type {
   OpenClawPluginGatewayEvents,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  openOpenClawStateDatabase,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
@@ -577,7 +574,7 @@ describe("Browser dashboard lifetime", () => {
     expect(listTabs).not.toHaveBeenCalled();
   });
 
-  it("retains failed stale-creation cleanup and retries it after the browser recovers", async () => {
+  it("reports a failed new-tab cleanup without retaining speculative recovery state", async () => {
     browser.open.mockImplementationOnce(async () => {
       const tab = fixture.openedTab();
       fixture.widgets = [];
@@ -588,20 +585,17 @@ describe("Browser dashboard lifetime", () => {
       reason: "target-close-failed",
     });
     await expect(requestBrowserDashboard(request)).rejects.toThrow(
-      /retained cleanup record will retry/,
+      /close its newly opened tab manually/,
     );
     expect(fixture.tabs).toHaveLength(1);
-    expect(await readBrowserDashboardTabs()).toEqual([
+    expect(await readBrowserDashboardTabs()).toEqual([]);
+    expect(browser.closeOwned).toHaveBeenCalledWith(
       expect.objectContaining({
         nativeTargetId: "target-1",
-        profileFingerprint: "profile-one",
-        browserInstanceFingerprint: "browser-one",
-        dashboard: expect.objectContaining({ state: "released" }),
+        expectedProfileFingerprint: "profile-one",
+        expectedBrowserInstanceFingerprint: "browser-one",
       }),
-    ]);
-    await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
-    expect(fixture.tabs).toEqual([]);
-    expect(await readBrowserDashboardTabs()).toEqual([]);
+    );
   });
 
   it.each(["Stop", "removal"] as const)(
@@ -897,49 +891,6 @@ describe("Browser dashboard lifetime", () => {
       });
       await expect(requestBrowserDashboard(request)).rejects.toThrow(
         "Dashboard tab stopped during this operation",
-      );
-      expect(browser.open).toHaveBeenCalledOnce();
-      expect(browser.closeOwned).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["selected", "unrelated"] as const)(
-    "handles %s corrupt JSON introduced during the dashboard ownership lookup",
-    async (scope) => {
-      const opened = await requestBrowserDashboard(request);
-      const tab = (await readBrowserDashboardTabs())[0];
-      if (!tab) {
-        throw new Error("Expected the registered dashboard tab");
-      }
-      const store = getBrowserSessionTabStore();
-      await store.register("unrelated-entry", { diagnostic: "unrelated" });
-      browser.ownership.mockImplementationOnce(async () => {
-        openOpenClawStateDatabase()
-          .db.prepare(
-            "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-          )
-          .run(
-            "{",
-            "browser",
-            "browser.session-tabs",
-            scope === "selected" ? tab.storageKey : "unrelated-entry",
-          );
-        return {
-          status: "durable",
-          nativeTargetId: tab.nativeTargetId,
-          profileFingerprint: tab.profileFingerprint,
-          browserInstanceFingerprint: tab.browserInstanceFingerprint,
-        };
-      });
-      if (scope === "selected") {
-        await expect(requestBrowserDashboard(request)).rejects.toMatchObject({
-          code: "PLUGIN_STATE_CORRUPT",
-        });
-      } else {
-        expect((await requestBrowserDashboard(request)).browserTab).toEqual(opened.browserTab);
-      }
-      await expect(readBrowserDashboardTabs()).rejects.toThrow(
-        "Plugin state entry contains corrupt JSON",
       );
       expect(browser.open).toHaveBeenCalledOnce();
       expect(browser.closeOwned).not.toHaveBeenCalled();

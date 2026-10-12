@@ -251,7 +251,7 @@ function renderQaMultipassGuestScript(plan: QaMultipassPlan, redactSecrets = fal
     `import { isSupportedOpenClawNodeVersion } from ${JSON.stringify(
       `file://${plan.guestMountedRepoPath}/node-version.mjs`,
     )};`,
-    "process.exit(isSupportedOpenClawNodeVersion(process.versions.node) ? 0 : 1);",
+    "process.exitCode = isSupportedOpenClawNodeVersion(process.versions.node) ? 0 : 1;",
   ].join(" ");
   const rsyncCommand = [
     "rsync -a --delete",

@@ -241,7 +241,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
     const deny = (
       reasonCode: string,
-      result: OpenClawPluginNodeInvokeTransportResult,
+      error: Omit<Extract<OpenClawPluginNodeInvokeTransportResult, { ok: false }>, "ok">,
     ): OpenClawPluginNodeInvokeTransportResult => {
       nodeGateDecisionRecorded = true;
       recordNodeDecision({
@@ -251,12 +251,11 @@ export async function applyPluginNodeInvokePolicy(params: {
         reasonCode,
         summary: "A plugin-owned node command was denied at the Gateway dispatch gate.",
       });
-      return result;
+      return { ok: false, ...error };
     };
     sessionAuthority?.assertCurrent();
     if (!isCallerRuntimeAuthorityActive()) {
       return deny("node_runtime_authority_closed", {
-        ok: false,
         code: "APPROVAL_AUTHORITY_CLOSED",
         message: "agent runtime approval authority closed before node dispatch",
       });
@@ -265,7 +264,6 @@ export async function applyPluginNodeInvokePolicy(params: {
     // they can retry/override params without getting direct registry access.
     if (params.isInvocationCurrent && !(await params.isInvocationCurrent())) {
       return deny("node_pairing_changed", {
-        ok: false,
         code: "PAIRING_CHANGED",
         message: "node pairing changed before dispatch",
       });
@@ -278,14 +276,12 @@ export async function applyPluginNodeInvokePolicy(params: {
       : params.context.nodeRegistry.get(params.nodeSession.nodeId);
     if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
       return deny("node_route_changed", {
-        ok: false,
         code: "ROUTE_CHANGED",
         message: "node connection changed before dispatch",
       });
     }
     if (currentNode.client.invalidated === true) {
       return deny("node_pairing_changed", {
-        ok: false,
         code: "PAIRING_CHANGED",
         message: "node pairing changed before dispatch",
       });
@@ -308,7 +304,6 @@ export async function applyPluginNodeInvokePolicy(params: {
     const allowed = resolveCommandAuthorization();
     if (!allowed.ok) {
       return deny("node_command_revoked", {
-        ok: false,
         code: "NODE_COMMAND_REVOKED",
         message: `node command not allowed at dispatch: ${allowed.reason}`,
         details: { command: params.command, reason: allowed.reason },
@@ -317,7 +312,6 @@ export async function applyPluginNodeInvokePolicy(params: {
     const remainingTimeoutMs = params.resolveRemainingTimeoutMs?.();
     if (remainingTimeoutMs === 0 && params.timeoutMs !== 0) {
       return deny("node_dispatch_timeout", {
-        ok: false,
         code: "TIMEOUT",
         message: "node invoke timed out",
       });
@@ -340,28 +334,24 @@ export async function applyPluginNodeInvokePolicy(params: {
     sessionAuthority?.assertCurrent();
     if (params.privateTransport?.isCurrent() === false) {
       return deny("node_private_owner_closed", {
-        ok: false,
         code: "PRIVATE_OWNER_CLOSED",
         message: "private node invocation owner closed before dispatch",
       });
     }
     if (!isPluginCurrent()) {
       return deny("node_plugin_replaced", {
-        ok: false,
         code: "PLUGIN_POLICY_CHANGED",
         message: "node plugin policy changed before dispatch",
       });
     }
     if (!isCallerRuntimeAuthorityActive()) {
       return deny("node_runtime_authority_closed", {
-        ok: false,
         code: "APPROVAL_AUTHORITY_CLOSED",
         message: "agent runtime approval authority closed before node dispatch",
       });
     }
     if (params.isApprovalAuthorityActive?.() === false) {
       return deny("node_approval_authority_closed", {
-        ok: false,
         code: "APPROVAL_AUTHORITY_CLOSED",
         message: "approved runtime authority closed before node dispatch",
       });

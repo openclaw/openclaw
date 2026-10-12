@@ -2,7 +2,6 @@
  * Tests channel config helper authorization and write-scope behavior.
  */
 import { describe, expect, it } from "vitest";
-import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   adaptScopedAccountAccessor,
@@ -10,7 +9,6 @@ import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigAdapter,
   createScopedChannelConfigBase,
-  createScopedDmSecurityResolver,
   createHybridChannelConfigAdapter,
   createTopLevelChannelConfigAdapter,
   createTopLevelChannelConfigBase,
@@ -18,7 +16,6 @@ import {
   ensureOpenDmPolicyAllowFromWildcard,
   mapAllowFromEntries,
   normalizeChannelDmPolicy,
-  normalizeLegacyDmAliases,
   resolveChannelDmAccess,
   resolveChannelDmAllowFrom,
   resolveChannelDmPolicy,
@@ -64,41 +61,6 @@ function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
   ).toEqual({ enabled: true });
 }
 
-type DemoDmAccount = {
-  accountId?: string | null;
-  dmPolicy?: string;
-  allowFrom?: string[];
-};
-
-type DemoDmPolicy = ReturnType<ReturnType<typeof createDemoDmSecurityResolver>>;
-type ExpectedDemoDmPolicy = Omit<DemoDmPolicy, "normalizeEntry">;
-
-function createDemoDmSecurityResolver(
-  params: {
-    inheritSharedDefaultsFromDefaultAccount?: boolean;
-  } = {},
-) {
-  return createScopedDmSecurityResolver<DemoDmAccount>({
-    channelKey: "demo",
-    resolvePolicy: (account) => account.dmPolicy,
-    resolveAllowFrom: (account) => account.allowFrom,
-    policyPathSuffix: "dmPolicy",
-    normalizeEntry: (raw) => raw.toLowerCase(),
-    ...params,
-  });
-}
-
-function expectDemoDmPolicy(policy: DemoDmPolicy, expected: ExpectedDemoDmPolicy) {
-  const { normalizeEntry, ...rest } = policy;
-
-  expect(rest).toEqual(expected);
-  expect(normalizeEntry).toBeTypeOf("function");
-  if (typeof normalizeEntry !== "function") {
-    throw new Error("expected normalizeEntry to be a function");
-  }
-  expect(normalizeEntry("OWNER")).toBe("owner");
-}
-
 describe("mapAllowFromEntries", () => {
   it("returns empty list for missing input", () => {
     expect(mapAllowFromEntries(undefined)).toEqual([]);
@@ -107,11 +69,6 @@ describe("mapAllowFromEntries", () => {
 
 describe("resolveOptionalConfigString", () => {
   it.each([
-    {
-      name: "coerces numeric values",
-      input: 123,
-      expected: "123",
-    },
     {
       name: "returns undefined for empty string values",
       input: "   ",
@@ -186,78 +143,6 @@ describe("channel DM access helpers", () => {
       "- channels.matrix.allowFrom: removed after moving allowlist to channels.matrix.dm.allowFrom",
       '- channels.matrix.dm.allowFrom: added "*" (required by dmPolicy="open")',
     ]);
-  });
-
-  it.each([
-    {
-      name: "moves both aliases and removes the empty DM section",
-      entry: { dm: { policy: "allowlist", allowFrom: ["U1"] } },
-      expected: { dmPolicy: "allowlist", allowFrom: ["U1"] },
-      expectedChanges: [
-        "Moved channels.demo.dm.policy → channels.demo.dmPolicy.",
-        "Moved channels.demo.dm.allowFrom → channels.demo.allowFrom.",
-        "Removed empty channels.demo.dm after migration.",
-      ],
-    },
-    {
-      name: "removes matching aliases using normalized allowlist equality",
-      entry: {
-        dmPolicy: "allowlist",
-        allowFrom: ["U1", 42],
-        dm: { policy: "allowlist", allowFrom: [" U1 ", "42"], enabled: false },
-      },
-      expected: { dmPolicy: "allowlist", allowFrom: ["U1", 42], dm: { enabled: false } },
-      expectedChanges: [
-        "Removed channels.demo.dm.policy (dmPolicy already set).",
-        "Removed channels.demo.dm.allowFrom (allowFrom already set).",
-      ],
-    },
-    {
-      name: "preserves conflicting policies and differently ordered allowlists",
-      entry: {
-        dmPolicy: "disabled",
-        allowFrom: ["U1", "U2"],
-        dm: { policy: "open", allowFrom: ["U2", "U1"] },
-      },
-      expected: {
-        dmPolicy: "disabled",
-        allowFrom: ["U1", "U2"],
-        dm: { policy: "open", allowFrom: ["U2", "U1"] },
-      },
-      expectedChanges: [],
-    },
-    {
-      name: "keeps nested allowlists when their channel opts out of promotion",
-      entry: { dm: { policy: "allowlist", allowFrom: ["U1"] } },
-      promoteAllowFrom: false,
-      expected: { dmPolicy: "allowlist", dm: { allowFrom: ["U1"] } },
-      expectedChanges: ["Moved channels.demo.dm.policy → channels.demo.dmPolicy."],
-    },
-    {
-      name: "leaves an empty DM section untouched when no migration ran",
-      entry: { dm: {} },
-      expected: { dm: {} },
-      expectedChanges: [],
-    },
-  ])("$name", ({ entry, expected, expectedChanges, promoteAllowFrom }) => {
-    const original = structuredClone(entry);
-    const changes: string[] = [];
-    const result = normalizeLegacyDmAliases({
-      entry,
-      pathPrefix: "channels.demo",
-      changes,
-      promoteAllowFrom,
-    });
-
-    expect(result.entry).toEqual(expected);
-    expect(changes).toEqual(expectedChanges);
-    expect(entry).toEqual(original);
-    if (expectedChanges.length === 0) {
-      expect(result).toEqual({ entry, changed: false });
-      expect(result.entry).toBe(entry);
-    } else {
-      expect(result.changed).toBe(true);
-    }
   });
 });
 
@@ -395,54 +280,6 @@ describe("createScopedChannelConfigBase", () => {
       }).channels,
     ).toBeUndefined();
   });
-
-  it("can force default account config into accounts.default", () => {
-    const base = createScopedChannelConfigBase({
-      sectionKey: "demo",
-      listAccountIds: () => ["default", "alt"],
-      resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: resolveDefaultAccountId,
-      clearBaseFields: [],
-      allowTopLevel: false,
-    });
-
-    expect(
-      base.setAccountEnabled!({
-        cfg: {
-          channels: {
-            demo: {
-              token: "secret",
-            },
-          },
-        },
-        accountId: "default",
-        enabled: true,
-      }).channels?.demo,
-    ).toEqual({
-      token: "secret",
-      accounts: {
-        default: { enabled: true },
-      },
-    });
-    expect(
-      base.deleteAccount!({
-        cfg: {
-          channels: {
-            demo: {
-              token: "secret",
-              accounts: {
-                default: { enabled: true },
-              },
-            },
-          },
-        },
-        accountId: "default",
-      }).channels?.demo,
-    ).toEqual({
-      token: "secret",
-      accounts: undefined,
-    });
-  });
 });
 
 describe("createScopedChannelConfigAdapter", () => {
@@ -497,113 +334,6 @@ describe("createScopedChannelConfigAdapter", () => {
   });
 });
 
-describe("createScopedDmSecurityResolver", () => {
-  it("builds account-aware DM policy payloads", () => {
-    const resolveDmPolicy = createDemoDmSecurityResolver();
-
-    expectDemoDmPolicy(
-      resolveDmPolicy({
-        cfg: {
-          channels: {
-            demo: {
-              accounts: {
-                alt: {},
-              },
-            },
-          },
-        },
-        accountId: "alt",
-        account: {
-          accountId: "alt",
-          dmPolicy: "allowlist",
-          allowFrom: ["Owner"],
-        },
-      }),
-      {
-        policy: "allowlist",
-        allowFrom: ["Owner"],
-        policyPath: "channels.demo.accounts.alt.dmPolicy",
-        allowFromPath: "channels.demo.accounts.alt.",
-        approveHint: formatPairingApproveHint("demo"),
-      },
-    );
-  });
-
-  it("uses accounts.default paths when named accounts inherit shared defaults", () => {
-    const resolveDmPolicy = createDemoDmSecurityResolver({
-      inheritSharedDefaultsFromDefaultAccount: true,
-    });
-
-    expectDemoDmPolicy(
-      resolveDmPolicy({
-        cfg: {
-          channels: {
-            demo: {
-              accounts: {
-                default: {
-                  dmPolicy: "allowlist",
-                  allowFrom: ["Owner"],
-                },
-                alt: {},
-              },
-            },
-          },
-        },
-        accountId: "alt",
-        account: {
-          accountId: "alt",
-          dmPolicy: "allowlist",
-          allowFrom: ["Owner"],
-        },
-      }),
-      {
-        policy: "allowlist",
-        allowFrom: ["Owner"],
-        policyPath: "channels.demo.accounts.default.dmPolicy",
-        allowFromPath: "channels.demo.accounts.default.",
-        approveHint: formatPairingApproveHint("demo"),
-      },
-    );
-  });
-
-  it("ignores accounts.default paths unless the channel opts into shared default-account inheritance", () => {
-    const resolveDmPolicy = createDemoDmSecurityResolver();
-
-    expectDemoDmPolicy(
-      resolveDmPolicy({
-        cfg: {
-          channels: {
-            demo: {
-              dmPolicy: "pairing",
-              allowFrom: ["*"],
-              accounts: {
-                default: {
-                  dmPolicy: "allowlist",
-                  allowFrom: ["Owner"],
-                },
-                alt: {},
-              },
-            },
-          },
-        },
-        accountId: "alt",
-        account: {
-          accountId: "alt",
-          dmPolicy: "pairing",
-          allowFrom: ["*"],
-        },
-      }),
-      {
-        policy: "pairing",
-        allowFrom: ["*"],
-        policyPath: "channels.demo.dmPolicy",
-        allowFromPath: "channels.demo.",
-        approveHint: formatPairingApproveHint("demo"),
-      },
-    );
-  });
-});
-
 describe("createTopLevelChannelConfigBase", () => {
   it("wires top-level enable/delete semantics", () => {
     const base = createTopLevelChannelConfigBase({
@@ -632,32 +362,6 @@ describe("createTopLevelChannelConfigBase", () => {
         accountId: "default",
       }).channels,
     ).toBeUndefined();
-  });
-
-  it("can clear only account-scoped fields while preserving channel settings", () => {
-    const base = createTopLevelChannelConfigBase({
-      sectionKey: "demo",
-      resolveAccount: () => ({ accountId: "default" }),
-      deleteMode: "clear-fields",
-      clearBaseFields: ["token", "allowFrom"],
-    });
-
-    expect(
-      base.deleteAccount!({
-        cfg: {
-          channels: {
-            demo: {
-              token: "secret",
-              allowFrom: ["owner"],
-              markdown: { tables: false },
-            },
-          },
-        },
-        accountId: "default",
-      }).channels?.demo,
-    ).toEqual({
-      markdown: { tables: false },
-    });
   });
 });
 
@@ -733,38 +437,6 @@ describe("createHybridChannelConfigBase", () => {
         cfg: {},
         accountId: "alt",
         enabled: true,
-      }).channels?.demo,
-    ).toEqual({
-      accounts: {
-        alt: { enabled: true },
-      },
-    });
-  });
-
-  it("can preserve the section when deleting the default account", () => {
-    const base = createHybridChannelConfigBase({
-      sectionKey: "demo",
-      listAccountIds: () => ["default", "alt"],
-      resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
-      defaultAccountId: resolveDefaultAccountId,
-      clearBaseFields: ["token", "name"],
-      preserveSectionOnDefaultDelete: true,
-    });
-
-    expect(
-      base.deleteAccount!({
-        cfg: {
-          channels: {
-            demo: {
-              token: "secret",
-              name: "bot",
-              accounts: {
-                alt: { enabled: true },
-              },
-            },
-          },
-        },
-        accountId: "default",
       }).channels?.demo,
     ).toEqual({
       accounts: {

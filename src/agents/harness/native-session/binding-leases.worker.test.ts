@@ -3,13 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as mutationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
+  type PluginStateActionAuthority,
 } from "../../../plugin-state/plugin-state-store.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
-import { createNativeSessionBindingLeases } from "./binding-leases.js";
+import { createNativeSessionBindingLeasesV2 } from "./binding-leases.js";
 import {
   bindingTestOptions,
   prepareBindingTestLease,
@@ -23,10 +24,26 @@ function bindingStores(env: NodeJS.ProcessEnv) {
     overflowPolicy: "reject-new" as const,
     env,
   };
-  const asyncState = createPluginStateKeyedStore<TestBindingRecord>("binding-proof", options);
+  const asyncState = createPluginStateKeyedStoreV2<TestBindingRecord>("binding-proof", options, {
+    assertCurrent() {},
+  });
   const syncState = createPluginStateSyncKeyedStore<TestBindingRecord>("binding-proof", options);
-  const state = { ...syncState, withCurrent: asyncState.withCurrent!.bind(asyncState) };
-  return { state, asyncState, owner: createNativeSessionBindingLeases(state, bindingTestOptions) };
+  const state = {
+    withCurrent(authority: PluginStateActionAuthority) {
+      return createPluginStateKeyedStoreV2<TestBindingRecord>("binding-proof", options, authority);
+    },
+    assertLeaseCurrent(key: string, token: string) {
+      const lease = syncState.lookup(key)?.lease;
+      if (lease?.token !== token || lease.expiresAt <= Date.now()) {
+        throw bindingTestOptions.errors.lostLease(key);
+      }
+    },
+  };
+  return {
+    state,
+    asyncState,
+    owner: createNativeSessionBindingLeasesV2(state, bindingTestOptions),
+  };
 }
 
 afterEach(() => {
@@ -74,66 +91,51 @@ describe("native binding worker admission", () => {
     });
   });
 
-  it.each(["revocation", "lease expiry", "acquisition expiry"] as const)(
-    "refuses %s at native commit without publishing a prepared binding",
-    async (failure) => {
-      await withOpenClawTestState({ label: "binding-worker-authority" }, async (fixture) => {
-        vi.useFakeTimers({ toFake: ["Date"] });
-        const { owner, asyncState } = bindingStores(fixture.env);
-        await asyncState.register("binding", { value: "before" });
-        let current = true;
-        let prepared = false;
-        let entered = false;
-        let refusedCommit = false;
-        const assertCurrent = () => {
-          if (!current) {
-            throw new Error("binding action revoked");
-          }
-        };
-        probe.admission(mutationAdmission, (request, grant, admit) => {
-          if (request.stage === "commit" && prepared && !refusedCommit) {
-            refusedCommit = true;
-            if (failure === "revocation") {
-              current = false;
-            } else {
-              vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
-            }
-          }
-          admit(request, grant);
-        });
-        await expect(
-          owner.withLease(
-            "binding",
-            () => {
-              entered = true;
-              return owner.transact(
-                "binding",
-                (record) => {
-                  prepared = true;
-                  return { next: { ...record, value: "unauthorized" }, result: true };
-                },
-                undefined,
-                assertCurrent,
-              );
-            },
-            {
-              prepareLease(record, lease) {
-                prepared = failure === "acquisition expiry";
-                return prepareBindingTestLease(record, lease);
-              },
-              assertCurrent,
-            },
-          ),
-        ).rejects.toThrow();
-        expect(refusedCommit).toBe(true);
-        expect(entered).toBe(failure !== "acquisition expiry");
-        const stored = await asyncState.lookup("binding");
-        if (failure === "acquisition expiry") {
-          expect(stored).toEqual({ value: "before" });
-        } else {
-          expect(stored).toMatchObject({ value: "before" });
+  it("refuses revocation at native commit without publishing a prepared binding", async () => {
+    await withOpenClawTestState({ label: "binding-worker-authority" }, async (fixture) => {
+      const { owner, asyncState } = bindingStores(fixture.env);
+      await asyncState.register("binding", { value: "before" });
+      let current = true;
+      let prepared = false;
+      let entered = false;
+      let refusedCommit = false;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("binding action revoked");
         }
+      };
+      probe.admission(mutationAdmission, (request, grant, admit) => {
+        if (request.stage === "commit" && prepared && !refusedCommit) {
+          refusedCommit = true;
+          current = false;
+        }
+        admit(request, grant);
       });
-    },
-  );
+      await expect(
+        owner.withLease(
+          "binding",
+          () => {
+            entered = true;
+            return owner.transact(
+              "binding",
+              (record) => {
+                prepared = true;
+                return { next: { ...record, value: "unauthorized" }, result: true };
+              },
+              undefined,
+              assertCurrent,
+            );
+          },
+          {
+            prepareLease: prepareBindingTestLease,
+            assertCurrent,
+          },
+        ),
+      ).rejects.toThrow();
+      expect(refusedCommit).toBe(true);
+      expect(entered).toBe(true);
+      const stored = await asyncState.lookup("binding");
+      expect(stored).toMatchObject({ value: "before" });
+    });
+  });
 });

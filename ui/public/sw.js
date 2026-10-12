@@ -284,7 +284,9 @@ self.addEventListener("fetch", (event) => {
       new URL(self.location.href).searchParams.get("session-entry") === "1" &&
       pathname.startsWith("/chat/") &&
       pathname !== "/chat/" &&
-      [...url.searchParams.keys()].every((key) => key === "dashboard" || key === "draft")
+      [...url.searchParams.keys()].every(
+        (key) => key === "dashboard" || key === "draft" || key === "openclaw_mount_recovery",
+      )
     ) {
       event.respondWith(fetchChatNavigation(event.request, url));
     } else if (

@@ -1,3 +1,4 @@
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
@@ -18,7 +19,7 @@ export function createCodingToolsGatewayCaller(params: {
   sessionKey?: string;
   accountId?: string;
   capabilityProfile: ResolvedConversationCapabilityProfile;
-  sessionEventToolsAllow?: readonly string[];
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
 }) {
   const { options, agentId, sessionKey, capabilityProfile } = params;
   const delegatedPolicy = capabilityProfile.policy.delegatedToolPolicy;
@@ -44,8 +45,10 @@ export function createCodingToolsGatewayCaller(params: {
       ? {
           agentId,
           sessionKey: sessionKey.trim(),
-          sessionEventToolsAllow: params.sessionEventToolsAllow,
-          sessionEventSettings: { permissionMode: options.sessionPermissionPolicy?.mode },
+          sessionEventToolsAllow: params.sessionEventSourcePolicy?.toolsAllow,
+          sessionEventSettings: params.sessionEventSourcePolicy?.settings ?? {
+            permissionMode: options.sessionPermissionPolicy?.mode,
+          },
           ...(options.sourceReplyDeliveryMode === "message_tool_only"
             ? { sessionEventDelivery: false as const }
             : {}),

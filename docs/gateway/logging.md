@@ -341,6 +341,12 @@ Initial session row-reader waits are included in that interval, rather than time
 separately. `snapshot` measures the agent-run transcript-start reader preparation,
 nested inside `preparation`.
 Startup measurement ends when the agent run starts, or when dispatch exits before starting one.
+Accepted steering instead reports `stage=steer`; a deferred follow-up reports
+`stage=queued`. These records include waits for the active run to commit the input
+at its next boundary, including the steering receipt timeout. They use the same
+one-second threshold and emit at most one post-acknowledgement record per send;
+they are not startup latency. Rejected steering that starts a new run retains
+`stage=startup`.
 These records do not contain message text or session identifiers. Nested phases
 can overlap; their sum is not the request duration. The
 [Prometheus exporter](/gateway/prometheus) records the same fixed phases for fast

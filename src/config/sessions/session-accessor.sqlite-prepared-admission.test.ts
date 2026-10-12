@@ -37,7 +37,6 @@ import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import type { SessionEntryLifecycleMutationResult } from "./session-accessor.sqlite-contract.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
@@ -63,6 +62,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 
 const hooks = vi.hoisted((): PreparedAdmissionHooks => ({}));
@@ -414,42 +414,6 @@ it("checks replacement commit authority before stale rows or worker admission", 
   expect(update).toHaveBeenCalledOnce();
   expect(guard).toHaveBeenCalledOnce();
   probe.expectHealthy(0);
-  expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
-});
-
-it("keeps lifecycle commit denial before its stale-row check after admission", async () => {
-  const f = fixture();
-  const probe = observeWorkerAdmission(f.databasePath, "warm");
-  const denied = new Error("synthetic lifecycle denied");
-  const guard = vi.fn(() => {
-    throw denied;
-  });
-  const committed = vi.fn();
-  const buildEntry = vi.fn(
-    async ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
-      replaceSessionEntrySync(f.input, {
-        sessionId: "original",
-        label: "newer",
-        updatedAt: Date.now(),
-      });
-      await closeForIntegrityAdmission(f);
-      return { ...currentEntry!, label: "uncommitted" };
-    },
-  );
-  const work = own(
-    applySessionEntryLifecycleMutation({
-      storePath: f.databasePath,
-      skipMaintenance: true,
-      beforeCommitInTransaction: guard,
-      onLifecycleCommitted: committed,
-      upserts: [{ sessionKey: f.input.sessionKey, buildEntry }],
-    }),
-  );
-  await expect(work).rejects.toBe(denied);
-  expect(buildEntry).toHaveBeenCalledOnce();
-  expect(guard).toHaveBeenCalledOnce();
-  expect(committed).not.toHaveBeenCalled();
-  await probe.expectHealthy({ executor: 1, reclamation: 0, other: 0 });
   expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
 });
 

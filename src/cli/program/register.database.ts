@@ -49,13 +49,26 @@ async function runDatabaseOwnership(
 ): Promise<void> {
   try {
     const databasePath = path.resolve(resolveOpenClawStateSqlitePath(process.env));
+    const managerId = options.manager;
     const ownership =
-      options.manager !== undefined
-        ? (
-            await import("../../state/openclaw-state-ownership-operations.js")
-          ).claimOpenClawStateOwnership(options.manager, {
-            path: databasePath,
-            env: process.env,
+      managerId !== undefined
+        ? await (
+            await import("../local-state-owner.js")
+          ).runWithLocalStateOwner({
+            method: "database.ownership.claim",
+            params: { manager: managerId },
+            target: databasePath,
+            onForeignOwner: async () => {
+              throw new Error(
+                "Cannot claim shared-state ownership while a Gateway or embedded agent is running. Stop the Gateway through the external supervisor and stop any embedded agents, then retry the ownership claim.",
+              );
+            },
+            runLocal: async ({ env, assertCurrent }) => {
+              const { claimOpenClawStateOwnership } =
+                await import("../../state/openclaw-state-ownership-operations.js");
+              assertCurrent();
+              return claimOpenClawStateOwnership(managerId, { path: databasePath, env });
+            },
           })
         : (
             await import("../../state/openclaw-state-ownership.js")
@@ -94,7 +107,7 @@ export function registerDatabaseCommand(program: Command): void {
     .command("preflight-agent")
     .description("Compare one copied agent SQLite file with this release's agent schema and owner")
     .argument("<path>", "explicit copied agent SQLite database path")
-    .requiredOption("--agent-id <id>", "exact canonical agent owner ID")
+    .requiredOption("--agent-id <id>", "exact agent owner ID")
     .option("--json", "emit machine-readable JSON", false)
     .action(runDatabasePreflight);
 

@@ -64,7 +64,10 @@ export function registerNodeCli(program: Command) {
     .addOption(new Option("--ephemeral").hideHelp())
     .addOption(new Option("--desktop-sharing").hideHelp())
     .addOption(new Option("--no-desktop-sharing").hideHelp())
-    .addOption(new Option("--auth-from-env").hideHelp())
+    .option(
+      "--auth-from-env",
+      "Use environment Gateway credentials instead of the paired device token",
+    )
     .addOption(new Option("--parent-stdin").hideHelp())
     .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
     .option("--no-share-installed-apps", "Disable installed application sharing")
@@ -148,6 +151,10 @@ export function registerNodeCli(program: Command) {
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
     .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")
+    .option(
+      "--auth-from-env",
+      "Persist environment Gateway credentials instead of the paired device token",
+    )
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)
     .action(async (opts, command: Command) => {

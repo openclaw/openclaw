@@ -92,7 +92,6 @@ function createCurrentEntryRead(
       };
       return true;
     },
-    "read",
   );
   return () => {
     guard();

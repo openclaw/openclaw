@@ -33,7 +33,7 @@ it("keeps the loaded form and Setup mounted but read-only while the schema refre
   expect(field.disabled).toBe(true);
   expect(container.querySelector("#config-section-wizard")).toBe(setup);
   expect(setup.open).toBe(true);
-  expect(setup.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+  expect(setup.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(true);
   expect(container.querySelector(".config-content")?.getAttribute("aria-busy")).toBe("true");
 
   props.schemaLoading = false;

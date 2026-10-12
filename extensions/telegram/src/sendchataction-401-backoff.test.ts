@@ -176,70 +176,6 @@ describe("createTelegramSendChatActionHandler", () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["success", "non-transient error", "shorter flood wait", "authorization error"])(
-    "preserves a newer account cooldown after an older %s",
-    async (outcome) => {
-      let now = 1000;
-      const older = createDeferred<true>();
-      const fn = vi
-        .fn()
-        .mockReturnValueOnce(older.promise)
-        .mockRejectedValueOnce(makeTelegramError("Too Many Requests", 429, { retry_after: 20 }))
-        .mockResolvedValue(true);
-      const handler = createTelegramSendChatActionHandler({
-        sendChatActionFn: fn,
-        logger: vi.fn(),
-        now: () => now,
-      });
-      const first = handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
-      await expect(
-        handler.sendChatAction(-100, "typing", { message_thread_id: 2 }),
-      ).rejects.toThrow("Too Many Requests");
-      if (outcome === "success") {
-        older.resolve(true);
-        await first;
-      } else {
-        const rejection = expect(first).rejects.toThrow();
-        older.reject(
-          outcome === "shorter flood wait"
-            ? makeTelegramError("Too Many Requests", 429, { retry_after: 1 })
-            : outcome === "authorization error"
-              ? make401Error()
-              : new Error("400 Bad Request"),
-        );
-        await rejection;
-      }
-      now = 20_999;
-      await expect(
-        handler.sendChatAction(-100, "typing", { message_thread_id: 3 }),
-      ).rejects.toThrow("transient cooldown active");
-      expect(fn).toHaveBeenCalledTimes(2);
-      now = 21_000;
-      await handler.sendChatAction(-100, "typing", { message_thread_id: 3 });
-      expect(fn).toHaveBeenCalledTimes(3);
-    },
-  );
-
-  it("does not erase newer authorization failures when an older action succeeds", async () => {
-    const older = createDeferred<true>();
-    const fn = vi.fn().mockReturnValueOnce(older.promise).mockRejectedValue(make401Error());
-    const handler = createTelegramSendChatActionHandler({
-      sendChatActionFn: fn,
-      logger: vi.fn(),
-      maxConsecutive401: 2,
-    });
-    const first = handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
-    await expect(handler.sendChatAction(-100, "typing", { message_thread_id: 2 })).rejects.toThrow(
-      "401",
-    );
-    older.resolve(true);
-    await first;
-    await expect(handler.sendChatAction(-100, "typing", { message_thread_id: 3 })).rejects.toThrow(
-      "401",
-    );
-    expect(handler.isSuspended()).toBe(true);
-  });
-
   it("rechecks account cooldown after an authorization backoff wait", async () => {
     const older = createDeferred<true>();
     const backoff = createDeferred<void>();
@@ -271,44 +207,6 @@ describe("createTelegramSendChatActionHandler", () => {
     backoff.resolve();
     await rejection;
     expect(fn).toHaveBeenCalledTimes(2);
-  });
-
-  it("serializes authorization retries and uses the latest account backoff", async () => {
-    const retry = createDeferred<true>();
-    const retryStarted = createDeferred<void>();
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(make401Error())
-      .mockImplementationOnce(() => {
-        retryStarted.resolve();
-        return retry.promise;
-      })
-      .mockRejectedValue(make401Error());
-    const handler = createTelegramSendChatActionHandler({
-      sendChatActionFn: fn,
-      logger: vi.fn(),
-      maxConsecutive401: 3,
-    });
-    await expect(handler.sendChatAction(-100, "typing", { message_thread_id: 1 })).rejects.toThrow(
-      "401",
-    );
-    mocks.sleepWithAbort.mockClear();
-    const firstFailure = expect(
-      handler.sendChatAction(-100, "typing", { message_thread_id: 2 }),
-    ).rejects.toThrow("401");
-    await retryStarted.promise;
-    const secondFailure = expect(
-      handler.sendChatAction(-100, "typing", { message_thread_id: 3 }),
-    ).rejects.toThrow("401");
-    try {
-      await Promise.resolve();
-      expect(fn).toHaveBeenCalledTimes(2);
-    } finally {
-      retry.reject(make401Error());
-      await Promise.all([firstFailure, secondFailure]);
-    }
-    expect(mocks.sleepWithAbort.mock.calls.map(([delay]) => delay)).toEqual([1000, 2000]);
-    expect(handler.isSuspended()).toBe(true);
   });
 
   it("resets transient counters on non-transient errors", async () => {

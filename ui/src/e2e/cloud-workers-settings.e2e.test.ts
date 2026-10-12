@@ -194,7 +194,7 @@ suite.define(() => {
       await page
         .locator(".settings-row")
         .filter({ hasText: "Desktop" })
-        .locator("wa-switch")
+        .getByRole("switch")
         .click();
       await page.getByLabel("Crabbox binary").fill("/opt/bin/crabbox-draft");
       await page.getByLabel("Warm images", { exact: true }).selectOption("off");

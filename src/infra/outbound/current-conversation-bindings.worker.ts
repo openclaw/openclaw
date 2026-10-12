@@ -12,6 +12,7 @@ import {
   bindCurrentConversationInDatabase,
   removeCurrentConversationBindingsInDatabase,
   readCurrentConversationBindingListInDatabase,
+  readCurrentConversationBindingListsInDatabase,
   pruneCurrentConversationBindingListInTransaction,
   readCurrentConversationBindingResolutionInDatabase,
   readCurrentConversationBindingSelectionInDatabase,
@@ -119,8 +120,10 @@ export const conversationBindingOperations = {
     context,
   ) => {
     const database = context.open();
-    const prepared = input.targetSessionKeys.map((key) =>
-      readCurrentConversationBindingListInDatabase(database.db, key, input.scope),
+    const prepared = readCurrentConversationBindingListsInDatabase(
+      database.db,
+      input.targetSessionKeys,
+      input.scope,
     );
     if (!prepared.some((list) => list.requiresPrune)) {
       return prepared.map((list) => list.records);

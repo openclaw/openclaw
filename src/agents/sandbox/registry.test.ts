@@ -39,6 +39,7 @@ import { sandboxRegistryPublication } from "./registry-publication.js";
 import {
   completeSandboxRegistryReservation,
   readBrowserRegistry,
+  assertSandboxRegistryEntryCurrent,
   assertSandboxBrowserRegistryEntryCurrent,
   readRegisteredSandboxRuntimeIds,
   readRegistry,
@@ -347,14 +348,13 @@ describe("registry race safety", () => {
       await expect(readBrowserRegistry()).resolves.toEqual({
         entries: [browserEntry({ workspaceDir: "/original/workspace", lastUsedAtMs: 2 })],
       });
+      const [selected] = (await readBrowserRegistry()).entries;
+      expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).not.toThrow();
+      await updateBrowserRegistry(browserEntry({ workspaceDir: "/other/workspace" }));
+      expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).toThrow("owner changed");
     } finally {
       hostSql.mockRestore();
     }
-    const [selected] = (await readBrowserRegistry()).entries;
-    expect(selected?.workspaceDir).toBe("/original/workspace");
-    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).not.toThrow();
-    await updateBrowserRegistry(browserEntry({ workspaceDir: "/other/workspace" }));
-    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).toThrow("owner changed");
   });
 
   it("does not migrate legacy registry files from runtime reads", async () => {
@@ -488,12 +488,20 @@ describe("registry race safety", () => {
     const calls = observeMainThreadSql();
     calls.calibrate();
     try {
+      expect(() => assertSandboxRegistryEntryCurrent(original)).toThrow("generation changed");
+      expect(() => assertSandboxRegistryEntryCurrent(replacement)).not.toThrow();
+      expect(() => assertSandboxRegistryEntryCurrent({ ...replacement })).not.toThrow();
+      await updateRegistry({ ...replacement, lastUsedAtMs: 999 });
+      expect(() => assertSandboxRegistryEntryCurrent(replacement)).not.toThrow();
       for (const retired of [false, true]) {
         await expect(completeSandboxRegistryReservation(original, retired)).rejects.toThrow(
           "Sandbox runtime generation changed",
         );
       }
-      await expect(readRegistryEntry(original.containerName)).resolves.toMatchObject(replacement);
+      await expect(readRegistryEntry(original.containerName)).resolves.toMatchObject({
+        ...replacement,
+        lastUsedAtMs: 999,
+      });
       calls.expectIdle();
     } finally {
       calls.restore();

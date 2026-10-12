@@ -734,7 +734,7 @@ describe("chat pane model controls", () => {
     await vi.waitFor(() => expect(state.chatSending).toBe(false));
     expect(state.chatRunId).toBe("next-run");
     expectFallbackExecution();
-    reconcileChatRunLifecycle(state, { clearLocalRun: true, clearChatStream: true });
+    reconcileChatRunLifecycle(state, { clearLocalRun: true });
     expect(state.chatRunId).toBeNull();
   });
 

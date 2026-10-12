@@ -8,7 +8,6 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadTranscriptEvents,
-  replaceTranscriptEvents,
   stageSessionPendingInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -16,6 +15,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,7 +24,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";

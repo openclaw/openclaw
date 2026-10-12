@@ -29,38 +29,32 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it.each(["idle inspection", "placement write"] as const)(
-  "observes a managed schema publication before %s",
-  async (operation) => {
-    const context = captureOpenClawStateWorkerContext();
-    const backend = runWithSqliteWorkerStateContext(context, () =>
-      createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+it("observes a managed schema publication before a placement write", async () => {
+  const context = captureOpenClawStateWorkerContext();
+  const backend = runWithSqliteWorkerStateContext(context, () =>
+    createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+  );
+  const peer = openNodeSqliteDatabase(context.admission.databasePath);
+  try {
+    const command = {
+      type: "workerPlacements.retire" as const,
+      input: {
+        sessionId: "schema-fenced-placement",
+        expectedState: "local" as const,
+        expectedGeneration: 1,
+      },
+    };
+    await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
+    peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    expect(() => runWithSqliteWorkerStateContext(context, () => backend.execute(command))).toThrow(
+      "newer schema version",
     );
-    const peer = openNodeSqliteDatabase(context.admission.databasePath);
-    try {
-      const command =
-        operation === "idle inspection"
-          ? { type: "database.inspectIdle" as const, input: undefined }
-          : {
-              type: "workerPlacements.retire" as const,
-              input: {
-                sessionId: "schema-fenced-placement",
-                expectedState: "local" as const,
-                expectedGeneration: 1,
-              },
-            };
-      await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type);
-      peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-      expect(() =>
-        runWithSqliteWorkerStateContext(context, () => backend.execute(command)),
-      ).toThrow("newer schema version");
-    } finally {
-      peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-      peer.close();
-      await backend.close();
-    }
-  },
-);
+  } finally {
+    peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+    peer.close();
+    await backend.close();
+  }
+});
 
 it("retires an existing-only idle actor without opening its missing database", async () => {
   const databasePath = openOpenClawStateDatabase().path;

@@ -23,6 +23,7 @@ import {
   requireChatSessionAction,
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -43,7 +44,6 @@ import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { sendDetachedCommandMessage } from "./chat-send-detached-command.ts";
 import {
   canSendVolatileQueueItem,
-  captureChatConnectionOwner,
   createPendingSendMessage,
   publishPendingSendMessage,
   reconnectSafeQueuedSendState,
@@ -246,7 +246,7 @@ export async function handleSendChat(
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, userMessage);
       }
-      await handleAbortChat(host);
+      await handleAbortChat(host, { scope: "session" });
       return undefined;
     }
 

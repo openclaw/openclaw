@@ -36,7 +36,6 @@ import {
   loadTranscriptEventsSync,
   replaceSessionEntry,
   replaceSessionEntrySync,
-  replaceTranscriptEvents,
   resetSessionEntryLifecycle,
   resolveSessionParentForkDecision,
   rewindSessionToMessage,
@@ -48,6 +47,7 @@ import {
   prepareConversationIdentities,
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";

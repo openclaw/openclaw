@@ -6,15 +6,12 @@ import { withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import * as memoryCapture from "../../hooks/bundled/session-memory/capture.js";
 import saveSessionMemory, {

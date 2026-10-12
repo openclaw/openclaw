@@ -51,6 +51,15 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+vi.mock("../session-utils-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store.js")>()),
+  withGatewaySessionEntry: async (
+    sessionKey: string,
+    opts: { agentId?: string } | undefined,
+    consume: (loaded: ReturnType<typeof loadSessionEntryMock>) => unknown,
+  ) => consume(loadSessionEntryMock(sessionKey, opts)),
+}));
+
 vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/embedded-agent-runner/runs.js")>(
     "../../agents/embedded-agent-runner/runs.js",

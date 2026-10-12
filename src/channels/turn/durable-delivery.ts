@@ -231,6 +231,7 @@ async function deliverAdmittedInboundReply(
     to,
     accountId: params.accountId,
     payloads: [params.payload],
+    retryAmbiguousFinalText: params.retryAmbiguousFinalText,
     ...((params.runId ?? params.executionIdentityToken?.runId)
       ? { runId: params.runId ?? params.executionIdentityToken?.runId }
       : {}),

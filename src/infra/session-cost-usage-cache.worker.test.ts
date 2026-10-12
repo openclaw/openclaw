@@ -264,14 +264,21 @@ it("refreshes and loads usage without executing cache SQL on the caller", async 
       for (const observer of observers) {
         observer.mockClear();
       }
-      for (let round = 0; round < 2; round++) {
-        const result = await loadSessionCostSummariesFromCache({
-          agentId,
-          sessions: [{ sessionFile }],
-          requestRefresh: false,
-        });
-        expect(result.cacheStatus.status).toBe("fresh");
-        expect(result.summaries[0]).toMatchObject({ totalTokens: 10 });
+      const refreshStatus = vi
+        .spyOn(usageCacheSqlite, "isSessionCostUsageRefreshRunning")
+        .mockRejectedValue(new Error("Refresh status is unavailable"));
+      try {
+        for (let round = 0; round < 2; round++) {
+          const result = await loadSessionCostSummariesFromCache({
+            agentId,
+            sessions: [{ sessionFile }],
+            requestRefresh: false,
+          });
+          expect(result.cacheStatus.status).toBe("fresh");
+          expect(result.summaries[0]).toMatchObject({ totalTokens: 10 });
+        }
+      } finally {
+        refreshStatus.mockRestore();
       }
       const selection = [{ sessionId: "selected", sessionFile }];
       const reading = runUsageCostWorker(prepared, {

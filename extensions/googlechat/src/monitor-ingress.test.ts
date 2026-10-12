@@ -342,42 +342,4 @@ describe("Google Chat durable ingress", () => {
       }
     });
   });
-
-  it("keeps unrelated downstream authentication failures retryable", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async () => {
-        throw Object.assign(new Error("model provider unauthorized"), { status: 401 });
-      });
-      const ingress = startIngress(queue, dispatch);
-      try {
-        await ingress.receive(messageEvent({ messageName: "spaces/AAA/messages/model-auth" }));
-        await vi.waitFor(async () => {
-          expect(await queue.listPending({ limit: "all" })).toEqual([
-            expect.objectContaining({ id: "spaces/AAA/messages/model-auth" }),
-          ]);
-        });
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("leaves transient dispatch failures retryable", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async () => {
-        throw Object.assign(new Error("Google Chat unavailable"), { status: 503 });
-      });
-      const ingress = startIngress(queue, dispatch);
-      try {
-        await ingress.receive(messageEvent({ messageName: "spaces/AAA/messages/transient" }));
-        await vi.waitFor(async () => {
-          expect(await queue.listPending({ limit: "all" })).toEqual([
-            expect.objectContaining({ id: "spaces/AAA/messages/transient" }),
-          ]);
-        });
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
 });

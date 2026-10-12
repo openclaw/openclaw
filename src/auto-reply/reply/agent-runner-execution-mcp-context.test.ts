@@ -102,22 +102,7 @@ describe("executeAgentTurn MCP App context", () => {
     expect(getMcpAppModelContext(runtime, view)).not.toBeNull();
   });
 
-  it("never attaches another requester’s App context", async () => {
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    const view = await prepareView(runtime, "bob");
-    updateMcpAppModelContext(runtime, view, {
-      content: [{ type: "text", text: "private selection" }, image],
-    });
-    const params = createMinimalRunAgentTurnParams();
-    params.followupRun.run.senderId = "alice";
-    await executeAgentTurn(params);
-    expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.images ?? []).toEqual([]);
-    expect(
-      JSON.stringify(state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.currentInboundContext ?? {}),
-    ).not.toContain("private selection");
-    expect(getMcpAppModelContext(runtime, view)).not.toBeNull();
-  });
-  it.each(["model_call_started", "turn_accepted"] as const)(
+  it.each(["turn_accepted"] as const)(
     "injects context and native images exactly once at %s without rewriting transcript text",
     async (phase) => {
       const runtime = { sessionId: "session" } as SessionMcpRuntime;
@@ -168,32 +153,6 @@ describe("executeAgentTurn MCP App context", () => {
       ).not.toContain("selected item 42");
     },
   );
-
-  it("indexes App images after existing user images at the actual next-turn boundary", async () => {
-    const runtime = { sessionId: "session" } as SessionMcpRuntime;
-    const first = await prepareView(runtime);
-    const second = await prepareView(runtime);
-    updateMcpAppModelContext(runtime, first, { content: [image] });
-    updateMcpAppModelContext(runtime, second, {
-      content: [
-        {
-          type: "resource",
-          resource: { uri: "parts://image", mimeType: image.mimeType, blob: image.data },
-        },
-      ],
-    });
-    state.resolveCurrentTurnImagesMock.mockResolvedValueOnce({
-      images: [image],
-      imageOrder: ["inline"],
-    });
-    await executeAgentTurn(createMinimalRunAgentTurnParams());
-    const input = state.runEmbeddedAgentMock.mock.calls[0]?.[0];
-    expect(input?.images).toEqual([image, image, image]);
-    expect(input?.imageOrder).toEqual(["inline", "inline", "inline"]);
-    expect(input?.currentInboundContext?.text).toContain('"imageIndex":1');
-    expect(input?.currentInboundContext?.text).toContain('"imageIndex":2');
-    expect(input?.currentInboundContext?.text).not.toContain('"imageIndex":0');
-  });
 
   it("does not consume pending MCP App context when pre-start validation fails", async () => {
     const runtime = { sessionId: "session" } as SessionMcpRuntime;

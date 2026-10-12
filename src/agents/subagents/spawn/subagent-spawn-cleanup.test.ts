@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   cleanupProvisionalSession,
   terminateAcceptedCollectorRun,
@@ -89,47 +88,17 @@ describe("subagent spawn cleanup identity", () => {
     expect(callGateway).toHaveBeenCalledOnce();
   });
 
-  it("retries abort without deleting a durable session after a gateway error", async () => {
-    const callGateway = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("gateway unavailable"))
-      .mockResolvedValueOnce({ ok: true, aborted: false, runIds: [] });
-
-    await terminateAcceptedCollectorRun({
-      childSessionKey: "agent:main:subagent:child",
-      gatewayRunId: "gateway-run",
-      sessionCleanup: "preserve",
-      callGateway,
-    });
-
-    expect(callGateway).toHaveBeenCalledTimes(2);
-    expect(callGateway).toHaveBeenNthCalledWith(2, {
-      method: "chat.abort",
-      params: {
-        sessionKey: "agent:main:subagent:child",
-        runId: "gateway-run",
-      },
-      timeoutMs: 60_000,
-    });
-  });
-
-  it("stops accepted-run cleanup when its Gateway request owner is retired", async () => {
-    const callGateway = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Gateway request owner is retired"))
-      .mockResolvedValue({ aborted: false, runIds: [] });
-
-    await withPluginRuntimeGatewayRequestScope(
-      { resolveGatewayContext: () => undefined, isWebchatConnect: () => false },
-      () =>
-        terminateAcceptedCollectorRun({
-          childSessionKey: "agent:main:subagent:child",
-          gatewayRunId: "gateway-run",
-          sessionCleanup: "preserve",
-          callGateway,
-        }),
-    );
-
+  it("reports an abort failure without deleting or retrying a durable session", async () => {
+    const failure = new Error("gateway unavailable");
+    const callGateway = vi.fn().mockRejectedValue(failure);
+    await expect(
+      terminateAcceptedCollectorRun({
+        childSessionKey: "agent:main:subagent:child",
+        gatewayRunId: "gateway-run",
+        sessionCleanup: "preserve",
+        callGateway,
+      }),
+    ).rejects.toBe(failure);
     expect(callGateway).toHaveBeenCalledOnce();
   });
 

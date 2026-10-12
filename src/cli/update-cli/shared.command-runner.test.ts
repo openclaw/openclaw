@@ -8,6 +8,7 @@ import {
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import {
   ensureGitCheckout,
   parseUpdateTimeoutMs,
@@ -18,9 +19,22 @@ import {
 } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
+const runCommandBuffered = vi.hoisted(() =>
+  vi.fn(async () => ({
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+    code: null,
+    signal: null,
+    killed: false,
+    termination: "error" as const,
+    error: Object.assign(new Error("fixture package database unavailable"), { code: "EACCES" }),
+  })),
+);
 
-vi.mock("../../process/exec.js", () => ({
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandWithTimeout,
+  runCommandBuffered,
 }));
 
 const successfulCommandResult = {
@@ -140,11 +154,13 @@ describe("update CLI shared helpers", () => {
           stderr: "not owned",
         });
 
-        const owner = resolveGlobalManager({
-          root,
-          installKind: "package",
-          timeoutMs: 1_000,
-        });
+        const owner = withMockedPlatform("linux", () =>
+          resolveGlobalManager({
+            root,
+            installKind: "package",
+            timeoutMs: 1_000,
+          }),
+        );
         await expect(owner).rejects.toBeInstanceOf(UpdatePreMutationError);
         await expect(owner).rejects.toMatchObject({
           name: "UpdatePreMutationError",
@@ -185,11 +201,13 @@ describe("update CLI shared helpers", () => {
     "guides Homebrew-managed installations to use brew upgrade",
     async () => {
       await expect(
-        resolveGlobalManager({
-          root: "/opt/homebrew/Cellar/openclaw-cli/2026.9.2/libexec/lib/node_modules/openclaw",
-          installKind: "package",
-          timeoutMs: 1_000,
-        }),
+        withMockedPlatform("linux", () =>
+          resolveGlobalManager({
+            root: "/opt/homebrew/Cellar/openclaw-cli/2026.9.2/libexec/lib/node_modules/openclaw",
+            installKind: "package",
+            timeoutMs: 1_000,
+          }),
+        ),
       ).rejects.toMatchObject({
         name: "UpdatePreMutationError",
         reason: "unmanaged-package-install",

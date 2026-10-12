@@ -7,6 +7,7 @@ import {
   checkAgentCreationGate,
   createAgent,
   validateAgentIdInput,
+  type CreateAgentSuccess,
 } from "../agents/agent-create.js";
 import { loadAgentRole } from "../agents/agent-roles.js";
 import {
@@ -28,6 +29,7 @@ import {
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
@@ -106,12 +108,6 @@ export async function agentsAddCommand(
     );
   }
 
-  const writeSnapshot = await requireValidConfigForWrite(runtime);
-  if (!writeSnapshot) {
-    return;
-  }
-  const cfg = writeSnapshot.snapshot.sourceConfig;
-
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
 
@@ -139,26 +135,48 @@ export async function agentsAddCommand(
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
 
-    const created = await withPluginLifecycleLease({}, async () => {
-      return await createAgent({
+    const created = await runWithLocalStateOwner<
+      Pick<
+        CreateAgentSuccess,
+        "agentId" | "name" | "workspace" | "agentDir" | "model" | "bindingResult"
+      >
+    >({
+      method: "agents.create",
+      params: {
         name: nameInput,
         workspace: workspaceFlag,
-        ...(opts.role ? { role: opts.role } : {}),
-        ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
         ...(opts.model ? { model: opts.model } : {}),
-        ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
-        transformConfig: transformConfigWithPendingPluginInstalls,
-      });
+      },
+      target: agentId,
+      recoveryCommand: "openclaw agents list",
+      // Guided role, auth-directory, and binding setup has no matching creation RPC.
+      ...(opts.role || opts.agentDir || opts.bind?.length
+        ? { onForeignOwner: "refuse" as const }
+        : {}),
+      runLocal: ({ assertCurrent }) =>
+        withPluginLifecycleLease({}, async () => {
+          const result = await createAgent({
+            name: nameInput,
+            workspace: workspaceFlag,
+            ...(opts.role ? { role: opts.role } : {}),
+            ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+            ...(opts.model ? { model: opts.model } : {}),
+            ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
+            transformConfig: transformConfigWithPendingPluginInstalls,
+            beforePersistentApply: assertCurrent,
+          });
+          if (result.status === "error") {
+            throwExpectedCliError(
+              result.reason === "reserved-id"
+                ? `"${result.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
+                : result.reason === "already-exists"
+                  ? `Agent "${result.agentId}" already exists.`
+                  : result.message,
+            );
+          }
+          return result;
+        }),
     });
-    if (created.status === "error") {
-      throwExpectedCliError(
-        created.reason === "reserved-id"
-          ? `"${created.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
-          : created.reason === "already-exists"
-            ? `Agent "${created.agentId}" already exists.`
-            : created.message,
-      );
-    }
 
     const { added = [], updated = [], skipped = [], conflicts = [] } = created.bindingResult ?? {};
     if (!opts.json) {
@@ -202,6 +220,26 @@ export async function agentsAddCommand(
     return;
   }
 
+  await runWithLocalStateOwner({
+    method: "agents.setup",
+    params: {},
+    target: nameInput ?? "interactive agent setup",
+    onForeignOwner: "refuse",
+    runLocal: () => runInteractiveAgentsAdd(opts, runtime, wizardOutput),
+  });
+}
+
+async function runInteractiveAgentsAdd(
+  opts: AgentsAddOptions,
+  runtime: RuntimeEnv,
+  wizardOutput: NodeJS.WriteStream,
+) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
+    return;
+  }
+  const cfg = writeSnapshot.snapshot.sourceConfig;
+  const nameInput = opts.name?.trim();
   const prompter = createClackPrompter(wizardOutput);
   const wizardRuntime: RuntimeEnv = opts.json
     ? { ...runtime, log: (...args) => runtime.error(...args) }

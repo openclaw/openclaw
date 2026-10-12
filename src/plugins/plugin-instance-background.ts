@@ -25,7 +25,7 @@ export function createPluginBackgroundRunner(
   return (run) => {
     const current = pluginInstanceInvocation.getStore();
     const cleanup =
-      current?.instance === instance && instance.hasActiveCall && isCleanup(current.token)
+      current?.instance === instance && isCleanup(current.token)
         ? { instance, token: current.token }
         : undefined;
     const registry = instance.owner?.registry;

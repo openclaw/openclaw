@@ -1,3 +1,4 @@
+import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -11,6 +12,7 @@ import {
   withUsageCostIncognitoScope,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
+import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import {
   prepareUsageCostWorker,
@@ -36,6 +38,7 @@ type UsageCostRefreshState = {
   queueKey: string;
   env?: NodeJS.ProcessEnv;
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
   pendingRebuildRows: Map<string, SessionCostUsageRollupRow>;
@@ -46,6 +49,7 @@ type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" 
   databasePath?: string;
   env?: NodeJS.ProcessEnv;
   incognito?: UsageCostIncognitoBinding;
+  sessionActor?: SessionActorStorageBinding;
   sessionFiles?: string[];
   rebuildRows?: SessionCostUsageRollupRow[];
 };
@@ -101,6 +105,7 @@ async function loadAggregateCostUsageSummary(
         agentDir: prepared.agentDir,
         databasePath,
         storePath,
+        sessionActor: prepared.sessionActor,
       })
     : undefined;
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
@@ -129,12 +134,15 @@ async function loadAggregateCostUsageSummary(
       agentId: params.agentId,
       storePath,
       rebuildRows: invalidRows,
+      sessionActor: prepared.sessionActor,
     });
   }
   if (
     refresh === "busy" ||
     isUsageCostRefreshQueued(databasePath) ||
-    (await isSessionCostUsageRefreshRunning(params.agentId, databasePath))
+    (prepared.sessionActor
+      ? isSessionActorUsageRefreshRunning(prepared.sessionActor)
+      : await isSessionCostUsageRefreshRunning(params.agentId, databasePath))
   ) {
     cacheStatus.status = "refreshing";
   }
@@ -194,10 +202,16 @@ async function loadCapturedSessionCostSummariesFromCache(
       databasePath,
       env: prepared.location.env,
       incognito: prepared.incognito,
+      sessionActor: prepared.sessionActor,
     });
   }
-  const refreshRunning = await isSessionCostUsageRefreshRunning(params.agentId, databasePath);
-  if (staleSessionFiles.length > 0 && (refreshRunning || refreshRequested)) {
+  if (
+    staleSessionFiles.length > 0 &&
+    (refreshRequested ||
+      (prepared.sessionActor
+        ? isSessionActorUsageRefreshRunning(prepared.sessionActor)
+        : await isSessionCostUsageRefreshRunning(params.agentId, databasePath)))
+  ) {
     cacheStatus.status = "refreshing";
     for (const summary of summaries) {
       if (summary?.staleSince !== undefined) {
@@ -213,11 +227,13 @@ function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
   if (scopeSignal?.aborted) {
     return;
   }
-  const databasePath = resolveOpenClawAgentSqlitePath({
-    agentId: normalizeAgentId(params.agentId),
-    path: params.databasePath,
-    env: params.env,
-  });
+  const databasePath =
+    params.sessionActor?.path ??
+    resolveOpenClawAgentSqlitePath({
+      agentId: normalizeAgentId(params.agentId),
+      path: params.databasePath,
+      env: params.env,
+    });
   const queueKey = params.incognito
     ? `${databasePath}#${params.incognito.actor.identity.incarnation}`
     : databasePath;
@@ -235,6 +251,7 @@ function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {
     queueKey,
     env: params.env,
     incognito: params.incognito,
+    sessionActor: params.sessionActor,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
     pendingRebuildRows: new Map(),
@@ -319,6 +336,7 @@ async function runQueuedUsageCostRefresh(
             rebuildRows,
             env: state.env,
             incognito: state.incognito,
+            sessionActor: state.sessionActor,
           });
           if (signal?.aborted) {
             return;

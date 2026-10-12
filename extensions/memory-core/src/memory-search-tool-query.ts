@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveMemoryIndexIdentityDiagnostic,
   resolveMemoryIndexSearchDiagnostic,
@@ -58,19 +57,8 @@ type MemorySearchToolVisibility = {
   sandboxed: boolean;
 };
 
-function isClosedMemoryStoreError(error: unknown): boolean {
-  const message = formatErrorMessage(error).toLowerCase();
-  return (
-    message.includes("database is not open") ||
-    message.includes("database connection is not open") ||
-    message.includes("database handle is closed") ||
-    message.includes("memory index manager is closed")
-  );
-}
-
 export async function executeMemorySearchToolQuery(params: {
   initialManager: ManagerState;
-  refreshManager: () => Promise<ManagerState | null>;
   query: MemorySearchToolQuery;
   visibility: MemorySearchToolVisibility;
   signal: AbortSignal;
@@ -82,8 +70,7 @@ export async function executeMemorySearchToolQuery(params: {
 }) {
   const startedAt = Date.now();
   const runtimeDebug: MemorySearchRuntimeDebug[] = [];
-  let active = params.initialManager;
-  let partialGeneration = 0;
+  const active = params.initialManager;
   const { query, signal, visibility } = params;
   // Product recall may index transcripts without adding them to ordinary model search.
   // Explicit corpus selection is authorized by the tool owner before this point.
@@ -131,7 +118,6 @@ export async function executeMemorySearchToolQuery(params: {
       onDebug: (debug) => runtimeDebug.push(debug),
       onPartialResults: params.onPartialResults
         ? (partialCandidates) => {
-            const generation = ++partialGeneration;
             params.onPartialResults?.(null);
             // Session visibility can change while semantic retrieval waits. A deadline
             // cannot reuse earlier session authority, so retain only durable memory files.
@@ -141,7 +127,6 @@ export async function executeMemorySearchToolQuery(params: {
             if (!memoryCandidates?.length || signal.aborted) {
               return;
             }
-            // Finalization yields; only the latest permitted snapshot survives fallback.
             void finalizeMemorySearchToolQuery({
               active,
               searched: { candidates: memoryCandidates, searchWindow },
@@ -150,7 +135,7 @@ export async function executeMemorySearchToolQuery(params: {
               effectiveMode: "keyword-only",
             }).then(
               (result) => {
-                if (generation === partialGeneration && !signal.aborted) {
+                if (!signal.aborted) {
                   params.onPartialResults?.(result.pausedIndexIdentity ? null : result);
                 }
               },
@@ -163,24 +148,7 @@ export async function executeMemorySearchToolQuery(params: {
     return { searched: { candidates, searchWindow }, status: active.manager.status() };
   };
 
-  let searched: Awaited<ReturnType<typeof searchOnce>>;
-  try {
-    searched = await searchOnce();
-  } catch (error) {
-    if (!isClosedMemoryStoreError(error)) {
-      throw error;
-    }
-    partialGeneration += 1;
-    params.onPartialResults?.(null);
-    const refreshed = await params.refreshManager();
-    if (!refreshed) {
-      throw error;
-    }
-    active = refreshed;
-    searched = await searchOnce();
-  } finally {
-    partialGeneration += 1;
-  }
+  const searched = await searchOnce();
 
   return await finalizeMemorySearchToolQuery({
     active,

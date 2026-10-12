@@ -1,14 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import {
+  clearGitHubCredentialVerificationCache,
+  verifyGitHubCredential,
+} from "../../agents/github-oauth-client.js";
+import {
+  resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
+} from "../../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  updateUserGitHubConnection,
-  type UserGitHubConnection,
-} from "../../state/user-github-connections.js";
+import type { UserGitHubConnection } from "../../state/user-github-connections.js";
+import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as prRead from "../control-ui-session-pr-read.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
@@ -130,6 +135,126 @@ describe("publication receipt reads", () => {
       await fixture.invoke("sessions.github.options", { sessionKey });
       expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("marks expired account options stale without waiting for GitHub", async ({ signal }) => {
+    vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
+    vi.stubEnv("GH_TOKEN", "synthetic-options-stale-token");
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const refresh = createDeferredCore<Response>();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ id: 7, login: "shared-bot", avatar_url: null }))
+      .mockReturnValue(refresh.promise);
+    await withReadFixture(async (fixture) => {
+      await fixture.invoke("sessions.github.options", { sessionKey });
+      now.mockReturnValue(61_001);
+      try {
+        const stale = await withinTest(
+          fixture.invoke("sessions.github.options", { sessionKey }),
+          signal,
+        );
+        expect(stale).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            stale: true,
+            shared: { ...publisher, source: "system-detected" },
+          }),
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        fixture.disconnect();
+        const denied = await fixture.invoke("sessions.github.options", { sessionKey });
+        expect(denied.mock.calls[0]?.[0]).toBe(false);
+      } finally {
+        refresh.resolve(Response.json({ id: 7, login: "shared-bot", avatar_url: null }));
+      }
+    });
+  });
+
+  it("marks only expired personal account facts stale through options revalidation", async ({
+    signal,
+  }) => {
+    vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
+    const personalToken = "synthetic-personal-options-stale";
+    const sharedToken = "synthetic-shared-options-fresh";
+    vi.stubEnv("GH_TOKEN", sharedToken);
+    mocks.runCommandBuffered.mockResolvedValue({
+      stdout: Buffer.from(sharedToken),
+      stderr: Buffer.alloc(0),
+      code: 0,
+      termination: "exit",
+    });
+    const refresh = createDeferredCore<Response>();
+    let personalProbes = 0;
+    let sharedProbes = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      if (new Headers(init?.headers).get("Authorization") === `Bearer ${personalToken}`) {
+        personalProbes += 1;
+        return personalProbes === 1
+          ? Response.json({ id: 42, login: "personal-reader", avatar_url: null })
+          : refresh.promise;
+      }
+      sharedProbes += 1;
+      return Response.json({ id: 7, login: "shared-bot", avatar_url: null });
+    });
+    await withReadFixture(
+      async (fixture) => {
+        const owner = expectDefined(
+          fixture.client.authenticatedUserProfile,
+          "reader profile",
+        ).profileId;
+        const profileId = "ghp_33333333333333333333333333333333";
+        await writeManagedGitHubProfileFiles(
+          resolveManagedGitHubProfileDir({ agentId: "", scope: "personal", profileId }),
+          { login: "personal-reader", token: personalToken },
+        );
+        const initialNow = Date.now();
+        updateUserGitHubConnection(
+          owner,
+          () => ({
+            version: 1,
+            generation: "d1b37521-a10c-482c-a1d9-ce1390ccbf89",
+            selection: {
+              kind: "connected",
+              profileId,
+              accountId: 42,
+              login: "personal-reader",
+              refreshToken: "synthetic-personal-refresh",
+              accessExpiresAtMs: initialNow + 3_600_000,
+              refreshExpiresAtMs: initialNow + 86_400_000,
+              scopes: ["repo"],
+            },
+          }),
+          () => {},
+        );
+        fixture.personalConnectionStatus.mockImplementation(fixture.personalLifecycle.status);
+        const now = vi.spyOn(Date, "now").mockReturnValue(initialNow);
+        try {
+          await verifyGitHubCredential(personalToken);
+          now.mockReturnValue(initialNow + 30_000);
+          await fixture.invoke("sessions.github.options", { sessionKey });
+          now.mockReturnValue(initialNow + 60_001);
+          const result = await withinTest(
+            fixture.invoke("sessions.github.options", { sessionKey }),
+            signal,
+          );
+          expect(result).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              stale: true,
+              personal: expect.objectContaining({ state: "connected", stale: true }),
+              shared: { source: "system-detected", accountId: 7, login: "shared-bot" },
+            }),
+          );
+          expect(personalProbes).toBe(2);
+          expect(sharedProbes).toBe(1);
+        } finally {
+          refresh.resolve(Response.json({ id: 42, login: "personal-reader", avatar_url: null }));
+          await verifyGitHubCredential(personalToken);
+        }
+      },
+      { personal: true },
+    );
   });
 
   it.each([false, true])(

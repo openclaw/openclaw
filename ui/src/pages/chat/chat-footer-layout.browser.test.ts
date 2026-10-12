@@ -370,12 +370,31 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         const before = await geometry();
-        await page.locator(".agent-chat__composer-notices").evaluate((node) => {
+        await page.locator(".chat-footer__context").evaluate((node) => {
+          const notices = node.querySelector(".agent-chat__composer-notices")!;
+          const content = document.createElement("span");
+          content.className = "chat-composer-lit-content";
+          content.style.display = "contents";
+          for (const child of Array.from(node.children)) {
+            if (child !== notices) {
+              content.append(child);
+            }
+          }
+          node.prepend(content);
+          const recovery = document.createElement("openclaw-chat-outbox-recovery");
+          recovery.style.display = "contents";
+          content.append(recovery);
+          const noticeContent = document.createElement("span");
+          noticeContent.className = "chat-composer-lit-content";
+          noticeContent.style.display = "contents";
           const attention = document.createElement("openclaw-chat-child-attention");
           attention.style.display = "contents";
-          node.append(attention);
+          noticeContent.append(attention);
+          notices.append(noticeContent);
         });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
+        expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
+        expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         expect(await geometry()).toEqual(before);
         expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
@@ -386,7 +405,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         });
         await page.locator(".agent-chat__composer-notices").evaluate((node) => {
           node.innerHTML =
-            '<div class="chat-composer-neighbor-card chat-error">Model unavailable</div>';
+            '<span class="chat-composer-lit-content" style="display:contents"><div class="chat-composer-neighbor-card chat-error">Model unavailable</div></span>';
         });
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
         expect(await page.getByText("Disk space low").isVisible()).toBe(true);

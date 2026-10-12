@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -14,7 +13,6 @@ import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
-import { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -27,10 +25,8 @@ import { VERSION } from "../version.js";
 import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
-import {
-  createNodeHostGatewayCandidateConnection,
-  formatGatewayCandidateUrl,
-} from "./gateway-candidate-connection.js";
+import { canReuseNodeHostDeviceToken } from "./gateway-auth.js";
+import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
 import {
   resolveNodeHostCloudflareAccess,
   type NodeHostCloudflareAccessConfig,
@@ -92,29 +88,6 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
-async function canReuseNodeHostDeviceToken(params: {
-  savedGateway?: NodeHostGatewayConfig;
-  gatewayCandidates: readonly NodeHostGatewayConfig[];
-  deviceId: string;
-}): Promise<boolean> {
-  const savedGatewayScope = params.savedGateway
-    ? gatewayOriginScope(formatGatewayCandidateUrl(params.savedGateway))
-    : undefined;
-  return Boolean(
-    savedGatewayScope &&
-    params.gatewayCandidates.every(
-      (candidate) => gatewayOriginScope(formatGatewayCandidateUrl(candidate)) === savedGatewayScope,
-    ) &&
-    (
-      await loadDeviceAuthTokenReadOnly({
-        deviceId: params.deviceId,
-        role: "node",
-        env: process.env,
-      })
-    )?.token,
-  );
-}
-
 async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   savedGateway?: NodeHostGatewayConfig;
@@ -123,13 +96,26 @@ async function resolveNodeHostGatewayCredentials(params: {
   envOnly?: boolean;
 }): Promise<{ token?: string; password?: string }> {
   const env = process.env;
-  if (params.envOnly || (await canReuseNodeHostDeviceToken(params))) {
-    // A co-located Gateway's shared password must not displace the paired node
-    // credential. GatewayClient rereads the current token when connecting.
-    return resolveExplicitGatewayAuth({
+  const canReuseDeviceToken = await canReuseNodeHostDeviceToken(params);
+  if (params.envOnly) {
+    const auth = resolveExplicitGatewayAuth({
       token: env.OPENCLAW_GATEWAY_TOKEN,
       password: env.OPENCLAW_GATEWAY_PASSWORD,
     });
+    if (canReuseDeviceToken && (auth.token || auth.password)) {
+      const sources = [
+        ...(auth.token ? ["OPENCLAW_GATEWAY_TOKEN"] : []),
+        ...(auth.password ? ["OPENCLAW_GATEWAY_PASSWORD"] : []),
+      ];
+      writeStderrLine(
+        `node host: --auth-from-env selects ${sources.join(" and ")} instead of the paired device token`,
+      );
+    }
+    return auth;
+  }
+  if (canReuseDeviceToken) {
+    // GatewayClient rereads the current paired token when connecting.
+    return {};
   }
   const mode = params.config.gateway?.mode === "remote" ? "remote" : "local";
   const configForResolution =

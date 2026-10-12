@@ -1,17 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolFixture as render } from "./chat-tool-render.test-support.ts";
 
 describe("tool-card redaction", () => {
   it.each([
     ["/Users/alice/Pictures/base.png", "~/Pictures/base.png"],
     ["D:\\Users\\alice\\Pictures\\base.png", "~\\Pictures\\base.png"],
     ["/var/folders/demo/screenshots/base.png", "/var/folders/demo/screenshots/base.png"],
-  ])("keeps image path %s readable in the tool row", (path, expected) => {
+  ])("keeps image path %s readable in the tool row", async (path, expected) => {
     const container = document.createElement("div");
-    render(
+    await render(
       renderToolCard(
         { id: "msg:image", name: "view_image", args: { path } },
         { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
@@ -84,9 +84,9 @@ describe("tool-card redaction", () => {
     ],
   ])(
     "renderToolCard displays the %s with public URLs intact and credentials masked",
-    (_label, input, expected) => {
+    async (_label, input, expected) => {
       const container = document.createElement("div");
-      render(
+      await render(
         renderToolCard(
           { id: "msg:redaction", name: "custom_tool", args: { message: input } },
           { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },

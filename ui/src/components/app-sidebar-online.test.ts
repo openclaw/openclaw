@@ -12,6 +12,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
+import { selectSidebarView } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -83,7 +84,11 @@ function createWorkloadGateway(readSummary: () => Promise<SessionsListResult>, i
       if (!Value.Check(SessionsListParamsSchema, params)) {
         throw new Error("Invalid sessions.list request");
       }
-      return params.includeOwnerSessionCounts ? summaryRequest() : PAGE;
+      if (params.includeOwnerSessionCounts && params.excludeSubagents) {
+        return summaryRequest();
+      }
+      // Navigation scope equivalence is a separate full-population query.
+      return params.includeOwnerSessionCounts ? summary() : PAGE;
     }
     throw new Error("Unexpected Gateway request: " + method);
   });
@@ -109,6 +114,7 @@ async function mountWorkload(readSummary = async () => summary(), includeRaw = f
     TWO_AGENTS,
   );
   mounted.sidebar.connected = true;
+  await selectSidebarView(mounted.sidebar, "online");
   await mounted.sidebar.updateComplete;
   await vi.dynamicImportSettled();
   await settle(mounted.sidebar);
@@ -185,7 +191,7 @@ describe("sidebar people workload", () => {
     },
   );
 
-  it("keeps a single deduplicated self visible in the roster and collapsed facepile", async () => {
+  it("keeps a single deduplicated self visible when returning to Online", async () => {
     const { sidebar, gateway } = await mountWorkload();
     const self = presence()[0]!;
     gateway.publishEvent("presence", {
@@ -194,16 +200,18 @@ describe("sidebar people workload", () => {
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada"]);
     expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
-    await click(sidebar, ".sidebar-online .sidebar-session-group-toggle");
-    const facepile = sidebar.querySelector("openclaw-viewer-facepile");
-    expect(facepile?.staticUsers?.map((user) => user.id)).toEqual(["ada"]);
+    await selectSidebarView(sidebar, "sessions");
+    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+    await selectSidebarView(sidebar, "online");
+    expect(names(sidebar)).toEqual(["ada"]);
     gateway.publishEvent("presence", { presence: [{ ...self, reason: "disconnect" }] });
     await settle(sidebar);
-    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+    expect(names(sidebar)).toEqual([]);
+    expect(sidebar.querySelector(".sidebar-online__list")).not.toBeNull();
   });
 
   it.each(["chip", "roster"] as const)(
-    "hides filters while collapsed and preserves the people view when reopened (%s)",
+    "hides people filters in Sessions and preserves them when Online is selected again (%s)",
     async (mode) => {
       const { sidebar } = await mountWorkload();
       sidebar.sidebarAgentsMode = mode;
@@ -218,11 +226,11 @@ describe("sidebar people workload", () => {
       expect(names(sidebar)).toEqual(["bea", "ada"]);
       expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
 
-      await click(sidebar, toggle);
+      await selectSidebarView(sidebar, "sessions");
       expect(sidebar.querySelector(".sidebar-online__filter-toggle")).toBeNull();
-      expect(sidebar.querySelector("openclaw-viewer-facepile")?.staticUsers).toHaveLength(3);
+      expect(sidebar.querySelector(".sidebar-online__list")).toBeNull();
 
-      await click(sidebar, toggle);
+      await selectSidebarView(sidebar, "online");
       expect(names(sidebar)).toEqual(["bea", "ada"]);
       expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
       await click(sidebar, ".sidebar-online__filter-toggle");

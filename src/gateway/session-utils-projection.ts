@@ -73,7 +73,7 @@ export function buildSessionListRowMetadataContext(params: {
         entries = new Map();
         runtimeEntries.set(selection.routeVariants, entries);
       }
-      const key = `${selection.runtimeId}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
+      const key = `${selection.runtimeId}\0${selection.allowApiFallback !== false}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
       let selected = entries.get(key);
       if (!selected) {
         selected = selectModelCatalogRuntimeEntry(selection);

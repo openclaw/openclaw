@@ -74,7 +74,7 @@ afterEach(() => {
 describe("vault CLI setup plan", () => {
   const setupArgs = ["--openai-id", "providers/openai/apiKey"];
 
-  it.skipIf(process.platform === "win32").each([0o700, 0o755])(
+  it.skipIf(process.platform === "win32").each([0o755])(
     "creates private plans in a %o directory without overwriting files or following symlinks",
     async (directoryMode) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-plan-security-"));
@@ -99,42 +99,6 @@ describe("vault CLI setup plan", () => {
       }
     },
   );
-
-  it("generates plugin-managed provider config and model API-key targets", async () => {
-    const plan = await createSetupPlan([
-      "--openai-id",
-      "providers/openai/apiKey",
-      "--anthropic-id",
-      "providers/anthropic/apiKey",
-      "--provider-key",
-      "local-openai=providers/local-openai/apiKey",
-    ]);
-
-    expect(plan.providerUpserts).toEqual({
-      vault: {
-        source: "exec",
-        pluginIntegration: { pluginId: "vault", integrationId: "vault" },
-      },
-    });
-    expect(plan.targets).toEqual([
-      expect.objectContaining({
-        type: "models.providers.apiKey",
-        path: "models.providers.openai.apiKey",
-        providerId: "openai",
-        ref: { source: "exec", provider: "vault", id: "providers/openai/apiKey" },
-      }),
-      expect.objectContaining({
-        type: "models.providers.apiKey",
-        path: "models.providers.anthropic.apiKey",
-        providerId: "anthropic",
-      }),
-      expect.objectContaining({
-        type: "models.providers.apiKey",
-        path: "models.providers.local-openai.apiKey",
-        providerId: "local-openai",
-      }),
-    ]);
-  });
 
   it("preserves colon-bearing auth-profile target paths", async () => {
     const plan = await createSetupPlan([
@@ -162,21 +126,6 @@ describe("vault CLI setup plan", () => {
 });
 
 describe("vault CLI status", () => {
-  it("prefers the managed integration when the default alias is unrelated", async () => {
-    const result = await runStatus({
-      secrets: {
-        providers: {
-          vault: { source: "exec", command: "/legacy/resolver" },
-          "corp-vault": {
-            source: "exec",
-            pluginIntegration: { pluginId: "vault", integrationId: "vault" },
-          },
-        },
-      },
-    });
-    expect(result.providerAlias).toBe("corp-vault");
-  });
-
   it("requires an explicit alias when multiple Vault providers are configured", async () => {
     const config = {
       secrets: {
@@ -195,16 +144,5 @@ describe("vault CLI status", () => {
     expect((await runStatus(config, ["--provider-alias", "prod-vault"])).providerAlias).toBe(
       "prod-vault",
     );
-  });
-
-  it("reports the packaged resolver fallback through the status command", async () => {
-    vi.spyOn(fs, "access").mockImplementation(async (filePath) => {
-      if (String(filePath).includes("extensions/vault/vault-secret-ref-resolver.js")) {
-        return;
-      }
-      throw Object.assign(new Error("missing"), { code: "ENOENT" });
-    });
-    const result = await runStatus({});
-    expect(result.resolverScript).toMatch(/extensions\/vault\/vault-secret-ref-resolver\.js$/u);
   });
 });

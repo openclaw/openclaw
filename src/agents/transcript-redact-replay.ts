@@ -40,7 +40,15 @@ function sanitizeCompactedWindow(
     typeof window === "object" &&
     helpers.isPlainTranscriptObject(window) &&
     typeof window.output === "string"
-    ? { state: "ready", output: window.output }
+    ? {
+        state: "ready",
+        output: window.output,
+        ...(typeof window.outputTokens === "number" &&
+        Number.isSafeInteger(window.outputTokens) &&
+        window.outputTokens >= 0
+          ? { outputTokens: window.outputTokens }
+          : {}),
+      }
     : { state: "refresh-required" };
 }
 

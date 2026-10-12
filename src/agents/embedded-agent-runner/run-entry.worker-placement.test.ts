@@ -83,6 +83,7 @@ describe("runEmbeddedAgentEntry worker placement", () => {
       const placement = {
         assertCompactionSuccessorAllowed: () => {},
         resolveRuntimeOverride: vi.fn(async () => "openclaw"),
+        usesWorkerInference: async () => true,
         executeLocalTurn: async <T>(_claim: unknown, run: () => Promise<T>) => run(),
         executeTurn: vi.fn(),
       };
@@ -141,6 +142,9 @@ describe("runEmbeddedAgentEntry worker placement", () => {
             agentHarnessRuntimeOverride: requestedRuntime ?? "openclaw",
           });
         }
+      }
+      for (const [fallback] of state.runWithModelFallback.mock.calls) {
+        expect(fallback.skipAuthProfileRuntime).toBe(true);
       }
     },
   );

@@ -9,7 +9,7 @@ describe("Control UI WebKit selection", () => {
     ["ui/src/components/modal-dialog.ts", true],
     ["ui/src/pages/chat/components/chat-composer.tsx", true],
     ["ui/src/styles/chat/composer.css", true],
-    ["ui/src/pages/about/about-page.ts", false],
+    ["ui/src/pages/about/about-page.tsx", false],
   ])("selects %s: %s without adding UI rows", (file, selected) => {
     const result = runCiManifestFixture({
       bundledPlanner: true,

@@ -13,8 +13,8 @@ import {
   createProviderErrorTextRedactor,
   readProviderJsonResponse,
 } from "./provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "./provider-network-policy.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
-import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -27,12 +27,7 @@ const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
 export function isMinimaxVlmProvider(provider: string): boolean {
   const normalized = provider.trim().toLowerCase();
-  return (
-    normalized === "minimax" ||
-    normalized === "minimax-cn" ||
-    normalized === "minimax-portal" ||
-    normalized === "minimax-portal-cn"
-  );
+  return ["minimax", "minimax-cn", "minimax-portal", "minimax-portal-cn"].includes(normalized);
 }
 
 export function isMinimaxVlmModel(provider: string, modelId: string): boolean {

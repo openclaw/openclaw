@@ -12,11 +12,7 @@ import {
 } from "../../agents/tools/common.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
-import {
-  dispatchChannelMessageAction,
-  isFencedProviderReadAction,
-  isScheduledMessageWriteAction,
-} from "../../channels/plugins/message-action-dispatch.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
@@ -29,7 +25,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
-import { withEffectPreparation } from "../../shared/effect-authority.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
@@ -66,26 +61,6 @@ const log = createSubsystemLogger("outbound/message-action");
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
-
-export function withMessageActionEffectAuthority<T>(
-  input: MessageActionInput,
-  run: () => Promise<T>,
-): Promise<T> {
-  const prepare = input.messageActionAuthorization?.scheduled?.prepareUse;
-  return withEffectPreparation(
-    prepare
-      ? () =>
-          prepare(
-            isFencedProviderReadAction(input.action) || isScheduledMessageWriteAction(input.action),
-            () => {
-              input.abortSignal?.throwIfAborted();
-              input.assertDirectAdapterHandoff?.();
-            },
-          )
-      : undefined,
-    run,
-  );
-}
 
 export function assertMessageDeliveryCurrent(input: MessageActionInput): void {
   throwIfAborted(input.abortSignal);

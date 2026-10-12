@@ -1250,7 +1250,7 @@ describe("memory cli", () => {
     },
     {
       args: ["session-backfill", "--rollback", "--from", "2026-01-01"],
-      acquires: true,
+      acquires: false,
       message: "Memory session-backfill --rollback cannot be combined",
     },
     { args: ["rem-backfill"], acquires: true, message: "Memory rem-backfill requires --path" },

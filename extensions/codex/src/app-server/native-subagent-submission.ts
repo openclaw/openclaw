@@ -35,7 +35,7 @@ export type CodexNativeSubagentSubmissions = z.infer<typeof submissionsSchema>;
 
 export type CodexNativeSubagentSubmissionStore = {
   assertCurrent(): void;
-  read(): readonly CodexNativeSubagentSubmission[];
+  read(): Promise<readonly CodexNativeSubagentSubmission[]>;
   record(receipt: CodexNativeSubagentSubmission, assertCurrent: () => void): Promise<boolean>;
   consume(receipt: CodexNativeSubagentSubmission, assertCurrent: () => void): Promise<boolean>;
 };

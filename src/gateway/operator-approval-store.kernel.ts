@@ -143,13 +143,14 @@ export function insertOperatorApprovalInDatabase(params: {
           consumed_at_ms: null,
           consumed_by: null,
         })
-        .onConflict((conflict) => conflict.column("approval_id").doNothing()),
+        .onConflict((conflict) => conflict.column("approval_id").doNothing())
+        .returningAll(),
     );
-    const row = selectOperatorApprovalRow(database, id);
+    const row = result.rows[0] ?? selectOperatorApprovalRow(database, id);
     if (!row) {
       throw new Error(`operator approval '${id}' was not readable after insert`);
     }
-    if (result.numAffectedRows === 1n) {
+    if (result.rows.length === 1) {
       operatorApprovalPublication.stagePostimages(database.db, [row]);
     }
     const record = decodeOperatorApprovalRow(row);
@@ -162,7 +163,7 @@ export function insertOperatorApprovalInDatabase(params: {
       });
       return { outcome: "conflict" };
     }
-    if (result.numAffectedRows === 1n) {
+    if (result.rows.length === 1) {
       if (executionIdentityBinding) {
         ensureExecutionIdentitySchema(database.db);
         executeSqliteQuerySync(

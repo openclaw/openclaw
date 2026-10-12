@@ -31,6 +31,7 @@ function roster(id: string, workspace: string): AgentsListResult {
     mainKey: "main",
     scope: "per-sender",
     agents: [{ id, workspace, workspaceGit: false, model: { primary: "openai/gpt-5.5" } }],
+    sessionPlacement: {},
   };
 }
 

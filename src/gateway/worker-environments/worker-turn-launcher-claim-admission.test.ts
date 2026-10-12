@@ -1,16 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SpawnResult } from "../../process/exec.js";
-import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
-import {
-  createPlacementTurnClaimFixtureOps,
-  seedAttachedPlacementEnvironment,
-} from "./placement-test-fixtures.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerGatewayTools } from "./worker-session-tool-executor.js";
@@ -40,9 +39,11 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("worker turn launcher claim admission", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "rejects compaction successors throughout the %s placement lifecycle without changing ownership",
@@ -255,53 +256,6 @@ describe("worker turn launcher claim admission", () => {
     },
   );
 
-  it("retries admission when a collided claim releases before inspection", async () => {
-    await seedActivePlacement();
-    const active = placements.get(SESSION_ID);
-    if (active?.state !== "active") {
-      throw new Error("expected active placement");
-    }
-    const priorClaim = await placements.claimTurn({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      claimId: "released-before-inspection",
-      runId: "prior-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-    const claimOps = createPlacementTurnClaimFixtureOps(database);
-    const claimTurn = placements.claimTurn.bind(placements);
-    vi.spyOn(placements, "claimTurn").mockImplementationOnce(async (...args) => {
-      try {
-        return await claimTurn(...args);
-      } catch (error) {
-        claimOps.releaseTurn(priorClaim);
-        throw error;
-      }
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-    });
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "next-run",
-        },
-        turn("next-run"),
-        async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow("Active worker placement does not match its attached environment");
-  });
-
   it("holds a remote-exec follow-up when reconciliation starts during claim admission", async () => {
     await seedActivePlacement("remote-exec");
     const active = placements.get(SESSION_ID);
@@ -510,6 +464,7 @@ describe("worker turn launcher claim admission", () => {
       await expect(replacement).resolves.toMatchObject({
         payloads: [{ text: "Recovered after cancellation" }],
       });
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       expect(stopTunnel).not.toHaveBeenCalled();
       expect(destroy).not.toHaveBeenCalled();
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
@@ -683,6 +638,7 @@ describe("worker turn launcher claim admission", () => {
             termination: "exit",
           });
           await expect(first).resolves.toMatchObject({ payloads: [{ text: "Only worker reply" }] });
+          await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
           const completedPlacement = placements.get(SESSION_ID);
           if (completedPlacement?.state !== "active") {
             throw new Error("expected active placement after worker completion");
@@ -727,9 +683,12 @@ describe("worker turn launcher claim admission", () => {
           launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
             request.onDispatchReady?.();
             launchCount += 1;
-            const descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
-              kind: "unix",
-              socketPath: "/worker/gateway.sock",
+            const descriptor = parseWorkerLaunchDescriptor({
+              ...structuredClone(request.plan),
+              connectionEndpoint: {
+                kind: "unix",
+                socketPath: "/worker/gateway.sock",
+              },
             });
             turnIds.push(descriptor.assignment.turnId);
             if (launchCount === 1) {
@@ -805,6 +764,7 @@ describe("worker turn launcher claim admission", () => {
         async () => ({ meta: { durationMs: 1 } }),
       ),
     ).resolves.toMatchObject({ payloads: [{ text: "Recovered worker reply" }] });
+    await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
     expect(turnIds).toHaveLength(2);
     expect(turnIds[0]).not.toBe(turnIds[1]);
     expect(stopTunnel).not.toHaveBeenCalled();

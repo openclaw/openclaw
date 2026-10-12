@@ -25,7 +25,6 @@ import {
   createUpdateStatusRefresher,
   projectUpdateSentinel,
   projectUpdateStatusResponse,
-  projectUpdateCheckoutResponse,
   projectUpdateRunFailure,
   resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
@@ -311,12 +310,9 @@ export function createApplicationUpdateOverlays(
     }
   };
 
-  const applyUpdateStatusResponse = (
-    response: UpdateRestartStatusResponse,
-    preserveInstall = false,
-  ) => {
+  const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
     const { failure, updateStatusBanner, recordedUpdateAttempt, ...status } =
-      projectUpdateStatusResponse(response, snapshot, preserveInstall);
+      projectUpdateStatusResponse(response, snapshot);
     const run = response.activeRun ?? response.lastRun;
     const history = updateAttempt?.history;
     // A failed history read is not an empty baseline. Until a current identity
@@ -354,7 +350,7 @@ export function createApplicationUpdateOverlays(
   const refreshUpdateStatus = createUpdateStatusRefresher({
     getClient: () => activeClient,
     getEpoch: () => connectedEpoch,
-    getRevision: () => updateStatusRevision,
+    getAuthorization: () => activeHello?.auth,
     canRefresh: () => !disposed && operatorAccess.canAdmin,
     isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
     onRefreshing: (updateStatusRefreshing) => {
@@ -362,18 +358,6 @@ export function createApplicationUpdateOverlays(
       publish();
     },
     onStatus: applyUpdateStatusResponse,
-    onCheckout: (response, preserveSchedule) => {
-      snapshot = {
-        ...snapshot,
-        ...projectUpdateCheckoutResponse(
-          response,
-          snapshot,
-          preserveSchedule ? "schedule" : undefined,
-        ),
-        updateStatusCheckBanner: null,
-      };
-      publish(true);
-    },
     onError: (error, mode) => {
       if (mode === "completion" && snapshot.updateStatusCheckBanner?.mode === "manual") {
         return;

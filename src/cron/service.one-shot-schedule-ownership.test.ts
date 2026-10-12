@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  clearCommandLane,
-  enqueueCommandInLane,
-  setCommandLaneConcurrency,
-} from "../process/command-queue.js";
-import { CommandLane } from "../process/lanes.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -41,6 +36,7 @@ type IsolatedOutcome =
 
 function createCron(params: {
   runIsolatedAgentJob: CronServiceDeps["runIsolatedAgentJob"];
+  runCommandJob?: CronServiceDeps["runCommandJob"];
   onEvent?: (event: CronEvent) => void;
 }) {
   return new CronService({
@@ -54,17 +50,52 @@ function createCron(params: {
   });
 }
 
-async function blockCronLane() {
+function createQueueBlocker() {
   const started = createDeferred();
   const release = createDeferred();
-  clearCommandLane(CommandLane.Cron);
-  setCommandLaneConcurrency(CommandLane.Cron, 1);
-  const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
-    started.resolve();
+  let active = 0;
+  const runCommandJob: NonNullable<CronServiceDeps["runCommandJob"]> = async () => {
+    if (++active === DEFAULT_CRON_MAX_CONCURRENT_RUNS) {
+      started.resolve();
+    }
     await release.promise;
-  });
-  await started.promise;
-  return { blocker, release };
+    return { status: "ok" };
+  };
+  return {
+    runCommandJob,
+    async occupy(cron: CronService, signal: AbortSignal) {
+      const jobs = await Promise.all(
+        Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
+          cron.add({
+            name: `capacity blocker ${index}`,
+            enabled: false,
+            schedule: { kind: "at", at: new Date(clock.clock.now() + 86_400_000).toISOString() },
+            sessionTarget: "isolated",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "command", argv: ["synthetic-capacity-blocker"] },
+            delivery: { mode: "none" },
+          }),
+        ),
+      );
+      const runs = jobs.map((job) => cron.run(job.id, "force"));
+      let released = false;
+      const finish = async () => {
+        release.resolve();
+        await Promise.all(runs);
+        if (!released) {
+          released = true;
+          await Promise.all(jobs.map((job) => cron.remove(job.id)));
+        }
+      };
+      try {
+        await withinTest(started.promise, signal);
+      } catch (error) {
+        await finish();
+        throw error;
+      }
+      return finish;
+    },
+  };
 }
 
 async function addOneShot(params: {
@@ -254,18 +285,24 @@ describe("cron one-shot schedule ownership", () => {
     },
   );
 
-  it.each([
+  it.for([
     { enabled: false, editSchedule: false },
     { enabled: false, editSchedule: true },
   ])(
     "preserves a queued pre-deadline occurrence unless its schedule changes (enabled=$enabled, editSchedule=$editSchedule)",
-    async ({ enabled, editSchedule }) => {
+    async ({ enabled, editSchedule }, { signal }) => {
       const finished = createDeferred();
       const removed = createDeferred();
+      const capacity = createQueueBlocker();
+      let targetId: string | undefined;
       const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
       const options = {
         runIsolatedAgentJob,
+        runCommandJob: capacity.runCommandJob,
         onEvent: (event: CronEvent) => {
+          if (event.jobId !== targetId) {
+            return;
+          }
           if (event.action === "finished") {
             finished.resolve();
           }
@@ -276,11 +313,12 @@ describe("cron one-shot schedule ownership", () => {
       };
       let cron = createCron(options);
 
-      const { blocker, release: releaseBlocker } = await blockCronLane();
+      let releaseBlockers: (() => Promise<void>) | undefined;
 
       try {
         await cron.start();
         cron.pauseScheduling();
+        releaseBlockers = await capacity.occupy(cron, signal);
         const atMs = clock.clock.now() + 1_000;
         const job = await addOneShot({
           cron,
@@ -288,15 +326,16 @@ describe("cron one-shot schedule ownership", () => {
           atMs,
           enabled,
         });
+        targetId = job.id;
 
         await expect(cron.enqueueRun(job.id, "force")).resolves.toMatchObject({
           ok: true,
           enqueued: true,
         });
+        expect((await cron.readJob(job.id))?.state.queuedAtMs).toEqual(expect.any(Number));
         clock.setTime(atMs + 1);
-        releaseBlocker.resolve();
-        await blocker;
-        await finished.promise;
+        await releaseBlockers();
+        await withinTest(finished.promise, signal);
         await cron.status();
 
         await expectFutureOneShot({
@@ -331,30 +370,31 @@ describe("cron one-shot schedule ownership", () => {
           cron.resumeScheduling();
           await clock.advanceBy(MIN_REFIRE_GAP_MS);
           if (!editSchedule) {
-            await removed.promise;
+            await withinTest(removed.promise, signal);
           }
           await cron.status();
           expect(runIsolatedAgentJob).toHaveBeenCalledTimes(editSchedule ? 1 : 2);
           expect((await loadCronStore(storePath)).jobs).toHaveLength(editSchedule ? 1 : 0);
         }
       } finally {
-        releaseBlocker.resolve();
-        await blocker;
+        await releaseBlockers?.();
         cron.stop();
-        clearCommandLane(CommandLane.Cron);
       }
     },
   );
 
-  it.each([
+  it.for([
     { startOffsetMs: 1, editSchedule: false },
     { startOffsetMs: 1, editSchedule: true },
   ])(
     "retains only an unchanged occurrence when enabled during a queued manual run (start offset=$startOffsetMs, editSchedule=$editSchedule)",
-    async ({ startOffsetMs, editSchedule }) => {
+    async ({ startOffsetMs, editSchedule }, { signal }) => {
       const payloadStarted = createDeferred();
       const releasePayload = createDeferred();
+      const finished = createDeferred();
       const scheduledOccurrenceConsumed = createDeferred();
+      const capacity = createQueueBlocker();
+      let targetId: string | undefined;
       const runIsolatedAgentJob = vi
         .fn(async () => ({ status: "ok" as const, summary: "scheduled" }))
         .mockImplementationOnce(async () => {
@@ -364,18 +404,26 @@ describe("cron one-shot schedule ownership", () => {
         });
       const options = {
         runIsolatedAgentJob,
+        runCommandJob: capacity.runCommandJob,
         onEvent: (event: CronEvent) => {
+          if (event.jobId !== targetId) {
+            return;
+          }
+          if (event.action === "finished") {
+            finished.resolve();
+          }
           if (event.action === "removed") {
             scheduledOccurrenceConsumed.resolve();
           }
         },
       };
       let cron = createCron(options);
-      const { blocker, release: releaseBlocker } = await blockCronLane();
+      let releaseBlockers: (() => Promise<void>) | undefined;
 
       try {
         await cron.start();
         cron.pauseScheduling();
+        releaseBlockers = await capacity.occupy(cron, signal);
         const atMs = clock.clock.now() + 1_000;
         const job = await addOneShot({
           cron,
@@ -383,14 +431,15 @@ describe("cron one-shot schedule ownership", () => {
           atMs,
           enabled: false,
         });
+        targetId = job.id;
         await expect(cron.enqueueRun(job.id, "force")).resolves.toMatchObject({
           ok: true,
           enqueued: true,
         });
+        expect((await cron.readJob(job.id))?.state.queuedAtMs).toEqual(expect.any(Number));
         clock.setTime(atMs + startOffsetMs);
-        releaseBlocker.resolve();
-        await blocker;
-        await payloadStarted.promise;
+        await releaseBlockers();
+        await withinTest(payloadStarted.promise, signal);
         clock.setTime(atMs + 10);
         if (editSchedule) {
           await cron.update(job.id, { schedule: { kind: "every", everyMs: 60_000 } });
@@ -400,8 +449,7 @@ describe("cron one-shot schedule ownership", () => {
         }
         await cron.update(job.id, { enabled: true });
         releasePayload.resolve();
-        // Joining the lane successor also joins the manual run's final ownership cleanup.
-        await enqueueCommandInLane(CommandLane.Cron, async () => {});
+        await withinTest(finished.promise, signal);
         expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
         await expectFutureOneShot({
           cron,
@@ -422,19 +470,15 @@ describe("cron one-shot schedule ownership", () => {
           DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS + MIN_REFIRE_GAP_MS,
         );
         if (!editSchedule) {
-          await scheduledOccurrenceConsumed.promise;
+          await withinTest(scheduledOccurrenceConsumed.promise, signal);
         }
-        await enqueueCommandInLane(CommandLane.Cron, async () => {});
         await cron.status();
         expect(runIsolatedAgentJob).toHaveBeenCalledTimes(editSchedule ? 1 : 2);
         expect((await loadCronStore(storePath)).jobs).toHaveLength(editSchedule ? 1 : 0);
       } finally {
-        releaseBlocker.resolve();
         releasePayload.resolve();
-        await blocker;
-        await enqueueCommandInLane(CommandLane.Cron, async () => {});
+        await releaseBlockers?.();
         cron.stop();
-        clearCommandLane(CommandLane.Cron);
       }
     },
   );

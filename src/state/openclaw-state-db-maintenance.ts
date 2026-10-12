@@ -89,7 +89,12 @@ export function prepareStateDatabaseSchemaRepair(
 ): () => string[] {
   const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
   const assertWriteAllowed = () =>
-    assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
+    assertOpenClawStateWriteAllowed({
+      database,
+      databasePath: pathname,
+      env,
+      inspectOwnership: true,
+    });
   const admit = () => {
     assertSupportedStateSchemaVersion(database, pathname);
     if (danglingWorkshopIndex) {

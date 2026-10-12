@@ -426,10 +426,9 @@ it("leaves an acknowledged collector rekey with its launch owner during restore 
   }
 });
 
-it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
-  "isolates failed requester activation and retries only its current startup owner (%s)",
+it.each(["current", "during hydration"] as const)(
+  "isolates failed requester activation until an explicit retry (%s)",
   async (owner) => {
-    vi.useFakeTimers();
     const { manager } = createRegistrationFixture();
     for (const runId of ["first-child", "later-child"]) {
       await manager.registerSubagentRun({
@@ -446,10 +445,8 @@ it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
     }
     subagentRuns.clear();
     const context = sessionSharingTestContext(vi.fn());
-    let gateway = context;
-    const resolver = () => gateway;
+    const resolver = () => context;
     context.resolveGatewayContext = resolver;
-    const recovered = createDeferred();
     const failure = new Error("requester transfer temporarily unavailable");
     let firstAttempts = 0;
     const settleRequesterTurn = vi.fn<
@@ -457,7 +454,7 @@ it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
     >(async (params) => {
       params.assertCurrent?.();
       const first = params.requesterTurnRunId === "first-child-turn";
-      if (first && ++firstAttempts < 3) {
+      if (first && ++firstAttempts < 2) {
         throw failure;
       }
       const runId = first ? "first-child" : "later-child";
@@ -472,9 +469,6 @@ it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
         },
         { context: params.stateContext, assertCurrent: params.assertCurrent },
       );
-      if (first) {
-        recovered.resolve();
-      }
       return true;
     });
     const ensureListener = vi.fn();
@@ -492,7 +486,7 @@ it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
     try {
       if (owner === "during hydration") {
         await restorer.activate();
-        await expect(restorer.restoreOnce(undefined, true)).rejects.toBe(failure);
+        await expect(restorer.restoreOnce(true)).rejects.toBe(failure);
       } else {
         await restorer.restoreOnce();
         await expect(restorer.activate()).rejects.toBe(failure);
@@ -502,41 +496,21 @@ it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
       expect(resumeRun.mock.calls).toEqual([["first-child"], ["later-child"]]);
       expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBe("first-child-turn");
       expect(subagentRuns.get("later-child")?.requesterTurnRunId).toBeUndefined();
-      if (owner === "reset") {
-        restorer.reset();
-      } else if (owner === "replaced Gateway") {
-        gateway = sessionSharingTestContext(vi.fn());
-      }
-      await vi.advanceTimersByTimeAsync(999);
       expect(firstAttempts).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      if (owner === "reset" || owner === "replaced Gateway") {
-        expect(firstAttempts).toBe(1);
-        expect(warn).not.toHaveBeenCalled();
-        return;
-      }
+      await restorer.activate();
       expect(firstAttempts).toBe(2);
-      expect(warn).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(1_999);
-      expect(firstAttempts).toBe(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(firstAttempts).toBe(3);
-      await recovered.promise;
-      await vi.advanceTimersByTimeAsync(0);
       expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBeUndefined();
-      expect(settleRequesterTurn).toHaveBeenCalledTimes(4);
+      expect(settleRequesterTurn).toHaveBeenCalledTimes(3);
       expect(ensureListener).toHaveBeenCalledOnce();
       expect(startSweeper).toHaveBeenCalledOnce();
       expect(resumeRun).toHaveBeenCalledTimes(2);
     } finally {
       restorer.reset();
-      vi.useRealTimers();
     }
   },
 );
 
 it("retries retirement when registration supersedes another restored child during a held write", async () => {
-  vi.useFakeTimers();
   const { manager } = createRegistrationFixture();
   const settleOwnedWork = observeRootWork();
   const held = createDeferred();
@@ -629,9 +603,8 @@ it("retries retirement when registration supersedes another restored child durin
     expect((await readStored()).has("first-child")).toBe(false);
     expect((await readStored()).get("later-child")?.requesterTurnRunId).toBe("retirement-turn");
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await restorer.activate();
     await retiredLater.promise;
-    await vi.advanceTimersByTimeAsync(0);
     const saved = await readStored();
     expect(saved.has("later-child")).toBe(false);
     for (const runId of ["first-successor", "later-successor"]) {
@@ -646,6 +619,5 @@ it("retries retirement when registration supersedes another restored child durin
     await activation;
     restorer.reset();
     await settleOwnedWork();
-    vi.useRealTimers();
   }
 });

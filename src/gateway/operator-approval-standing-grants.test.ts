@@ -5,18 +5,17 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import { withCronReceiptAuthorityMutation } from "../cron/store/receipt-authority-owner.js";
 import {
   deleteCronJobRowInDatabase,
   loadCronRows,
   loadedCronStoreFromRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
+import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
+} from "../cron/store/run-receipt-store.test-support.js";
 import type { CronRunReceiptHandle } from "../cron/store/run-receipt.types.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -290,12 +289,7 @@ function consumeInWorker(
   input: Parameters<typeof consumeCronStandingGrant>[1],
 ) {
   const context = captureOpenClawStateWorkerContext(databaseOptions);
-  return consumeCronStandingGrant(
-    context,
-    input,
-    () => {},
-    (run) => withCronReceiptAuthorityMutation(context, run),
-  );
+  return consumeCronStandingGrant(context, input, () => {});
 }
 
 function consume(params: Parameters<typeof grantInput>[0]) {

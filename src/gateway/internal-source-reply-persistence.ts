@@ -17,7 +17,6 @@ import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptWriterFence,
-  withSessionTranscriptWriteAssertion,
 } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
@@ -26,7 +25,6 @@ import {
   retainAssistantModelContent,
 } from "../shared/assistant-display-content.js";
 import { readClawHubRecommendations } from "../shared/clawhub-recommendations.js";
-import { prepareEffectAuthority } from "../shared/effect-authority.js";
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
 import {
   attachManagedOutgoingMediaToMessage,
@@ -38,20 +36,6 @@ import {
 const internalSourceReplyPersistenceLeases = createKeyedFifoLeaseRegistry(
   Symbol.for("openclaw.internalSourceReplyPersistenceLeases"),
 );
-
-async function withPreparedSourceReplyWrite<T>(
-  scope: Parameters<typeof withSessionTranscriptWriteAssertion>[0],
-  write: (assertCurrent: () => void) => Promise<T>,
-): Promise<T> {
-  // Preparation may fetch media through this same authority owner; hold only for persistence.
-  const use = await prepareEffectAuthority();
-  const persist = () => write(captureOwnedTranscriptWriteAssertion(scope));
-  return use
-    ? use.persist((assertCurrent) =>
-        withSessionTranscriptWriteAssertion(scope, assertCurrent, persist),
-      )
-    : persist();
-}
 
 async function completePersistedInternalSourceReply(params: {
   cfg: OpenClawConfig;
@@ -126,9 +110,7 @@ async function completePersistedInternalSourceReply(params: {
       attachSourceReplyMedia(result, acceptCompletion);
     },
   };
-  const replay = await withPreparedSourceReplyWrite(scope, (assertWriteCurrent) =>
-    persistSessionTranscriptTurn(scope, { ...options, assertCurrent: assertWriteCurrent }),
-  );
+  const replay = await persistSessionTranscriptTurn(scope, options);
   if (replay.rejectedReason || replay.messages.length === 0) {
     throw new Error("Internal source reply no longer owns the active transcript");
   }
@@ -232,17 +214,17 @@ export async function persistInternalSourceReply(params: {
           attachSourceReplyMedia(result, acceptCompletion);
         },
       };
-      const appended = await withPreparedSourceReplyWrite(
-        {
+      const appended = await appendAssistantMessageToSessionTranscript({
+        ...options,
+        assertCurrent: captureOwnedTranscriptWriteAssertion({
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           sessionId: params.expectedSessionId,
           storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
             agentId: params.agentId,
           }),
-        },
-        (assertCurrent) => appendAssistantMessageToSessionTranscript({ ...options, assertCurrent }),
-      );
+        }),
+      });
       if (!appended.ok) {
         throw new Error(`Internal source reply persistence failed: ${appended.reason}`);
       }

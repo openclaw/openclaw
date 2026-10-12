@@ -317,6 +317,20 @@ function distinctCandidates(
 describe("memory-core embedding batch recovery over real transport", () => {
   it.each([
     {
+      message: "input array max 10",
+      count: 33,
+      limit: 10,
+      maxInputsPerRequest: 10,
+      requests: [10, 10, 10, 3],
+    },
+    {
+      message: "input array max 10",
+      count: 33,
+      limit: 10,
+      maxInputsPerRequest: 20,
+      requests: [20, 10, 10, 13, 10, 3],
+    },
+    {
       message: "batch size is invalid, it should not be larger than 10",
       count: 33,
       limit: 10,
@@ -341,35 +355,39 @@ describe("memory-core embedding batch recovery over real transport", () => {
       limit: 50,
       requests: [100, 50, 50],
     },
-  ])("recovers in order from $message", async ({ message, count, limit, requests }) => {
-    const server = await startEmbeddingServer({
-      reject: (inputCount) =>
-        inputCount > limit
-          ? { status: 400, body: JSON.stringify({ error: { message } }) }
-          : undefined,
-    });
-    const database = new DatabaseSync(":memory:");
-    try {
-      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
-        server.baseUrl,
-        database,
-      );
-      const embeddings = await owner.embedChunksInBatches(
-        distinctCandidates(count),
-        generation,
-        8000,
-      );
+  ])(
+    "embeds in order for $message with declared cap $maxInputsPerRequest",
+    async ({ message, count, limit, requests, maxInputsPerRequest }) => {
+      const server = await startEmbeddingServer({
+        reject: (inputCount) =>
+          inputCount > limit
+            ? { status: 400, body: JSON.stringify({ error: { message } }) }
+            : undefined,
+      });
+      const database = new DatabaseSync(":memory:");
+      try {
+        const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+          server.baseUrl,
+          database,
+        );
+        generation.provider.maxInputsPerRequest = maxInputsPerRequest;
+        const embeddings = await owner.embedChunksInBatches(
+          distinctCandidates(count),
+          generation,
+          8000,
+        );
 
-      expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
-        requests,
-      );
-      expect(embeddings).toEqual(
-        Array.from({ length: count }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
-      );
-    } finally {
-      database.close();
-    }
-  });
+        expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
+          requests,
+        );
+        expect(embeddings).toEqual(
+          Array.from({ length: count }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
+        );
+      } finally {
+        database.close();
+      }
+    },
+  );
 
   it.each([
     "input array must contain strings",

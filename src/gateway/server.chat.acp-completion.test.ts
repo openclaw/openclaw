@@ -323,6 +323,7 @@ describe("Gateway ACP completion ownership", () => {
         errorKind?: string;
       };
     }> = [];
+    let lifecycleStarted = createDeferred();
     let lifecycleDelivered = createDeferred();
     const capture = (data: Buffer) => {
       const frame: (typeof frames)[number] = JSON.parse(data.toString());
@@ -330,10 +331,13 @@ describe("Gateway ACP completion ownership", () => {
       if (
         frame.event === "agent" &&
         frame.payload?.runId === activeRunId &&
-        frame.payload.stream === "lifecycle" &&
-        (frame.payload.data?.phase === "end" || frame.payload.data?.phase === "error")
+        frame.payload.stream === "lifecycle"
       ) {
-        lifecycleDelivered.resolve();
+        if (frame.payload.data?.phase === "start") {
+          lifecycleStarted.resolve();
+        } else if (frame.payload.data?.phase === "end" || frame.payload.data?.phase === "error") {
+          lifecycleDelivered.resolve();
+        }
       }
     };
     ws.on("message", capture);
@@ -347,6 +351,7 @@ describe("Gateway ACP completion ownership", () => {
         dispatchAdmissions.set(runId, admissionCapture);
         turnStarted = createDeferred();
         releaseTurn = createDeferred();
+        lifecycleStarted = createDeferred();
         lifecycleDelivered = createDeferred();
         const expectedState = scenario.rpcAbort
           ? "aborted"
@@ -371,6 +376,8 @@ describe("Gateway ACP completion ownership", () => {
         expect(accepted.ok).toBe(true);
         if (scenario.rpcAbort) {
           await turnStarted.promise;
+          // Stop suppresses a start still awaiting publication; this case aborts after start.
+          await withinTest(lifecycleStarted.promise, signal);
           const aborted = await rpcReq(ws, "chat.abort", { sessionKey, runId });
           expect(aborted.payload).toMatchObject({ aborted: true, runIds: [runId] });
           releaseTurn.resolve();

@@ -748,6 +748,8 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
                 configPath: params.snapshot.path,
                 snapshot: refreshedSnapshot,
                 sourceConfig: refreshedSnapshot.sourceConfig,
+                previousSourceConfig: params.snapshot.sourceConfig,
+                writtenSourceConfig: runtimeConfigToWrite,
                 runtimeConfig: refreshedSnapshot.runtimeConfig,
                 persistedHash,
                 deferRuntimeActivation,

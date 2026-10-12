@@ -178,6 +178,12 @@ describe("AgentSession model-visible tool-result redaction", () => {
     { kind: "opaque", ambientPolicy: "matching", callbackChange: "late" },
     { kind: "opaque", ambientPolicy: "matching", callbackChange: "pattern" },
     { kind: "app-password", ambientPolicy: "absent", callbackChange: "none" },
+    { kind: "oversized-opaque", ambientPolicy: "matching", callbackChange: "none" },
+    { kind: "oversized-opaque", ambientPolicy: "matching", callbackChange: "late" },
+    { kind: "oversized-opaque", ambientPolicy: "matching", callbackChange: "pattern" },
+    { kind: "oversized-opaque", ambientPolicy: "matching", callbackChange: "text" },
+    { kind: "truncated-opaque", ambientPolicy: "matching", callbackChange: "none" },
+    { kind: "delimited-opaque", ambientPolicy: "matching", callbackChange: "pattern" },
   ] as const)(
     "masks $kind in first and reopened payloads (ambient=$ambientPolicy, callback=$callbackChange)",
     async ({ kind, ambientPolicy, callbackChange }) => {
@@ -189,6 +195,12 @@ describe("AgentSession model-visible tool-result redaction", () => {
         storePath: path.join(cwd, "sessions.json"),
       };
       const isAppPassword = kind === "app-password";
+      const delimitedCapture = kind === "delimited-opaque";
+      const truncatedCapture = kind === "truncated-opaque" || delimitedCapture;
+      const padding =
+        kind === "oversized-opaque" || truncatedCapture
+          ? "synthetic padding ".repeat(delimitedCapture ? 1_500 : 20_000)
+          : "";
       const config = {
         logging: { redactPatterns: isAppPassword ? [] : [String.raw`/opaque\(([^)]+)\)/g`] },
       };
@@ -215,7 +227,10 @@ describe("AgentSession model-visible tool-result redaction", () => {
       const rawText = `${rawValue} ${benignText}`;
       const maskedText = `${maskedValue} ${benignText}`;
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = guardSessionManager(SessionManager.open(scope, cwd), { config });
+      const manager = guardSessionManager(SessionManager.open(scope, cwd), {
+        config,
+        contextWindowTokens: 32_768,
+      });
       const customTools = toToolDefinitions([
         {
           name: "lookup",
@@ -223,7 +238,16 @@ describe("AgentSession model-visible tool-result redaction", () => {
           description: "Return a synthetic lookup result.",
           parameters: Type.Object({}),
           execute: async () => ({
-            content: [{ type: "text", text: rawText, apiKey: "private" }],
+            content: [
+              {
+                type: "text",
+                text: truncatedCapture
+                  ? `${rawText}\n${padding}${delimitedCapture ? " END" : ""}`
+                  : rawText,
+                apiKey: "private",
+              },
+              ...(padding && !truncatedCapture ? [{ type: "text" as const, text: padding }] : []),
+            ],
             details: {},
           }),
         },
@@ -245,6 +269,13 @@ describe("AgentSession model-visible tool-result redaction", () => {
           const result = context.messages.findLast((message) => message.role === "toolResult");
           expect(result?.isError).toBe(false);
           currentToolText = result?.content.find((block) => block.type === "text")?.text;
+          if (padding) {
+            const lastBlock = result?.content.at(-1);
+            expect(lastBlock?.type).toBe("text");
+            expect(lastBlock?.type === "text" && lastBlock.text.length).toBeLessThan(
+              padding.length,
+            );
+          }
           return streamOpenAIResponses(model as Model<"openai-responses">, context, {
             ...options,
             apiKey: "synthetic-probe-auth",
@@ -264,17 +295,40 @@ describe("AgentSession model-visible tool-result redaction", () => {
           } else if (callbackChange === "duplicate") {
             registerSecretValueForRedaction(unchangedSecret);
           } else if (callbackChange === "pattern") {
-            config.logging.redactPatterns.push(String.raw`/unclassified\(([^)]+)\)/g`);
+            config.logging.redactPatterns.push(
+              delimitedCapture
+                ? String.raw`/unclassified\(([^)]+)\)[\s\S]* END/g`
+                : String.raw`/unclassified\(([^)]+)\)/g`,
+            );
+          } else if (callbackChange === "text") {
+            event.message.content = [{ type: "text", text: `${rawText} replacement` }];
           }
         }
       });
       try {
         await session.prompt("Run lookup.");
         const admittedText = currentToolText;
-        expect.soft(listenerToolText === (classifiedByCallback ? rawText : maskedText)).toBe(true);
-        expect.soft(admittedText === maskedText).toBe(true);
+        const expectedText = truncatedCapture
+          ? classifiedByCallback
+            ? admittedText!
+            : listenerToolText!
+          : callbackChange === "text"
+            ? `${maskedText} replacement`
+            : maskedText;
+        if (truncatedCapture) {
+          expect(listenerToolText).toContain(benignText);
+          expect(listenerToolText?.includes(secret)).toBe(classifiedByCallback);
+          expect(admittedText).toContain(benignText);
+          expect(admittedText).not.toContain(secret);
+        } else {
+          expect
+            .soft(listenerToolText === (classifiedByCallback ? rawText : maskedText))
+            .toBe(true);
+        }
+        expect.soft(admittedText).toBe(expectedText);
+        const serializedText = JSON.stringify(expectedText).slice(1, -1);
         expect(providerPayload).toBeDefined();
-        expect.soft(JSON.stringify(providerPayload).includes(maskedText)).toBe(true);
+        expect.soft(JSON.stringify(providerPayload).includes(serializedText)).toBe(true);
         expect.soft(JSON.stringify(providerPayload).includes(secret)).toBe(false);
         session.dispose();
         const databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path;
@@ -286,9 +340,9 @@ describe("AgentSession model-visible tool-result redaction", () => {
         });
         providerPayload = undefined;
         await restored.prompt("Use the earlier lookup result.");
-        expect(currentToolText === maskedText).toBe(true);
+        expect(currentToolText === expectedText).toBe(true);
         expect(providerPayload).toBeDefined();
-        expect(JSON.stringify(providerPayload).includes(maskedText)).toBe(true);
+        expect(JSON.stringify(providerPayload).includes(serializedText)).toBe(true);
         expect(JSON.stringify(providerPayload).includes(secret)).toBe(false);
         expect(currentToolText === admittedText).toBe(true);
       } finally {

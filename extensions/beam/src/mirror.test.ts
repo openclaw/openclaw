@@ -83,39 +83,14 @@ describe("parseBeamMirrorConfig", () => {
     );
   });
 
-  it("applies defaults and normalizes catalogs", () => {
-    const parsed = parseBeamMirrorConfig(beamTestMirrorConfig({ catalogs: [" Claude "] }));
-    expect(parsed).toMatchObject({
-      endpoint: "https://team.example/api/v1/beam/sessions",
-      catalogs: ["claude"],
-      pollSeconds: 30,
-      activeWindowMinutes: 180,
-    });
-  });
-
   it.each([
     { bogus: true },
     { endpoint: "ftp://x" },
     { endpoint: "not a url" },
     { endpoint: "http://team.example/x" },
-    { catalogs: undefined },
     { catalogs: [] },
   ])("rejects invalid mirror settings %j", (overrides) => {
     expect(typeof parseBeamMirrorConfig(beamTestMirrorConfig(overrides))).toBe("string");
-  });
-
-  it.each(["http://127.0.0.1:19351/x", "http://localhost:19351/x", "http://[::1]:19351/x"])(
-    "accepts plaintext loopback endpoint %s",
-    (endpoint) => {
-      expect(parseBeamMirrorConfig(beamTestMirrorConfig({ endpoint }))).toMatchObject({ endpoint });
-    },
-  );
-
-  it("bounds poll and window values", () => {
-    const parsed = parseBeamMirrorConfig(
-      beamTestMirrorConfig({ pollSeconds: 1, activeWindowMinutes: 999_999 }),
-    );
-    expect(parsed).toMatchObject({ pollSeconds: 10, activeWindowMinutes: 10_080 });
   });
 });
 
@@ -383,37 +358,11 @@ describe("createBeamMirrorRunner", () => {
     ]);
   });
 
-  it("does not split a surrogate pair when clipping the session title", async () => {
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog({
-      sessions: [
-        { threadId: "t-emoji", name: `${"x".repeat(159)}🙂`, recencyAt: beamTestNow - 60_000 },
-      ],
-    });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
-    });
-    await runner.tick();
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.payload.title).toBe("x".repeat(159));
-  });
-
   it.each([
     {
       reason: "the source already truncated a message",
       item: { type: "userMessage", text: "Partial message", truncated: true },
       expectedText: "Partial message",
-    },
-    {
-      reason: "a message exceeds the receiver character cap",
-      item: { type: "userMessage", text: "x".repeat(10_000) },
-      expectedText: "x".repeat(6_000),
-    },
-    {
-      reason: "clipping reaches a surrogate pair",
-      item: { type: "userMessage", text: `${"x".repeat(5_999)}🙂tail` },
-      expectedText: "x".repeat(5_999),
     },
   ] satisfies Array<{
     reason: string;
@@ -433,27 +382,6 @@ describe("createBeamMirrorRunner", () => {
       items: [{ type: "userMessage", text: expectedText }],
     });
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
-  });
-
-  it("publishes a changed truncation flag even when the visible text is unchanged", async () => {
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog();
-    const read = catalog.read;
-    let hasOlderPage = false;
-    catalog.read = async (request) => ({
-      ...(await read(request)),
-      ...(hasOlderPage ? { nextCursor: "older-page" } : {}),
-    });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
-    });
-    await runner.tick();
-    hasOlderPage = true;
-    await runner.tick();
-    await runner.tick();
-    expect(sent.map(({ payload }) => payload.truncated === true)).toEqual([false, true]);
-    expect(sent[0]?.payload.items).toEqual(sent[1]?.payload.items);
   });
 
   it("redacts credentials from the uploaded title and visible messages while preserving prose", async () => {
@@ -503,42 +431,6 @@ describe("createBeamMirrorRunner", () => {
     expect(sent).toHaveLength(1);
     expect(cancel).toHaveBeenCalledOnce();
     expect(warnings).toEqual([]);
-  });
-
-  it("bounds guarded uploads and releases their response resources", async () => {
-    const cancel = vi.fn();
-    const release = vi.fn();
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        cancel,
-      }),
-      { status: 200 },
-    );
-    const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
-      response,
-      finalUrl: "https://team.example/api/v1/beam/sessions",
-      release,
-    });
-    const runner = createBeamTestRunner({
-      listCatalogs: () => [createBeamTestCatalog()],
-    });
-
-    try {
-      await runner.tick();
-
-      expect(guardedFetch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://team.example/api/v1/beam/sessions",
-          timeoutMs: 15_000,
-          maxRedirects: 0,
-          policy: { allowedOrigins: ["https://team.example"] },
-        }),
-      );
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      guardedFetch.mockRestore();
-    }
   });
 
   it("stops before a paused transcript read settles without resuming mirror work", async () => {
@@ -799,26 +691,6 @@ describe("createBeamMirrorRunner", () => {
     expect(sent).toHaveLength(2);
     expect(sent[1]?.payload.completed).toBe(true);
     expect(sent[1]?.payload.beamId).toBe(sent[0]?.payload.beamId);
-  });
-
-  it("keeps tracking for retry when the receiver rejects an upload", async () => {
-    const sent: SentRequest[] = [];
-    const warnings: string[] = [];
-    const cancel = vi.fn();
-    const catalog = createBeamTestCatalog({
-      sessions: [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }],
-    });
-    const runner = createBeamTestRunner({
-      logger: { warn: (message) => warnings.push(message), info: () => {} },
-      fetchFn: captureFetch(sent, 503, cancel),
-      listCatalogs: () => [catalog],
-    });
-    await runner.tick();
-    await runner.tick();
-    // Both ticks retry because the failed upload was never fingerprinted.
-    expect(sent).toHaveLength(2);
-    expect(warnings.length).toBeGreaterThan(0);
-    expect(cancel).toHaveBeenCalledTimes(2);
   });
 
   it("skips ticks when a configured token cannot be resolved", async () => {

@@ -176,14 +176,11 @@ async function prepareSpawnParentWorktreeSource(
       `Spawn parent ${sourceKind} changed; retry from its current session`,
     );
   };
-  const assertRouting = captureSessionMutationRouting(parent.cfg, refuse);
-  const metadata = captureSessionEntryMetadataRead({
-    agentId,
-    sessionKey: parent.canonicalKey,
-    storePath: parent.storePath,
-  });
+  const scope = { agentId, sessionKey: parent.canonicalKey, storePath: parent.storePath };
+  const assertRouting = captureSessionMutationRouting(parent.cfg, refuse, [scope]);
+  const metadata = captureSessionEntryMetadataRead(scope);
   const parentSource = captureSessionEntrySourceAssertion({
-    scope: { agentId, sessionKey: parent.canonicalKey, storePath: parent.storePath },
+    scope,
     readSource: parent.capturedReadSource,
     expected: parent.entry,
     fields,

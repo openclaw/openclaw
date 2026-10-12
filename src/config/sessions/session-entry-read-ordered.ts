@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -14,6 +15,10 @@ import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
+import {
+  readRetainedSessionEntryFacts,
+  retainSessionEntryReadFacts,
+} from "./session-entry-read-facts.js";
 import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
 import type {
   PreparedSessionEntryWorkerRead,
@@ -122,8 +127,14 @@ export function createAdmittedSessionEntryCohortReader(params: {
       const result = await params.execution.runExisting(
         source,
         async (worker) => {
-          const read = await worker.execute({ type: "session.entry.read", input: captured });
+          const before = readSqliteDatabaseWriteTokenForPath(database.path);
+          const cached = readRetainedSessionEntryFacts(database, captured, params.generation);
+          const read =
+            cached ?? (await worker.execute({ type: "session.entry.read", input: captured }));
           assertCurrent();
+          if (!cached) {
+            retainSessionEntryReadFacts(database, captured, read, before);
+          }
           const value = consume(read, assertCurrent);
           if (isPromiseLike(value)) {
             void Promise.resolve(value).catch(() => {});
@@ -274,12 +285,20 @@ export async function withOrderedSessionEntriesInWorker<T>(
           const reads: PreparedSessionEntryWorkerRead[] = [];
           for (const { input: selectedInput, owner, database, continuation } of selected) {
             assertCurrent();
-            const result = await owner.readExactEntries({
-              ...captureSessionEntryWorkerRequest(selectedInput),
-              env: database.env,
-              continuation,
-            });
+            const request = captureSessionEntryWorkerRequest(selectedInput);
+            const before = readSqliteDatabaseWriteTokenForPath(database.path);
+            const cached = readRetainedSessionEntryFacts(database, request);
+            const result =
+              cached ??
+              (await owner.readExactEntries({
+                ...request,
+                env: database.env,
+                continuation,
+              }));
             assertCurrent();
+            if (!cached) {
+              retainSessionEntryReadFacts(database, request, result, before);
+            }
             reads.push({ result, database, assertCurrent });
           }
           const result = consume(reads);

@@ -281,8 +281,16 @@ function shouldExposeVideoReferenceAudioParams(params: {
   return false;
 }
 
-export function createVideoGenerateTool(options?: MediaGenerateToolOptions): AnyAgentTool | null {
-  const context = resolveMediaGenerateToolContext("videoGenerationProviders", options, log);
+export function createVideoGenerateTool(
+  options?: MediaGenerateToolOptions,
+  preparedAvailability?: boolean,
+): AnyAgentTool | null {
+  const context = resolveMediaGenerateToolContext(
+    "videoGenerationProviders",
+    options,
+    log,
+    preparedAvailability,
+  );
   if (!context) {
     return null;
   }

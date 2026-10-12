@@ -116,7 +116,16 @@ export function createOpenClawDatabaseMaintenanceScope(
         if (access === "read") {
           return;
         }
-        throw new Error("Database maintenance authority check cannot admit a nested effect");
+        // Function names identify the admission without exposing stack paths or arguments.
+        const callers = new Error().stack
+          ?.split("\n")
+          .slice(2, 6)
+          .flatMap((line) => line.match(/^\s+at (?:async )?([\w$.]+) \(/u)?.[1] ?? [])
+          .join(" <- ")
+          .slice(0, 160);
+        throw new Error(
+          `Database maintenance authority check cannot admit a nested effect (access=effect; caller=${callers || "unknown"})`,
+        );
       }
       checkingOwner = true;
       try {

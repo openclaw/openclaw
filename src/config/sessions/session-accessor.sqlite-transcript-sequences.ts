@@ -16,6 +16,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import type { TranscriptAppendPostimage } from "./session-transcript-append-postimage.js";
 
@@ -56,6 +57,20 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
     committedTranscriptMessageSequences.delete(message);
   }
   if (appendedMessages.length === 0) {
+    return;
+  }
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    if (actor.transcript.projection?.needsRebuild !== false) {
+      return;
+    }
+    for (const message of appendedMessages) {
+      const identity = actor.transcript.identities.get(message.messageId);
+      const position = identity && actor.transcript.active.get(identity.seq)?.message_position;
+      if (position !== null && position !== undefined) {
+        committedTranscriptMessageSequences.set(message, position + 1);
+      }
+    }
     return;
   }
   const only = appendedMessages.length === 1 ? appendedMessages[0] : undefined;

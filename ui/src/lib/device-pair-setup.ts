@@ -15,6 +15,8 @@ export type DevicePairSetup = DevicePairSetupCodeResult & {
   setupId: string;
   expiresAtMs: number;
 };
+export type DevicePairJoinSetup = DevicePairSetup &
+  Required<Pick<DevicePairSetupCodeResult, "command" | "serviceCommand" | "installedCommand">>;
 export type DevicePairSetupAccess = "full" | "limited" | "node";
 // Only the fields the modal actually shows. The event also carries deviceId and
 // ts; validating what is never rendered would just be shipped dead weight.
@@ -35,14 +37,17 @@ export type DevicePairSetupLifecycle = { access: DevicePairSetupAccess } & (
   | { phase: "expired" }
 );
 
-function requestDevicePairSetup(client: GatewayRequestClient, params: DevicePairSetupCodeParams) {
-  return client.request<DevicePairSetup>("device.pair.setupCode", params, {
+function requestDevicePairSetup<Result extends DevicePairSetup = DevicePairSetup>(
+  client: GatewayRequestClient,
+  params: DevicePairSetupCodeParams,
+) {
+  return client.request<Result>("device.pair.setupCode", params, {
     timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   });
 }
 
 export function requestDevicePairJoinSetup(client: GatewayRequestClient) {
-  return requestDevicePairSetup(client, { includeQr: false, joinUrl: true });
+  return requestDevicePairSetup<DevicePairJoinSetup>(client, { includeQr: false, joinUrl: true });
 }
 
 type DevicePairSetupState = {

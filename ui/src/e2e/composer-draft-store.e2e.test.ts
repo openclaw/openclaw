@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   installMockGateway,
   startControlUiE2eServer,
@@ -97,7 +98,7 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         const cells = page.locator(".chat-split-view__cell");
         const left = cells.nth(0).getByRole("textbox", { name: "Chat composer" });
         const right = cells.nth(1).getByRole("textbox", { name: "Chat composer" });

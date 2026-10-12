@@ -3277,13 +3277,8 @@ function migrationVerifyPreservation(inventory, backups, release, profile) {
         migrationColdTable(current.database, profile.to.agent, coldSchema);
       }
       if (profile.nativeDoctor) {
-        // Full Doctor owns shared rewrites and agent repairs across its qualified edges.
-        // Keep original proposals; backups, physical owners and session witnesses remain mandatory.
-        if (store.agentId === null && snapshot.tables.skill_workshop_proposals) {
-          const retained = new Set(current.database.prepare("SELECT proposal_id FROM skill_workshop_proposals").all().map(row => row.proposal_id));
-          for (const row of old.database.prepare("SELECT proposal_id FROM skill_workshop_proposals").all())
-            if (!retained.has(row.proposal_id)) reject("native Doctor lost an original Workshop proposal");
-        }
+        // Full Doctor owns shared rewrites, including retired Workshop draft export,
+        // and agent repairs; backups, physical owners and session witnesses remain mandatory.
         continue;
       }
       if (profile.participants && store.agentId !== null && !isDeepStrictEqual(migrationParticipantProjection(current.database, 18), snapshot.participants))

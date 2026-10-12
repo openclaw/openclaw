@@ -79,7 +79,7 @@ type TelegramMessageContextSessionRuntime =
 
 const sessionRuntimeMethods = [
   "buildChannelInboundEventContext",
-  "readAmbientTranscriptWatermark",
+  "readAmbientTranscriptWatermarkAsync",
   "readSessionUpdatedAtAsync",
   "recordInboundSession",
   "resolveAmbientTranscriptWatermarkKey",
@@ -470,7 +470,7 @@ export async function buildTelegramInboundContextPayload(params: {
         })
       : undefined;
   const ambientTranscriptWatermark = ambientTranscriptWatermarkKey
-    ? sessionRuntime.readAmbientTranscriptWatermark({
+    ? await sessionRuntime.readAmbientTranscriptWatermarkAsync({
         storePath,
         sessionKey: route.sessionKey,
         key: ambientTranscriptWatermarkKey,

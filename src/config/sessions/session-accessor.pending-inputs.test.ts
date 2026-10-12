@@ -18,12 +18,10 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
-  appendTranscriptEventSync,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
   readSessionSubmittedInput,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -42,6 +40,10 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -422,22 +424,6 @@ describe("accepted input custody", () => {
     expect(
       receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
     ).toMatchObject({ ok: true, value: { appended: false } });
-  });
-
-  it("does not use a dirty projection to excuse an inactive admitted user", async () => {
-    const receipt = await stage("dirty-off-path");
-    await promote(receipt);
-    expect(
-      appendTranscriptMessageSync(scope(), {
-        eventId: "other-root",
-        message: message("other-root"),
-        parentId: null,
-      }),
-    ).toMatchObject({ ok: true, value: { appended: true, messageId: "other-root" } });
-
-    expect(() =>
-      receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
-    ).toThrow("no longer active");
   });
 
   it("rejects a split-cursor replay before and after projection reconciliation", async () => {

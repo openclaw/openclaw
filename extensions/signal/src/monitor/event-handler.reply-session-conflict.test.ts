@@ -1,4 +1,4 @@
-// Signal tests cover retry behavior for reply session initialization conflicts.
+// Signal tests cover durable redelivery after dispatch failures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +7,6 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,29 +31,6 @@ const {
   removeReactionSignalMock: vi.fn(async () => ({ ok: true })),
   dispatchInboundMessageMock: vi.fn(),
   recordInboundSessionMock: vi.fn(),
-}));
-
-vi.mock("node:timers/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:timers/promises")>()),
-  setTimeout: <T>(delayMs: number, value?: T, options?: { signal?: AbortSignal }) =>
-    new Promise<T | undefined>((resolve, reject) => {
-      const signal = options?.signal;
-      if (signal?.aborted) {
-        reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
-        return;
-      }
-      const onAbort = () => {
-        globalThis.clearTimeout(timer);
-        cleanup();
-        reject(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
-      };
-      const cleanup = () => signal?.removeEventListener("abort", onAbort);
-      const timer = globalThis.setTimeout(() => {
-        cleanup();
-        resolve(value);
-      }, delayMs);
-      signal?.addEventListener("abort", onAbort, { once: true });
-    }),
 }));
 
 vi.mock("../send.js", () => ({
@@ -129,7 +105,7 @@ function createTrackedTaskHarness() {
   };
 }
 
-describe("signal reply session init conflict retry", () => {
+describe("signal durable dispatch failure recovery", () => {
   beforeEach(() => {
     vi.useRealTimers();
     sendTypingMock.mockReset().mockResolvedValue(true);
@@ -138,90 +114,6 @@ describe("signal reply session init conflict retry", () => {
     removeReactionSignalMock.mockReset().mockResolvedValue({ ok: true });
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockReset();
-  });
-
-  it("cancels a pending retry when the Signal monitor aborts", async () => {
-    dispatchInboundMessageMock.mockRejectedValueOnce(CONFLICT_ERROR);
-    const abort = new AbortController();
-    const tracked = createTrackedTaskHarness();
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 10 } } },
-        abortSignal: abort.signal,
-        runTrackedTask: tracked.runTrackedTask,
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const handled = handler(
-        createSignalReceiveEvent({
-          dataMessage: { message: "do not dispatch after shutdown", attachments: [] },
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      await handled;
-
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(tracked.tasks).toHaveLength(1);
-
-      abort.abort(new Error("monitor stopped"));
-      await Promise.all(tracked.tasks);
-      await vi.advanceTimersByTimeAsync(10_000);
-
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(tracked.tasks).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps a retry that crossed the timer boundary in the monitor task runner", async () => {
-    let resolveRetry: (() => void) | undefined;
-    const retryDispatch = new Promise<{ queuedFinal: boolean; counts: Record<string, number> }>(
-      (resolve) => {
-        resolveRetry = () =>
-          resolve({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
-      },
-    );
-    dispatchInboundMessageMock
-      .mockRejectedValueOnce(CONFLICT_ERROR)
-      .mockReturnValueOnce(retryDispatch);
-    const tracked = createTrackedTaskHarness();
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 10 } } },
-        runTrackedTask: tracked.runTrackedTask,
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const handled = handler(
-        createSignalReceiveEvent({
-          dataMessage: { message: "wait for this retry", attachments: [] },
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      await handled;
-      expect(tracked.tasks).toHaveLength(1);
-
-      let trackedTaskSettled = false;
-      void tracked.tasks[0]?.then(() => {
-        trackedTaskSettled = true;
-      });
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-      expect(tracked.tasks).toHaveLength(1);
-      expect(trackedTaskSettled).toBe(false);
-
-      resolveRetry?.();
-      await tracked.tasks[0];
-      expect(trackedTaskSettled).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("preserves durable abandon accounting through backoff, threshold, and restart", async () => {
@@ -274,7 +166,6 @@ describe("signal reply session init conflict retry", () => {
       await dispatched.promise;
       await vi.advanceTimersByTimeAsync(10);
       expect(tracked.tasks).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(7_000);
       await Promise.all(tracked.tasks);
     };
     const pendingAttempt = async (attempts: number) => {
@@ -284,7 +175,7 @@ describe("signal reply session init conflict retry", () => {
           id: eventId,
           attempts,
           lastAttemptAt: expect.any(Number),
-          lastError: "turn-abandoned",
+          lastError: CONFLICT_ERROR.message,
         }),
       ]);
       const record = pending[0];
@@ -300,14 +191,14 @@ describe("signal reply session init conflict retry", () => {
       await first.monitor.receive(event);
       await finishOuterAttempt(first);
       const firstAttempt = await pendingAttempt(1);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       await first.monitor.stop();
 
       vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
       const blocked = await createIntegratedMonitor();
       await blocked.monitor.waitForIdle();
       await vi.advanceTimersByTimeAsync(10);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(blocked.tracked.tasks).toHaveLength(0);
       await blocked.monitor.stop();
 
@@ -315,7 +206,7 @@ describe("signal reply session init conflict retry", () => {
       const second = await createIntegratedMonitor();
       await finishOuterAttempt(second);
       const secondAttempt = await pendingAttempt(2);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(8);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       await second.monitor.stop();
 
       for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
@@ -324,7 +215,7 @@ describe("signal reply session init conflict retry", () => {
           throw new Error(`Expected Signal seed claim ${attempt}`);
         }
         await queue.release(claim, {
-          lastError: "turn-abandoned",
+          lastError: CONFLICT_ERROR.message,
           releasedAt: secondAttempt.lastAttemptAt,
         });
       }
@@ -333,21 +224,21 @@ describe("signal reply session init conflict retry", () => {
       const threshold = await createIntegratedMonitor();
       await finishOuterAttempt(threshold);
       const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(12);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
       await threshold.monitor.stop();
 
       vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
       const beyond = await createIntegratedMonitor();
       await finishOuterAttempt(beyond);
       const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(16);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
       await beyond.monitor.stop();
 
       vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
       const blockedRestart = await createIntegratedMonitor();
       await blockedRestart.monitor.waitForIdle();
       await vi.advanceTimersByTimeAsync(10);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(16);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
       expect(blockedRestart.tracked.tasks).toHaveLength(0);
       await blockedRestart.monitor.stop();
     } finally {
@@ -378,100 +269,6 @@ describe("signal reply session init conflict retry", () => {
 
       await vi.advanceTimersByTimeAsync(10_000);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("retries a failed batch as one ordered dispatch", async () => {
-    dispatchInboundMessageMock
-      .mockRejectedValueOnce(
-        new Error("dispatch wrapper failed", { cause: { error: CONFLICT_ERROR } }),
-      )
-      .mockResolvedValueOnce({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
-
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 10 } },
-        } as OpenClawConfig,
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const first = handler(
-        createSignalReceiveEvent({
-          timestamp: 1700000000001,
-          dataMessage: { message: "first", attachments: [] },
-        }),
-      );
-      const second = handler(
-        createSignalReceiveEvent({
-          timestamp: 1700000000002,
-          dataMessage: { message: "second", attachments: [] },
-        }),
-      );
-
-      await vi.advanceTimersByTimeAsync(10);
-      await Promise.all([first, second]);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-      const retryCall = dispatchInboundMessageMock.mock.calls[1]?.[0] as
-        | { ctx?: { Body?: string } }
-        | undefined;
-      const body = retryCall?.ctx?.Body ?? "";
-      expect(body).toContain("first");
-      expect(body).toContain("second");
-      expect(body.indexOf("first")).toBeLessThan(body.indexOf("second"));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps newer buffered messages behind the failed batch during backoff", async () => {
-    dispatchInboundMessageMock
-      .mockRejectedValueOnce(CONFLICT_ERROR)
-      .mockResolvedValue({ queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } });
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 10 } } },
-      }),
-    );
-
-    vi.useFakeTimers();
-    try {
-      const older = handler(
-        createSignalReceiveEvent({
-          timestamp: 1700000000001,
-          dataMessage: { message: "older failed message", attachments: [] },
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      await older;
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      const newer = handler(
-        createSignalReceiveEvent({
-          timestamp: 1700000000002,
-          dataMessage: { message: "newer buffered message", attachments: [] },
-        }),
-      );
-      await newer;
-      await vi.advanceTimersByTimeAsync(10);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(990);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
-      const dispatchedBodies = dispatchInboundMessageMock.mock.calls.map((call) => {
-        const payload = call[0] as { ctx?: { Body?: string } };
-        return payload.ctx?.Body ?? "";
-      });
-      expect(dispatchedBodies[1]).toContain("older failed message");
-      expect(dispatchedBodies[1]).not.toContain("newer buffered message");
-      expect(dispatchedBodies[2]).toContain("newer buffered message");
     } finally {
       vi.useRealTimers();
     }

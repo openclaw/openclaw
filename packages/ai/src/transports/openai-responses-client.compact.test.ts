@@ -68,15 +68,10 @@ describe("responses compact endpoint", () => {
     sdkState.post.mockReset();
   });
 
-  it("accepts retained-message prefixes from the official OpenAI endpoint", async () => {
+  it("sends the system prompt as instructions and accepts retained users from official OpenAI", async () => {
     mockCompactResponse({
       object: "response.compaction",
       output: [
-        {
-          type: "message",
-          role: "developer",
-          content: [{ type: "input_text", text: "Retain the conversation." }],
-        },
         {
           type: "message",
           role: "user",
@@ -98,21 +93,19 @@ describe("responses compact endpoint", () => {
       apiKey: "test-key",
       baseURL: "https://api.openai.com/v1",
     });
+    // The prompt stays out of input, so the endpoint cannot retain it in the window.
     expect(sdkState.post).toHaveBeenCalledWith(
       "/responses/compact",
       expect.objectContaining({
         body: {
           model: "gpt-5.6-luna",
-          input: [
-            expect.objectContaining({ role: "developer", type: "message" }),
-            expect.objectContaining({ role: "user", type: "message" }),
-          ],
+          instructions: "Retain the conversation.",
+          input: [expect.objectContaining({ role: "user", type: "message" })],
         },
       }),
     );
     expect(result).toMatchObject({
       output: [
-        expect.objectContaining({ role: "developer" }),
         expect.objectContaining({ role: "user" }),
         { type: "compaction", id: "cmp_1", encrypted_content: "opaque" },
       ],
@@ -143,6 +136,19 @@ describe("responses compact endpoint", () => {
     });
 
     await expect(compact()).rejects.toThrow("one trailing compaction item");
+    // xAI has no instructions field on /responses/compact and disables the developer role.
+    expect(sdkState.post).toHaveBeenCalledWith(
+      "/responses/compact",
+      expect.objectContaining({
+        body: {
+          model: "grok-4.5",
+          input: [
+            expect.objectContaining({ role: "system", type: "message" }),
+            expect.objectContaining({ role: "user", type: "message" }),
+          ],
+        },
+      }),
+    );
   });
 
   it.each([
@@ -194,6 +200,8 @@ describe("responses compact endpoint", () => {
 
   it.each([
     ["native xAI alias default", { ...model, provider: "x-ai" }, undefined, true],
+    ["public OpenAI default", officialOpenAIModel, undefined, true],
+    ["public OpenAI opt-out", officialOpenAIModel, { responsesCompactEndpoint: false }, false],
     [
       "custom Responses opt-in",
       { ...model, provider: "custom", baseUrl: "https://responses.example/v1" },
@@ -205,7 +213,6 @@ describe("responses compact endpoint", () => {
       { ...officialOpenAIModel, baseUrl: undefined },
       undefined,
       false,
-      "budget",
     ],
     [
       "ChatGPT default",
@@ -216,7 +223,6 @@ describe("responses compact endpoint", () => {
       },
       undefined,
       false,
-      "budget",
     ],
     [
       "Azure default",
@@ -227,14 +233,8 @@ describe("responses compact endpoint", () => {
       },
       undefined,
       false,
-      "budget",
     ],
-  ] as const)(
-    "resolves the %s gate",
-    (_name, route, extraParams, enabled, purpose: "manual" | "budget" = "manual") => {
-      expect(resolveOpenAIResponsesCompactEndpointPlan(route, extraParams, purpose).enabled).toBe(
-        enabled,
-      );
-    },
-  );
+  ] as const)("resolves the %s gate", (_name, route, extraParams, enabled) => {
+    expect(resolveOpenAIResponsesCompactEndpointPlan(route, extraParams).enabled).toBe(enabled);
+  });
 });

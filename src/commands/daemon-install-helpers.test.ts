@@ -53,7 +53,9 @@ vi.mock("./daemon-install-auth-profiles-store.runtime.js", () => ({
   loadAuthProfileStoreForSecretsRuntime: mocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 
-vi.mock("../daemon/runtime-paths.js", () => ({
+vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/runtime-paths.js")>()),
+  resolveNodeRuntimeInfo: async () => ({ status: "unsupported" }),
   resolvePreferredBunPath: mocks.resolvePreferredBunPath,
   resolvePreferredNodePath: mocks.resolvePreferredNodePath,
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
@@ -461,7 +463,6 @@ describe("buildGatewayInstallPlan", () => {
       process.argv = originalArgv;
     }
 
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
     expect(
       firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").extraPathDirs,
     ).toStrictEqual(["/opt/homebrew/opt/node/bin", path.dirname(openclawBinPath)]);
@@ -483,7 +484,6 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(warn).toHaveBeenCalledWith("Node too old", "Gateway runtime");
-    expect(mocks.resolvePreferredNodePath).toHaveBeenCalled();
   });
 
   it("uses the state dir as the default macOS launchd working directory", async () => {

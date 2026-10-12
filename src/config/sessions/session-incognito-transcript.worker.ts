@@ -28,7 +28,7 @@ import type { TranscriptReportWorkerOperations } from "./session-accessor.sqlite
 import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
-import { readClosedTranscriptTurnInDatabase } from "./session-accessor.transcript-range.js";
+import { readClosedTranscriptTurnInDatabase } from "./session-accessor.transcript-range.worker.js";
 import { readSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import type { IncognitoManagerOperations } from "./session-incognito-manager-contract.js";
 import {

@@ -16,6 +16,16 @@ All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
 including these entry helpers. Pin and test the OpenClaw host versions your
 plugin supports.
 
+Gateway adapters use the existing `core` or `gateway-runtime`
+`GatewayRequestHandlerOptions.context.githubPublicationService` contract for
+GitHub publication. Prepare its required capabilities with
+`prepareGitHubPublicationRequesterV2` or `preparePersonalGitHubSessionActionV2`
+from `gateway-runtime`, using admitted handler options, and release them after
+the operation settles. The host's worker and source-fence modules remain private.
+Migrate wrappers and lifecycle calls using the
+[GitHub publication method mapping](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations),
+without adding imports from Gateway internals.
+
 <Tip>
   **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
   [Channel Plugins](/plugins/sdk-channel-plugins), or
@@ -190,6 +200,10 @@ A remote binding without maintenance support fails instead of using Gateway file
 The file worker implements these operations and native change notifications.
 The paired-node file-transfer adapter connects these operations through the
 existing service-owned node channel and node file policy.
+Requester-scoped `writeDreams` and `appendCorpus` calls carry `assertCurrent`
+separately from the serialized request. Transports must retain that callback in
+node dispatch and recheck it after preparation, immediately before starting the
+remote write. Refusal closes the prepared channel and waits for accepted cleanup.
 
 Task-time Skill preparation uses remote discovery. Channel-native menus use
 Gateway-owned Skills without waiting for the Harness; remote menu support is
@@ -301,3 +315,50 @@ the native operation.
 Use the plugin approval timeout independently of the agent-run timeout. Authenticated
 Control UI reviewers can inspect `detail`, while channel messages retain
 the bounded description. Oversized detail is rejected by the existing request schema.
+
+## Session persistence
+
+`agent-sessions` exposes awaited SessionManager mutations and versioned extension
+actions. `session-store-runtime` provides `prepareSessionEntryPatch` for host
+preparation followed by a conditional worker commit, and `applySessionEntryPatch`
+for already prepared data. `session-transcript-runtime` provides
+`withSessionTranscriptWrite` and duplicate-aware message preparation. Released
+synchronous and opaque transaction callback forms remain deprecated until the
+next Plugin SDK major. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
+and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
+
+For ordinary session preparation, await `getSessionEntryAsync`,
+`readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
+`readAmbientTranscriptWatermarkAsync` from `session-store-runtime`. Native command
+preparation uses `resolveStoredModelOverrideAsync` and
+`resolveCommandArgMenuAsync` from `command-auth-native`; the menu helper is also
+available from `native-command-registry`. Their synchronous compatibility APIs
+remain deprecated until the next Plugin SDK major. See
+[session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
+
+## Stateful CLI commands
+
+`openclaw/plugin-sdk/cli-state-owner` exports `runWithLocalStateOwner`. Supply the
+Gateway `method`, serializable `params`, a diagnostic `target`, and `runLocal`.
+Open databases and load mutation-capable runtime state only inside `runLocal`;
+its scope supplies the admitted config, environment, abort signal, and current
+owner assertion. Close plugin-owned stores before the callback returns.
+
+The helper routes to the local Gateway with its expected owner ID, or retains
+exclusive offline ownership through resource settlement. It never replays an
+uncertain Gateway mutation locally. Use `onForeignOwner: "refuse"` for commands
+that require an offline Gateway. Optional `scopes` preserves the command's
+existing authorization contract; the default is `operator.admin`.
+After a multi-request operation has started on the Gateway, reject `runLocal`
+before accessing config or performing local work if a later request loses its owner.
+
+Gateway handlers can use `captureLocalStateMutationGuard` from
+`openclaw/plugin-sdk/gateway-runtime` to bind the expected owner and current
+request authority, then pass the returned assertion to their existing writer
+admission and privileged-effect boundaries. `isImplicitLocalGatewayTargetFromCli`
+from that same entrypoint preserves explicit and configured remote CLI targets.
+`runWithLocalStateMutationOwner` adds the existing channel authority scope for
+plugin transport effects and disclosure; pass its assertion into the plugin's
+database writer and file publication boundaries too. Versioned owner-bound RPC
+names let CLI callers require updated plugin handlers without assuming that an
+updated Gateway also upgraded an independently installed plugin.

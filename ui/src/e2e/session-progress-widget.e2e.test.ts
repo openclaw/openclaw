@@ -5,6 +5,7 @@ import {
   openSlot,
   toggleSidebarPanelExpanded,
 } from "../pages/chat/sidebar-layout.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -269,7 +270,7 @@ suite.define(() => {
       if (viewport.name === "expanded-side") {
         const mainChat = surface.locator('.sidebar-region__primary[data-region="main"]');
         await mainChat.waitFor({ state: "hidden" });
-        await surface.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(surface, "Restore split");
         await mainChat.waitFor({ state: "visible" });
         await surface.locator('[data-panel-slot="dashboard"]').waitFor({ state: "visible" });
       }

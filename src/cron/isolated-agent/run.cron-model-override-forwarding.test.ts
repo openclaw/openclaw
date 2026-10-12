@@ -637,10 +637,9 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     };
     cronSession.initialSessionEntry = initialEntry;
     loadSessionEntryMock.mockReturnValue(initialEntry);
-    let basePersistCount = 0;
     const persist = expectDefined(patchSessionEntryMock.getMockImplementation(), "persist mock");
     patchSessionEntryMock.mockImplementation(async (...args) => {
-      if (!args[0].sessionKey.includes(":run:") && ++basePersistCount === 2) {
+      if (!args[0].sessionKey.includes(":run:") && args[2]?.fallbackEntry?.systemSent === true) {
         throw new Error("ENOSPC: no space left on device");
       }
       return persist(...args);
@@ -702,12 +701,11 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
       const [provider, model] = raw.split("/");
       return { ref: { provider, model } };
     });
-    loadModelCatalogMock
-      .mockResolvedValueOnce([{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }])
-      .mockResolvedValueOnce([
-        { provider: "openai", id: "gpt-5.6-sol", reasoning: true },
-        { provider: "OLLAMA", id: "minimax-m3:cloud", reasoning: true },
-      ]);
+    loadModelCatalogMock.mockImplementation(({ provider }: { provider?: string }) =>
+      provider?.toLowerCase() === "ollama"
+        ? [{ provider: "OLLAMA", id: "minimax-m3:cloud", reasoning: true }]
+        : [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
+    );
     resolveThinkingDefaultMock.mockImplementation(
       ({
         catalog,
@@ -754,10 +752,18 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
       }),
     );
 
-    expect(loadModelCatalogMock).toHaveBeenCalledTimes(2);
-    expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0].thinkLevel)).toEqual([
-      "off",
-      "medium",
+    expect(loadModelCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "ollama", model: "minimax-m3:cloud" }),
+    );
+    expect(
+      runEmbeddedAgentMock.mock.calls.map(([call]) => ({
+        provider: call.provider,
+        model: call.model,
+        thinkLevel: call.thinkLevel,
+      })),
+    ).toEqual([
+      { provider: "openai", model: "gpt-5.6-sol", thinkLevel: "off" },
+      { provider: "ollama", model: "minimax-m3:cloud", thinkLevel: "medium" },
     ]);
   });
 });

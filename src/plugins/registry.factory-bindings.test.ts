@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
@@ -11,7 +12,7 @@ import { createPluginRuntime } from "./runtime/index.js";
 import type { SessionCatalogContinueProviderResult } from "./session-catalog.js";
 import { mapRegistryProviders } from "./web-provider-resolution-shared.js";
 
-function createOwner(nativeCatalog = false) {
+function createOwner(nativeCatalog = false, id = "factory-owner") {
   const runtime = nativeCatalog ? createPluginRuntime() : undefined;
   if (runtime) {
     runtime.config.current = () => ({
@@ -20,7 +21,7 @@ function createOwner(nativeCatalog = false) {
   }
   const builder = createTestPluginRegistry(runtime);
   const record = createPluginRecord({
-    id: "factory-owner",
+    id,
     ...(nativeCatalog
       ? { nativeSessionCatalog: { label: "Factory catalog", nodeCommands: [] } }
       : {}),
@@ -73,6 +74,40 @@ function createTools(expectScope: () => void) {
 }
 
 describe("registered plugin factory bindings", () => {
+  it.each(["sync", "callback"] as const)(
+    "attributes a retained %s store's deprecation to the opening plugin",
+    async (kind) => {
+      await withOpenClawTestState({ label: `runtime-store-warning-${kind}` }, async ({ env }) => {
+        const pluginId = `runtime-store-warning-${kind}`;
+        const { api, instance } = createOwner(false, pluginId);
+        const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+        try {
+          const useLegacyStore = instance.run(() => {
+            const options = { namespace: "warning", maxEntries: 2, env };
+            if (kind === "sync") {
+              const store = api.runtime.state.openSyncKeyedStore<number>(options);
+              return () => store.lookup("missing");
+            }
+            const store = api.runtime.state.openKeyedStore<number>(options);
+            const update = store.update;
+            assert(update);
+            return () => update("counter", (current) => (current ?? 0) + 1);
+          });
+          expect(emitWarning).not.toHaveBeenCalled();
+          await useLegacyStore();
+          await useLegacyStore();
+          expect(emitWarning).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining(`Plugin ${pluginId}:`),
+            expect.objectContaining({ type: "DeprecationWarning", code: "DEP_PLUGIN_SDK" }),
+          );
+        } finally {
+          emitWarning.mockRestore();
+          await instance.dispose();
+        }
+      });
+    },
+  );
+
   it.each([
     { kind: "static", shape: "single" } as const,
     { kind: "version 2", shape: "array" } as const,

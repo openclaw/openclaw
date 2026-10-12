@@ -32,6 +32,7 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
+  RESPONSES_RETAINED_USER,
   type OpenAIResponsesReasoningReplayMetadata,
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
@@ -260,6 +261,7 @@ type ConvertResponsesMessagesOptions = {
   sessionId?: string;
   authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
+  retainUserProvenance?: boolean;
 };
 
 function convertResponsesMessagesWithStyle(
@@ -349,7 +351,13 @@ function convertResponsesMessagesWithStyle(
   // The compact endpoint's output is already canonical provider input, not
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
-    messages.push(...replayPlan.compactedWindow);
+    messages.push(
+      ...replayPlan.compactedWindow.map((item) =>
+        options?.retainUserProvenance && item.type === "message" && item.role === "user"
+          ? Object.assign({}, item, { [RESPONSES_RETAINED_USER]: true })
+          : item,
+      ),
+    );
   }
   let replayMessages = replayPlan.compaction
     ? [replayPlan.compaction, ...transformedMessages]
@@ -386,7 +394,7 @@ function convertResponsesMessagesWithStyle(
       messages.push(msg);
       continue;
     }
-    if (isRuntimeContextMessage(msg)) {
+    if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
       messages.push(
         buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
           {
@@ -420,7 +428,17 @@ function convertResponsesMessagesWithStyle(
                 providerStyle || model.input.includes("image") || item.type !== "input_image",
             );
       if (content.length > 0) {
-        messages.push(buildResponsesInputMessage(role, content, msg));
+        const input = buildResponsesInputMessage(role, content, msg);
+        if (
+          options?.retainUserProvenance &&
+          role === "user" &&
+          !msg.synthetic &&
+          !msg.operatorMessage &&
+          !hasRuntimeContextMarker(msg)
+        ) {
+          Object.assign(input, { [RESPONSES_RETAINED_USER]: true });
+        }
+        messages.push(input);
       } else if (providerStyle) {
         continue;
       }
@@ -597,6 +615,7 @@ export function convertProviderResponsesMessages<TApi extends Api>(
     sessionId?: string;
     authProfileId?: string;
     replayMode?: OpenAIResponsesReplayMode;
+    retainUserProvenance?: boolean;
   },
 ): ResponseInput {
   return convertResponsesMessagesWithStyle(

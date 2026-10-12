@@ -94,7 +94,7 @@ export type BuildTelegramMessageContextParams = {
     agentId?: string;
     sessionKey: string;
     cfg: OpenClawConfig;
-  }) => boolean | undefined;
+  }) => boolean | undefined | Promise<boolean | undefined>;
   resolveGroupRequireMention: (chatId: string | number, cfg: OpenClawConfig) => boolean;
   resolveTelegramGroupConfig: (
     chatId: string | number,

@@ -494,7 +494,7 @@ export class Agent {
     await this.runPromptMessages(messages);
   }
 
-  /** Continue from the current transcript. The last message must be a user or tool-result message. */
+  /** Continue from a user, tool result, or failed assistant without rewriting its history. */
   async continue(): Promise<void> {
     if (this.activeRun) {
       throw new Error("Agent is already processing. Wait for completion before continuing.");
@@ -519,7 +519,11 @@ export class Agent {
       }
     }
 
-    if (lastMessage.role === "assistant") {
+    if (
+      lastMessage.role === "assistant" &&
+      lastMessage.stopReason !== "error" &&
+      lastMessage.stopReason !== "aborted"
+    ) {
       throw new TranscriptNotContinuableError(lastMessage.role);
     }
 

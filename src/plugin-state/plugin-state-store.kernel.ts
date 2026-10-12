@@ -11,13 +11,11 @@ import {
 } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { createPluginStateError, parseStoredJson } from "./plugin-state-error.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
-import {
-  PluginStateStoreError,
-  type PluginStateEntry,
-  type PluginStateStoreErrorCode,
-  type PluginStateStoreOperation,
-} from "./plugin-state-store.types.js";
+import type { PluginStateEntry, PluginStateStoreOperation } from "./plugin-state-store.types.js";
+
+export { createPluginStateError, parseStoredJson } from "./plugin-state-error.js";
 
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 1_048_576;
 // Outside the historical logical namespace alphabet: legacy stores cannot be reclassified.
@@ -37,21 +35,6 @@ export type PluginStateDatabase = {
   db: DatabaseSync;
   path: string;
 };
-
-export function createPluginStateError(params: {
-  code: PluginStateStoreErrorCode;
-  operation: PluginStateStoreOperation;
-  message: string;
-  path?: string;
-  cause?: unknown;
-}): PluginStateStoreError {
-  return new PluginStateStoreError(params.message, {
-    code: params.code,
-    operation: params.operation,
-    ...(params.path ? { path: params.path } : {}),
-    cause: params.cause,
-  });
-}
 
 export function resolvePluginStateExpiresAtMs(params: {
   ttlMs: number | undefined;
@@ -81,24 +64,6 @@ export function resolvePluginStateExpiresAtMs(params: {
     });
   }
   return expiresAt;
-}
-
-export function parseStoredJson(
-  raw: string,
-  operation: PluginStateStoreOperation,
-  databasePath: string,
-): unknown {
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch (error) {
-    throw createPluginStateError({
-      code: "PLUGIN_STATE_CORRUPT",
-      operation,
-      message: "Plugin state entry contains corrupt JSON.",
-      path: databasePath,
-      cause: error,
-    });
-  }
 }
 
 export function rowToEntry(
@@ -316,31 +281,25 @@ const pluginStateExpiryQuery = createSqliteQueryCache((db) =>
 export function deleteExpiredPluginStateEntries(
   db: DatabaseSync,
   now: number,
-  scope?: { pluginId: string; namespace: string },
+  scope: { pluginId: string; namespace: string },
 ): number {
-  if (scope && isRetainedPluginStateNamespace(scope.namespace)) {
+  if (isRetainedPluginStateNamespace(scope.namespace)) {
     return 0;
   }
   const kysely = getPluginStateKysely(db);
-  if (scope) {
-    // The expiry index can prove there is nothing due without scanning the namespace.
-    // Only compilation is retained; expiry is checked in the caller's current transaction.
-    if (pluginStateExpiryQuery(db)(now).rows.length === 0) {
-      return 0;
-    }
+  // The expiry index can prove there is nothing due without scanning the namespace.
+  // Only compilation is retained; expiry is checked in the caller's current transaction.
+  if (pluginStateExpiryQuery(db)(now).rows.length === 0) {
+    return 0;
   }
-  let expiredEntries = kysely
+  // Leave namespace scans unsorted to avoid an unbounded sort under the write lock.
+  const expiredEntries = kysely
     .selectFrom("plugin_state_entries")
     .select(["plugin_id", "namespace", "entry_key"])
     .where("expires_at", "is not", null)
-    .where("expires_at", "<=", now);
-  // Global expiry ordering uses its index; namespace scans must stay unsorted
-  // so SQLite never builds an unbounded temporary sort under the write lock.
-  expiredEntries = scope
-    ? expiredEntries
-        .where("plugin_id", "=", scope.pluginId)
-        .where("namespace", "=", scope.namespace)
-    : expiredEntries.orderBy("expires_at", "asc");
+    .where("expires_at", "<=", now)
+    .where("plugin_id", "=", scope.pluginId)
+    .where("namespace", "=", scope.namespace);
   const result = executeSqliteQuerySync(
     db,
     kysely

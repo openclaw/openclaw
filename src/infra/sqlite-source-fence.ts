@@ -22,8 +22,8 @@ import {
   assertSqliteWorkerCommitReceiptPending,
   requestSqliteWorkerOperationAdmission,
   takeSqliteWorkerOperationAdmissionAttachment,
-  withSqliteWorkerSourceReservations,
 } from "./sqlite-worker-operation-admission.js";
+import { currentSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-settlement.js";
 
 const bindings = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSourceFenceBindings"),
@@ -101,6 +101,23 @@ function rollbackReservations(reservations: readonly SqliteSourceFenceDatabase[]
   }
   if (failures.length) {
     throw new AggregateError(failures, "SQLite source reservation cleanup failed");
+  }
+}
+
+/** A native waiter may block MAIN; this interval must complete without host messages. */
+function withSqliteWorkerSourceReservations<T>(operation: () => T): T {
+  const scope = currentSqliteWorkerOperationAdmission.getStore();
+  if (!scope?.active || scope.owner.sourceReservations) {
+    throw new SqliteWorkerError(
+      "SQLite source fence requires exclusive operation custody",
+      "closed",
+    );
+  }
+  scope.owner.sourceReservations = true;
+  try {
+    return operation();
+  } finally {
+    delete scope.owner.sourceReservations;
   }
 }
 

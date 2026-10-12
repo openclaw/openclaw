@@ -986,38 +986,32 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(wrapSandboxFileToolPath(base, params), REQUIRED_PARAM_GROUPS.edit);
 }
 
-export function createHostWorkspaceWriteTool(
+type HostWorkspaceMutationOptions = {
+  containmentRoot?: string;
+  workspaceOnly?: boolean;
+  abortSignal?: AbortSignal;
+  memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+};
+
+function createHostWorkspaceMutationTool(
+  kind: "write" | "edit",
   root: string,
-  options?: {
-    containmentRoot?: string;
-    workspaceOnly?: boolean;
-    abortSignal?: AbortSignal;
-    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-  },
+  options?: HostWorkspaceMutationOptions,
 ) {
-  const base = eraseSessionFileTool(
-    createWriteTool(root, {
-      operations: createHostMutationOperations(options?.containmentRoot ?? root, options),
-    }),
-  );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, root);
+  const operations = createHostMutationOperations(options?.containmentRoot ?? root, options);
+  const base =
+    kind === "write"
+      ? eraseSessionFileTool(createWriteTool(root, { operations }))
+      : eraseSessionFileTool(createEditTool(root, { operations }));
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS[kind], root);
 }
 
-export function createHostWorkspaceEditTool(
-  root: string,
-  options?: {
-    containmentRoot?: string;
-    workspaceOnly?: boolean;
-    abortSignal?: AbortSignal;
-    memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-  },
-) {
-  const base = eraseSessionFileTool(
-    createEditTool(root, {
-      operations: createHostMutationOperations(options?.containmentRoot ?? root, options),
-    }),
-  );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, root);
+export function createHostWorkspaceWriteTool(root: string, options?: HostWorkspaceMutationOptions) {
+  return createHostWorkspaceMutationTool("write", root, options);
+}
+
+export function createHostWorkspaceEditTool(root: string, options?: HostWorkspaceMutationOptions) {
+  return createHostWorkspaceMutationTool("edit", root, options);
 }
 
 export function createOpenClawReadTool(

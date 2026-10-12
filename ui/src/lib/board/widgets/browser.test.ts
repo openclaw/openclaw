@@ -110,12 +110,12 @@ describe("Browser dashboard presentation", () => {
       { timeoutMs: 150_000 },
     );
     expect(panel.dashboardTarget?.sessionScoped).toBe(admin ? undefined : true);
-    const download = panel.shadowRoot?.querySelector('[aria-label="Download file"]');
+    const download = panel.renderRoot?.querySelector('[aria-label="Download file"]');
     if (admin) {
       expect(download).not.toBeNull();
     } else {
       expect(download).toBeNull();
-      expect(panel.shadowRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
+      expect(panel.renderRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
       expect(element.textContent).toContain("isolated session browser");
     }
   });
@@ -251,8 +251,8 @@ describe("Browser dashboard presentation", () => {
     expect(panel.fixedTab?.targetId).toBe("current");
     expect(panel.dashboardTarget?.instanceId).toBe("current");
     await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
-    expect(panel.shadowRoot?.querySelector('[aria-label^="Close tab"]')).toBeNull();
+    expect(panel.renderRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
+    expect(panel.renderRoot?.querySelector('[aria-label^="Close tab"]')).toBeNull();
   });
 
   it("hides without closing and stops/resumes through the dashboard owner", async () => {

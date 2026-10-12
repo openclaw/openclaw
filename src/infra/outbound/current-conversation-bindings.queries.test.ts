@@ -19,6 +19,10 @@ import {
   removeCurrentConversationBindingsAsync,
   updateCurrentConversationBindingRecord,
 } from "./current-conversation-bindings.js";
+import {
+  readCurrentConversationBindingListsInDatabase,
+  readCurrentConversationBindingSelectionInDatabase,
+} from "./current-conversation-bindings.kernel.js";
 import { currentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
 import {
   inspectSessionBindingsByConversations,
@@ -48,6 +52,53 @@ function binding(id: string, accountId = "default", generic = false): SessionBin
 function writeBinding(record: SessionBindingRecord) {
   return updateCurrentConversationBindingRecord(record.conversation, () => record).current;
 }
+
+it("reads ordered binding selections and target batches in one statement after committed writes", async () => {
+  await withOpenClawTestState({ label: "binding-single-statement-selection" }, async () => {
+    const original = binding("current");
+    const missing = binding("missing");
+    writeBinding(original);
+    const { db } = openOpenClawStateDatabase();
+    const statements = trackSqliteStatementExecutions(db, ["statement"], () => "statement");
+    const refs = [missing.conversation, original.conversation, original.conversation];
+    try {
+      expect(readCurrentConversationBindingSelectionInDatabase(db, refs)).toEqual([
+        null,
+        original,
+        original,
+      ]);
+      expect(statements.counts.statement).toBe(1);
+      const replacement = { ...original, targetSessionKey: "agent:other:replacement" };
+      writeBinding(replacement);
+      const before = statements.counts.statement;
+      expect(readCurrentConversationBindingSelectionInDatabase(db, refs)).toEqual([
+        null,
+        replacement,
+        replacement,
+      ]);
+      expect(statements.counts.statement - before).toBe(1);
+      writeBinding(missing);
+      const listBefore = statements.counts.statement;
+      const targets = [
+        replacement.targetSessionKey,
+        missing.targetSessionKey,
+        replacement.targetSessionKey,
+      ];
+      expect(
+        readCurrentConversationBindingListsInDatabase(db, targets, {
+          channel: "demo",
+          accountId: "default",
+        }).map((list) => list.records),
+      ).toEqual([[replacement], [missing], [replacement]]);
+      expect(statements.counts.statement - listBefore).toBe(1);
+      expect(readCurrentConversationBindingListsInDatabase(db, targets)).toEqual(
+        targets.map(() => ({ records: [], requiresPrune: false })),
+      );
+    } finally {
+      statements.restore();
+    }
+  });
+});
 
 it("reads current bindings without recompiling fixed queries after warmup", async () => {
   await withOpenClawTestState({ label: "binding-query-budget" }, async () => {

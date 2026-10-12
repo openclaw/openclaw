@@ -39,6 +39,45 @@ afterEach(() => {
 });
 
 describe("gateway method authorization", () => {
+  it.each([
+    { sessionKey: "agent:main:demo", agentId: "research", message: "does not match" },
+    { sessionKey: "agent:main", message: "malformed session key" },
+    { sessionKey: "demo", message: "Pass agentId" },
+  ])(
+    "returns INVALID_REQUEST for an invalid chat target $sessionKey",
+    async ({ message, ...target }) => {
+      const defaults = requestDefaults(["operator.admin"]);
+      const handler = vi.fn<GatewayRequestHandler>();
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        ...defaults,
+        context: {
+          ...defaults.context,
+          getRuntimeConfig: () => ({
+            agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+          }),
+        },
+        req: {
+          type: "req",
+          id: "invalid-chat-target",
+          method: "chat.send",
+          params: { ...target, message: "hello", idempotencyKey: "invalid-chat-target" },
+        },
+        respond,
+        extraHandlers: { "chat.send": handler },
+      });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining(message),
+        }),
+      );
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
   async function dispatch(scopes: string[]) {
     const attachedPluginRegistry = createEmptyPluginRegistry();
     const handler: GatewayRequestHandler = ({ respond }) => {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { persistClawInstallRecord, type ClawInstallStatus } from "../claws/provenance.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import { ExitError } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
@@ -876,15 +877,27 @@ describe("claws cli", () => {
         agentRemoved: status === "complete",
         ...(status === "partial" ? { error } : {}),
       });
-      await runCli([
-        "claws",
-        "remove",
-        "demo-agent",
-        "--yes",
-        "--plan-integrity",
-        "sha256:remove-plan",
-        ...(json ? ["--json"] : []),
-      ]);
+      await mocks.runtime.exit.withImplementation(
+        (code) => {
+          throw new ExitError(code);
+        },
+        async () => {
+          const command = runCli([
+            "claws",
+            "remove",
+            "demo-agent",
+            "--yes",
+            "--plan-integrity",
+            "sha256:remove-plan",
+            ...(json ? ["--json"] : []),
+          ]);
+          if (status === "partial") {
+            await expect(command).rejects.toEqual(new ExitError(1));
+          } else {
+            await command;
+          }
+        },
+      );
 
       expect(mocks.applyClawRemovePlan).toHaveBeenCalledWith(
         expect.objectContaining({ planIntegrity: "sha256:remove-plan" }),
@@ -894,6 +907,7 @@ describe("claws cli", () => {
         }),
       );
       if (json) {
+        expect(mocks.logs).toHaveLength(1);
         expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
           schemaVersion: "openclaw.clawRemoveResult.v1",
           status,
@@ -906,7 +920,7 @@ describe("claws cli", () => {
         expect(mocks.logs.filter((line) => line === `Warning: ${warnings[0]}`)).toHaveLength(1);
         expect(mocks.logs).toContain("Plugin runtime changed in Gateway generation 3.");
         if (status === "partial") {
-          expect(mocks.errors).toContain(error.message);
+          expect(mocks.errors).toEqual([error.message]);
           expect(mocks.logs).not.toContain("Removed agent: demo-agent");
         }
       }

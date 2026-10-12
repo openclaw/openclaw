@@ -717,6 +717,7 @@ describe("mcp cli", () => {
   });
 
   it("reports omitted enabled servers while accepting omitted disabled servers", async () => {
+    const invocationExitCode = process.exitCode;
     await withMcpHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       let catalogServers: Record<
@@ -753,6 +754,9 @@ describe("mcp cli", () => {
 
       expect(JSON.parse(lastLogLine())).toMatchObject({ servers: {}, diagnostics: [] });
       expect(lastErrorLine()).toBe(`MCP check did not connect to "incomplete" in ${configPath}.`);
+      expect(process.exitCode).toBe(1);
+      // The next probe represents a new CLI invocation, not a continuation of its failed status.
+      process.exitCode = invocationExitCode;
 
       await writeMcpServers(home, {
         healthy: { command: "node" },
@@ -776,6 +780,7 @@ describe("mcp cli", () => {
         diagnostics: [],
       });
       expect(lastErrorLine()).toBe("");
+      expect(process.exitCode).toBe(invocationExitCode);
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "probe"]);

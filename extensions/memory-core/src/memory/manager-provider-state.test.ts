@@ -76,7 +76,6 @@ describe("memory provider requests and lifecycle", () => {
     const provider = "ollama";
     const model = DEFAULT_OLLAMA_EMBEDDING_MODEL;
     const sharedRemote = {
-      nonBatchConcurrency: 3,
       batch: {
         enabled: true,
         wait: false,

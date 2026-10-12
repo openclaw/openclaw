@@ -196,7 +196,11 @@ export function withIncognitoTranscriptWriteSequence<T>(
                 authority,
                 {
                   type: "session.lock.facts",
-                  input: { ...target, idempotencyKeys: query.idempotencyKeys },
+                  input: {
+                    ...target,
+                    idempotencyKeys: query.idempotencyKeys,
+                    sourceRunId: query.sourceRunId,
+                  },
                 },
                 binding.admissionSignal,
               );

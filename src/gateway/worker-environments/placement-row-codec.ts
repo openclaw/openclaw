@@ -280,7 +280,7 @@ export function ensureLocal(
     }
     return current;
   }
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     db,
     query(db)
       .insertInto("worker_session_placements")
@@ -305,9 +305,10 @@ export function ensureLocal(
         created_at_ms: nowMs,
         updated_at_ms: nowMs,
         state_changed_at_ms: nowMs,
-      }),
+      })
+      .returningAll(),
   );
-  const record = getRequired(db, identity.sessionId);
+  const record = fromRow(result.rows[0]!);
   publishPlacementTurnClaimState(db, record, null);
   return record;
 }

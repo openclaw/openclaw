@@ -45,7 +45,7 @@ function captureStreamOptions(
   agent: { streamFn?: StreamFn },
   underlying: StreamFn,
   model: Parameters<StreamFn>[0],
-  options: Parameters<StreamFn>[2],
+  options: (NonNullable<Parameters<StreamFn>[2]> & { topP?: number }) | undefined,
 ) {
   if (!agent.streamFn) {
     throw new Error("expected extra params to wrap streamFn");
@@ -55,7 +55,7 @@ function captureStreamOptions(
 }
 
 describe("createStreamFnWithExtraParams sampling overrides", () => {
-  it("forwards temperature, top_p, and maxTokens from override into the underlying streamFn options", () => {
+  it("forwards temperature, topP, and maxTokens from override into the underlying streamFn options", () => {
     const { underlying, agent } = createStreamAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
@@ -75,6 +75,34 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
 
     expect(callOptions).toMatchObject({ temperature: 0.4, topP: 0.7, maxTokens: 512 });
   });
+
+  it.each([
+    { params: { top_p: 0.3 }, override: undefined, options: undefined, expected: 0.3 },
+    { params: { topP: 0.3 }, override: undefined, options: undefined, expected: 0.3 },
+    { params: { top_p: 0 }, override: undefined, options: undefined, expected: 0 },
+    { params: { topP: 0.7, top_p: 0.3 }, override: undefined, options: undefined, expected: 0.7 },
+    { params: { top_p: 0.3 }, override: { topP: 0.8 }, options: undefined, expected: 0.8 },
+    { params: { top_p: 0.3 }, override: undefined, options: { topP: 0.9 }, expected: 0.9 },
+  ])(
+    "projects configured nucleus sampling with request precedence: %j",
+    ({ params, override, options, expected }) => {
+      const { underlying, agent } = createStreamAgent();
+      applyExtraParamsToAgent(
+        agent,
+        { agents: { defaults: { models: { "local/model": { params } } } } },
+        "local",
+        "model",
+        override,
+      );
+      const callOptions = captureStreamOptions(
+        agent,
+        underlying,
+        { id: "model", api: "openai-completions", provider: "local" } as Model,
+        options,
+      );
+      expect(callOptions).toMatchObject({ topP: expected });
+    },
+  );
 
   it.each([false, true])("forwards configured streaming=%s to the transport", (streaming) => {
     const { underlying, agent } = createStreamAgent();

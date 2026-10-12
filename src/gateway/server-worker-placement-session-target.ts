@@ -5,6 +5,7 @@ import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { createSessionEntryRevisionGuard } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { createSessionTranscriptOwnerPredicate } from "../config/sessions/session-accessor.sqlite-transcript-write-guard.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
@@ -50,6 +51,17 @@ export function resolveWorkerPlacementSessionStoreTarget(
   cfg: OpenClawConfig,
   identity: Pick<WorkerSessionPlacementIdentity, "sessionKey" | "agentId">,
 ): ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore> {
+  const memory = getSessionActorStorageBinding(identity);
+  if (memory) {
+    const entry = memory.actor.snapshot(memory.authority)?.entry;
+    return {
+      agentId: memory.agentId,
+      storePath: memory.path,
+      canonicalKey: identity.sessionKey,
+      storeKeys: [identity.sessionKey],
+      store: entry ? { [identity.sessionKey]: entry } : {},
+    };
+  }
   const metadata = captureSessionEntryMetadataRead(identity);
   if (metadata) {
     const binding = captureIncognitoSessionBinding(identity)!;
@@ -89,6 +101,31 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
     assertOwnerCurrent();
     resolved.assertCurrent(options.getConfig());
     const { target, entry, workspace } = resolved;
+    const memory = getSessionActorStorageBinding({ ...identity, storePath: target.storePath });
+    if (memory) {
+      const transcriptTarget = {
+        ...captureSessionTranscriptTargetBinding({ ...identity, storePath: memory.path }),
+        expectedLifecycleRevision: entry.lifecycleRevision,
+        expectedWriterRunId: entry.activeWriterRunId,
+      };
+      const assertCurrent = () => {
+        assertOwnerCurrent();
+        resolved.assertCurrent(options.getConfig());
+        if (
+          memory.actor.snapshot(memory.authority)?.entry?.activeWriterRunId !==
+          entry.activeWriterRunId
+        ) {
+          throw new WorkerDispatchTargetChangedError("Workspace recovery writer changed");
+        }
+      };
+      return await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, () =>
+        run({
+          workspace,
+          assertCurrent,
+          ...createWorkerWorkspaceConflictTranscriptHandlers(transcriptTarget, assertCurrent),
+        }),
+      );
+    }
     const actorBinding = captureIncognitoSessionBinding({
       ...identity,
       storePath: target.storePath,
@@ -191,7 +228,6 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
           lifecycleRevision: preparedEntry.lifecycleRevision,
           activeWriterRunId: preparedEntry.activeWriterRunId,
         }),
-        "read",
       );
       assertCurrent();
       resolved.assertCurrent(options.getConfig());
@@ -301,8 +337,9 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     cfg: OpenClawConfig,
   ) => ReturnType<typeof sessionUtils.resolveGatewaySessionStoreTargetWithStore>;
 }) {
-  const actorBinding = captureIncognitoSessionBinding(params);
-  const metadata = captureSessionEntryMetadataRead(params);
+  const memory = getSessionActorStorageBinding(params);
+  const actorBinding = memory ? undefined : captureIncognitoSessionBinding(params);
+  const metadata = memory ? undefined : captureSessionEntryMetadataRead(params);
   const actorClaim = actorBinding?.actor.sessions.captureCurrent(params.sessionKey);
   const worktreeContext = captureWorktreeRunEndContext(process.env);
   const resolveTarget = (cfg: OpenClawConfig) =>
@@ -311,23 +348,25 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   const initialTarget = actorBinding
     ? resolveWorkerPlacementSessionStoreTarget(params.sessionRuntime, params.config, params)
     : resolveTarget(params.config);
-  const initialEntry: InternalSessionEntry | undefined = actorBinding
-    ? (
-        await actorBinding.actor.sessions.read(
-          {
-            assertCurrent: () => {
-              metadata!.assertCurrent();
-              actorClaim!.assertCurrent();
+  const initialEntry: InternalSessionEntry | undefined = memory
+    ? memory.actor.snapshot(memory.authority)?.entry
+    : actorBinding
+      ? (
+          await actorBinding.actor.sessions.read(
+            {
+              assertCurrent: () => {
+                metadata!.assertCurrent();
+                actorClaim!.assertCurrent();
+              },
             },
-          },
-          { sessionKey: params.sessionKey },
-          actorBinding.admissionSignal,
-        )
-      ).entry
-    : params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
-        initialTarget.store,
-        initialTarget.storeKeys,
-      );
+            { sessionKey: params.sessionKey },
+            actorBinding.admissionSignal,
+          )
+        ).entry
+      : params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+          initialTarget.store,
+          initialTarget.storeKeys,
+        );
   const expected = params.expectedTarget ?? initialTarget;
   const targetChangedError = () =>
     params.expectedTarget
@@ -367,13 +406,15 @@ export async function resolveWorkerPlacementSessionTarget(params: {
     : undefined;
   const resolveBinding = (config = params.config) => {
     actorClaim?.assertCurrent();
-    const target = actorBinding ? initialTarget : resolveTarget(config);
-    const entry: InternalSessionEntry | undefined = actorBinding
-      ? metadata!.readCurrent()
-      : params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
-          target.store,
-          target.storeKeys,
-        );
+    const target = memory || actorBinding ? initialTarget : resolveTarget(config);
+    const entry: InternalSessionEntry | undefined = memory
+      ? memory.actor.snapshot(memory.authority)?.entry
+      : actorBinding
+        ? metadata!.readCurrent()
+        : params.sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+            target.store,
+            target.storeKeys,
+          );
     if (
       target.storePath !== expected.storePath ||
       target.canonicalKey !== expected.canonicalKey ||
@@ -458,6 +499,8 @@ export const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(a
     managedWorktrees,
     resolveWorkerPlacementSessionRuntime:
       placementSessionRuntime.resolveWorkerPlacementSessionRuntime,
+    resolveWorkerPlacementSessionRuntimeAsync:
+      placementSessionRuntime.resolveWorkerPlacementSessionRuntimeAsync,
     resolveCanonicalSessionEntryFromStoreKeys:
       sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
     resolveGatewaySessionStoreTargetWithStore:
@@ -468,14 +511,17 @@ export const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(a
 export async function prepareWorkerPlacementRepositoryManifestRefs(
   placement: WorkerSessionPlacementIdentity,
 ): Promise<() => readonly string[] | null> {
-  const metadata = captureSessionEntryMetadataRead(placement);
+  const memory = getSessionActorStorageBinding(placement);
+  const metadata = memory ? undefined : captureSessionEntryMetadataRead(placement);
   const readEntry = () =>
-    metadata
-      ? metadata.readCurrent()
-      : loadSessionEntryReadOnly({
-          ...placement,
-          storePath: resolveSessionStorePathForScope(placement),
-        });
+    memory
+      ? memory.actor.snapshot(memory.authority)?.entry
+      : metadata
+        ? metadata.readCurrent()
+        : loadSessionEntryReadOnly({
+            ...placement,
+            storePath: resolveSessionStorePathForScope(placement),
+          });
   const entry = readEntry();
   if (entry?.sessionId !== placement.sessionId) {
     return () => null;

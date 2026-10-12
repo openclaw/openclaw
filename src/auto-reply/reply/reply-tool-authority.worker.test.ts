@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
@@ -95,7 +94,7 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
 });
 
 it.each(["main", "policy", "borrowed"] as const)(
-  "retains the %s-agent source while rereading foreign sandbox policy before steering",
+  "retains the %s-agent source while rereading changed sandbox policy before steering",
   async (policyAgent) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const policyAgentId = policyAgent === "borrowed" ? "main" : policyAgent;
@@ -105,7 +104,7 @@ it.each(["main", "policy", "borrowed"] as const)(
         { agentId: policyAgentId, sessionKey: classificationKey },
         { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
       );
-      // Settle setup maintenance before retaining the readers used across the foreign commit.
+      // Settle setup maintenance before retaining the readers used across the policy change.
       await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
       const run = createQueueTestRun({ prompt: "authority" });
       Object.assign(run.run, {
@@ -157,25 +156,18 @@ it.each(["main", "policy", "borrowed"] as const)(
         });
         try {
           await operation.bindToolAuthoritySnapshotAsync(snapshot);
-          expect(initialEntries).toBe(1);
+          // The borrowed admission read already warmed the entry facts.
+          expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
         } finally {
           for (const read of initialReads) {
             read.mockRestore();
           }
         }
         const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
-        const foreign = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: policyAgentId, env: state.env }),
+        await upsertSessionEntryCore(
+          { agentId: policyAgentId, sessionKey: classificationKey, env: state.env },
+          { sandboxMode: undefined },
         );
-        try {
-          foreign
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-            )
-            .run(classificationKey);
-        } finally {
-          foreign.close();
-        }
         const calls = observeMainThreadSql();
         try {
           discovery.mockClear();

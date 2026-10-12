@@ -771,7 +771,7 @@ it.each([
         expect.soft(await moving).toMatchObject({ state: "local" });
         expect(localGenerations.size).toBe(1);
         expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
-        expect.soft(f.placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+        expect.soft(await f.placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
         expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
@@ -854,7 +854,7 @@ it.each([
       expect(admissionReached).toBe(true);
       expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
       expect(f.placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
-      expect(f.placements.getPlacementMove(REQUEST.sessionId)?.operationId).toBe(
+      expect((await f.placements.getPlacementMoveAsync(REQUEST.sessionId))?.operationId).toBe(
         begun.intent.operationId,
       );
     } finally {

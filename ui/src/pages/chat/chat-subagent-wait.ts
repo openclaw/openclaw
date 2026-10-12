@@ -23,7 +23,7 @@ export type ChatSubagentWait = {
   runningCount: number;
   /** Unfinished child sessions that are not subagents; the wait names none of them. */
   sessionCount?: number;
-  child?: { key: string; label: string };
+  child?: { key: string; label: string; startedAt?: number | null };
 };
 
 export type ChatSubagentActivity = {
@@ -82,7 +82,8 @@ export function projectSubagentStatus(
   // Dashboard children count as sessions, never named subagents.
   const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
   const running = children.length;
-  const child = running === 1 ? children[0] : undefined;
+  const hydrated = input.subagentSessionsHydrated && !input.subagentSessionsPending;
+  const child = hydrated && running === 1 ? children[0] : undefined;
   // Launch order stays stable as activity updates reorder the source roster.
   // The roster already carries live observer headlines; no child transcript
   // reads or second execution/status owner are needed for inline progress.
@@ -113,7 +114,7 @@ export function projectSubagentStatus(
         });
   // A hydrated roster with no unfinished children ends the wait.
   const wait: ChatSubagentWait | null =
-    shouldWait && (!input.subagentSessionsHydrated || unfinished.length > 0)
+    shouldWait && (!hydrated || unfinished.length > 0)
       ? {
           // The yield's transcript row can predate the handoff by its whole wrapping
           // step; the parent's run end is the handoff itself.
@@ -124,13 +125,16 @@ export function projectSubagentStatus(
               ? session.endedAt
               : handoffAt,
           ...(handoffAt !== null && pending?.runId ? { runId: pending.runId } : {}),
-          runningCount: running,
-          ...(unfinished.length > running ? { sessionCount: unfinished.length - running } : {}),
+          runningCount: hydrated ? running : 0,
+          ...(hydrated && unfinished.length > running
+            ? { sessionCount: unfinished.length - running }
+            : {}),
           ...(child
             ? {
                 child: {
                   key: child.key,
                   label: resolveSessionDisplayName(child.key, child),
+                  startedAt: child.startedAt,
                 },
               }
             : {}),
@@ -160,6 +164,7 @@ export function projectSubagentStatus(
             wait.sessionCount,
             wait.child?.key,
             wait.child?.label,
+            wait.child?.startedAt,
             listed,
           ]
         : [running, listed],

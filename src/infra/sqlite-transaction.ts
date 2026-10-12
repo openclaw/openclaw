@@ -540,26 +540,38 @@ export function runSqliteImmediateTransactionSync<T>(
   );
 }
 
-/** Admit the borrowed worker connection after BEGIN and before its physical commit. */
+/**
+ * Execute one complete statement, then publish its receipts. Prepare inputs before
+ * calling; the callback must not do fallible work after the native statement.
+ * Existing transactions retain their savepoint and outer publication owner.
+ */
+export function runSqliteSingleStatementSync<T>(db: DatabaseSync, statement: () => T): T {
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () => {
+    if (db.isTransaction) {
+      return runSqliteTransactionSync(db, statement, "immediate");
+    }
+    const result = runSqliteReadOperationSync(db, statement);
+    assertSyncTransactionResult(result);
+    return result;
+  });
+}
+
+/** Obtain host admission before taking the writer lock; revalidate before physical commit. */
 export function runSqliteWorkerTransactionSync<T>(
   context: SqliteWorkerDatabaseContext,
   operation: () => T,
   options?: SqliteTransactionOptions,
 ): T {
-  return runSqliteImmediateTransactionSync(
-    context.database,
-    () => {
-      context.admit("transaction");
-      return operation();
+  assertTransactionUsable(context.database);
+  context.admit("transaction");
+  return runSqliteImmediateTransactionSync(context.database, operation, {
+    ...options,
+    withCommit(commit) {
+      context.admit("commit");
+      return options?.withCommit ? options.withCommit(commit) : commit();
     },
-    {
-      ...options,
-      withCommit(commit) {
-        context.admit("commit");
-        return options?.withCommit ? options.withCommit(commit) : commit();
-      },
-    },
-  );
+  });
 }
 
 /** Prepare outside the transaction; yield for admission without replaying admitted writes. */

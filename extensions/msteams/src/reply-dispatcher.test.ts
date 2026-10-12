@@ -96,7 +96,11 @@ describe("createMSTeamsReplyDispatcher", () => {
   function createDispatcher(
     conversationType = "personal",
     msteamsConfig: Record<string, unknown> = {},
-    extraParams: { onSentMessageIds?: (ids: string[]) => void } = {},
+    extraParams: {
+      accountId?: string;
+      cfg?: Parameters<typeof createMSTeamsReplyDispatcher>[0]["cfg"];
+      onSentMessageIds?: (ids: string[]) => void;
+    } = {},
   ) {
     const contextSendActivity = vi.fn(async () => ({ id: "activity-1" }));
     lastContextSendActivity = contextSendActivity;
@@ -107,7 +111,8 @@ describe("createMSTeamsReplyDispatcher", () => {
     const streamMock = conversationType === "personal" ? createStreamMock() : undefined;
     lastStreamMock = streamMock;
     const dispatcher = createMSTeamsReplyDispatcher({
-      cfg: { channels: { msteams: msteamsConfig } } as never,
+      cfg: extraParams.cfg ?? { channels: { msteams: msteamsConfig } },
+      accountId: extraParams.accountId,
       agentId: "agent",
       sessionKey: "agent:main:main",
       runtime: { error: vi.fn() } as never,
@@ -472,6 +477,42 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     // streaming.mode=block disables native streaming entirely; the dispatcher
     // doesn't expose onPartialReply and the controller's stream is unused.
+    const stream = getStreamMock();
+    expect(stream.emit).not.toHaveBeenCalled();
+    expect(dispatcher.replyOptions.onPartialReply).toBeUndefined();
+    expect(dispatcher.replyOptions.disableBlockStreaming).toBe(false);
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("inherits root block streaming mode for named accounts", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "hello" }]);
+    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"]);
+
+    const dispatcher = createDispatcher(
+      "personal",
+      {},
+      {
+        accountId: "support",
+        cfg: {
+          channels: {
+            msteams: {
+              streaming: { mode: "block" },
+              accounts: {
+                support: {
+                  appId: "support-app",
+                  appPassword: "support-secret",
+                  webhook: { path: "/api/messages/support" },
+                },
+              },
+            },
+          },
+        },
+      },
+    );
+    const options = dispatcherOptions();
+
+    await options.deliver({ text: "support account block reply" });
+
     const stream = getStreamMock();
     expect(stream.emit).not.toHaveBeenCalled();
     expect(dispatcher.replyOptions.onPartialReply).toBeUndefined();

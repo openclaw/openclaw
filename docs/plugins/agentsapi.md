@@ -307,7 +307,7 @@ requires a reset. It does not migrate files between hosts.
 4. Finishing or interrupting a turn leaves the executor available. Gateway
    disposal also retains its saved binding and executor. A running executor
    handles native reconnection; an outstanding connection action can ask the
-   controller to ensure the same session again.
+   controller to prepare the same session again.
 5. Reset, session deletion, or confirmed terminal native-session failure attempts
    `retire(binding, context)` after native work settles. It stops only that
    binding's executor. If native work cannot be confirmed settled, reset or
@@ -326,8 +326,8 @@ codex exec-server \
   --environment-id "<binding.environmentId>"
 ```
 
-Use a separate managed process for each native session and make repeated
-`ensure` calls idempotent. Reconnection does not guarantee an interrupted command
+Use a separate managed process for each native session and make
+`ensure` calls safe to repeat. Reconnection does not guarantee an interrupted command
 survives. Check the original turn's outcome before repeating work that might
 already have changed files or called a service. Input submission has a 60-second
 HTTP deadline, including connection wait, so prepare hosts to connect promptly.

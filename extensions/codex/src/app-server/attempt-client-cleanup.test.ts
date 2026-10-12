@@ -15,29 +15,11 @@ import {
   CodexAppServerScopedRequestRejectedError,
   codexPrewriteRejectionCause,
 } from "./rpc-error.js";
-import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
-import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 describe("Codex app-server attempt client cleanup", () => {
   it.each([
-    {
-      name: "startup selection",
-      cause: Object.assign(new Error("selection changed"), {
-        code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
-      }),
-      matches: isCodexAppServerStartSelectionChangedError,
-      retireBefore: false,
-    },
-    {
-      name: "context restart",
-      cause: Object.assign(new Error("context selection changed"), {
-        code: "CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED",
-      }),
-      matches: isCodexContextRestartSelectionChangedError,
-      retireBefore: true,
-    },
     {
       name: "startup timeout",
       cause: new CodexAppServerStartupError("timed_out"),

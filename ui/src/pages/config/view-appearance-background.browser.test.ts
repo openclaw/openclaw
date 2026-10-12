@@ -148,7 +148,9 @@ describe("Appearance backgrounds", () => {
       host.querySelector('[data-background-source="none"]')?.getAttribute("aria-pressed"),
     ).toBe("true");
     expect(
-      [...host.querySelectorAll("wa-switch")].every((input) => input.hasAttribute("disabled")),
+      [...host.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].every(
+        (input) => input.disabled,
+      ),
     ).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
     expect(props.onRemoveImage).not.toHaveBeenCalled();

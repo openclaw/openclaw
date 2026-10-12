@@ -67,14 +67,16 @@ it("settles accepted work before running pre-resource cleanup", async () => {
 it("keeps nested authority reads in their resource scope without admitting effects or revoked work", async () => {
   let revoked = false;
   let childRevoked = false;
-  let nestedEffect = false;
+  let nestedEffect: "admission" | "database" | undefined;
   const resource = {};
   const parent = createOpenClawDatabaseMaintenanceScope({
     assertOwnerCurrent: () => {
       const current = getOpenClawDatabaseMaintenanceScope();
       current?.assertReadAdmission();
       observeOpenClawDatabaseMaintenanceResource(resource);
-      if (nestedEffect) {
+      if (nestedEffect === "database") {
+        current?.assertDatabaseAccess("/private/fixture-secret/state.sqlite");
+      } else if (nestedEffect) {
         current?.assertAdmission();
       }
       if (revoked) {
@@ -103,9 +105,15 @@ it("keeps nested authority reads in their resource scope without admitting effec
         supportedVersion: 2,
       });
     });
-    nestedEffect = true;
-    expect(() => child.run(() => child.assertAdmission())).toThrow("cannot admit a nested effect");
-    nestedEffect = false;
+    nestedEffect = "admission";
+    expect(() => child.run(() => child.assertAdmission())).toThrow(
+      /^Database maintenance authority check cannot admit a nested effect \(access=effect; caller=[\w$.]*assertAdmission[\w$. <-]{0,140}\)$/u,
+    );
+    nestedEffect = "database";
+    expect(() => child.run(() => child.assertAdmission())).toThrow(
+      /caller=[\w$. <-]*assertDatabaseAccess[\w$. <-]*\)$/u,
+    );
+    nestedEffect = undefined;
     expect(() => child.run(() => child.assertAdmission())).not.toThrow();
     await expect(
       child.run(async () => {

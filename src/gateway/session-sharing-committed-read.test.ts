@@ -14,7 +14,10 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -216,21 +219,38 @@ describe("committed session mutation authorization", () => {
           expect(warm.error).toBeNull();
           warm.authorization!.assertCurrent();
           const queries = observeSqliteReadSql(StatementSync.prototype);
+          const messages = vi.spyOn(Worker.prototype, "postMessage");
           try {
             for (let turn = 0; turn < 50; turn += 1) {
               const admitted = capture();
               expect(admitted.error).toBeNull();
               expect(admitted.authorization).toBeDefined();
               await Promise.resolve();
-              admitted.authorization!.assertCurrent();
+              if (resident) {
+                await admitted.authorization!.withCurrent!(() =>
+                  admitted.authorization!.assertCurrent(),
+                );
+              } else {
+                admitted.authorization!.assertCurrent();
+              }
             }
             if (resident) {
               expect(queries.queries).toHaveLength(0);
+              // Display backfill runs independently of the admission's worker reads.
+              expect(
+                messages.mock.calls.filter(
+                  ([message]) => message.input?.kind !== "session-row-backfill",
+                ),
+              ).toEqual([]);
+              await expect(
+                warm.authorization!.withCurrent!(() => Promise.resolve()),
+              ).rejects.toThrow("Sharing authorization consumers must remain synchronous");
             } else {
               expect(queries.queries.length).toBeGreaterThan(0);
             }
           } finally {
             queries.restore();
+            messages.mockRestore();
           }
           const prepared = resolveSessionMutationAuthorization({
             client,
@@ -253,10 +273,21 @@ describe("committed session mutation authorization", () => {
           if (!authorization) {
             throw new Error("Expected session mutation authorization");
           }
+          await authorization.admittedInputAuthority!.withCurrent((facts) => {
+            expect(facts.members).toContainEqual(
+              expect.objectContaining({ identityId, addedBy: "test-owner" }),
+            );
+          });
           const owner = openOpenClawAgentDatabase({ agentId: "main" });
           registerOpenClawAgentDatabase({ agentId: "main", path: owner.path });
           expect(() => authorization.assertCurrent()).not.toThrow();
           removeSessionMember(scope, identityId);
+          await Promise.resolve();
+          const effect = vi.fn();
+          await expect(authorization.withCurrent!(effect)).rejects.toThrow(
+            "session is shared for this connection",
+          );
+          expect(effect).not.toHaveBeenCalled();
           expect(() => authorization.assertCurrent()).toThrow(
             "session is shared for this connection",
           );
@@ -357,18 +388,20 @@ describe("committed session mutation authorization", () => {
           throw new Error("Expected session mutation authorization");
         }
         const owner = openOpenClawAgentDatabase({ agentId: "main" });
-        inWriterTransaction(owner.db, () => {
-          if (opened === "before") {
+        runOpenClawAgentWriteTransaction(
+          () => {
+            if (opened === "before") {
+              expect(() => authorization.assertCurrent()).not.toThrow();
+            }
+            setCanonicalSqliteSessionMainKey(owner, "work");
+            owner.db
+              .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+              .run("agent:main:unrecorded-parent", "agent:main:main");
             expect(() => authorization.assertCurrent()).not.toThrow();
-          }
-          setCanonicalSqliteSessionMainKey(owner, "work");
-          owner.db
-            .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
-            .run("agent:main:unrecorded-parent", "agent:main:main");
-          expect(() => authorization.assertCurrent()).not.toThrow();
-          expect(() => authorization.assertCurrent()).not.toThrow();
-          owner.db.exec("COMMIT");
-        });
+            expect(() => authorization.assertCurrent()).not.toThrow();
+          },
+          { agentId: "main" },
+        );
 
         // A policy change never makes this valid target depend on an invalid sibling.
         inWriterTransaction(owner.db, () => {

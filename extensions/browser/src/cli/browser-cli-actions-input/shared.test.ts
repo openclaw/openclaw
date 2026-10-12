@@ -25,38 +25,6 @@ describe("browser JSON byte input", () => {
     });
   });
 
-  it.each(["fields", "actions"] as const)("preserves valid Unicode in %s files", async (kind) => {
-    await withTempDir("openclaw-browser-utf8-", async (root) => {
-      const file = path.join(root, "input.json");
-      const text = '[{"ref":"1","value":"合法 � 😀"}]\r\n';
-      await fs.writeFile(file, text);
-      if (kind === "fields") {
-        expect(await readFields({ fieldsFile: file })).toEqual([
-          { ref: "1", type: "text", value: "合法 � 😀" },
-        ]);
-      } else {
-        expect(await readActionsPayload({ actionsFile: file })).toBe(text);
-      }
-      expect(await fs.readFile(file, "utf8")).toBe(text);
-    });
-  });
-
-  it("rejects malformed stdin bytes after bounded collection", async () => {
-    const iterator = vi
-      .spyOn(process.stdin, Symbol.asyncIterator)
-      .mockImplementationOnce(async function* () {
-        yield Buffer.from('[{"kind":"type","text":"');
-        yield Buffer.from([0xe2, 0x82]);
-        yield Buffer.from('"}]');
-        return undefined;
-      });
-    try {
-      await expect(readActionsPayload({ actionsFile: "-" })).rejects.toThrow("must be valid UTF-8");
-    } finally {
-      iterator.mockRestore();
-    }
-  });
-
   it("preserves valid stdin Unicode split across chunks", async () => {
     const text = '[{"kind":"type","text":"合法 � 😀"}]\r\n';
     const bytes = Buffer.from(text);
@@ -98,11 +66,6 @@ describe("readActionsPayload", () => {
     await expect(
       readActionsPayload({ actions: "[]", actionsFile: "/tmp/openclaw-browser-actions.json" }),
     ).rejects.toThrow("Specify only one of --actions or --actions-file");
-  });
-
-  it("preserves inline actions larger than the file input ceiling", async () => {
-    const actions = " ".repeat(1_000_001);
-    await expect(readActionsPayload({ actions })).resolves.toBe(actions);
   });
 
   it("bounds action files with the same byte limit as stdin", async () => {

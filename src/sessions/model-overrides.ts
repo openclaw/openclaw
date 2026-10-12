@@ -74,31 +74,17 @@ export function applyModelOverrideToSessionEntry(params: {
   assertModelSelectionUnlocked(entry);
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   const selectionSource = params.selectionSource ?? "user";
-  let updated = false;
-  let selectionUpdated = false;
+  let updated: boolean;
+  let selectionUpdated: boolean;
   let profileUpdated = false;
 
   if (selection.isDefault) {
-    if (params.explicitDefaultSelection && entry.modelOverrideSource !== "default") {
-      entry.modelOverrideSource = "default";
-      updated = true;
-      selectionUpdated = true;
-    } else if (!params.explicitDefaultSelection && entry.modelOverrideSource !== undefined) {
-      delete entry.modelOverrideSource;
-      updated = true;
-      selectionUpdated = true;
-    }
-    for (const key of ["providerOverride", "modelOverride"] as const) {
-      if (entry[key]) {
-        delete entry[key];
-        updated = true;
-        selectionUpdated = true;
-      }
-    }
-    if (entry.modelOverrideRouteResolution) {
-      delete entry.modelOverrideRouteResolution;
-      updated = true;
-    }
+    selectionUpdated = params.explicitDefaultSelection
+      ? setField(entry, "modelOverrideSource", "default")
+      : clearDefinedFields(entry, "modelOverrideSource");
+    selectionUpdated =
+      clearDefinedFields(entry, "providerOverride", "modelOverride") || selectionUpdated;
+    updated = clearDefinedFields(entry, "modelOverrideRouteResolution") || selectionUpdated;
   } else {
     selectionUpdated = setField(entry, "providerOverride", selection.provider);
     selectionUpdated = setField(entry, "modelOverride", selection.model) || selectionUpdated;
@@ -112,9 +98,6 @@ export function applyModelOverrideToSessionEntry(params: {
       "modelOverrideFallbackOriginModel",
     ) || updated;
 
-  // Model overrides supersede previously recorded runtime model identity.
-  // If runtime fields are stale (or the override changed), clear them so status
-  // surfaces reflect the selected model immediately.
   const runtimeModel = normalizeOptionalString(entry.model) ?? "";
   const runtimeProvider = normalizeOptionalString(entry.modelProvider) ?? "";
   const runtimePresent = runtimeModel.length > 0 || runtimeProvider.length > 0;
@@ -130,9 +113,6 @@ export function applyModelOverrideToSessionEntry(params: {
     selectionUpdated = true;
   }
 
-  // contextTokens are derived from the active session model. When the selected
-  // model changes (or runtime model is already stale), the cached window can
-  // pin the session to an older/smaller limit until another run refreshes it.
   const shouldClearModelDerivedState = selectionUpdated || (runtimePresent && !runtimeAligned);
   if (shouldClearModelDerivedState) {
     updated =
@@ -145,12 +125,7 @@ export function applyModelOverrideToSessionEntry(params: {
     profileUpdated =
       setField(entry, "authProfileOverrideSource", profileOverrideSource) || profileUpdated;
   } else if (!params.preserveAuthProfileOverride) {
-    for (const key of ["authProfileOverride", "authProfileOverrideSource"] as const) {
-      if (entry[key]) {
-        delete entry[key];
-        profileUpdated = true;
-      }
-    }
+    profileUpdated = clearDefinedFields(entry, "authProfileOverride", "authProfileOverrideSource");
   }
   updated = profileUpdated || updated;
   if (profileOverride || !params.preserveAuthProfileOverride) {

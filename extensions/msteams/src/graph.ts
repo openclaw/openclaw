@@ -7,7 +7,8 @@ import {
   createProviderHttpError,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
+import { fetchWithSsrFGuard, type OpenClawConfig } from "../runtime-api.js";
+import { resolveMSTeamsRuntimeAccount } from "./accounts.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import {
@@ -17,7 +18,7 @@ import {
   withMSTeamsRequestDeadline,
 } from "./request-timeout.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
+import { resolveDelegatedAccessToken } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
@@ -256,12 +257,22 @@ export async function fetchAllGraphPages<T>(params: {
 
 export async function resolveGraphToken(
   cfg: unknown,
-  options?: { preferDelegated?: boolean },
+  options?: { accountId?: string | null; preferDelegated?: boolean },
 ): Promise<string> {
   const assertRequestCurrent = captureGraphRequestCurrentness(captureChannelReadAuthority());
   assertRequestCurrent?.();
-  const msteamsCfg = (cfg as { channels?: { msteams?: MSTeamsConfig } })?.channels?.msteams;
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
+  const openClawCfg = cfg as OpenClawConfig;
+  const {
+    accountId,
+    config: msteamsCfg,
+    credentials: creds,
+  } = resolveMSTeamsRuntimeAccount({
+    cfg: openClawCfg,
+    accountId: options?.accountId,
+  });
+  if (openClawCfg.channels?.msteams?.enabled === false || msteamsCfg.enabled === false) {
+    throw new Error("MS Teams account disabled: " + accountId);
+  }
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
@@ -276,6 +287,7 @@ export async function resolveGraphToken(
       tenantId: creds.tenantId,
       clientId: creds.appId,
       clientSecret: creds.appPassword,
+      accountId,
     });
     assertRequestCurrent?.();
     if (delegated) {

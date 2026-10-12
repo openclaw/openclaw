@@ -12,6 +12,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "active turn recovery",
@@ -317,7 +318,7 @@ suite.define(() => {
         .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
         .click();
       await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
-      await sidebar.getByRole("link", { name: "Home" }).click();
+      await openHomeFullPage(page);
       await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
       await assertActiveTurnVisible(page, streamText);
       await expect.poll(() => readWorkingStartedAts(page)).toContain(startedAt);

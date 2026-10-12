@@ -33,7 +33,7 @@ export async function readDoctorGatewayOwnerLease(
   const reply = await withArtifactPreservingStateReads(() =>
     executeExistingOpenClawStateRead(
       options,
-      { type: "doctor.gatewayOwnerLease.read" },
+      { type: "gatewayOwnerLease.read", schemaMaintenance: true },
       { current: true, signal },
     ),
   );
@@ -41,7 +41,7 @@ export async function readDoctorGatewayOwnerLease(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "doctor.gatewayOwnerLease.read") {
+  if (!reply.ok || reply.type !== "gatewayOwnerLease.read") {
     throw new Error("Unexpected Doctor Gateway owner lease read result");
   }
   // The recorded process may have exited while the reader and its private snapshot settled.

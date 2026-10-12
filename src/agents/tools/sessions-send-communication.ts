@@ -132,7 +132,10 @@ export async function prepareSessionsSendCommunication(params: {
     }
   };
   const unsubscribe = sessionChanges.subscribeFacts((change) => {
-    if (!sessionChangeScopeAffectsStoredRows(change)) {
+    if (
+      !sessionChangeScopeAffectsStoredRows(change) &&
+      !("all" in change && change.scope === "config")
+    ) {
       return;
     }
     if ("all" in change) {

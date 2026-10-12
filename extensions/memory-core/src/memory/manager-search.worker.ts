@@ -1,13 +1,16 @@
-import { openOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import {
+  openOpenClawAgentDatabaseReadOnly,
+  loadSqliteVecExtension,
+} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   readCuratedMemoryTriggerCandidates,
   readCuratedProjectMemoryCandidates,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { withOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  withOpenClawAgentDatabaseReadOnly,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import { readMemoryOriginsInWorker } from "../memory-entry-origin-reads.js";
 import type {
@@ -17,6 +20,7 @@ import type {
 import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
 import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import {
+  readMemoryDatabaseFacts,
   readMemoryRetrievalIndexState,
   readMemoryRecallData,
   type MemoryRecallData,
@@ -52,6 +56,8 @@ export type MemorySearchWorkerInput =
       | { kind: "keyword"; query: MemoryKeywordWorkerQuery; includeIndexState?: boolean }
       | { kind: "vector"; query: MemoryVectorWorkerQuery }
       | { kind: "index-state" }
+      | { kind: "index-facts" }
+      | { kind: "vector-load"; extensionPath?: string }
       | {
           kind: "source-state";
           query: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">;
@@ -73,6 +79,8 @@ export type MemorySearchWorkerOutput =
   | { kind: "prewarm" }
   | { kind: "presence"; present: boolean }
   | { kind: "index-state"; state: ReturnType<typeof readMemoryRetrievalIndexState> }
+  | { kind: "index-facts"; facts: ReturnType<typeof readMemoryDatabaseFacts> }
+  | { kind: "vector-load"; result: Awaited<ReturnType<typeof loadSqliteVecExtension>> }
   | { kind: "source-state"; rows: ReturnType<typeof loadMemorySourceFileState> }
   | ({ kind: "recall-metadata" } & ReturnType<typeof readMemoryRecallData>)
   | {
@@ -105,12 +113,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (request.kind === "forget-index-plan") {
     return { kind: request.kind, plan: await readMemoryForgetIndexInWorker(request) };
   }
-  if (
-    request.kind === "origin-rows" ||
-    request.kind === "origin-exists" ||
-    request.kind === "session-tombstones" ||
-    request.kind === "origin-index-keys"
-  ) {
+  if (request.kind === "origin-rows" || request.kind === "session-tombstones") {
     return readMemoryOriginsInWorker(request);
   }
   if (request.kind === "recall-metadata") {
@@ -126,10 +129,13 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (request.kind === "source-state") {
     assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
   }
-  const opened = openOpenClawAgentDatabaseReadOnly({
-    agentId: request.agentId,
-    path: request.databasePath,
-  });
+  const opened = openOpenClawAgentDatabaseReadOnly(
+    {
+      agentId: request.agentId,
+      path: request.databasePath,
+    },
+    request.kind === "vector-load" ? { allowExtension: true } : {},
+  );
   if (!opened.found) {
     if (
       opened.reason === "database-missing" &&
@@ -149,12 +155,21 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   }
   const { db } = opened.database;
   try {
+    if (request.kind === "vector-load") {
+      return {
+        kind: "vector-load",
+        result: await loadSqliteVecExtension({ db, extensionPath: request.extensionPath }),
+      };
+    }
     if (request.kind === "source-state") {
       assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
       return { kind: "source-state", rows: loadMemorySourceFileState({ db, ...request.query }) };
     }
     if (request.kind === "index-state") {
       return { kind: "index-state", state: readMemoryRetrievalIndexState(db) };
+    }
+    if (request.kind === "index-facts") {
+      return { kind: "index-facts", facts: readMemoryDatabaseFacts(db) };
     }
     if (request.kind === "curated") {
       const provenanceRepairPending =

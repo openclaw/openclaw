@@ -236,8 +236,13 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteStartupOptimizationHints: () => undefined,
 }));
 
+// mock-isolation: Keep config preparation outside service-lifecycle fixtures.
 vi.mock("../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig: async () => ({ cfg: mocks.config(), shouldWriteConfig: true }),
+  loadAndMaybeMigrateDoctorConfig: async () => ({
+    cfg: mocks.config(),
+    shouldWriteConfig: true,
+    [Symbol.asyncDispose]: async () => undefined,
+  }),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({

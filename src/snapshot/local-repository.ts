@@ -43,6 +43,10 @@ import {
   assertTrustedStagingRoot,
 } from "./local-repository-directory-policy.js";
 import {
+  createPrivateSnapshotDirectory,
+  isPrivateDirectoryAlreadyExists,
+} from "./local-repository-private-directory.js";
+import {
   copySnapshotArtifact,
   hashSnapshotArtifact,
   readSnapshotManifest,
@@ -166,17 +170,8 @@ class LocalSqliteSnapshotProvider {
       await syncDirectoryIfSupported(stagingDir);
 
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
-      try {
-        await createPrivateSqliteDirectory(snapshotDir);
-        snapshotDirectoryCreated = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-          throw new Error(`SQLite snapshot directory already exists: ${snapshotDir}`, {
-            cause: error,
-          });
-        }
-        throw error;
-      }
+      await createPrivateSnapshotDirectory(snapshotDir);
+      snapshotDirectoryCreated = true;
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
       publishedDirectory = await pinDirectory(snapshotDir, {
         label: "SQLite snapshot directory",
@@ -628,7 +623,7 @@ async function ensurePrivateDirectory(
           await createPrivateSqliteDirectory(targetPath);
           return;
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          if (!isPrivateDirectoryAlreadyExists(error)) {
             throw error;
           }
         }

@@ -27,6 +27,11 @@ vi.mock("node:worker_threads", async (importOriginal) => {
       on(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
         fixture.receive = listener;
       },
+      off(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
+        if (fixture.receive === listener) {
+          fixture.receive = undefined;
+        }
+      },
       postMessage: (message: unknown) => fixture.worker?.emit("message", structuredClone(message)),
       close: () => queueMicrotask(() => fixture.worker?.emit("exit", 0)),
     },

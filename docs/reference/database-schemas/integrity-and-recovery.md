@@ -23,6 +23,12 @@ explicit verification keep their independent checks. Proven corruption still
 revokes admission; current ownership and cached-row freshness are separate from
 format validation.
 
+Shared-state admission checks schema eligibility before scanning database contents.
+Stores that need canonical index repair receive their full integrity check from
+the repair owner before mutation, followed by verification of the rebuilt indexes.
+Repair publishes the passing integrity fact with its committed schema so later
+schema additions and worker opens do not repeat the full check.
+
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the

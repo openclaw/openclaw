@@ -22,6 +22,17 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Browser requirements
+
+Use Safari 26.2 or later on macOS 26.2, iOS 26.2, or iPadOS 26.2 or later,
+or Chrome or Firefox released within the last six months (Chrome 147+ and
+Firefox 150+ as of October 2026). Embedded web views need the same browser capabilities.
+
+Browsers missing required overlay features show an update screen before the
+dashboard starts. In the native apps, **Open in browser** opens the current
+page in your default browser. Update the browser or operating system if that
+browser also shows the update screen.
+
 In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
 the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
 and **Circle**. Square preserves the full image; rounded and circular icons use a
@@ -29,6 +40,10 @@ centered crop. The choice is saved with your tab-icon preference, and activity
 badges remain visible on every shape.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
+
+Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.
 
@@ -68,6 +83,8 @@ Failed narration releases use the same backoff, including while the tab is hidde
 
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
+Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
+
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
 New Session keeps previously fetched model choices selectable while their catalog
@@ -78,6 +95,8 @@ catalog cache and appear independently of slower search categories.
 Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Sidebar health and Automations page refreshes pause during announced restarts or suspension and catch up when the Gateway is available again. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
+
+In a session’s menu, open **View → Speech bubbles** to switch that conversation—including the main session—to two-sided bubbles. Your messages stay on the right and agent replies stream into bubbles on the left. The choice is saved per session in this browser; other sessions keep their own mode. Turn it off to restore the flat reply layout. In bubble mode, activity appears as a compact **…** preview. Click it to see the full tool or status details. Agent reactions appear beneath the prompt they acknowledge, independently of the selected layout.
 
 Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
 
@@ -123,9 +142,16 @@ When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
 
-Open the parent conversation's side panel and select **Subagents** from its **+**
-menu to inspect child runs, including swarm workers. The panel loads all child
-pages automatically and groups running and finished work,
+The chat header keeps **Share**, **Layout**, and the session menu together.
+**Layout** contains focus, split, swap, panel selection, and dock-position actions,
+with their keyboard shortcuts. Open **Subagents** there or from the side-panel
+**+** menu to inspect child runs, including swarm workers. An empty conversation
+starts with the panel closed. The first running batch adds it automatically,
+preserving another panel you selected; closing it keeps it closed for that batch.
+Finished results stay open until you close them. While the parent waits on
+subagents, a muted line above the composer shows the count, child name and elapsed
+time, with **View** to open the panel. The panel loads all child pages automatically
+and groups running and finished work,
 keeping children waiting on their own descendants under **Running**. It shows
 elapsed time and available tool activity, and opens each child's existing
 view-only transcript beside the parent. Avatar-free child transcripts do not reserve
@@ -135,7 +161,7 @@ The parallel-tasks view also shows aggregate swarm progress. A directly opened c
 offers **Open parent session**. The `/subagents list`, `/subagents info <id|#>`,
 and `/subagents log <id|#>` commands remain available.
 
-Open **Processes** from the chat header's **Panels** menu or the side-panel **+**
+Open **Processes** from the chat header's **Layout** menu or the side-panel **+**
 menu to inspect the conversation's background exec commands. It is separate from
 **Subagents**. Running and retained finished processes show status and elapsed
 time. **Finished** starts collapsed; click its heading to expand or collapse the
@@ -308,6 +334,9 @@ Agent names and avatars follow agent and identity updates. While a configured av
 the avatar keeps its tinted background with no face or text. The image appears when ready;
 an emoji or generated face appears only when no image is configured or the image fails to load.
 Repeated views reuse prepared avatar thumbnails; updating the avatar refreshes its thumbnail.
+Profiles without an advertised avatar use initials without probing an image route. Authenticated
+misses for current profile revisions, agent avatars, and resolved workspace icons can remain in
+the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
 
 Activity and previews on the page and sidebar roster refresh on session events

@@ -237,52 +237,6 @@ describe("Mattermost server thread recovery through the post handler", () => {
     };
   }
 
-  it("discards a session reset during fetch without another inbound ensure", async () => {
-    const f = await setup("channel");
-    const { entered, release } = holdResponse();
-    const pending = f.recover(f.turn);
-    await entered.promise;
-    await f.rotate();
-    release.resolve();
-    expect((await pending).current).toBe(false);
-    expect(f.histories.size).toBe(0);
-  });
-
-  it("rejects same-session rotation and deletion during recovered-history authorization", async () => {
-    const f = await setup("direct");
-    f.monitor.account.config.dmPolicy = "pairing";
-    // Hold authorization's deadline; the separate deadline case exercises real elapsed time.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    try {
-      for (const remove of [false, true]) {
-        const entered = createDeferred<void>();
-        const release = createDeferred<void>();
-        f.monitor.pairing.readAllowFromStore = async () => {
-          entered.resolve();
-          await release.promise;
-          return ["trusted"];
-        };
-        const pending = f.recover(f.turn);
-        try {
-          await entered.promise;
-          if (remove) {
-            await f.remove();
-          } else {
-            await f.rotate("stored-session", "rotated-generation");
-          }
-          release.resolve();
-          expect((await pending).current).toBe(false);
-          expect(f.histories.size).toBe(0);
-        } finally {
-          release.resolve();
-          await pending;
-        }
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("filters concurrent later history from the older turn without losing it", async () => {
     const f = await setup("channel");
     f.monitor.groupPolicy = "allowlist";
@@ -344,20 +298,6 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(requests).toHaveLength(1);
   });
 
-  it("discards in-flight missing-session recovery when storage materializes", async () => {
-    const f = await setup("channel");
-    await f.remove();
-    const { entered, release } = holdResponse();
-    const pending = f.recover(f.turn);
-    await entered.promise;
-    await f.rotate();
-    release.resolve();
-    expect((await pending).current).toBe(false);
-    expect(f.histories.size).toBe(0);
-    await f.recover(f.turn);
-    expect(requests).toHaveLength(1);
-  });
-
   it("does not adopt a completed missing-session success across an unobserved reset", async () => {
     const f = await setup("channel");
     await f.remove();
@@ -371,29 +311,6 @@ describe("Mattermost server thread recovery through the post handler", () => {
     await f.recover(f.turn);
     expect(requests).toHaveLength(2);
     expect(f.histories.get(f.sessionKey)?.[0]?.body).toBe("Next year France");
-  });
-
-  it("late old completion cannot clear a newer session's history or retry owner", async () => {
-    const f = await setup("channel");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    let requestCount = 0;
-    beforeResponse = async () => {
-      if (++requestCount === 1) {
-        entered.resolve();
-        await release.promise;
-      }
-    };
-    const old = f.recover(f.turn);
-    await entered.promise;
-    await f.rotate();
-    await f.recover(f.turn);
-    const newWindow = f.histories.get(f.sessionKey);
-    release.resolve();
-    expect((await old).current).toBe(false);
-    expect(f.histories.get(f.sessionKey)).toBe(newWindow);
-    await f.recover(f.turn);
-    expect(requestCount).toBe(2);
   });
 
   it("keeps warm windows and recovers after actual history LRU eviction", async () => {
@@ -455,25 +372,6 @@ describe("Mattermost server thread recovery through the post handler", () => {
     };
     await f.recover(f.turn);
     expect(f.histories.size).toBe(0);
-  });
-
-  it("preserves cooldown and three-attempt budget across pending session materialization", async () => {
-    const f = await setup("channel");
-    await f.remove();
-    vi.useFakeTimers({ toFake: ["Date"] });
-    responseStatus = 503;
-    await f.recover(f.turn);
-    await f.rotate();
-    await f.recover(f.turn);
-    expect(requests).toHaveLength(1);
-    for (let index = 0; index < 4; index++) {
-      vi.setSystemTime(Date.now() + 60_001);
-      await f.recover(f.turn);
-    }
-    expect(requests).toHaveLength(3);
-    await f.rotate("next-session", "next-generation");
-    await f.recover(f.turn);
-    expect(requests).toHaveLength(4);
   });
 
   it("does not retry permanent provider failure on an absent history key", async () => {

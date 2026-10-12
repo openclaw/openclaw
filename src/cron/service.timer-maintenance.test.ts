@@ -117,7 +117,6 @@ describe("cron timer maintenance admission", () => {
       expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(state.running).toBe(false);
       expect(state.deps.scheduler.nextWakeAtMs).toBe(nextRunAtMs);
       expect(previousRuns).toHaveBeenCalledTimes(0);

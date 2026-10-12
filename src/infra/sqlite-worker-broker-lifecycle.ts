@@ -121,16 +121,12 @@ export function createSqliteWorkerLifecycle({
     operations,
     waiters,
   }: {
-    inputAdmission: Pick<
-      SqliteWorkerInputAdmission,
-      "invalidatePreparations" | "joinOpens" | "joinPreparations"
-    >;
+    inputAdmission: Pick<SqliteWorkerInputAdmission, "joinOpens" | "joinPreparations">;
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
   }): Promise<void> {
     const epoch = ++closeEpoch;
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
-    inputAdmission.invalidatePreparations();
     for (const waiting of waiters) {
       for (const resume of waiting) {
         resume(new SqliteWorkerError("SQLite worker host is closing", "overloaded"));

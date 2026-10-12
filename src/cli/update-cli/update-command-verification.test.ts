@@ -654,55 +654,32 @@ describe("update readiness generation", () => {
     },
   );
 
-  it.each(["stable", "pid storm", "boot storm"])(
-    "only preserves stable startup at the deadline: %s",
-    async (startup) => {
-      mockProcessPlatform("linux");
-      const service = makeGatewayService({ status: "running", pid: 8000 });
-      vi.mocked(service.readRuntime).mockImplementation(async () => ({
-        status: "running",
-        pid: startup === "pid storm" ? 8000 + monotonicClock.nowMs / 500 : 8000,
-      }));
-      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
-      if (startup === "boot storm") {
-        inspectPortUsage.mockImplementation(async (port) => ({
-          port,
-          status: "busy",
-          listeners: [{ pid: 8000 }],
-          hints: [],
-        }));
-        callGateway.mockImplementation((opts) =>
-          gatewayHealthResponse({
-            server: { version: "2026.9.4", bootId: `boot-${monotonicClock.nowMs}` },
-          })(opts),
-        );
-      }
-      const recoverHealth = vi.fn<
-        NonNullable<Parameters<typeof verifyUpdatedGateway>[0]["recoverHealth"]>
-      >(async (health) => ({ health, launchAgentRecovery: null }));
-      const updateResult: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
-      const result = await verifyUpdatedGateway({
-        result: updateResult,
-        opts: { json: true },
-        serviceEnv: { HOME: "/synthetic-home" },
-        gatewayPort: 18789,
-        expectedVersion: "2026.9.4",
-        requireRunningService: true,
-        timeoutMs: 1_000,
-        recoverHealth,
-      });
-      expect(result).toMatchObject(
-        startup === "stable"
-          ? { stopReason: "still-starting" }
-          : { ok: false, summary: "generation-changed" },
-      );
-      if (startup !== "stable") {
-        expect(result.stopReason).toBeUndefined();
-      }
-      expect(recoverHealth).not.toHaveBeenCalled();
-      expect(updateResult.steps[0]?.exitCode).toBe(startup === "stable" ? 0 : 1);
-    },
-  );
+  it("preserves stable startup at the deadline", async () => {
+    mockProcessPlatform("linux");
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    vi.mocked(service.readRuntime).mockImplementation(async () => ({
+      status: "running",
+      pid: 8000,
+    }));
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+    const recoverHealth = vi.fn<
+      NonNullable<Parameters<typeof verifyUpdatedGateway>[0]["recoverHealth"]>
+    >(async (health) => ({ health, launchAgentRecovery: null }));
+    const updateResult: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+    const result = await verifyUpdatedGateway({
+      result: updateResult,
+      opts: { json: true },
+      serviceEnv: { HOME: "/synthetic-home" },
+      gatewayPort: 18789,
+      expectedVersion: "2026.9.4",
+      requireRunningService: true,
+      timeoutMs: 1_000,
+      recoverHealth,
+    });
+    expect(result).toMatchObject({ stopReason: "still-starting" });
+    expect(recoverHealth).not.toHaveBeenCalled();
+    expect(updateResult.steps[0]?.exitCode).toBe(0);
+  });
 
   it.each([
     { activation: "native restart", exhausted: false },

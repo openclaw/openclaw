@@ -41,7 +41,6 @@ type WorkerNodeProvisioningOptions = Pick<
   };
 
 export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOptions) {
-  const now = options.now ?? Date.now;
   const prepareBundle = async (
     preparedInstallation?: WorkerInstallationArtifact,
     signal?: AbortSignal,
@@ -194,17 +193,10 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         current?.state !== "provisioning" ||
         current.destroyRequestedAtMs !== null ||
         current.provisionOperationId !== record.provisionOperationId ||
-        current.ownerEpoch !== record.ownerEpoch ||
-        (current.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now())
+        current.ownerEpoch !== record.ownerEpoch
       ) {
         controller.abort();
         throw new DOMException("Worker provisioning operation is closed", "AbortError");
-      }
-    };
-    const assertRuntimeCurrent = () => {
-      assertCurrent();
-      if (pending) {
-        throw new Error("Worker node enrollment has already begun");
       }
     };
     const assertRuntimeIdentity = (
@@ -226,16 +218,16 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       },
       prepareRuntime: prepareNodeRuntime
         ? async () => {
-            assertRuntimeCurrent();
+            assertCurrent();
             pendingRuntime ??= (async () => {
               const artifact = await racePromiseWithAbortSignal(
                 prepareInstallation(),
                 controller.signal,
               );
-              assertRuntimeCurrent();
+              assertCurrent();
               const prepared = await prepareNodeRuntime(record, artifact, controller.signal);
               try {
-                assertRuntimeCurrent();
+                assertCurrent();
                 assertRuntimeIdentity(prepared);
               } catch (error) {
                 options.closeNodeRuntime?.(prepared);
@@ -302,8 +294,6 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         current.state !== record.state ||
         current.provisionOperationId !== record.provisionOperationId ||
         current.ownerEpoch !== record.ownerEpoch ||
-        (current.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now()) ||
-        (current.preparation !== null && current.preparation.consumedAtMs !== null) ||
         (preparation !== undefined &&
           (!enrollmentOwner?.nodeSetupId ||
             current.nodeSetupId !== enrollmentOwner.nodeSetupId ||

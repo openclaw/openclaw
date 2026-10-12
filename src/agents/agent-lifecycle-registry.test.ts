@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
 import { registerActiveCronTaskRun } from "../cron/service/active-run-cancellation.js";
 import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -262,7 +262,7 @@ describe("agent lifecycle registry", () => {
     });
     const changes: unknown[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => {
-      if ("all" in change && change.scope === "stores") {
+      if (isSessionStoreTopologyChange(change)) {
         changes.push(change);
       }
     });
@@ -767,6 +767,9 @@ describe("agent lifecycle registry", () => {
       });
       expect(isAgentDeletionBlocked("main", options)).toBe(true);
       await expect(first.assertCurrentAsync()).rejects.toThrow("no longer owns");
+      await expect(first.retire()).rejects.toThrow("no longer owns");
+      await expect(first.fenceDatabasePaths([])).rejects.toThrow("no longer owns");
+      await expect(first.fenceCleanupPaths([])).rejects.toThrow("no longer owns");
       expect(first.assertCurrentFinal).toThrow("no longer owns");
       expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
       expect(await captureAgentLifecycleBinding(() => config, "main", options)).toBeUndefined();

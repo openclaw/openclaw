@@ -380,9 +380,11 @@ describe("tsdown config", () => {
         throw new Error("expected runtime graph dependency predicates");
       }
 
-      expect(alwaysBundle("@openclaw/fs-safe")).toBe(false);
-      expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(false);
-      expect(external("@openclaw/fs-safe/path", undefined, false)).toBe(true);
+      for (const specifier of ["@openclaw/fs-safe/path", "@openclaw/proc-safe/windows-job"]) {
+        expect(alwaysBundle(specifier.split("/").slice(0, 2).join("/"))).toBe(false);
+        expect(alwaysBundle(specifier)).toBe(false);
+        expect(external(specifier, undefined, false)).toBe(true);
+      }
       expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
       expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
       expect(alwaysBundle("zod")).toBe(true);

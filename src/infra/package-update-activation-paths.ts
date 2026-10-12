@@ -9,6 +9,9 @@ import type { PackageActivationRecord } from "./package-update-activation-schema
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
+// Published openclaw@2026.9.8 recovery helper; newer writers keep full verification.
+export const LEGACY_PACKAGE_RECOVERY_HELPER =
+  "e08dfc1fb3ba7962f9e01d7a6770117c6cd77406b3fa4f7ba94788a670030ba0";
 
 export function packageActivationRuntimeIdentity(file: string): string {
   const stat = fs.lstatSync(file, { bigint: true });

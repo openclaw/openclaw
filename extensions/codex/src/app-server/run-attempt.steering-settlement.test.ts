@@ -303,9 +303,7 @@ it("keeps one steering prefix and source through degraded tainted native complet
     await vi.advanceTimersByTimeAsync(1);
     release.resolve();
     await writer;
-    const settled = vi.fn();
-    void fixture.run.then(settled, settled);
-    await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+    // Keep the deadline clock fixed while the accepted SQLite work settles.
     const result = await fixture.run;
     vi.useRealTimers();
 

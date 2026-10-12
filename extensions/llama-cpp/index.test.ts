@@ -56,6 +56,10 @@ vi.mock("./src/managed-server.js", async (importOriginal) => ({
   ensureManagedLlamaServerForChat: mocks.ensureChat,
   prepareManagedLlamaServer: mocks.prepareServer,
   reconcileManagedLlamaServer: mocks.reconcileServer,
+}));
+
+vi.mock("./src/managed-server-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/managed-server-inspection.js")>()),
   inspectLlamaServerRuntime: mocks.inspectRuntime,
 }));
 
@@ -194,10 +198,15 @@ describe("llama.cpp provider plugin", () => {
         ]),
       }),
     );
-    expect(provider.auth.map((method) => method.id)).toEqual(["local", "existing-server"]);
+    expect(provider.auth.map((method) => method.id)).toEqual([
+      "local",
+      "existing-server",
+      "local-media",
+    ]);
     expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual([
       "llama-cpp",
       "llama-cpp-existing-server",
+      undefined,
     ]);
     expect(provider).not.toHaveProperty("createStreamFn");
   });
@@ -383,6 +392,24 @@ describe("llama.cpp provider plugin", () => {
       buildInfo: "b10357 (689e227db)",
       endpoints: { health: "ready", metrics: "ready" },
     });
+  });
+
+  it("keeps media preset sections and residency when refreshing embeddings", async () => {
+    const options = configuredOptions();
+    const provider: ModelProviderConfig = options.config.models.providers[LLAMA_CPP_PROVIDER_ID];
+    provider.params = { mediaModels: { ocr: "ocr", vision: "vision" } };
+    provider.localService?.args?.push("--models-max", "1");
+
+    await llamaCppEmbeddingProviderAdapter.create(options);
+
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatModel: { mode: "preserve" },
+        configuredChatModelIds: expect.arrayContaining(["gemma-4-e4b-it-q4_k_m"]),
+        mediaModels: [],
+        localService: provider.localService,
+      }),
+    );
   });
 
   it("routes embeddings without requiring a configured chat model", async () => {

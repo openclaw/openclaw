@@ -81,7 +81,9 @@
 }
 
 .chat-bubble--tool-shell > .chat-tool-msg-collapse,
-.chat-bubble--tool-shell > .chat-tools-inline > .chat-tool-msg-collapse {
+.chat-bubble--tool-shell > .chat-tools-inline > .chat-tool-msg-collapse,
+.chat-bubble--tool-shell > openclaw-chat-tool-card > .chat-tool-msg-collapse,
+.chat-bubble--tool-shell > .chat-tools-inline > openclaw-chat-tool-card > .chat-tool-msg-collapse {
   margin-top: 0;
 }
 
@@ -1008,7 +1010,8 @@
   width: 100%;
 }
 
-.chat-tool-card__widget-raw > .chat-tool-card__raw {
+.chat-tool-card__widget-raw > .chat-tool-card__raw,
+.chat-tool-card__widget-raw > openclaw-chat-tool-raw > .chat-tool-card__raw {
   margin-top: 8px;
 }
 
@@ -1036,7 +1039,8 @@
   cursor: default;
 }
 
-.chat-tool-card--flush > .chat-tool-card__raw {
+.chat-tool-card--flush > .chat-tool-card__raw,
+.chat-tool-card--flush > openclaw-chat-tool-raw > .chat-tool-card__raw {
   margin-inline: 12px;
 }
 

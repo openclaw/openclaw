@@ -316,12 +316,6 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               return await executeMemorySearchToolQuery({
                 onRebuildNotice: (read) => rebuildNotices.push(read),
                 initialManager: { manager: memory.manager, managerMs: memory.debug?.managerMs },
-                refreshManager: async () => {
-                  const refreshed = await acquireMemoryManager();
-                  return "error" in refreshed
-                    ? null
-                    : { manager: refreshed.manager, managerMs: refreshed.debug?.managerMs };
-                },
                 query: {
                   text: query,
                   resultLimit: maxResults ?? settings.query.maxResults,

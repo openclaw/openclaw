@@ -15,6 +15,8 @@ import {
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import {
+  buildExecApprovalFollowupTarget,
+  buildExecApprovalDeniedToolResult,
   buildExecAutoReviewDeniedToolResult,
   formatExecApprovalContinuationSourceOutput,
 } from "./bash-tools.exec-approval-output.js";
@@ -123,18 +125,7 @@ export async function executeNodeHostCommand(
   }
   if (requiresAsk && params.nonInteractiveApproval) {
     const text = `Exec denied (approval_required): ${params.command}`;
-    return {
-      content: [{ type: "text", text }],
-      details: {
-        status: "failed",
-        exitCode: null,
-        failureKind: "approval_required",
-        durationMs: 0,
-        aggregated: text,
-        timedOut: false,
-        cwd: prepared.cwd,
-      },
-    };
+    return buildExecApprovalDeniedToolResult(text, prepared.cwd, "approval_required");
   }
   const registerNodeApproval = async (
     approvalId: string,
@@ -422,25 +413,15 @@ export async function executeNodeHostCommand(
         inlineDispatchAuthority = inlineApprovalSource ?? "human-approval";
         inlineFallbackPolicy = outcome.state.timeoutContext;
       } else {
-        const followupTarget = {
-          approvalId,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          sessionKey: params.notifySessionKey ?? params.sessionKey,
-          expectedSessionId: params.sessionId,
-          sessionStore: params.sessionStore,
-          bashElevated: params.bashElevated,
-          turnSourceChannel: params.turnSourceChannel,
-          turnSourceTo: params.turnSourceTo,
-          turnSourceAccountId: params.turnSourceAccountId,
-          turnSourceThreadId: params.turnSourceThreadId,
-          direct: params.approvalFollowupMode === "direct",
-        };
+        const followupTarget = buildExecApprovalFollowupTarget(params, approvalId);
+        const sendDeniedFollowup = (reason: string) =>
+          execHostShared.sendExecApprovalFollowupResult(
+            followupTarget,
+            `Exec denied (node=${target.nodeId} id=${approvalId}, ${reason}): ${params.command}`,
+          );
         const sendApprovalRequestFailedFollowup = async (): Promise<void> => {
           if (!params.signal?.aborted) {
-            await execHostShared.sendExecApprovalFollowupResult(
-              followupTarget,
-              `Exec denied (node=${target.nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
-            );
+            await sendDeniedFollowup("approval-request-failed");
           }
         };
         let nodeInvocationStarted = false;
@@ -475,10 +456,7 @@ export async function executeNodeHostCommand(
                 : null;
 
           if (deniedReason) {
-            await execHostShared.sendExecApprovalFollowupResult(
-              followupTarget,
-              `Exec denied (node=${target.nodeId} id=${approvalId}, ${deniedReason}): ${params.command}`,
-            );
+            await sendDeniedFollowup(deniedReason);
             return;
           }
 
@@ -551,10 +529,7 @@ export async function executeNodeHostCommand(
             if (params.signal?.aborted || nodeInvocationCompleted) {
               return;
             }
-            await execHostShared.sendExecApprovalFollowupResult(
-              followupTarget,
-              `Exec denied (node=${target.nodeId} id=${approvalId}, invoke-failed): ${params.command}`,
-            );
+            await sendDeniedFollowup("invoke-failed");
           }
         })()
           .catch(async (error: unknown): Promise<void> => {

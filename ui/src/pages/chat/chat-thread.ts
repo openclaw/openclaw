@@ -15,6 +15,7 @@ import {
   type AssistantMessageExpansionState,
 } from "./chat-message-recovery.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
+import { activeChatReasoning } from "./chat-reasoning.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
@@ -282,6 +283,10 @@ function sameChatItemsStructuralInput(
   previous: BuildChatItemsProps,
   next: BuildChatItemsProps,
 ): boolean {
+  const previousReasoning = previous.reasoning?.items;
+  const nextReasoning = next.reasoning?.items;
+  const previousActive = activeChatReasoning(previous.reasoning);
+  const nextActive = activeChatReasoning(next.reasoning);
   return (
     previous.sessionKey === next.sessionKey &&
     previous.archiveNotice?.key === next.archiveNotice?.key &&
@@ -295,8 +300,16 @@ function sameChatItemsStructuralInput(
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.reasoning?.runId === next.reasoning?.runId &&
-    previous.reasoning?.itemId === next.reasoning?.itemId &&
-    previous.reasoning?.startedAt === next.reasoning?.startedAt &&
+    previous.showReasoning === next.showReasoning &&
+    previousReasoning?.length === nextReasoning?.length &&
+    (previousReasoning?.every(
+      (item, index) =>
+        item === nextReasoning?.[index] ||
+        (item === previousActive &&
+          nextReasoning?.[index] === nextActive &&
+          sameFields(previousActive, nextActive, ["itemId", "startedAt"])),
+    ) ??
+      true) &&
     previous.queue === next.queue &&
     previous.initialTurnId === next.initialTurnId &&
     // renderChat derives this list of immutable Gateway records on every render,
@@ -328,10 +341,11 @@ function liveStreamIdentity(input: BuildChatItemsProps): string {
 }
 
 function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsProps): boolean {
+  const reasoning = activeChatReasoning(input.reasoning);
   const live = cached.liveStream;
   const item = live ? cached.items[live.index] : undefined;
   if (
-    (input.stream === null && !input.reasoning) ||
+    (input.stream === null && !reasoning) ||
     !live ||
     item?.kind !== "stream" ||
     !item.isStreaming ||
@@ -340,10 +354,10 @@ function updateCachedLiveStream(cached: CachedChatItems, input: BuildChatItemsPr
     return false;
   }
   const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream ?? ""), live.prefix);
-  if (!input.reasoning && (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip)) {
+  if (!reasoning && (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip)) {
     return false;
   }
-  cached.items[live.index] = { ...item, text, thinking: input.reasoning?.text };
+  cached.items[live.index] = { ...item, text, thinking: reasoning?.text };
   return true;
 }
 
@@ -393,7 +407,8 @@ export function buildCachedChatItems(
   if (cached.input && sameChatItemsStructuralInput(cached.input, input)) {
     if (
       cached.input.stream === input.stream &&
-      cached.input.reasoning?.text === input.reasoning?.text
+      activeChatReasoning(cached.input.reasoning)?.text ===
+        activeChatReasoning(input.reasoning)?.text
     ) {
       return cached.items;
     }

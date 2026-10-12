@@ -13,7 +13,7 @@ import {
   type UpdateFailureReportInput,
   type UpdateFailureReportSubmitResult,
 } from "../../infra/update-failure-report.js";
-import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { getUpdateRunStatusAsync } from "../../infra/update-run-reader.js";
 import { classifyUpdateOutcome, isReportableUpdateRun } from "../../shared/update-outcome.js";
 import { refreshLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -82,7 +82,8 @@ async function readCurrentReportInput(hasCurrentAuthority: () => boolean) {
   }
   // Match update.status authority, not a legacy sentinel's timestamp. Only
   // same-run evidence may enrich a ledger row; reads never create a store.
-  const run = findActiveUpdateRun() ?? listUpdateRuns({ limit: 1 })[0];
+  const { activeRun, lastRun } = await getUpdateRunStatusAsync();
+  const run = activeRun ?? lastRun;
   if (!run) {
     return sentinel ? projectReportInput(sentinel) : null;
   }

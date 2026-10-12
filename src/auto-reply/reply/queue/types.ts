@@ -296,6 +296,19 @@ export type FollowupRun = {
   };
 };
 
+export function bindReplyOperationQueueDisposition(
+  run: Pick<FollowupRun, "onQueueDisposition">,
+  state: ReplyOperationRunState | undefined,
+): void {
+  const observe = run.onQueueDisposition;
+  run.onQueueDisposition = (disposition) => {
+    observe?.(disposition);
+    if (state && (disposition !== "queue-cap-old" || state.admission?.status !== "accepted")) {
+      state.admission = { status: "skipped", reason: "queue-cap" };
+    }
+  };
+}
+
 export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,
 ): boolean {

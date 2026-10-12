@@ -993,7 +993,7 @@ async function inspectOrMigrateTarget(params: {
         if (indexless) {
           report.issues.push({
             code: "retained_plugin_source_index_rebuilt",
-            message: `Derived the retained source index from verified transcripts for ${path.dirname(params.target.storePath)}. Recorded their identities in the completed import receipt without creating sessions.json or replaying canonical metadata.`,
+            message: `Derived the retained source index from verified transcripts for ${path.dirname(params.target.storePath)}. Recorded their identities in the completed import receipt without creating sessions.json or replaying existing metadata.`,
           });
         }
       }

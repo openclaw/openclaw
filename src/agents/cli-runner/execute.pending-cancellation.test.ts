@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createProcessAdapterEvents } from "../../process/supervisor/adapters/process-events.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
@@ -11,6 +11,7 @@ import {
   setCliRunnerExecuteTestDeps,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
+import * as cliHelpers from "./helpers.js";
 import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -445,31 +446,42 @@ describe("CLI execution cancellation", () => {
     expect(createChildAdapterMock).not.toHaveBeenCalled();
   });
 
-  it("drops an aborted turn waiting behind the serialized CLI run queue", async () => {
-    const firstPreparation = createDeferred();
-    const beforeExecution = vi.fn(async () => await firstPreparation.promise);
+  it("rejects a cancelled CLI turn before its serialized predecessor settles", async ({
+    signal,
+  }) => {
     const firstAdapter = createTestAdapter();
     createChildAdapterMock.mockResolvedValueOnce(firstAdapter);
 
-    const first = executePreparedCliRun(
-      createRunContext({ runId: "cli-queue-first", beforeExecution }),
-    );
-    await vi.waitFor(() => expect(beforeExecution).toHaveBeenCalledOnce());
+    const first = executePreparedCliRun(createRunContext({ runId: "cli-queue-first" }));
+    await vi.waitFor(() => expect(firstAdapter.onStdout).toHaveBeenCalledOnce());
 
     const controller = new AbortController();
-    const second = executePreparedCliRun(
-      createRunContext({ runId: "cli-queue-aborted", signal: controller.signal }),
-    );
+    const queueKeyResolved = createDeferred();
+    const resolveQueueKey = cliHelpers.resolveCliRunQueueKey;
+    vi.spyOn(cliHelpers, "resolveCliRunQueueKey").mockImplementationOnce((params) => {
+      queueKeyResolved.resolve();
+      return resolveQueueKey(params);
+    });
+    const secondContext = createRunContext({
+      runId: "cli-queue-aborted",
+      signal: controller.signal,
+    });
+    secondContext.params.sessionId = "session-2";
+    secondContext.params.sessionKey = "agent:main:second";
+    const second = executePreparedCliRun(secondContext);
     const secondRejected = expect(second).rejects.toMatchObject({ name: "AbortError" });
-    controller.abort();
-    firstPreparation.resolve();
-
-    await vi.waitFor(() => expect(createChildAdapterMock).toHaveBeenCalledOnce());
-    firstAdapter.emitStdout("first");
-    firstAdapter.settle(0);
-    await expect(first).resolves.toMatchObject({ text: "first" });
-    await secondRejected;
-    expect(createChildAdapterMock).toHaveBeenCalledOnce();
+    try {
+      await withinTest(queueKeyResolved.promise, signal);
+      controller.abort();
+      await withinTest(secondRejected, signal);
+      expect(createChildAdapterMock).toHaveBeenCalledOnce();
+    } finally {
+      firstAdapter.emitStdout("first");
+      firstAdapter.settle(0);
+      await expect(first).resolves.toMatchObject({ text: "first" });
+      await secondRejected;
+      expect(createChildAdapterMock).toHaveBeenCalledOnce();
+    }
   });
 
   it("recognizes checkpoint rejection before provider coercion", async () => {

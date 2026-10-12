@@ -5,10 +5,10 @@ import {
   appendTranscriptMessage,
   readLatestSessionTranscriptMessageEvent,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   markCanonicalSessionValidationPending,
   setCanonicalSqliteSessionMainKey,

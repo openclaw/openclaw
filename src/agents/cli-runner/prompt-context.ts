@@ -209,14 +209,18 @@ function prependCliSessionDriftUserContext(
 export function createCliCurrentPromptRenderer(
   params: Pick<RunCliAgentParams, "currentInboundContext" | "inputProvenance">,
   reusableCliSession: CliReusableSession,
+  inlineContext?: string,
 ) {
   const context = prependCliSessionDriftUserContext(
     params.currentInboundContext,
     reusableCliSession,
   );
   return (prompt: string, preferResumableText = false) =>
-    annotateInterSessionPromptText(
-      buildCurrentInboundPrompt({ context, prompt, preferResumableText }),
-      params.inputProvenance,
+    composeCliPromptContext(
+      annotateInterSessionPromptText(
+        buildCurrentInboundPrompt({ context, prompt, preferResumableText }),
+        params.inputProvenance,
+      ),
+      { prependContext: inlineContext },
     );
 }

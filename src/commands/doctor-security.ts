@@ -329,7 +329,7 @@ export async function collectSecurityWarnings(
         title: "WARNING",
         detail: [
           `Gateway bound to ${bindDescriptor} (network-accessible).`,
-          "Ensure your auth credentials are strong and not exposed.",
+          "Use strong authentication credentials and keep them private.",
         ].join("\n"),
         remediation: saferRemoteAccessLines.join("\n"),
       });

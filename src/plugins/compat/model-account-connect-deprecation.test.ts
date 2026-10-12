@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { PluginInstance } from "../plugin-instance.js";
 import { warnModelAccountConnectDeprecation } from "./model-account-connect-deprecation.js";
 
-it("warns once per plugin and released account method, including after a plugin reload", async () => {
+it("warns once per plugin and account family, including after a plugin reload", async () => {
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
   const first = new PluginInstance("model-account-compat-first");
   const second = new PluginInstance("model-account-compat-second");
@@ -24,9 +24,9 @@ it("warns once per plugin and released account method, including after a plugin 
         warnModelAccountConnectDeprecation(method);
       }
     });
-    expect(warning).toHaveBeenCalledTimes(8);
+    expect(warning).toHaveBeenCalledTimes(2);
     for (const { plugin, method } of [
-      ...methods.map((name) => ({ plugin: "model-account-compat-first", method: name })),
+      { plugin: "model-account-compat-first", method: "listLinks" },
       { plugin: "model-account-compat-second", method: "list" },
     ]) {
       const calls = warning.mock.calls.filter(

@@ -1208,11 +1208,10 @@ def forum_identity(driver, test_server):
 
 
 def public_forum_record(record):
-    return {
-        key: record[key]
-        for key in ("ok", "status", "groupId", "forumTopicId", "title", "topicTitle")
-        if key in record
-    }
+    keys = ("ok", "status", "groupId", "forumTopicId", "title", "topicTitle")
+    if record.get("creationUncertain"):
+        keys += ("testerUserId", "createdAt", "error", "deletion", "deletionReadback")
+    return {key: record[key] for key in keys if key in record}
 
 
 def prepare_forum(driver, manifest_path, test_server):
@@ -1224,6 +1223,7 @@ def prepare_forum(driver, manifest_path, test_server):
     record = {
         **identity,
         "status": "creating",
+        "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "title": f"OpenClaw {'QA forum' if test_server else 'private QA'} {secrets.token_hex(6)}",
         "topicTitle": f"{'Topic' if test_server else 'Identity'} proof {secrets.token_hex(4)}",
     }
@@ -1319,6 +1319,36 @@ def prepare_forum(driver, manifest_path, test_server):
         raise
 
 
+def verify_forum_deletion(driver, manifest_path, record):
+    try:
+        group_id = int(record.get("groupId") or record["basicGroupId"])
+        remaining = driver.client.request({
+            "@type": "searchChatsOnServer", "query": record["title"], "limit": 100,
+        })
+        if group_id in remaining["chat_ids"]:
+            chat_type = record["deletionChatType"]
+            if chat_type["@type"] == "chatTypeBasicGroup":
+                group = driver.client.request({
+                    "@type": "getBasicGroup", "basic_group_id": chat_type["basic_group_id"],
+                })
+                deleted = group.get("is_active") is False
+            else:
+                group = driver.client.request({
+                    "@type": "getSupergroup", "supergroup_id": chat_type["supergroup_id"],
+                })
+                deleted = group["status"]["@type"] in {
+                    "chatMemberStatusLeft", "chatMemberStatusBanned",
+                }
+            if not deleted:
+                raise DriverError("Deleted forum is still active in the deletion read-back.")
+        record.pop("error", None)
+        record.update(status="deleted", ok=True, deletionReadback=True)
+    except (DriverError, KeyError, TypeError, ValueError) as error:
+        record.update(ok=False, error=str(error))
+    write_json_private(manifest_path, record)
+    return public_forum_record(record)
+
+
 def cleanup_forum(driver, manifest_path, test_server):
     record = read_json(manifest_path)
     if not record:
@@ -1328,12 +1358,33 @@ def cleanup_forum(driver, manifest_path, test_server):
         raise DriverError("Forum cleanup record belongs to a different identity.")
     if record.get("status") == "deleted":
         return public_forum_record(record)
+    if record.get("status") == "deletion-pending-verification":
+        return verify_forum_deletion(driver, manifest_path, record)
     group_id = record.get("groupId") or record.get("basicGroupId")
+    reconciled = not group_id or record.get("creationUncertain") is True
     if not group_id:
-        record.pop("inviteLink", None)
-        record.update(status="not-created", ok=True)
+        record["creationUncertain"] = True
         write_json_private(manifest_path, record)
-        return public_forum_record(record)
+        # A create timeout says nothing about whether Telegram committed it.
+        # Search the leased user's server chats, then require exact ownership.
+        try:
+            matches = driver.client.request({
+                "@type": "searchChatsOnServer", "query": record["title"], "limit": 100,
+            })
+            chats = [
+                driver.client.request({"@type": "getChat", "chat_id": chat_id})
+                for chat_id in matches["chat_ids"]
+            ]
+            exact = [chat for chat in chats if chat.get("title") == record["title"]]
+            if len(exact) != 1:
+                raise DriverError("Creation remains uncertain: exact-title search did not find one chat.")
+            group_id = exact[0]["id"]
+            record["groupId"] = str(group_id)
+            write_json_private(manifest_path, record)
+        except (DriverError, KeyError, TypeError, ValueError) as error:
+            record.update(status="uncertain-creation", ok=False, error=str(error))
+            write_json_private(manifest_path, record)
+            return public_forum_record(record)
     chat = driver.client.request({"@type": "getChat", "chat_id": int(group_id)})
     membership = driver.client.request(
         {
@@ -1363,7 +1414,18 @@ def cleanup_forum(driver, manifest_path, test_server):
             if "The chat can't be deleted" not in str(error) or attempt == 4:
                 raise
             time.sleep(1)
+    if reconciled:
+        record.update(
+            status="deletion-pending-verification",
+            deletion=deletion,
+            deletionChatType=chat["type"],
+            ok=False,
+        )
+        record.pop("inviteLink", None)
+        write_json_private(manifest_path, record)
+        return verify_forum_deletion(driver, manifest_path, record)
     record.pop("inviteLink", None)
+    record.pop("error", None)
     record.update(status="deleted", deletion=deletion, ok=True)
     write_json_private(manifest_path, record)
     return public_forum_record(record)

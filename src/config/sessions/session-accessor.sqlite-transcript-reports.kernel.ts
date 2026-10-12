@@ -1,20 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import {
-  readSessionTranscriptRunId,
-  resolveTerminalAssistantTranscriptRunId,
-} from "../../sessions/transcript-events.js";
-import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
-import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
-import {
-  isOpenClawMessageToolMirrorAssistantMessage,
-  isTranscriptOnlyOpenClawAssistantMessage,
-} from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
@@ -24,7 +14,6 @@ import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-
 import type {
   AbortedSessionTranscriptPartial,
   AbortedSessionTranscriptPartialResult,
-  CustomMessageReport,
   CustomMessageReportAppend,
   PreparedTranscriptReport,
   SelectedTranscriptReport,
@@ -37,51 +26,19 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "./session-entry-codec.js";
-import { SessionEntryNavigation, type SessionNavigationEntry } from "./session-entry-navigation.js";
 import {
   decodeSessionTranscriptReportFacts,
   projectSessionTranscriptReportFacts,
   type SessionTranscriptReportFacts,
 } from "./session-transcript-report-facts.js";
+import {
+  TranscriptReportNavigation,
+  hasSettledTranscriptAssistant,
+  selectTranscriptReport,
+} from "./session-transcript-report-policy.js";
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
-
-type ReportNavigationEntry = SessionNavigationEntry & {
-  seq: number;
-  customType?: string;
-  assistantResponseId?: string;
-  assistantRunId?: string;
-};
-
-class TranscriptReportNavigation extends SessionEntryNavigation<ReportNavigationEntry> {
-  constructor(rows: Iterable<{ seq: number; facts: SessionTranscriptReportFacts }>) {
-    super();
-    for (const { seq, facts } of rows) {
-      switch (facts.kind) {
-        case "canonical":
-          this.appendCanonicalNavigationEntry(
-            { ...facts.entry, parentId: facts.entry.parentId ?? null, seq },
-            facts.hasParentId,
-          );
-          break;
-        case "leaf":
-          this.appendOpaqueNavigationRecord({ ...facts.entry, type: "leaf" });
-          break;
-        case "link":
-          this.appendOpaqueNavigationRecord(facts);
-          break;
-        case "ignored":
-          break;
-      }
-    }
-    this.finishNavigation();
-  }
-
-  facts() {
-    return { appendParentId: this.appendParentId, path: this.getBranch() };
-  }
-}
 
 function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
   function rows() {
@@ -152,54 +109,16 @@ function readReportEvent(database: OpenClawAgentDatabase, sessionId: string, seq
   return asOptionalRecord(event);
 }
 
-function latestCustomReport(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  branch: ReturnType<typeof readReportBranch>,
-  customTypes: readonly string[],
-): CustomMessageReport | undefined {
-  for (const entry of branch.path.toReversed()) {
-    if (
-      entry.type !== "custom_message" ||
-      entry.customType === undefined ||
-      !customTypes.includes(entry.customType)
-    ) {
-      continue;
-    }
-    const record = readReportEvent(database, sessionId, entry.seq);
-    if (record) {
-      return { customType: entry.customType, content: record.content, details: record.details };
-    }
-  }
-  return undefined;
-}
-
 export function prepareTranscriptReportSelection(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   selection: TranscriptReportSelection,
 ): PreparedTranscriptReport {
-  const branch = readReportBranch(database, resolved.sessionId);
-  const suppressed =
-    selection.kind === "assistant"
-      ? branch.path.some((entry) => entry.assistantResponseId === selection.responseId)
-      : selection.suppressWhenAssistantRun !== undefined &&
-        branch.path.some((entry) => {
-          if (entry.assistantRunId !== selection.suppressWhenAssistantRun) {
-            return false;
-          }
-          // Progress and commentary cannot stand in for a durable failure outcome.
-          const message = readReportEvent(database, resolved.sessionId, entry.seq)?.message;
-          return isRecord(message) && message.stopReason === "error";
-        });
-  return {
-    appendParentId: branch.appendParentId,
-    suppressed,
-    latest:
-      selection.kind === "custom" && !suppressed
-        ? latestCustomReport(database, resolved.sessionId, branch, selection.customTypes)
-        : undefined,
-  };
+  return selectTranscriptReport(
+    readReportBranch(database, resolved.sessionId),
+    (seq) => readReportEvent(database, resolved.sessionId, seq),
+    selection,
+  );
 }
 
 /** Process-held reports select and append without crossing their native transaction boundary. */
@@ -252,28 +171,14 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
     throw new SessionTranscriptWriterClaimReboundError();
   }
   const branch = readReportBranch(database, resolved.sessionId);
-  for (const candidate of branch.path.toReversed()) {
-    if (candidate.assistantRunId !== partial.runId) {
-      continue;
-    }
-    const message = readReportEvent(database, resolved.sessionId, candidate.seq)?.message;
-    if (
-      !isRecord(message) ||
-      readSessionTranscriptRunId(message) !== partial.runId ||
-      resolveTerminalAssistantTranscriptRunId(message, partial.runId) === undefined ||
-      isOpenClawMessageToolMirrorAssistantMessage(message) ||
-      isTranscriptOnlyOpenClawAssistantMessage(message)
-    ) {
-      continue;
-    }
-    const metadata = asOptionalRecord(message["__openclaw"]);
-    if (metadata?.mirrorOrigin !== undefined && metadata.runTerminal !== true) {
-      continue;
-    }
-    // Commentary, media-only receipts, and empty error rows do not own buffered answer text.
-    if (extractAssistantPhaseText(projectAssistantDisplayContent(message))?.trim()) {
-      return { skipped: true };
-    }
+  if (
+    hasSettledTranscriptAssistant(
+      branch,
+      (seq) => readReportEvent(database, resolved.sessionId, seq),
+      partial.runId,
+    )
+  ) {
+    return { skipped: true };
   }
   // Deferred Gateway settlement has no model writer context; recheck durable custody here.
   if (entry.activeWriterRunId !== undefined && entry.activeWriterRunId !== partial.runId) {

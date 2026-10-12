@@ -385,14 +385,14 @@ describe("AuthStorage OAuth refresh ownership", () => {
         filterExternalAuthProfiles: false,
       });
 
-      const originalLoad = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfiles;
+      const originalLoad = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfilesAsync;
       let providerAReads = 0;
       let providerBReads = 0;
       vi.spyOn(
         authProfileStoreRuntime,
-        "loadAuthProfileStoreWithoutExternalProfiles",
-      ).mockImplementation((...args: Parameters<typeof originalLoad>) => {
-        const store = originalLoad(...args);
+        "loadAuthProfileStoreWithoutExternalProfilesAsync",
+      ).mockImplementation(async (...args: Parameters<typeof originalLoad>) => {
+        const store = await originalLoad(...args);
         const credential = store.profiles[profileId];
         if (credential?.type === "oauth" && credential.provider === "openai") {
           providerAReads += 1;

@@ -3,7 +3,6 @@ import { assertAgentSessionStoreDeletionBlocker } from "../agents/agent-delete-s
 import { findAgentSessionStoreDeletionBlocker } from "../agents/agent-delete-session-store-safety.kernel.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-import { prepareCronReceiptAuthorityPublication } from "../cron/store/receipt-authority-publication.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -29,7 +28,10 @@ import {
   readClawInstallRecordFromDatabase,
   readClawOrphanWorkspaceInDatabase,
 } from "./provenance-read.kernel.js";
-import type { ClawRemovalJournalWorkerInput } from "./removal-journal-contract.js";
+import {
+  serializeClawRemovalJournal,
+  type ClawRemovalJournalWorkerInput,
+} from "./removal-journal-contract.js";
 
 export function mutateClawRemovalJournalInWorker(
   database: OpenClawStateDatabase,
@@ -70,7 +72,7 @@ export function mutateClawRemovalJournalInWorker(
       const previous = readAgentDeletionJournalInDatabase({ db }, request.agentId);
       if (
         digestClawValue(install ?? null) !== request.expectedInstallDigest ||
-        digestClawValue(previous ?? null) !== request.expectedJournalDigest
+        digestClawValue(serializeClawRemovalJournal(previous)) !== request.expectedJournalDigest
       ) {
         throw new Error(
           "Claw install or deletion journal changed before mutation; preview removal again.",
@@ -133,8 +135,7 @@ export function mutateClawRemovalJournalInWorker(
       }
       deferSqliteWorkerCommitReceipt(db, {
         nonce: input.nonce,
-        journal,
-        receiptAuthority: prepareCronReceiptAuthorityPublication(db),
+        journal: serializeClawRemovalJournal(journal),
       });
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce: input.nonce } });
       assertLease();

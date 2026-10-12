@@ -12,8 +12,8 @@ import {
 import { projectPreparedModelProvider } from "../harness/support.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../model-auth.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { isOpenAIProvider } from "../openai-routing.js";
@@ -162,7 +162,7 @@ export async function prepareCompactionHarnessAuth(params: {
 }): Promise<
   | {
       ok: true;
-      runtimeAuthProfileStore: ReturnType<typeof ensureAuthProfileStore>;
+      runtimeAuthProfileStore: Awaited<ReturnType<typeof ensureAuthProfileStoreAsync>>;
       runtimeAuthPreparation: PreparedAgentRuntimeAuth;
       selectedPreparedHarness: AgentHarness;
       providerUsesProfileScopedModelMetadata: boolean;
@@ -171,9 +171,9 @@ export async function prepareCompactionHarnessAuth(params: {
 > {
   const useOpenAi = isOpenAIProvider(params.provider);
   const ensureStore = useOpenAi
-    ? ensureAuthProfileStore
-    : ensureAuthProfileStoreWithoutExternalProfiles;
-  const runtimeAuthProfileStore = ensureStore(params.agentDir, {
+    ? ensureAuthProfileStoreAsync
+    : ensureAuthProfileStoreWithoutExternalProfilesAsync;
+  const runtimeAuthProfileStore = await ensureStore(params.agentDir, {
     profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
     ...(useOpenAi ? { externalCliProviderIds: ["openai"] } : {}),
     allowKeychainPrompt: false,

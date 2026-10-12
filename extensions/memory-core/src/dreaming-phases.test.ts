@@ -19,16 +19,10 @@ import {
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
-import {
-  memoryCoreWorkspaceStateKey,
-  openMemoryCoreStateStore,
-  SHORT_TERM_LOCK_MAX_ENTRIES,
-  SHORT_TERM_LOCK_NAMESPACE,
-} from "./dreaming-state.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { appendSessionCorpusLines } from "./session-ingestion.js";
-import { makeMessage, withSessionAdmissionReadBudget } from "./session-ingestion.test-support.js";
+import { makeMessage, withoutHostSessionAdmissionReads } from "./session-ingestion.test-support.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -820,7 +814,7 @@ describe("memory-core dreaming phases", () => {
     const excludedHarness = createHarness(excludedConfig, workspaceDir);
     const corpusFile = corpusPath(workspaceDir);
 
-    await withSessionAdmissionReadBudget(() => runLight(excludedHarness.sweep), 1);
+    await withoutHostSessionAdmissionReads(() => runLight(excludedHarness.sweep));
     const excludedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(excludedState.files["main:sessions/main/gmail-session"]).toMatchObject({
       contentHash: "",
@@ -838,7 +832,7 @@ describe("memory-core dreaming phases", () => {
     const admittedHarness = createDailyHarness(workspaceDir, {
       includeMainAgent: true,
     });
-    await withSessionAdmissionReadBudget(() => runLight(admittedHarness.sweep, 6), 0);
+    await withoutHostSessionAdmissionReads(() => runLight(admittedHarness.sweep, 6));
     const admittedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
     expect(admittedState.files["main:sessions/main/gmail-session"]).not.toHaveProperty(
       "excludedReason",
@@ -944,16 +938,7 @@ describe("memory-core dreaming phases", () => {
           }),
         ]);
         expect(pendingContent).toContain(claim);
-        const publisherOwnsLock = await openMemoryCoreStateStore({
-          namespace: SHORT_TERM_LOCK_NAMESPACE,
-          maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-        }).lookup(memoryCoreWorkspaceStateKey(workspaceDir));
         forgotten = forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
-        // Finish deletion before a writer without a lease resumes. A serialized
-        // writer must finish first; this exercises both orders without sleeps.
-        if (!publisherOwnsLock) {
-          await forgotten;
-        }
         publish.resolve();
         await Promise.all([sweep, forgotten]);
         for (const file of [

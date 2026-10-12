@@ -20,7 +20,7 @@ export function createModelReferenceCheck(): HealthCheck {
         const migrationFinding = migrationTarget
           ? {
               message: `Configured model "${inspection.ref}" is a legacy reference. Doctor can migrate it to "${migrationTarget}".`,
-              requirement: `canonical model reference "${migrationTarget}"`,
+              requirement: `full model reference "${migrationTarget}"`,
               fixHint: `Run \`openclaw doctor --fix\` to migrate this model reference to "${migrationTarget}".`,
             }
           : undefined;

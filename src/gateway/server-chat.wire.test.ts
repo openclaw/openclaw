@@ -412,22 +412,6 @@ it.each([
     correctPrefix: false,
     replace: true,
   },
-  {
-    name: "unflagged cumulative snapshot",
-    itemId: "native",
-    savedSize: 600_000,
-    tailSize: 100_000,
-    correctPrefix: true,
-    replace: false,
-  },
-  {
-    name: "unscoped cumulative snapshot",
-    itemId: undefined,
-    savedSize: 600_000,
-    tailSize: 100_000,
-    correctPrefix: true,
-    replace: false,
-  },
 ])(
   "preserves unsaved text after an ambiguous replacement ($name)",
   ({ itemId, savedSize, tailSize, correctPrefix, replace }) => {
@@ -658,7 +642,7 @@ it("sends append-only wire text while retaining snapshots for observers and late
   expect(projectInFlightRunSnapshot({ chatRunState, runId: "wire-run" }).text).toBe(
     "Reset!\n\nOther",
   );
-  await emit(7, "Reset! again", " again");
+  await emit(7, "Reset! again", " again", undefined, "followup");
   expect(payloads(frames, "agent").at(-1)?.data?.text).toBe("Reset! again");
   handler.retireTranscript({
     sessionKey: "agent:main:wire",

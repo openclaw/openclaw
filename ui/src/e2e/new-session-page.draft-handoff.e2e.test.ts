@@ -46,7 +46,7 @@ suite.define(() => {
       if (!returnEarly) {
         await gateway.resolveDeferred("sessions.create");
       }
-      await page.locator(".sidebar-brand__new-thread").click();
+      await page.locator(".sidebar-session-toolbar .sidebar-new-session").click();
       await page.waitForURL((url) => url.pathname.endsWith("/new"));
       await composer.waitFor();
       const expected = replacement === "same" ? message : (replacement ?? "");
@@ -102,7 +102,7 @@ suite.define(() => {
         .locator(".sidebar-recent-session")
         .filter({ hasText: "Created session" });
       await existingSession.waitFor();
-      await pageA.locator(".sidebar-brand__new-thread").click();
+      await pageA.locator(".sidebar-session-toolbar .sidebar-new-session").click();
       await pageA.waitForURL(
         (url) => url.pathname.endsWith("/new") && url.search === "?agent=main",
       );
@@ -142,7 +142,7 @@ suite.define(() => {
       ).resolves.toBe(0);
       await pageB.close();
 
-      await pageA.locator(".sidebar-brand__new-thread").click();
+      await pageA.locator(".sidebar-session-toolbar .sidebar-new-session").click();
       await pageA.waitForURL(
         (url) => url.pathname.endsWith("/new") && url.search === "?agent=main",
       );
