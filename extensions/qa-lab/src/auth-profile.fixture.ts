@@ -129,7 +129,7 @@ export async function seedAuthProfiles(
 }
 
 export async function snapshotAuthProfiles(agentDir: string): Promise<QaAuthProfileSnapshot> {
-  return normalizeAuthProfileSnapshot(readQaAuthProfiles(agentDir));
+  return normalizeAuthProfileSnapshot(await readQaAuthProfiles(agentDir));
 }
 
 export function resolveCodexAuthProfile(
