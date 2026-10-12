@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
 import { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
+import { recordTalkRealtimeProviderEvent } from "../../../talk/logging.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAudioClearReason,
@@ -312,6 +313,7 @@ export function createTalkRealtimeRelaySession(
       if (!relay) {
         return;
       }
+      recordTalkRealtimeProviderEvent(relay.id, params.provider.id, event);
       if (event.direction === "client" && event.type === "session.continuity.reset") {
         if (continuityResetActive) {
           return;

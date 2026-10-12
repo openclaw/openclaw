@@ -132,6 +132,8 @@ export type RealtimeEvent = {
   data?: string;
   text?: string;
   transcript?: string;
+  audio_start_ms?: number;
+  audio_end_ms?: number;
   item_id?: string;
   response_id?: string;
   call_id?: string;
