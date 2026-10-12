@@ -202,7 +202,26 @@ describe("dashboard action ownership", () => {
         currentUrl = url;
         return null;
       });
+      const context = {
+        newCDPSession: async () => ({
+          send: async (method: string) => {
+            if (method === "Page.getFrameTree") {
+              return {
+                frameTree: {
+                  frame: { id: targetId, loaderId: `loader-${navigations}`, url: currentUrl },
+                },
+              };
+            }
+            if (method === "Target.getTargetInfo") {
+              return { targetInfo: { targetId, title: tab.title } };
+            }
+            throw new Error(`Unexpected CDP method: ${method}`);
+          },
+          detach: async () => {},
+        }),
+      };
       const page = {
+        context: () => context,
         url: () => currentUrl,
         isClosed: () => false,
         goto,
