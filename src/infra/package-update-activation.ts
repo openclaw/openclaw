@@ -11,6 +11,8 @@ import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveExecutablePath } from "./executable-path.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { readPackageVersion } from "./package-json.js";
 import {
   archivePackageActivationCustody,
   settlePackageActivationCustody,
@@ -238,14 +240,12 @@ export async function settleRemountedPackageActivation(anchor: string, operation
   const journal = openPackageActivationSettlementJournal(anchor);
   const inspected = (await journal.readForRecovery()).record;
   assertPackageActivationOperation(inspected, operationId);
-  // This path cannot fall through to manual-install settlement or general recovery.
-  inspectRemountedPackagePublication(anchor, inspected);
   return settlePackageActivation(
     inspected.descriptor.authority.installKey,
     undefined,
     undefined,
     undefined,
-    { journal, inspected },
+    operationId,
   );
 }
 
@@ -263,24 +263,24 @@ async function settlePackageActivation(
   onSettled?: (settlement: PackageActivationSettlement) => void,
   expectedCompleted?: PackageActivationRecord,
   options?: { onlyStaleLease?: boolean; dryRun?: boolean },
-  remounted?: {
-    journal: ReturnType<typeof openPackageActivationSettlementJournal>;
-    inspected: PackageActivationRecord;
-  },
+  operationId?: string,
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
-  const journal = remounted?.journal ?? openPackageActivationJournal(anchor);
+  const journal = openPackageActivationSettlementJournal(anchor);
   const admission = options?.dryRun ? undefined : await journal.readForRecovery();
   const initial = admission?.record ?? journal.read();
-  if (remounted && !isDeepStrictEqual(initial, remounted.inspected)) {
-    throw new Error("Package publication changed before remount settlement.");
+  if (operationId) {
+    assertPackageActivationOperation(initial, operationId);
   }
-  const remount = remounted ? inspectRemountedPackagePublication(anchor, initial) : undefined;
+  const identities = journal.inspectRemount(initial);
   const complete = isPackageActivationComplete(anchor, initial);
+  if (operationId && !identities && !complete) {
+    throw new Error("Separate-helper settlement requires a verified device remount.");
+  }
   if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {
     throw new Error("Completed package receipt changed; inspect recovery status before retrying.");
   }
@@ -321,25 +321,38 @@ async function settlePackageActivation(
   if (options?.onlyStaleLease && !leaseIdentityChanged) {
     return undefined;
   }
-  const reason = leaseWasMissing
-    ? "recovery-lease-missing"
-    : leaseIdentityChanged
-      ? "recovery-lease-identity-changed"
-      : "superseded-by-manual-install";
+  const manualReplacement = ![
+    initial.descriptor.previous.identity,
+    initial.descriptor.candidate.identity,
+  ]
+    .map((identity) => identities?.currentIdentity(identity) ?? identity)
+    .includes(replacementIdentity);
+  const reason =
+    identities && manualReplacement
+      ? "superseded-by-manual-install"
+      : leaseWasMissing
+        ? "recovery-lease-missing"
+        : leaseIdentityChanged
+          ? "recovery-lease-identity-changed"
+          : "superseded-by-manual-install";
   const externalPublication =
-    replacementIdentity === (remount?.candidateIdentity ?? initial.descriptor.candidate.identity) &&
+    replacementIdentity ===
+      (identities?.currentIdentity(initial.descriptor.candidate.identity) ??
+        initial.descriptor.candidate.identity) &&
     (initial.phase === "prepared" ||
       initial.phase === "publishing" ||
       initial.phase === "publication-complete" ||
       (initial.phase === "superseded" &&
         initial.intent?.kind === "publication-settled-external-change"));
   const unusedPreparation =
-    replacementIdentity === initial.descriptor.previous.identity &&
+    replacementIdentity ===
+      (identities?.currentIdentity(initial.descriptor.previous.identity) ??
+        initial.descriptor.previous.identity) &&
     ((initial.phase === "prepared" &&
       initial.intent === null &&
       initial.publications.length === 0) ||
       initial.phase === "aborted");
-  const publicationNotStarted = !leaseIdentityChanged && unusedPreparation;
+  const publicationNotStarted = !identities && !leaseIdentityChanged && unusedPreparation;
   if (
     !complete &&
     !publicationNotStarted &&
@@ -360,7 +373,11 @@ async function settlePackageActivation(
   }
   if (options?.dryRun) {
     if (externalPublication) {
-      await verifyPackagePublicationSettlement(initial, () => journal.assertCurrent(initial));
+      await verifyPackagePublicationSettlement(
+        initial,
+        () => journal.assertCurrent(initial),
+        identities ? inspectRemountedPackagePublication(anchor, initial, identities) : undefined,
+      );
     }
     return {
       operationId: initial.descriptor.operationId,
@@ -436,7 +453,11 @@ async function settlePackageActivation(
         return warning ? { ...settled, warning } : finish(settled, false);
       }
       if (externalPublication) {
-        const verified = await verifyPackagePublicationSettlement(initial, assertCurrent, remount);
+        const verified = await verifyPackagePublicationSettlement(
+          initial,
+          assertCurrent,
+          identities ? inspectRemountedPackagePublication(anchor, initial, identities) : undefined,
+        );
         // Persist a lost launcher rename acknowledgement before disarming recovery.
         const outcome = await syncDirectory(initial.descriptor.binDir);
         verified.assertUnchanged();
@@ -464,12 +485,44 @@ async function settlePackageActivation(
         });
         return { ...settled, warning: result.archiveWarning };
       }
+      let assertReplacement = () => {
+        assertCurrent();
+        if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
+          throw new Error("The installed package changed during recovery settlement.");
+        }
+      };
+      let detail = receipt?.detail;
+      if (identities && manualReplacement) {
+        const version = await readPackageVersion(installKey);
+        if (
+          !version ||
+          (compareOpenClawReleaseVersions(version, initial.descriptor.candidate.version) ?? -1) <= 0
+        ) {
+          throw new Error("Remounted recovery requires a verified newer manual installation.");
+        }
+        const assertInstalled = assertReplacement;
+        const verified = await verifyPackagePublicationSettlement(
+          {
+            ...initial,
+            descriptor: {
+              ...initial.descriptor,
+              candidate: { identity: replacementIdentity, version },
+              binIdentity: identities.bind(initial.descriptor.binIdentity, () =>
+                packageActivationIdentity(initial.descriptor.binDir, "parent"),
+              ),
+            },
+          },
+          assertInstalled,
+        );
+        assertReplacement = verified.assertUnchanged;
+        detail = verified.detail;
+      }
       // Legacy half-transfers retain their original replacement fact. Today's
       // live identity guards this closure; old artifact identities do not.
       const settlement: Parameters<typeof settlePackageActivationCustody>[0]["settlement"] =
         initial.phase === "superseded" && initial.intent && "settled" in initial.intent
           ? initial.intent
-          : { kind: reason, replacementIdentity, settled: true, detail: receipt?.detail };
+          : { kind: reason, replacementIdentity, settled: true, detail };
       const settled = {
         operationId: initial.descriptor.operationId,
         retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
@@ -481,12 +534,7 @@ async function settlePackageActivation(
         journal,
         record: initial,
         settlement,
-        assertCurrent: () => {
-          assertCurrent();
-          if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
-            throw new Error("The installed package changed during recovery settlement.");
-          }
-        },
+        assertCurrent: assertReplacement,
         onSettled: () => onSettled?.(settled),
       });
       return { ...settled, warning: result.archiveWarning };
