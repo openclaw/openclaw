@@ -503,7 +503,13 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         expect(result.resultWithPostUpdate.steps).toEqual(
           changed === "runtime"
             ? [expect.objectContaining({ name: "source runtime publication", exitCode: 0 })]
-            : [],
+            : [
+                expect.objectContaining({
+                  name: "post-plugin doctor",
+                  exitCode: 0,
+                  deferredInspectionCheckIds: null,
+                }),
+              ],
         );
         if (changed === "plugins") {
           expect(mocks.runExec.mock.calls.map(([, args]) => doctorOperation(args))).toEqual([

@@ -1166,6 +1166,7 @@ src/infra/test-runtime-env.ts
 src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
 src/infra/update-doctor-config-schema.ts
+src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-result.ts
 src/infra/update-failure-facts-format.ts
 src/infra/update-failure-facts.ts
