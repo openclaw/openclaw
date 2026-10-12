@@ -38,6 +38,7 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   createReplyOperation,
@@ -295,13 +296,20 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it.each(["default"] as const)(
-    "revalidates original thinking for main-chat fallback with turn request=%s",
-    async (override) => {
+  it.each([
+    { override: "default", requested: "ultra", expected: ["ultra", "ultra"] },
+    { override: undefined, requested: "high", expected: ["high", "off"] },
+  ] as const)(
+    "revalidates original thinking for main-chat fallback with turn request=$requested",
+    async ({ override, requested, expected }) => {
       const followupRun = createFollowupRun();
       followupRun.run.provider = "openai";
       followupRun.run.model = "gpt-5.6-sol";
-      followupRun.run.thinkLevel = "ultra";
+      followupRun.run.thinkLevel = requested;
+      followupRun.run.thinkingCatalog = [
+        { provider: "openai", id: "gpt-5.6-sol", reasoning: true },
+        { provider: "demo", id: "basic", reasoning: false },
+      ];
       followupRun.run = { ...followupRun.run, thinkLevelOverride: override };
       followupRun.run.config = {
         agents: {
@@ -327,15 +335,33 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
 
       const executeAgentTurn = await getExecuteAgentTurnForTest();
-      await executeAgentTurn({
+      const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams({ followupRun }),
       });
 
-      expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
-        "ultra",
-        "ultra",
-      ]);
-      expect(followupRun.run.thinkLevel).toBe("ultra");
+      expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual(
+        expected,
+      );
+      expect(followupRun.run.thinkLevel).toBe(requested);
+      if (result.kind !== "success") {
+        throw new Error("Expected a successful fallback");
+      }
+      expect(result.runResult.meta.requestShaping?.thinkingClamp).toBe(
+        requested === "high"
+          ? "Thinking level clamped to off for demo/basic (requested high; preference retained)."
+          : undefined,
+      );
+      const notice = await buildReplyDiagnosticsPayload({
+        activeSessionEntry: undefined,
+        followupRun,
+        accounting: {
+          runResult: result.runResult,
+          providerUsed: "demo",
+          modelUsed: "basic",
+          contextTokensUsed: 0,
+        },
+      });
+      expect(notice?.text).toBe(result.runResult.meta.requestShaping?.thinkingClamp);
     },
   );
 

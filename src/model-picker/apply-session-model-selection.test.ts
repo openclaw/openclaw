@@ -634,7 +634,7 @@ describe("applySessionModelSelection", () => {
     expectNoSelectionEffects();
   });
 
-  it("refreshes queued work when an idempotent selection only remaps thinking", async () => {
+  it("keeps requested thinking through an idempotent selection", async () => {
     const sessionEntry = createEntry({
       providerOverride: "openai",
       modelOverride: "gpt-4o",
@@ -648,16 +648,43 @@ describe("applySessionModelSelection", () => {
 
     expect(result).toMatchObject({
       status: "applied",
-      changed: true,
-      thinkingRemap: { from: "adaptive", to: "medium", provider: "openai", model: "gpt-4o" },
     });
-    expect(sessionEntry.thinkingLevel).toBe("medium");
-    expect(effects.triggerSessionPatchHook).toHaveBeenCalledOnce();
-    expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextThinking: expect.objectContaining({ level: "medium" }),
-      }),
-    );
+    expect(result).not.toHaveProperty("thinkingRemap");
+    expect(sessionEntry.thinkingLevel).toBe("adaptive");
+  });
+
+  it("preserves the persisted requested level across reasoning capability switches", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = "agent:main:dm:thinking-switch";
+    const sessionEntry = createEntry({ thinkingLevel: "high" });
+    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+    const reasoner = {
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+      name: "Reasoner",
+      reasoning: true,
+    };
+    const plain = { provider: "openai", id: "gpt-4o", name: "Plain", reasoning: false };
+    const thinkingCatalog = [reasoner, plain];
+    for (const [current, selected] of [
+      [reasoner, plain],
+      [plain, reasoner],
+    ] as const) {
+      const result = await applySessionModelSelection(
+        createParams({
+          sessionEntry,
+          sessionKey,
+          storePath,
+          modelCatalog: thinkingCatalog,
+          thinkingCatalog,
+          currentProvider: current.provider,
+          currentModel: current.id,
+          request: createRequest(selected.provider, selected.id),
+        }),
+      );
+      expect(result.status).toBe("applied");
+      expect(loadSessionEntryReadOnly({ sessionKey, storePath })?.thinkingLevel).toBe("high");
+    }
   });
 
   it.each([

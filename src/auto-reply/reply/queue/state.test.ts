@@ -231,9 +231,9 @@ describe("refreshQueuedFollowupSession", () => {
   });
 
   it.each([
-    { requested: "off", stored: "high", expected: ["low", "off", "low"] },
+    { requested: "off", stored: "high", expected: ["off", "off", "off"] },
     { requested: "default", stored: "off", expected: ["high", "off", "low"] },
-    { requested: undefined, stored: "low", expected: ["low", "off", "low"] },
+    { requested: undefined, stored: "high", expected: ["high", "high", "high"] },
   ] as const)(
     "retains requested thinking $requested across repeated queued model switches",
     ({ requested, stored, expected }) => {

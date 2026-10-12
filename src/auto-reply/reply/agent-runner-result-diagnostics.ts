@@ -59,10 +59,12 @@ export async function buildReplyDiagnosticsPayload(params: {
   const traceAuthorized = followupRun.run.traceAuthorized === true;
   const traceLevel = followupRun.run.traceLevelOverride ?? activeSessionEntry?.traceLevel;
   const traceEnabled = traceAuthorized && (traceLevel === "on" || traceLevel === "raw");
-  if (!verboseEnabled && !traceEnabled) {
+  const thinkingClamp = runResult.meta?.requestShaping?.thinkingClamp;
+  if (!verboseEnabled && !traceEnabled && !thinkingClamp) {
     return undefined;
   }
   const lines = [
+    ...(thinkingClamp ? [thinkingClamp] : []),
     ...(verboseEnabled ? resolveSessionPluginStatusLines(activeSessionEntry) : []),
     ...(traceEnabled ? resolveSessionPluginTraceLines(activeSessionEntry) : []),
   ];

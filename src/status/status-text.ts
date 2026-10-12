@@ -615,6 +615,7 @@ export async function buildStatusReplyParts(
     sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
     groupActivation,
     resolvedThink: effectiveThinkLevel,
+    requestedThink: requestedThinkLevel,
     resolvedFast: effectiveFastMode,
     resolvedHarness: effectiveHarness,
     resolvedVerbose: resolvedVerboseLevel,

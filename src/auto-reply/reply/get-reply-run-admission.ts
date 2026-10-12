@@ -268,9 +268,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
       }));
     }
-    // Execution fallbacks are turn-local; directive/model persistence owns
-    // durable thinking remaps so explicit session overrides survive replies.
-    resolvedThinkLevel = thinkingSelection.level;
   }
 
   const providedReplyOperation = opts?.replyOperation;
