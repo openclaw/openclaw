@@ -1,4 +1,5 @@
 import { ErrorCodes, type ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -21,7 +22,13 @@ export function resolveAgentRunAdmissionError(
 ): ErrorShape {
   return error instanceof SessionMutationAuthorizationChangedError
     ? error.error
-    : errorShapeFromError(code, error);
+    : error instanceof PreparedModelRuntimePublicationSupersededError
+      ? errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
+          message: "Model runtime changed before this turn started. Retry the request.",
+          retryable: true,
+          retryAfterMs: 0,
+        })
+      : errorShapeFromError(code, error);
 }
 
 /** Join rejected input and preaccept cleanup without losing either failure. */
