@@ -131,7 +131,9 @@ function resolveScopedGitHubToolIdentity(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   const config = resolveConfiguredGitHubToolIdentity(params);
-  return config
+  // A leftover PAT-shaped id is not a managed profile. Treat it like no binding
+  // so gateway exec falls through to native GitHub detection instead of throwing.
+  return config && isManagedGitHubProfileId(config.profileId)
     ? {
         source:
           params.scope === "agent" ? ("agent-override" as const) : ("system-configured" as const),

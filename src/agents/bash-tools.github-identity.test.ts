@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -236,5 +237,93 @@ describe("exec GitHub identity", () => {
     expect(storeMocks.readSecretStoreExecEnvironment).toHaveBeenCalledWith(
       expect.objectContaining({ excludeNames: ["PREVIEW_STORE_TOKEN"] }),
     );
+  });
+
+  it("does not fail-close gateway echo when a legacy PAT-shaped GitHub profile is configured", async () => {
+    storeMocks.readSecretStoreExecEnvironment.mockReturnValue({ env: {} });
+    const profileRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "exec-github-legacy-pat-")),
+    );
+    try {
+      const config = {
+        tools: {
+          github: {
+            profileId: `ghp_${"Z".repeat(36)}`,
+            kind: "oauth" as const,
+          },
+        },
+      };
+      const preparedRunEnvironment = prepareGitHubToolEnvironment({
+        config,
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: profileRoot },
+      });
+      expect(preparedRunEnvironment.managedLocalIdentity).toBe(false);
+      expect(preparedRunEnvironment.localIdentityEnv).not.toHaveProperty("GH_CONFIG_DIR");
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        allowBackground: false,
+        config,
+        agentId: "main",
+        preparedRunEnvironment,
+      });
+
+      const result = await tool.execute("legacy-pat-echo", { command: "echo hello-legacy" });
+
+      expect(result.details.status).toBe("completed");
+      if (result.details.status !== "completed") {
+        throw new Error("expected completed exec result");
+      }
+      expect(result.details.exitCode).toBe(0);
+      expect(result.details.aggregated).toContain("hello-legacy");
+      expect(result.details.aggregated).not.toContain(
+        "GitHub Identity credential is unavailable or insecure",
+      );
+    } finally {
+      await fs.rm(profileRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("still fail-closes gateway exec when a managed GitHub identity is missing", async () => {
+    storeMocks.readSecretStoreExecEnvironment.mockReturnValue({ env: {} });
+    const profileRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "exec-github-missing-identity-")),
+    );
+    try {
+      const config = {
+        tools: { github: { profileId: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } },
+      };
+      const preparedRunEnvironment = prepareGitHubToolEnvironment({
+        config,
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: profileRoot },
+      });
+      expect(preparedRunEnvironment.managedLocalIdentity).toBe(true);
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        allowBackground: false,
+        config,
+        agentId: "main",
+        preparedRunEnvironment,
+      });
+
+      const result = await tool.execute("missing-identity-echo", { command: "echo hello-missing" });
+
+      expect(result.details.status).toBe("completed");
+      if (result.details.status !== "completed") {
+        throw new Error("expected completed exec result");
+      }
+      expect(result.details.exitCode).toBe(1);
+      expect(result.details.aggregated).toContain(
+        "GitHub Identity credential is unavailable or insecure",
+      );
+      expect(result.details.aggregated).not.toContain("hello-missing");
+    } finally {
+      await fs.rm(profileRoot, { recursive: true, force: true });
+    }
   });
 });
