@@ -31,7 +31,6 @@ import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
@@ -103,7 +102,7 @@ import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
-import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
+import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -122,19 +121,16 @@ export async function getReplyFromConfig(
   options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const baseline: { capture?: Promise<void> } = {};
-  try {
-    return await resolveReplyFromConfig(ctx, options, configOverride, baseline);
-  } finally {
-    await baseline.capture;
-  }
+  return withReplySessionDiffBaseline((baseline) =>
+    resolveReplyFromConfig(ctx, options, configOverride, baseline),
+  );
 }
 
 async function resolveReplyFromConfig(
   ctx: MsgContext,
   options: GetReplyOptions | undefined,
   configOverride: OpenClawConfig | undefined,
-  baseline: { capture?: Promise<void> },
+  baseline: ReplyDiffBaseline,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const opts = prepareInternalGetReplyOptions(options, ctx);
   const isFastTestEnv = isFastTestRuntimeEnv();
@@ -534,25 +530,9 @@ async function resolveReplyFromConfig(
     }
     throw error;
   }
-  const baselineCapture = !useFastTestBootstrap
-    ? traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
-        prepareReplySessionDiffBaseline({
-          agentId,
-          workspaceDir,
-          sessionState,
-        }),
-      ).catch((error: unknown) => {
-        if (isSessionWorkStartInvalidatedError(error)) {
-          throw error;
-        }
-        logVerbose(
-          `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
-        );
-      })
-    : undefined;
-  // The model can start while capture runs; tools and reply cleanup share its settlement.
-  baseline.capture = baselineCapture;
-  void baselineCapture?.catch(() => {});
+  const awaitSessionDiffBaseline = useFastTestBootstrap
+    ? undefined
+    : baseline.start({ agentId, workspaceDir, sessionState }, traceGetReplyPhase);
   const {
     sessionCtx,
     sessionEntry,
@@ -594,14 +574,7 @@ async function resolveReplyFromConfig(
   const optsWithSessionSkillOverrides = {
     ...optsWithCommandQueueOverride,
     ...(turnToolOverrides?.skills ? { skillOverrides: turnToolOverrides.skills } : {}),
-    ...(baselineCapture &&
-    !sessionEntry.execNode &&
-    (sessionEntry.sessionDiffBaselineCapture?.status === "pending" ||
-      (isNewSession &&
-        sessionEntry.createdVia === "operator" &&
-        sessionEntry.sessionDiffBaseline?.sessionId !== sessionId))
-      ? { awaitSessionDiffBaseline: () => baselineCapture }
-      : {}),
+    ...(awaitSessionDiffBaseline ? { awaitSessionDiffBaseline } : {}),
   };
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
