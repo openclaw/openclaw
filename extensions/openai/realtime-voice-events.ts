@@ -370,11 +370,39 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       const rawToolChoice = session?.tool_choice;
       const toolChoice =
         typeof rawToolChoice === "string"
-          ? rawToolChoice
+          ? formatDiagnosticValue(rawToolChoice)
           : isRecord(rawToolChoice) && typeof rawToolChoice.type === "string"
-            ? rawToolChoice.type
+            ? formatDiagnosticValue(rawToolChoice.type)
             : "unset";
-      return `tools=${tools} toolChoice=${toolChoice}`;
+      const summary = [`tools=${tools}`, `toolChoice=${toolChoice}`];
+      if (event.type === "session.updated") {
+        const audio = asOptionalObjectRecord(session?.audio);
+        const input = asOptionalObjectRecord(audio?.input);
+        const inputFormat = asOptionalObjectRecord(input?.format);
+        const noiseReduction = asOptionalObjectRecord(input?.noise_reduction);
+        const turnDetection = asOptionalObjectRecord(input?.turn_detection);
+        const transcription = asOptionalObjectRecord(input?.transcription);
+        summary.push(
+          `model=${formatDiagnosticValue(session?.model)}`,
+          `inputAudioFormat=${formatDiagnosticValue(inputFormat?.type)}`,
+          `inputAudioSampleRate=${formatDiagnosticValue(inputFormat?.rate)}`,
+          `noiseReduction=${formatDiagnosticValue(noiseReduction?.type)}`,
+          `vadType=${formatDiagnosticValue(turnDetection?.type)}`,
+          `vadCreateResponse=${formatDiagnosticValue(turnDetection?.create_response)}`,
+          `vadInterruptResponse=${formatDiagnosticValue(turnDetection?.interrupt_response)}`,
+          `vadThreshold=${formatDiagnosticValue(turnDetection?.threshold)}`,
+          `vadPrefixPaddingMs=${formatDiagnosticValue(turnDetection?.prefix_padding_ms)}`,
+          `vadSilenceDurationMs=${formatDiagnosticValue(turnDetection?.silence_duration_ms)}`,
+          `transcriptionModel=${formatDiagnosticValue(transcription?.model)}`,
+        );
+      }
+      return summary.join(" ");
+    }
+    if (event.type === "input_audio_buffer.speech_started") {
+      return `providerAudioStartMs=${formatAudioOffset(event.audio_start_ms)}`;
+    }
+    if (event.type === "input_audio_buffer.speech_stopped") {
+      return `providerAudioEndMs=${formatAudioOffset(event.audio_end_ms)}`;
     }
     if (
       (event.type === "conversation.item.added" || event.type === "conversation.item.done") &&
@@ -397,6 +425,7 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         [status ? `status=${status}` : undefined, details].filter(Boolean).join(" ") || undefined
       );
     }
+
     if (event.type === "response.cancelled") {
       return "cancelled";
     }
@@ -411,4 +440,23 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
     error: Error,
     connection: RealtimeVoiceSessionConnection,
   ): void;
+}
+
+function formatDiagnosticValue(value: unknown): string {
+  if (typeof value === "string") {
+    return /^[A-Za-z0-9._:/-]{1,96}$/u.test(value) ? value : "other";
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return String(value);
+  }
+  return value === null ? "none" : "unset";
+}
+
+function formatAudioOffset(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? String(value)
+    : "unknown";
 }

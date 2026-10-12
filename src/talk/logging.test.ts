@@ -10,7 +10,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { flushLogger, getChildLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { recordTalkLogEvent } from "./logging.js";
+import { recordTalkLogEvent, recordTalkRealtimeProviderEvent } from "./logging.js";
 import { recordTalkObservabilityEvent } from "./observability.js";
 import { createTalkEventSequencer } from "./talk-events.js";
 
@@ -182,6 +182,65 @@ describe("talk logging", () => {
     unsubscribe();
 
     expect(logs).toHaveLength(0);
+  });
+
+  it("logs whitelisted provider VAD diagnostics and clear origins", async () => {
+    const logs: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "log.record") {
+        logs.push(event);
+      }
+    });
+    const events = createTalkEventSequencer(TALK_CONTEXT);
+    recordTalkRealtimeProviderEvent("talk-session", "openai", {
+      direction: "server",
+      type: "session.updated",
+      detail:
+        "model=gpt-realtime inputAudioFormat=audio/pcm inputAudioSampleRate=24000 noiseReduction=near_field vadType=server_vad vadCreateResponse=true vadInterruptResponse=true vadThreshold=0.7 vadPrefixPaddingMs=300 vadSilenceDurationMs=500 transcriptionModel=gpt-4o-mini-transcribe",
+    });
+    recordTalkRealtimeProviderEvent("talk-session", "openai", {
+      direction: "server",
+      type: "input_audio_buffer.speech_started",
+      detail: "providerAudioStartMs=120",
+    });
+    recordTalkRealtimeProviderEvent("talk-session", "openai", {
+      direction: "server",
+      type: "conversation.item.input_audio_transcription.completed",
+      detail: "private transcript",
+    });
+    recordTalkLogEvent(
+      events.next({
+        type: "output.audio.done",
+        turnId: "turn-1",
+        payload: { reason: "barge-in" },
+      }),
+    );
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    expect(logs).toHaveLength(3);
+    const providerLog = logs.find(
+      (event) => event.message === "talk provider event session.updated",
+    );
+    expect(providerLog?.attributes).toMatchObject({
+      sessionId: "talk-session",
+      talkProvider: "openai",
+      providerEventType: "session.updated",
+      providerEventDetail: expect.stringContaining("vadThreshold=0.7"),
+    });
+    const speechLog = logs.find(
+      (event) => event.message === "talk provider event input_audio_buffer.speech_started",
+    );
+    expect(speechLog?.attributes).toMatchObject({
+      providerEventType: "input_audio_buffer.speech_started",
+      providerEventDetail: "providerAudioStartMs=120",
+    });
+    const clearLog = logs.find((event) => event.message === "talk event output.audio.done");
+    expect(clearLog?.attributes).toMatchObject({
+      talkClearReason: "barge-in",
+      talkTurnId: "turn-1",
+    });
+    expect(JSON.stringify(logs)).not.toContain("private transcript");
   });
 
   it("records diagnostics and logs through the combined observability hook", async () => {

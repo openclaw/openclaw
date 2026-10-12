@@ -44,6 +44,64 @@ const {
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
 describe("OpenAI realtime voice bridge events", () => {
+  it("summarizes effective audio settings and provider speech boundaries", async () => {
+    const observed: Array<{ type: string; detail?: string }> = [];
+    const bridge = createNativeBridge({
+      onEvent: (event) => observed.push(event),
+    });
+    const socket = await connectReadyBridge(bridge);
+    observed.length = 0;
+
+    emitServerEvent(socket, {
+      type: "session.updated",
+      session: {
+        model: "gpt-realtime",
+        instructions: "private instructions must not be logged",
+        audio: {
+          input: {
+            format: { type: "audio/pcm", rate: 24000 },
+            noise_reduction: { type: "near_field" },
+            turn_detection: {
+              type: "server_vad",
+              create_response: true,
+              interrupt_response: true,
+              threshold: 0.7,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+            },
+            transcription: { model: "gpt-4o-mini-transcribe" },
+          },
+        },
+      },
+    });
+    emitServerEvent(socket, {
+      type: "input_audio_buffer.speech_started",
+      audio_start_ms: 120,
+    });
+    emitServerEvent(socket, {
+      type: "input_audio_buffer.speech_stopped",
+      audio_end_ms: 640,
+    });
+
+    expect(observed).toEqual([
+      expect.objectContaining({
+        type: "session.updated",
+        detail:
+          "tools=0 toolChoice=unset model=gpt-realtime inputAudioFormat=audio/pcm inputAudioSampleRate=24000 noiseReduction=near_field vadType=server_vad vadCreateResponse=true vadInterruptResponse=true vadThreshold=0.7 vadPrefixPaddingMs=300 vadSilenceDurationMs=500 transcriptionModel=gpt-4o-mini-transcribe",
+      }),
+      expect.objectContaining({
+        type: "input_audio_buffer.speech_started",
+        detail: "providerAudioStartMs=120",
+      }),
+      expect.objectContaining({
+        type: "input_audio_buffer.speech_stopped",
+        detail: "providerAudioEndMs=640",
+      }),
+    ]);
+    expect(JSON.stringify(observed)).not.toContain("private instructions");
+    await bridge.close();
+  });
+
   it("acknowledges A playback after B starts without PCM", async () => {
     const onMark = vi.fn();
     const bridge = createNativeBridge({ onMark });
