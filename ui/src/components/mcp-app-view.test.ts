@@ -22,7 +22,6 @@ import {
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
 import type { McpAppViewElement } from "./mcp-app-view-controller.ts";
-import type { McpAppContextStripElement as ContextStrip } from "./solid/mcp-app-context-strip.tsx";
 import { McpAppPanel, type McpAppPanelElement } from "./solid/mcp-app-panel.tsx";
 
 const bridgeMocks = vi.hoisted(() => ({
@@ -767,7 +766,8 @@ describe("mcp-app-view localization", () => {
       }
       return originalRequest(method, params, options);
     });
-    client.request = createTestGatewayClient(request).request.bind(client);
+    const appClient = createTestGatewayClient(request);
+    client.request = appClient.request.bind(appClient);
     // SAFETY: the registered Apps page exposes these properties to its rendering callers.
     const apps = document.createElement("openclaw-apps-page") as HTMLElement & {
       readonly updateComplete: Promise<boolean>;
@@ -793,16 +793,15 @@ describe("mcp-app-view localization", () => {
       await pane.updateComplete;
       expect(pane.querySelector('[role="alert"]')?.textContent).toBeUndefined();
       await initialized.promise;
-      const strip = pane.querySelector<ContextStrip>("openclaw-mcp-app-context-strip")!;
+      const strip = pane.querySelector("openclaw-mcp-app-context-strip")!;
       expect(pane.classList.contains("mcp-app-conversation")).toBe(true);
       expect(strip).not.toBeNull();
+      const itemSelector = ".mcp-app-context__item";
       const bridge = bridgeMocks.instances[0] as Awaited<ReturnType<typeof mountBridge>>["bridge"];
       await bridge.updateModelContextHandler!({ content: first.content });
-      await strip.updateComplete;
-      expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(2);
+      await waitForSolid(() => expect(strip.querySelectorAll(itemSelector)).toHaveLength(2));
       await bridge.updateModelContextHandler!({ content: second.content });
-      await strip.updateComplete;
-      expect(strip.querySelectorAll(".mcp-app-context__item")).toHaveLength(3);
+      await waitForSolid(() => expect(strip.querySelectorAll(itemSelector)).toHaveLength(3));
       expect(
         request.mock.calls.filter(([method]) => method === "mcp.app.updateModelContext"),
       ).toHaveLength(2);
@@ -812,8 +811,7 @@ describe("mcp-app-view localization", () => {
         modelContext: null,
         updateId: second.updateId,
       });
-      await strip.updateComplete;
-      expect(strip.textContent?.trim()).toBe("");
+      await waitForSolid(() => expect(strip.textContent?.trim()).toBe(""));
       expect(bridge.setHostContext).toHaveBeenLastCalledWith(
         expect.objectContaining({ "openai/modelContext": null }),
       );

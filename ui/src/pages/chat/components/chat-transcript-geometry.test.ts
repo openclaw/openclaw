@@ -295,6 +295,7 @@ describe("chat transcript geometry", () => {
       // A disconnected shell retires its old column observation before remounting.
       transcript.hostDisconnected();
       render(nothing, region);
+      await flushDeferredRowPrune();
       transcript.hostConnected();
       renderTranscript();
       await flushDeferredRowPrune();

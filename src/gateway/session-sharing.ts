@@ -4,6 +4,10 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  getSessionActorStorageBinding,
+  runWithSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { SessionPendingInputAuthorityFacts } from "../config/sessions/session-pending-input-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -120,6 +124,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     return { error: requestPreparation.error };
   }
   const { params, requiresCommunicationAuthority, targetOwnership } = requestPreparation;
+  const memoryBinding = getSessionActorStorageBinding({});
+  const withSelectedStorage = <T>(run: () => T): T =>
+    memoryBinding ? runWithSessionActorStorage(memoryBinding, run) : run();
   const authorizesAgentRun = isAgentRunStartMethod(params.method, params.requestParams);
   const authorizesRead =
     resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read";
@@ -539,23 +546,25 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           !authorizedTargets.some((target) => isIncognitoSessionKey(target.sessionKey)))
           ? {
               prepareWorkerGrant: (transactionSource) =>
-                prepareSessionSharingWorkerGrant({
-                  targets: authorizedTargets,
-                  request: params,
-                  sourceConfig: getCfg(),
-                  authorizesAgentRun,
-                  transactionFacts:
-                    params.method === "talk.client.create" ||
-                    params.method === "talk.client.toolCall" ||
-                    params.method === "talk.session.create",
-                  transactionSource,
-                  consume: (expected, cfg, prepared, profiles) =>
-                    consumeSharing(
-                      prepared,
-                      () => assertTargetCurrent(expected, expected, cfg),
-                      profiles,
-                    ),
-                }),
+                withSelectedStorage(() =>
+                  prepareSessionSharingWorkerGrant({
+                    targets: authorizedTargets,
+                    request: params,
+                    sourceConfig: getCfg(),
+                    authorizesAgentRun,
+                    transactionFacts:
+                      params.method === "talk.client.create" ||
+                      params.method === "talk.client.toolCall" ||
+                      params.method === "talk.session.create",
+                    transactionSource,
+                    consume: (expected, cfg, prepared, profiles) =>
+                      consumeSharing(
+                        prepared,
+                        () => assertTargetCurrent(expected, expected, cfg),
+                        profiles,
+                      ),
+                  }),
+                ),
             }
           : {}),
         ...(params.method === "chat.send" && authorizedTargets.length === 1 && !talkSessionTarget
@@ -569,22 +578,24 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
                   () => targetChanged(expected.sessionKey),
                   [expected],
                 );
-                return withSessionSharingTarget(
-                  { cfg, sessionKey: expected.sessionKey, agentId: expected.agentId },
-                  (read) => {
-                    const prepared = {
-                      ...read,
-                      assertCurrent: () => {
-                        read.assertCurrent();
-                        assertRoutingCurrent(params.context.getRuntimeConfig());
-                      },
-                    };
-                    return consumeSharing(prepared, () => {
-                      assertTargetCurrent(expected, expected, params.context.getRuntimeConfig());
-                      return consume();
-                    });
-                  },
-                  params.preparedSharing?.selection,
+                return withSelectedStorage(() =>
+                  withSessionSharingTarget(
+                    { cfg, sessionKey: expected.sessionKey, agentId: expected.agentId },
+                    (read) => {
+                      const prepared = {
+                        ...read,
+                        assertCurrent: () => {
+                          read.assertCurrent();
+                          assertRoutingCurrent(params.context.getRuntimeConfig());
+                        },
+                      };
+                      return consumeSharing(prepared, () => {
+                        assertTargetCurrent(expected, expected, params.context.getRuntimeConfig());
+                        return consume();
+                      });
+                    },
+                    params.preparedSharing?.selection,
+                  ),
                 );
               },
               withPreparedCurrent: <T>(
@@ -671,14 +682,16 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
               target.agentId === normalizedTarget.agentId,
           );
           const currentTalkTarget = assertTalkTargetCurrent(currentCfg);
-          assertTargetCurrent(
-            normalizedTarget,
-            expected,
-            currentCfg,
-            undefined,
-            targetRef.ensuredSessionId,
-            undefined,
-            currentTalkTarget,
+          withSelectedStorage(() =>
+            assertTargetCurrent(
+              normalizedTarget,
+              expected,
+              currentCfg,
+              undefined,
+              targetRef.ensuredSessionId,
+              undefined,
+              currentTalkTarget,
+            ),
           );
         },
       };

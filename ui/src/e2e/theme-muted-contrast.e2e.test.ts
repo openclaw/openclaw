@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
@@ -73,6 +75,22 @@ function themeConfigResponse(
     raw: JSON.stringify(config),
     valid: true,
   };
+}
+
+async function expectCommittedConfig(
+  page: Page,
+  committed: ReturnType<typeof themeConfigResponse>,
+) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const app = document.querySelector<
+          HTMLElement & { runtime?: { context: ApplicationContext } }
+        >("openclaw-app");
+        return app?.runtime?.context.runtimeConfig.state.configSnapshot;
+      }),
+    )
+    .toMatchObject({ config: committed.config, hash: committed.hash });
 }
 
 function compositeColor(foreground: RenderedColor, background: RenderedColor): RenderedColor {
@@ -202,9 +220,7 @@ suite.define(() => {
 
         await gateway.setMethodResponse("config.get", committed);
         await gateway.resolveDeferred("config.patch", committed);
-        await expect
-          .poll(async () => (await gateway.getRequests("config.get")).length)
-          .toBe(initialConfigGets + 1);
+        await expectCommittedConfig(page, committed);
 
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
@@ -215,7 +231,9 @@ suite.define(() => {
         // Reapply each extreme through the real picker after theme defaults,
         // rather than accidentally dropping custom-accent contrast coverage.
         if (accent) {
-          await gateway.setMethodResponse("config.get", themeConfigResponse(family, mode, accent));
+          const accentCommitted = themeConfigResponse(family, mode, accent);
+          await gateway.setMethodResponse("config.get", accentCommitted);
+          await gateway.deferNext("config.patch");
           await page.locator("[data-accent-custom]").fill(accent);
           const accentPatch = await gateway.waitForRequest("config.patch", { after: 1 });
           // SAFETY: This is the config.patch request emitted by the exercised picker;
@@ -223,9 +241,8 @@ suite.define(() => {
           expect(JSON.parse((accentPatch.params as { raw: string }).raw)).toEqual({
             ui: { prefs: { accent } },
           });
-          await expect
-            .poll(async () => (await gateway.getRequests("config.get")).length)
-            .toBe(initialConfigGets + 2);
+          await gateway.resolveDeferred("config.patch", accentCommitted);
+          await expectCommittedConfig(page, accentCommitted);
           await expect
             .poll(() =>
               page.evaluate(() => document.documentElement.style.getPropertyValue("--accent")),
@@ -378,6 +395,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         expect(new URL(page.url()).pathname).toBe("/settings/appearance");
         expect(await selected.getAttribute("data-value")).toBe(selectedValue);
+        expect(await gateway.getRequests("config.get")).toHaveLength(initialConfigGets);
 
         if (captureUiProof) {
           await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });

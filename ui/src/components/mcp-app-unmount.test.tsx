@@ -40,11 +40,11 @@ function mountGate(
     () => {
       const [revision, setRevision] = createSignal(0, { ownedWrite: true });
       requestUpdate = () => setRevision((value) => value + 1);
-      const content = createMemo(() => {
+      const value = createMemo(() => {
         revision();
         return gate.render(key, renderValue, () => leavingRoots(root), { retainRenderedValue });
       });
-      return <>{content()}</>;
+      return <>{value()}</>;
     },
     { container: root },
   );

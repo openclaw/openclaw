@@ -76,6 +76,7 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteLockAccessorContext,
 } from "./session-accessor.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
@@ -425,6 +426,12 @@ export async function withTranscriptWriteSequence<T>(
   scope: SessionTranscriptWriteScope,
   run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
 ): Promise<T> {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    const { withActorTranscriptWriteSequence } =
+      await import("./session-actor-transcript-sequence.js");
+    return withActorTranscriptWriteSequence(scope, memory, run);
+  }
   const actor = captureIncognitoSessionOperation(scope);
   if (!actor) {
     return withHostTranscriptWriteLock(scope, run);
