@@ -4,9 +4,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
-import { disposeMcpClient } from "./mcp-client-lifecycle.js";
+import { disposeMcpClient, isMcpHttpSessionExpired } from "./mcp-client-lifecycle.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
 import {
+  McpSseSessionExpiredError,
   OpenClawSSEClientTransport,
   OpenClawStreamableHTTPClientTransport,
 } from "./mcp-http-transport.js";
@@ -90,6 +91,76 @@ function mcpResultResponse(
       },
     },
   );
+}
+
+type SseEventSourceProbe = {
+  addEventListener(type: string, listener: (event: { origin?: string }) => void): void;
+};
+
+/**
+ * Reads the EventSource instance the SDK owns. eventsource derives the origin of
+ * every dispatched event from `response.url` when `response.redirected` is set, so
+ * this is the only place the watched response's redirect metadata becomes visible.
+ */
+function readSseEventSource(
+  transport: OpenClawSSEClientTransport,
+): SseEventSourceProbe | undefined {
+  const sdkTransport = (
+    transport as unknown as { transport?: { _eventSource?: SseEventSourceProbe } }
+  ).transport;
+  // oxlint-disable-next-line no-underscore-dangle -- the SDK stores its EventSource on a dangling-underscore field.
+  return sdkTransport?._eventSource;
+}
+
+function sseResponse(body: BodyInit): Response {
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+}
+
+/**
+ * Wires a legacy SSE transport to a fetch stub whose GET response is rebuilt on
+ * every (re)connect, and records the close signal the bundle runtime recycles a
+ * server on.
+ */
+function createSseReconnectFixture(buildGetResponse: (getCount: number) => Response) {
+  let getCount = 0;
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if ((init?.method ?? "GET") !== "GET") {
+      return new Response(null, { status: 202 });
+    }
+    getCount += 1;
+    return buildGetResponse(getCount);
+  });
+  const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
+    fetch: fetchMock,
+    eventSourceInit: { fetch: fetchMock },
+  });
+  const onclose = vi.fn();
+  // MCP transports expose callback properties rather than EventTarget listeners.
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener
+  transport.onclose = onclose;
+  return {
+    transport,
+    onclose,
+    getCount: () => getCount,
+    postTargets: () =>
+      fetchMock.mock.calls.filter((call) => call[1]?.method === "POST").map((call) => call[0]),
+  };
+}
+
+type SseReconnectFixture = ReturnType<typeof createSseReconnectFixture>;
+
+/** Asserts the replacement-session lifecycle: closed, expired, and never POSTed to. */
+async function expectSseSessionReplaced(fixture: SseReconnectFixture): Promise<void> {
+  await vi.waitFor(() => expect(fixture.onclose).toHaveBeenCalledOnce());
+  const sendError = await fixture.transport
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call" })
+    .then(() => undefined)
+    .catch((error: unknown) => error);
+  expect(sendError).toBeInstanceOf(McpSseSessionExpiredError);
+  expect(
+    isMcpHttpSessionExpired({ transport: fixture.transport, transportType: "sse" }, sendError),
+  ).toBe(true);
+  expect(fixture.postTargets()).toHaveLength(0);
 }
 
 describe("OpenClaw MCP HTTP lifecycle adapters", () => {
@@ -391,6 +462,239 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       await transport.close();
     }
   });
+
+  it("closes a legacy SSE transport when a reconnect announces a replacement session", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const encoder = new TextEncoder();
+    const fixture = createSseReconnectFixture((getCount) =>
+      sseResponse(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(
+              encoder.encode(
+                `retry: 1\n\nevent: endpoint\ndata: /messages?session_id=${getCount}\n\n`,
+              ),
+            );
+          },
+        }),
+      ),
+    );
+
+    try {
+      await fixture.transport.start();
+      // The server restarted: the stream ends and eventsource reconnects onto a
+      // fresh legacy session that never saw initialize.
+      streamController?.close();
+
+      await expectSseSessionReplaced(fixture);
+    } finally {
+      await fixture.transport.close();
+    }
+  });
+
+  it("keeps a legacy SSE transport open when a reconnect re-announces the same session", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const encoder = new TextEncoder();
+    const fixture = createSseReconnectFixture(() =>
+      sseResponse(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(
+              encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages?session_id=1\n\n"),
+            );
+          },
+        }),
+      ),
+    );
+
+    try {
+      await fixture.transport.start();
+      streamController?.close();
+
+      await vi.waitFor(() => expect(fixture.getCount()).toBe(2));
+      await expect(
+        fixture.transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      ).resolves.toBeUndefined();
+      expect(fixture.onclose).not.toHaveBeenCalled();
+      const posts = fixture.postTargets();
+      expect(posts).toHaveLength(1);
+      const postTarget = posts[0];
+      expect(postTarget).toBeInstanceOf(URL);
+      expect(postTarget instanceof URL ? postTarget.searchParams.get("session_id") : null).toBe(
+        "1",
+      );
+    } finally {
+      await fixture.transport.close();
+    }
+  });
+
+  it("closes a legacy SSE transport when a CR-delimited reconnect announces a replacement session", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const encoder = new TextEncoder();
+    const fixture = createSseReconnectFixture((getCount) =>
+      sseResponse(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            // eventsource-parser treats a bare CR as a line ending, so a server may
+            // announce sessions without emitting a single LF byte. The trailing
+            // comment completes the CR-terminated blank line inside this chunk; a
+            // lone trailing CR legitimately stays held until more bytes arrive.
+            controller.enqueue(
+              encoder.encode(
+                `retry: 1\r\revent: endpoint\rdata: /messages?session_id=${getCount}\r\r: ping\r`,
+              ),
+            );
+          },
+        }),
+      ),
+    );
+
+    try {
+      await fixture.transport.start();
+      streamController?.close();
+
+      await expectSseSessionReplaced(fixture);
+    } finally {
+      await fixture.transport.close();
+    }
+  });
+
+  it("detects a replacement session when CR line endings straddle stream chunks", async () => {
+    const encoder = new TextEncoder();
+    const fixture = createSseReconnectFixture((getCount) => {
+      // The event terminator is split across chunks: a trailing CR arrives first
+      // and its CRLF partner only shows up in the following chunk.
+      const head = `retry: 1\r\nevent: endpoint\rdata: /messages?session_id=${getCount}\r`;
+      return sseResponse(
+        new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(encoder.encode(head));
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 5);
+            });
+            // Completes the held CRLF and dispatches the event with another CRLF.
+            controller.enqueue(encoder.encode("\n\r\n"));
+            controller.close();
+          },
+        }),
+      );
+    });
+
+    try {
+      await fixture.transport.start();
+
+      await expectSseSessionReplaced(fixture);
+    } finally {
+      await fixture.transport.close();
+    }
+  });
+
+  it("detects a replacement session after CR-terminated comment traffic", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const encoder = new TextEncoder();
+    const fixture = createSseReconnectFixture((getCount) => {
+      // Comment lines are not charged against the per-event size limit, so a
+      // server can stream an unbounded number of them. The watcher has to
+      // release each completed line instead of retaining the whole flood.
+      const keepAlives = ": keep-alive\r".repeat(4096);
+      const payload =
+        getCount === 1
+          ? `retry: 1\r\r${keepAlives}event: endpoint\rdata: /messages?session_id=1\r\r: ping\r`
+          : `retry: 1\r\revent: endpoint\rdata: /messages?session_id=2\r\r: ping\r`;
+      return sseResponse(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(encoder.encode(payload));
+          },
+        }),
+      );
+    });
+
+    try {
+      await fixture.transport.start();
+      streamController?.close();
+
+      await expectSseSessionReplaced(fixture);
+    } finally {
+      await fixture.transport.close();
+    }
+  });
+
+  it("keeps redirect metadata on the watched SSE response", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const encoder = new TextEncoder();
+    const fixture = createSseReconnectFixture(() => {
+      // Simulate a followed redirect from /sse to a relocated route.
+      const response = sseResponse(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(
+              encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages?session_id=1\n\n"),
+            );
+          },
+        }),
+      );
+      Object.defineProperties(response, {
+        url: { value: "https://mcp-relocated.invalid/sse-v2" },
+        redirected: { value: true },
+      });
+      return response;
+    });
+
+    try {
+      await fixture.transport.start();
+      const eventSource = readSseEventSource(fixture.transport);
+      expect(eventSource).toBeDefined();
+      const origins: string[] = [];
+      eventSource?.addEventListener("endpoint", (event) => {
+        if (typeof event.origin === "string") {
+          origins.push(event.origin);
+        }
+      });
+      // Reconnect so eventsource dispatches a second endpoint event through the
+      // watched response.
+      streamController?.close();
+
+      await vi.waitFor(() => expect(origins).toHaveLength(1));
+      expect(origins[0]).toBe("https://mcp-relocated.invalid");
+    } finally {
+      await fixture.transport.close();
+    }
+  });
+
+  it("keeps short-line scanning linear across a large SSE chunk", async () => {
+    const encoder = new TextEncoder();
+    // Comment lines are not charged against the per-event size limit, so one chunk
+    // can carry a very large number of short lines. Searching every line for a
+    // delimiter the chunk does not contain must not rescan the remaining suffix.
+    // LF-only traffic isolates the watcher: eventsource-parser has a linear LF
+    // path, while its CR loop is quadratic on its own (upstream, out of scope).
+    const timeFlood = async (lines: number): Promise<number> => {
+      const payload = `${": ping\n".repeat(lines)}event: endpoint\ndata: /messages?session_id=1\n\n: tail\n`;
+      const fixture = createSseReconnectFixture(() => sseResponse(encoder.encode(payload)));
+      try {
+        const started = performance.now();
+        await fixture.transport.start();
+        const elapsed = performance.now() - started;
+        expect(fixture.onclose).not.toHaveBeenCalled();
+        return elapsed;
+      } finally {
+        await fixture.transport.close();
+      }
+    };
+
+    const smaller = await timeFlood(100_000);
+    const larger = await timeFlood(400_000);
+    expect(larger, "a 400k short-line SSE chunk must not stall the watcher").toBeLessThan(5_000);
+    // Quadrupling the lines may cost a few multiples more (allocation, GC and
+    // scheduling slack); a per-line suffix rescan grows an order beyond that.
+    expect(larger).toBeLessThan(smaller * 6 + 500);
+  }, 60_000);
 
   it("closes after Streamable notification retry exhaustion", async () => {
     let getCount = 0;

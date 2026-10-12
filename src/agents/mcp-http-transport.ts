@@ -213,6 +213,120 @@ function limitMcpEventSourceResponse(response: EventSourceResponse): Response {
   return limitedResponse;
 }
 
+function parseSseFieldLine(line: string): { field: string; value: string } | undefined {
+  if (line.startsWith(":")) {
+    return undefined;
+  }
+  const colon = line.indexOf(":");
+  if (colon < 0) {
+    return { field: line, value: "" };
+  }
+  let value = line.slice(colon + 1);
+  if (value.startsWith(" ")) {
+    value = value.slice(1);
+  }
+  return { field: line.slice(0, colon), value };
+}
+
+/**
+ * Passes stream chunks through unchanged while reporting every announced SSE
+ * `endpoint` payload. Legacy MCP SSE servers create a fresh session per stream,
+ * so a changed endpoint URL after a reconnect means later POSTs would target a
+ * session that never completed initialization.
+ */
+function watchSseEndpointEvents(
+  body: ReadableStream<Uint8Array>,
+  onEndpoint: (data: string) => void,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  let scanFrom = 0;
+  let eventType = "";
+  let dataLines: string[] = [];
+  const consumeLine = (rawLine: string) => {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (line === "") {
+      if (eventType === "endpoint" && dataLines.length > 0) {
+        onEndpoint(dataLines.join("\n"));
+      }
+      eventType = "";
+      dataLines = [];
+      return;
+    }
+    const parsed = parseSseFieldLine(line);
+    if (!parsed) {
+      return;
+    }
+    if (parsed.field === "event") {
+      eventType = parsed.value;
+    } else if (parsed.field === "data") {
+      dataLines.push(parsed.value);
+    }
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        if (buffered !== "") {
+          const remainder = buffered;
+          buffered = "";
+          scanFrom = 0;
+          consumeLine(remainder);
+        }
+        controller.close();
+        return;
+      }
+      const chunk = value ?? new Uint8Array(0);
+      buffered += decoder.decode(chunk, { stream: true });
+      // eventsource-parser accepts LF, CR, and CRLF, so scan for both delimiters
+      // and release each completed line: CR-terminated traffic (comments are not
+      // charged against the per-event size limit) must not accumulate here.
+      // Keep both delimiter positions so many short lines cannot repeatedly scan
+      // the rest of the buffer for a delimiter it does not contain.
+      let consumed = 0;
+      let lf = buffered.indexOf("\n", scanFrom);
+      let cr = buffered.indexOf("\r", scanFrom);
+      let delimiter = lf < 0 ? cr : cr < 0 ? lf : Math.min(lf, cr);
+      while (delimiter >= 0) {
+        if (buffered[delimiter] === "\r" && delimiter + 1 === buffered.length) {
+          // Hold a trailing CR: only the next chunk can tell a lone CR from a split CRLF.
+          break;
+        }
+        const next =
+          buffered[delimiter] === "\r" && buffered[delimiter + 1] === "\n"
+            ? delimiter + 2
+            : delimiter + 1;
+        consumeLine(buffered.slice(consumed, delimiter));
+        consumed = next;
+        if (lf >= 0 && lf < consumed) {
+          lf = buffered.indexOf("\n", consumed);
+        }
+        if (cr >= 0 && cr < consumed) {
+          cr = buffered.indexOf("\r", consumed);
+        }
+        delimiter = lf < 0 ? cr : cr < 0 ? lf : Math.min(lf, cr);
+      }
+      if (consumed > 0) {
+        buffered = buffered.slice(consumed);
+        lf = lf < 0 ? -1 : lf - consumed;
+        cr = cr < 0 ? -1 : cr - consumed;
+      }
+      // A surviving position can only be the held trailing CR; the rest of the
+      // buffer is already known to hold no delimiter, so resume from there.
+      scanFrom = Math.min(
+        lf < 0 ? buffered.length : lf,
+        cr < 0 ? buffered.length : cr,
+        buffered.length,
+      );
+      controller.enqueue(chunk);
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => undefined);
+    },
+  });
+}
+
 abstract class OpenClawMcpHttpTransport implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
@@ -267,6 +381,8 @@ abstract class OpenClawMcpHttpTransport implements Transport {
 /** Converts legacy SSE terminal HTTP failures into the lifecycle close the SDK omits. */
 export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
   protected readonly transport: SSEClientTransport;
+  private announcedEndpoints = new Set<string>();
+  private sessionReplacedError?: McpSseSessionExpiredError;
 
   constructor(url: URL, options?: SSEClientTransportOptions) {
     super();
@@ -292,10 +408,68 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
           const raw = configuredEventSourceFetch
             ? await configuredEventSourceFetch(eventUrl, init)
             : await baseFetch(eventUrl, init);
-          return limitMcpEventSourceResponse(raw);
+          const limited = limitMcpEventSourceResponse(raw);
+          if (limited.status !== 200 || !isEventStreamResponse(limited) || !limited.body) {
+            return limited;
+          }
+          const watched = new Response(
+            watchSseEndpointEvents(limited.body, (data) => this.handleAnnouncedEndpoint(data, url)),
+            {
+              status: limited.status,
+              statusText: limited.statusText,
+              headers: limited.headers,
+            },
+          );
+          // eventsource reads url/redirected off the response handed to it. The
+          // size limiter preserves both, so watching the body must not drop them.
+          Object.defineProperties(watched, {
+            url: { value: limited.url },
+            redirected: { value: limited.redirected },
+          });
+          return watched;
         },
       },
     });
+  }
+
+  /**
+   * Tracks endpoint announcements across stream reconnects. eventsource
+   * silently re-opens the stream after a server restart, and the SDK moves
+   * `_endpoint` onto the freshly announced session without re-running the
+   * initialize handshake. A changed endpoint URL therefore means every later
+   * POST would hit an uninitialized session (JSON-RPC -32602), so surface the
+   * same session-expired lifecycle the POST 404 path uses.
+   */
+  private handleAnnouncedEndpoint(data: string, url: URL): void {
+    let endpoint: string;
+    try {
+      endpoint = new URL(data, url).href;
+    } catch {
+      return;
+    }
+    if (this.announcedEndpoints.size === 0) {
+      this.announcedEndpoints.add(endpoint);
+      return;
+    }
+    if (this.announcedEndpoints.has(endpoint)) {
+      return;
+    }
+    this.announcedEndpoints.add(endpoint);
+    this.handleSessionReplaced(endpoint);
+  }
+
+  private handleSessionReplaced(endpoint: string): void {
+    if (this.sessionReplacedError) {
+      return;
+    }
+    this.sessionReplacedError = new McpSseSessionExpiredError(
+      `MCP SSE server reconnected onto a replacement session endpoint: ${endpoint}`,
+    );
+    this.emitError(this.sessionReplacedError);
+    void this.close();
+    // EventSource can arm its reconnect timer after this callback returns.
+    // Close again on the next turn so that new timer cannot survive.
+    setTimeout(() => void this.transport.close(), 0).unref?.();
   }
 
   protected onTransportError(error: Error): void {
@@ -312,6 +486,9 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
   }
 
   async send(message: JSONRPCMessage): Promise<void> {
+    if (this.sessionReplacedError) {
+      throw this.sessionReplacedError;
+    }
     if (this.closed) {
       throw new Error("MCP SSE transport is closed");
     }
