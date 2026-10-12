@@ -1,5 +1,9 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
@@ -39,10 +43,13 @@ export function createSessionRowRelationReads(owner: {
       if (!owner.isReady()) {
         return undefined;
       }
-      const binding = captureIncognitoSessionBinding({
-        ...query,
-        sessionKey: query.key,
-      });
+      const memory = getSessionActorStorageBinding({});
+      const binding = memory
+        ? undefined
+        : captureIncognitoSessionBinding({
+            ...query,
+            sessionKey: query.key,
+          });
       return owner.inOwnerContext(() => {
         const { key, value: entry } = selectStoredSessionLineage({
           cfg: owner.config(),
@@ -52,6 +59,14 @@ export function createSessionRowRelationReads(owner: {
             if (!isIncognitoSessionKey(storedKey)) {
               const row = owner.lookup({ ...query, agentId, key: storedKey });
               return row?.key === storedKey ? row.sharingEntry : undefined;
+            }
+            if (memory) {
+              const selected = captureSessionActorStorageOwner({
+                agentId,
+                sessionKey: storedKey,
+                sessionActor: memory,
+              })!;
+              return selected.owner?.readSession(storedKey, selected.authority)?.entry;
             }
             if (binding && binding.actor.agentId === agentId) {
               binding.admissionSignal?.throwIfAborted();

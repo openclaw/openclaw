@@ -50,8 +50,10 @@ export function linkPrWrapperDependencies(destination: string): void {
     "jiti",
     "json5",
     "kysely",
+    "markdown-it",
     "minimatch",
     "p-map",
+    "partial-json",
     "semver",
     "string-width",
     "tsdown",
@@ -73,5 +75,20 @@ export function linkPrWrapperDependencies(destination: string): void {
       linkedDependency,
       process.platform === "win32" ? "junction" : "dir",
     );
+  }
+  for (const dependency of [
+    "mdast-util-from-markdown",
+    "mdast-util-gfm-table",
+    "micromark-extension-gfm-table",
+  ]) {
+    const linkedDependency = join(destination, "packages/markdown-core/node_modules", dependency);
+    mkdirSync(dirname(linkedDependency), { recursive: true });
+    if (!lstatSync(linkedDependency, { throwIfNoEntry: false })) {
+      symlinkSync(
+        realpathSync(join("packages/markdown-core/node_modules", dependency)),
+        linkedDependency,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
   }
 }

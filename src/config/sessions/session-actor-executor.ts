@@ -14,8 +14,8 @@ import type {
   SessionActorPhaseResults,
   SessionActorReducer,
   SessionActorTarget,
+  SessionActorStorage,
 } from "./session-actor-contract.js";
-import type { SessionActorStorage } from "./session-actor-storage-contract.js";
 
 export type SessionActorExecutorGuards = {
   target: SessionActorTarget;
@@ -139,6 +139,12 @@ export function createSessionActorWithExecutor(params: {
     ...(storage
       ? {
           storage: {
+            acquire(sessionKey, lifetime) {
+              return storage.acquire(sessionKey, lifetime);
+            },
+            readCurrent(query, authority) {
+              return storage.readCurrent(query, authority);
+            },
             read(query, authority) {
               const captured = structuredClone(query);
               return retain(() => storage.read(captured, authority), phase);

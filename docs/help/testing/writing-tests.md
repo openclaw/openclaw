@@ -227,8 +227,15 @@ to get green.
    (assertion before the owned completion signal), or product (a real race).
 3. Fix at the owner. Product races get a regression that fails on the original
    defect; fixture leaks are fixed in the fixture owner, not in the failing test.
+   When the red traces to a removal or simplification commit, read that PR's
+   body for accepted tradeoffs before restoring the removed behavior; squash
+   messages can omit them.
 4. Proof bar: 20 clean standalone runs of the file, 3 clean runs of the original
-   shard, and the owner's sibling tests. Record the root cause in the PR.
+   shard, and the owner's sibling tests. Record the root cause in the PR. Clean
+   runs only count once the failure has been reproduced or forced. If it never
+   reproduces, list every producer of the asserted state in the lifecycle
+   (startup, restoration, and timers too, not only the one the assertion names)
+   and add pressure until the failure rate shows.
 5. If the owner is another lane or PR, cite that fix; it is the only reason to
    proceed on a red job.
 

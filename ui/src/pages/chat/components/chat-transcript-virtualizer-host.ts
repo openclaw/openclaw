@@ -372,7 +372,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   };
 
   disconnect(): void {
-    this.renderer.dispose();
+    this.renderer.disconnect(() => this.connected);
     this.layout.disconnect();
     this.endAnchor.disconnect();
     this.entryAnimations.disconnect();
@@ -406,6 +406,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   dispose(): void {
     this.disconnect();
+    this.renderer.dispose();
     this.rowRefs.clear();
     this.rowKeys = [];
     this.rowIndexesByKey.clear();
@@ -427,12 +428,11 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.offsetState.renderedScrollState = this.offsetState.renderState(
       this.scrollElement !== null && this.endAnchor.atEnd,
     );
-    const virtualizer = this.virtualizer;
     // Keep old geometry during the gesture, while still virtualizing that old
     // row model as the reader moves. Only the history insertion is held back.
     if (
       this.prependAnchor.hasPrepend &&
-      (this.offsetState.touchActive || virtualizer.isScrolling) &&
+      (this.offsetState.touchActive || this.virtualizer.isScrolling) &&
       !this.offsetState.scrollCommand &&
       !this.offsetState.pendingScrollOffset &&
       this.renderPreviousRows

@@ -32,8 +32,6 @@ export type ServerUiPrefsSync = {
   pushDraining: boolean;
   drainRequested: boolean;
   pushEpoch: number;
-  conflictRedrainTimer: ReturnType<typeof setTimeout> | null;
-  consecutiveConflictRedrains: number;
   confirmedPrefsFallback: ConfirmedPrefsFallback | null;
   lastReconciledScope: string | null;
   lastReconciledConfigObject: unknown;
@@ -52,8 +50,6 @@ export type ServerUiPrefsSync = {
   cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void;
   updateRetainedLocalKeys(scope: string, keys: readonly SyncedPrefKey[], retained: boolean): void;
   publishPreferenceWrites(): void;
-  clearConflictRedrain(): void;
-  scheduleConflictRedrain(writer: ServerUiPrefsWriter, epoch: number): void;
   mergePendingIntoStorage(ackedBatch?: ServerUiPrefs): void;
   startPendingDrain(writer: ServerUiPrefsWriter): void;
   batchIsCurrent(batch: ServerUiPrefs): boolean;
