@@ -118,6 +118,7 @@ async function fixture(state: OpenClawTestState, owner: Owner = "shared") {
       }),
       getApiKeyInfo: () => null,
       advanceAttemptAuthProfile: async () => false,
+      hasRemainingAuthAttempt: () => false,
     },
     getSessionId: () => "shared-usage-session",
   });

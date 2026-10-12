@@ -202,6 +202,7 @@ async function runThroughFailureRecovery(params: {
           }),
           getApiKeyInfo: () => null,
           advanceAttemptAuthProfile: async () => false,
+          hasRemainingAuthAttempt: () => false,
         },
         getSessionId: () => sessionId,
       });

@@ -75,6 +75,7 @@ let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-deci
 let createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
 let ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
 let saveAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").saveAuthProfileStore;
+let createOpenClawDatabaseMaintenanceScope: typeof import("../state/openclaw-state-db-async-lifecycle.js").createOpenClawDatabaseMaintenanceScope;
 
 beforeAll(async () => {
   vi.resetModules();
@@ -98,6 +99,8 @@ beforeAll(async () => {
     await import("./test-helpers/model-routing-decision-e2e-fixtures.js"));
   ({ ensureAuthProfileStore, saveAuthProfileStore } =
     await import("./auth-profiles/store-runtime.js"));
+  ({ createOpenClawDatabaseMaintenanceScope } =
+    await import("../state/openclaw-state-db-async-lifecycle.js"));
 });
 
 beforeEach(() => {
@@ -161,7 +164,10 @@ async function withScenarioWorkspace<T>(
   }
 }
 
-function writeProfiles(agentDir: string, profiles: { openai: 1 | 2; groq?: boolean }): void {
+function writeProfiles(
+  agentDir: string,
+  profiles: { openai: 1 | 2; groq?: boolean; backupCooling?: boolean },
+): void {
   saveAuthProfileStore(
     {
       version: 1,
@@ -176,7 +182,14 @@ function writeProfiles(agentDir: string, profiles: { openai: 1 | 2; groq?: boole
       },
       usageStats: {
         "openai:p1": { lastUsed: 1 },
-        ...(profiles.openai === 2 ? { "openai:p2": { lastUsed: 2 } } : {}),
+        ...(profiles.openai === 2
+          ? {
+              "openai:p2": {
+                lastUsed: 2,
+                ...(profiles.backupCooling ? { cooldownUntil: Date.now() + 60_000 } : {}),
+              },
+            }
+          : {}),
         ...(profiles.groq ? { "groq:p1": { lastUsed: 3 } } : {}),
       },
     },
@@ -304,6 +317,7 @@ async function runScenario(params: {
     agentId: sessionTarget.agentId,
     boundary: "provider-fault-sequence",
   });
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
   try {
     // The synthetic attempt skips transcript creation; seed the real row so the
     // runner claims its writer normally before entering compaction recovery.
@@ -311,42 +325,44 @@ async function runScenario(params: {
       sessionId: sessionTarget.sessionId,
       updatedAt: Date.now(),
     });
-    const outcome = await runWithModelFallback<EmbeddedAgentRunResult>({
-      cfg: params.config,
-      provider: "openai",
-      model: "mock-1",
-      runId: params.runId,
-      sessionId: sessionTarget.sessionId,
-      sessionKey: sessionTarget.sessionKey,
-      agentDir: params.agentDir,
-      classifyResult: ({ provider, model, result }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result }),
-      mergeExhaustedResult: ({ latestResult, preferredResult }) =>
-        mergeEmbeddedAgentRunResultForModelFallbackExhaustion({
-          latestResult,
-          preferredResult,
-        }),
-      run: async (provider, model, options) =>
-        await runEmbeddedAgentWithPreparedAdmission({
-          preparedRunAdmission,
-          agentId: sessionTarget.agentId,
-          sessionId: sessionTarget.sessionId,
-          sessionKey: sessionTarget.sessionKey,
-          sessionTarget,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          config: params.config,
-          prompt: "hello",
-          provider,
-          model,
-          authProfileIdSource: "auto",
-          allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
-          isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
-          timeoutMs: 250,
-          runId: params.runId,
-          enqueue: async (task) => await task(),
-        }),
-    });
+    const outcome = await maintenance.run(() =>
+      runWithModelFallback<EmbeddedAgentRunResult>({
+        cfg: params.config,
+        provider: "openai",
+        model: "mock-1",
+        runId: params.runId,
+        sessionId: sessionTarget.sessionId,
+        sessionKey: sessionTarget.sessionKey,
+        agentDir: params.agentDir,
+        classifyResult: ({ provider, model, result }) =>
+          classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result }),
+        mergeExhaustedResult: ({ latestResult, preferredResult }) =>
+          mergeEmbeddedAgentRunResultForModelFallbackExhaustion({
+            latestResult,
+            preferredResult,
+          }),
+        run: async (provider, model, options) =>
+          await runEmbeddedAgentWithPreparedAdmission({
+            preparedRunAdmission,
+            agentId: sessionTarget.agentId,
+            sessionId: sessionTarget.sessionId,
+            sessionKey: sessionTarget.sessionKey,
+            sessionTarget,
+            workspaceDir: params.workspaceDir,
+            agentDir: params.agentDir,
+            config: params.config,
+            prompt: "hello",
+            provider,
+            model,
+            authProfileIdSource: "auto",
+            allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+            isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
+            timeoutMs: 250,
+            runId: params.runId,
+            enqueue: async (task) => await task(),
+          }),
+      }),
+    );
     return {
       kind: "result",
       provider: outcome.provider,
@@ -360,7 +376,12 @@ async function runScenario(params: {
     }
     return { kind: "error", error };
   } finally {
-    preparedRunAdmission.close();
+    try {
+      // The runner may return before profile bookkeeping settles.
+      await maintenance.close();
+    } finally {
+      preparedRunAdmission.close();
+    }
   }
 }
 
@@ -581,49 +602,76 @@ describe("runEmbeddedAgent provider fault sequences", () => {
     });
   });
 
-  it("fails over a header-only multi-hour 429 past retry.provider.maxRetryDelayMs instead of sleeping it", async () => {
-    // The regression: Anthropic's session-window 429 carries the reset only in
-    // Retry-After and matches no usage-window keyword, so the controller slept
-    // the full ~2.75h floor in-turn and the configured fallback never ran
-    // (#148558/#143274). With the cap wired through, the run fails over to the
-    // model fallback and completes, and the floor is never handed to the sleep.
-    await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
-      writeProfiles(agentDir, { openai: 1, groq: true });
-      const observations: AttemptObservation[] = [];
-      installFaultScript(
-        [
-          { status: 429, window: "header-floor", retryAfterSeconds: 9897, maxRetryDelayMs: 30_000 },
-          { status: 200, text: "fallback after header floor" },
-        ],
-        observations,
-      );
+  it.each([
+    {
+      route: "model fallback",
+      runId: "header-floor-failover",
+      profiles: { openai: 1 as const, groq: true },
+      fallbacks: ["groq/mock-2"],
+      next: { provider: "groq", model: "mock-2", profileId: "groq:p1" },
+      waitsForFloor: false,
+    },
+    {
+      route: "auth profile without model fallback",
+      runId: "header-floor-profile-rotation",
+      profiles: { openai: 2 as const },
+      fallbacks: [],
+      next: { provider: "openai", model: "mock-1", profileId: "openai:p2" },
+      waitsForFloor: false,
+    },
+    {
+      route: "same profile when the backup is cooling",
+      runId: "header-floor-cooling-backup",
+      profiles: { openai: 2 as const, backupCooling: true },
+      fallbacks: [],
+      next: { provider: "openai", model: "mock-1", profileId: "openai:p1" },
+      waitsForFloor: true,
+    },
+  ])(
+    "handles a header-only multi-hour 429 with $route",
+    async ({ profiles, fallbacks, next, runId, waitsForFloor }) => {
+      await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+        writeProfiles(agentDir, profiles);
+        const observations: AttemptObservation[] = [];
+        installFaultScript(
+          [
+            {
+              status: 429,
+              window: "header-floor",
+              retryAfterSeconds: 9897,
+              maxRetryDelayMs: 30_000,
+            },
+            { status: 200, text: "fallback after header floor" },
+          ],
+          observations,
+        );
 
-      const outcome = expectResult(
-        await runScenario({
-          agentDir,
-          workspaceDir,
-          config: makeProviderConfig(["groq/mock-2"]),
-          runId: "header-floor-failover",
-        }),
-      );
+        const outcome = expectResult(
+          await runScenario({
+            agentDir,
+            workspaceDir,
+            config: makeProviderConfig(fallbacks),
+            runId,
+          }),
+        );
 
-      // The single openai attempt failed over to the groq fallback: the floor was
-      // declined, not slept, and no same-model retry sat between them.
-      expect(observations.map(({ provider, model }) => [provider, model])).toEqual([
-        ["openai", "mock-1"],
-        ["groq", "mock-2"],
-      ]);
-      // Nothing slept the 9,897,000ms floor; the only sleeps are the backoff
-      // controller's between-candidate waits, never the provider floor.
-      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).not.toContain(9_897_000);
-      expect(outcome.provider).toBe("groq");
-      expect(outcome.model).toBe("mock-2");
-      expect(outcome.result.payloads?.[0]?.text).toContain("fallback after header floor");
+        expect(
+          observations.map(({ provider, model, profileId }) => ({ provider, model, profileId })),
+        ).toEqual([{ provider: "openai", model: "mock-1", profileId: "openai:p1" }, next]);
+        expect(sleepWithAbortMock.mock.calls.some(([delay]) => delay === 9_897_000)).toBe(
+          waitsForFloor,
+        );
+        expect(outcome.provider).toBe(next.provider);
+        expect(outcome.model).toBe(next.model);
+        expect(outcome.result.payloads?.[0]?.text).toContain("fallback after header floor");
 
-      const usageStats = await readUsageStats(agentDir);
-      expect(usageStats["openai:p1"]?.cooldownReason).toBe("rate_limit");
-    });
-  });
+        const usageStats = await readUsageStats(agentDir);
+        expect(usageStats["openai:p1"]?.cooldownReason).toBe(
+          waitsForFloor ? undefined : "rate_limit",
+        );
+      });
+    },
+  );
 
   it("persists a ten-minute initial billing disable and surfaces billing copy for 402", async () => {
     await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {

@@ -78,6 +78,7 @@ function fixture(
       }),
       getApiKeyInfo: () => null,
       advanceAttemptAuthProfile: async () => false,
+      hasRemainingAuthAttempt: () => false,
     },
     getSessionId: () => "personal-usage-session",
   });

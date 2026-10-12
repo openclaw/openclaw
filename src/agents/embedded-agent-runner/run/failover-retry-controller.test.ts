@@ -43,6 +43,8 @@ function createController(
   fallbackConfigured = false,
   abortSignal?: AbortSignal,
   onRetryWait?: ControllerInput["runInput"]["runParams"]["onRetryWait"],
+  hasRemainingAuthAttempt: ControllerInput["preparedRuntime"]["hasRemainingAuthAttempt"] = () =>
+    false,
 ) {
   return createEmbeddedRunFailoverRetryController({
     runInput: {
@@ -66,6 +68,7 @@ function createController(
       }),
       getApiKeyInfo: () => null,
       advanceAttemptAuthProfile: advanceAuthProfile,
+      hasRemainingAuthAttempt,
     },
     getSessionId: () => "session:failover-retry-controller-test",
   });
@@ -222,16 +225,30 @@ describe("createEmbeddedRunFailoverRetryController", () => {
   });
 
   it.each([
-    ["fallback", true, undefined, 30_000, "rate_limit", 9_897_000, false],
-    ["no fallback", false, undefined, 30_000, "rate_limit", 9_897_000, true],
-    ["replay-unsafe", true, false, 30_000, "rate_limit", 9_897_000, true],
-    ["disabled cap", true, undefined, 0, "rate_limit", 9_897_000, true],
-    ["absent cap", true, undefined, undefined, "rate_limit", 9_897_000, true],
-    ["inside cap", true, undefined, 30_000, "rate_limit", 20_000, true],
-    ["non-rate limit", true, undefined, 30_000, "server_error", 60_000, true],
+    ["model fallback", true, false, undefined, 30_000, "rate_limit", 9_897_000, false],
+    ["auth profile", false, true, undefined, 30_000, "rate_limit", 9_897_000, false],
+    ["no alternative", false, false, undefined, 30_000, "rate_limit", 9_897_000, true],
+    ["replay-unsafe model", true, false, false, 30_000, "rate_limit", 9_897_000, true],
+    ["replay-unsafe auth", false, true, false, 30_000, "rate_limit", 9_897_000, true],
+    ["disabled model cap", true, false, undefined, 0, "rate_limit", 9_897_000, true],
+    ["disabled auth cap", false, true, undefined, 0, "rate_limit", 9_897_000, true],
+    ["absent model cap", true, false, undefined, undefined, "rate_limit", 9_897_000, true],
+    ["absent auth cap", false, true, undefined, undefined, "rate_limit", 9_897_000, true],
+    ["model inside cap", true, false, undefined, 30_000, "rate_limit", 20_000, true],
+    ["auth inside cap", false, true, undefined, 30_000, "rate_limit", 20_000, true],
+    ["non-rate limit", true, false, undefined, 30_000, "server_error", 60_000, true],
   ] as const)(
     "handles provider retry floors: %s",
-    async (_name, fallback, failoverEligible, maxRetryDelayMs, reason, retryAfterMs, expected) => {
+    async (
+      _name,
+      fallback,
+      profile,
+      failoverEligible,
+      maxRetryDelayMs,
+      reason,
+      retryAfterMs,
+      expected,
+    ) => {
       // Session-window 429s can carry hours of Retry-After without usage-window keywords.
       const message =
         'HTTP 429: {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}';
@@ -241,6 +258,9 @@ describe("createEmbeddedRunFailoverRetryController", () => {
       const controller = createController(
         vi.fn(async () => false),
         fallback,
+        undefined,
+        undefined,
+        () => profile,
       );
       controller.observeAttempt({ providerRetryMaxRetries: 3 });
       const onRetry = vi.fn();

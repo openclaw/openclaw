@@ -245,6 +245,7 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
         source: "models.json",
       }),
       advanceAttemptAuthProfile: async () => false,
+      hasRemainingAuthAttempt: () => false,
     },
     getSessionId: () => "inline-auth-failure-session",
   });

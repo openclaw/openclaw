@@ -81,7 +81,12 @@ export function createEmbeddedRunFailoverRetryController(input: {
   >;
   preparedRuntime: Pick<
     PreparedRuntime,
-    "provider" | "modelId" | "profileFailureStore" | "getApiKeyInfo" | "advanceAttemptAuthProfile"
+    | "provider"
+    | "modelId"
+    | "profileFailureStore"
+    | "getApiKeyInfo"
+    | "advanceAttemptAuthProfile"
+    | "hasRemainingAuthAttempt"
   > & {
     snapshot: () => {
       lastProfileId?: string;
@@ -321,11 +326,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
           : undefined;
       if (
         rateLimit &&
-        fallbackConfigured &&
         retry.failoverEligible !== false &&
         retryDelayCapMs !== undefined &&
         retry.retryAfterMs !== undefined &&
-        retry.retryAfterMs > retryDelayCapMs
+        retry.retryAfterMs > retryDelayCapMs &&
+        (fallbackConfigured || preparedRuntime.hasRemainingAuthAttempt())
       ) {
         recordDecision("rejected", "retry_delay_exceeds_cap");
         log.warn(

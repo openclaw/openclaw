@@ -113,24 +113,36 @@ export function createEmbeddedAuthProfileAdmission(
     provider: string;
     log: Pick<LogLike, "warn">;
   },
-): (candidate: string | undefined) => boolean {
+) {
   const policy = resolveEmbeddedAuthCooldownProbePolicy(params);
   let probed = false;
-  return (candidate) => {
-    if (
-      !candidate ||
-      !isProfileInCooldown(params.authStore, candidate, undefined, params.modelId)
-    ) {
+  const createAdmission = (preview: boolean) => {
+    let previewProbed = probed;
+    return (candidate: string | undefined): boolean => {
+      if (
+        !candidate ||
+        !isProfileInCooldown(params.authStore, candidate, undefined, params.modelId)
+      ) {
+        return true;
+      }
+      if ((preview ? previewProbed : probed) || !policy.probeProfileIds.has(candidate)) {
+        return false;
+      }
+      if (preview) {
+        previewProbed = true;
+      } else {
+        probed = true;
+        params.log.warn(
+          `checking cooldowned auth profile for ${params.provider}/${params.modelId} due to ${policy.unavailableReason ?? "transient"} unavailability`,
+        );
+      }
       return true;
-    }
-    if (probed || !policy.probeProfileIds.has(candidate)) {
-      return false;
-    }
-    probed = true;
-    params.log.warn(
-      `checking cooldowned auth profile for ${params.provider}/${params.modelId} due to ${policy.unavailableReason ?? "transient"} unavailability`,
-    );
-    return true;
+    };
+  };
+  return {
+    admit: createAdmission(false),
+    // A scan simulates its own probe use without spending the owner's live slot.
+    preview: () => createAdmission(true),
   };
 }
 
@@ -157,6 +169,7 @@ export function createEmbeddedRunAuthController(params: {
   provider: string;
   modelId: string;
   state: EmbeddedRunAuthState;
+  isAuthProfileCandidateEligible?(profileId: string | undefined, attemptIndex: number): boolean;
   prepareModelForAuthProfile?(
     profileId: string | undefined,
     attemptIndex?: number,
@@ -564,19 +577,28 @@ export function createEmbeddedRunAuthController(params: {
     state.lastProfileId = profileId;
   };
 
-  const advanceAuthProfile = async (): Promise<boolean> => {
-    let nextIndex = state.profileIndex + 1;
-    while (nextIndex < params.profileCandidates.length) {
-      const candidateIndex = nextIndex++;
-      const candidate = params.profileCandidates[candidateIndex];
-      // Candidate exhaustion is run-local and never depends on a cooldown write.
-      state.profileIndex = candidateIndex;
+  const findNextAuthProfileIndex = (): number => {
+    for (let index = state.profileIndex + 1; index < params.profileCandidates.length; index++) {
+      const candidate = params.profileCandidates[index];
       if (
         candidate &&
         isProfileInCooldown(params.authStore, candidate, undefined, params.modelId)
       ) {
         continue;
       }
+      if (params.isAuthProfileCandidateEligible?.(candidate, index) === false) {
+        continue;
+      }
+      return index;
+    }
+    return params.profileCandidates.length;
+  };
+
+  const advanceAuthProfile = async (): Promise<boolean> => {
+    while ((state.profileIndex = findNextAuthProfileIndex()) < params.profileCandidates.length) {
+      const candidateIndex = state.profileIndex;
+      const candidate = params.profileCandidates[candidateIndex];
+      // Candidate exhaustion is run-local and never depends on a cooldown write.
       try {
         await applyApiKeyInfo(candidate, candidateIndex);
         state.thinkLevel = params.initialThinkLevel;
@@ -597,7 +619,7 @@ export function createEmbeddedRunAuthController(params: {
     try {
       const admitCandidate = createEmbeddedAuthProfileAdmission(params);
       while (state.profileIndex < params.profileCandidates.length) {
-        if (!admitCandidate(params.profileCandidates[state.profileIndex])) {
+        if (!admitCandidate.admit(params.profileCandidates[state.profileIndex])) {
           state.profileIndex += 1;
           continue;
         }
@@ -641,6 +663,7 @@ export function createEmbeddedRunAuthController(params: {
   return {
     applyAuthProfileCandidate: applyApiKeyInfo,
     advanceAuthProfile,
+    hasRemainingAuthAttempt: () => findNextAuthProfileIndex() < params.profileCandidates.length,
     initializeAuthProfile,
     maybeRefreshRuntimeAuthForAuthError,
     stopRuntimeAuthRefreshTimer,

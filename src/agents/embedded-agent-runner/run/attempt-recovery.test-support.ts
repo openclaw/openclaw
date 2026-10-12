@@ -214,6 +214,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       }),
       getApiKeyInfo: () => null,
       advanceAttemptAuthProfile: vi.fn(async () => false),
+      hasRemainingAuthAttempt: () => false,
     },
     getSessionId: () => "session:transport-drop",
   });

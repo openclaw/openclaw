@@ -245,13 +245,13 @@ export async function prepareEmbeddedRunRuntime(input: {
     return attempt?.profileId === profileId ? attempt : undefined;
   };
   let preparedProfileAttempted = false;
+  const canRunPreparedAuthAttempt = (attempt: (typeof preparedAuthAttempts)[number]) =>
+    canRunPreparedAgentRuntimeAuthAttempt({
+      attempt,
+      priorProfileAttempted: preparedProfileAttempted,
+    });
   const prepareAuthAttempt = async (attempt: (typeof preparedAuthAttempts)[number]) => {
-    if (
-      !canRunPreparedAgentRuntimeAuthAttempt({
-        attempt,
-        priorProfileAttempted: preparedProfileAttempted,
-      })
-    ) {
+    if (!canRunPreparedAuthAttempt(attempt)) {
       throw new Error(
         `Prepared direct auth fallback cannot bypass unavailable profiles for ${provider}/${modelId}.`,
       );
@@ -324,6 +324,13 @@ export async function prepareEmbeddedRunRuntime(input: {
     provider,
     modelId,
     state: authState,
+    isAuthProfileCandidateEligible: (profileId, index) => {
+      if (!prepareModelForAuthProfile) {
+        return true;
+      }
+      const attempt = findPreparedAuthAttempt(profileId, index);
+      return attempt !== undefined && canRunPreparedAuthAttempt(attempt);
+    },
     ...(prepareModelForAuthProfile ? { prepareModelForAuthProfile } : {}),
     log,
   });
@@ -337,32 +344,60 @@ export async function prepareEmbeddedRunRuntime(input: {
     log,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe === true,
   });
+  type PendingPluginAuthAttempt =
+    | { kind: "skip" | "blocked"; index: number }
+    | { kind: "candidate"; index: number; attempt: (typeof preparedAuthAttempts)[number] };
+  const remainingPluginAuthAttempts = function* (
+    admit: (candidate: string | undefined) => boolean,
+  ): Generator<PendingPluginAuthAttempt> {
+    for (let index = authState.profileIndex + 1; index < preparedAuthAttempts.length; index++) {
+      const candidateAttempt = preparedAuthAttempts[index];
+      if (!candidateAttempt || !admit(candidateAttempt.profileId)) {
+        yield { kind: "skip", index };
+        continue;
+      }
+      if (!canRunPreparedAuthAttempt(candidateAttempt)) {
+        yield { kind: "blocked", index };
+        return;
+      }
+      const candidate = candidateAttempt.profileId;
+      if (
+        candidateAttempt.plan.modelRoute?.authRequirement !== "api-key" &&
+        (!candidate || candidateAttempt.plan.forwardedAuthProfileId !== candidate)
+      ) {
+        yield { kind: "skip", index };
+        continue;
+      }
+      yield { kind: "candidate", index, attempt: candidateAttempt };
+    }
+  };
+  const hasRemainingPluginAuthAttempt = (): boolean => {
+    if (!pluginHarnessOwnsTransport) {
+      return false;
+    }
+    for (const selection of remainingPluginAuthAttempts(admitAuthProfile.preview())) {
+      if (selection.kind === "candidate") {
+        return true;
+      }
+    }
+    return false;
+  };
   const advancePluginHarnessAuthAttempt = async (): Promise<boolean> => {
     if (!pluginHarnessOwnsTransport) {
       return false;
     }
-    let nextIndex = authState.profileIndex + 1;
-    while (nextIndex < preparedAuthAttempts.length) {
-      const candidateIndex = nextIndex++;
-      const candidateAttempt = preparedAuthAttempts[candidateIndex];
-      // Harness-owned auth shares the controller's run-local exhaustion invariant.
-      authState.profileIndex = candidateIndex;
-      if (!candidateAttempt) {
+    for (const selection of remainingPluginAuthAttempts(admitAuthProfile.admit)) {
+      // Skipped and failed candidates are exhausted only when actually advancing.
+      authState.profileIndex = selection.index;
+      if (selection.kind === "blocked") {
+        break;
+      }
+      if (selection.kind !== "candidate") {
         continue;
       }
+      const candidateAttempt = selection.attempt;
+      const candidateIndex = selection.index;
       const candidate = candidateAttempt.profileId;
-      if (!admitAuthProfile(candidate)) {
-        continue;
-      }
-      if (
-        !canRunPreparedAgentRuntimeAuthAttempt({
-          attempt: candidateAttempt,
-          priorProfileAttempted: preparedProfileAttempted,
-        })
-      ) {
-        authState.profileIndex = preparedAuthAttempts.length;
-        return false;
-      }
       if (candidateAttempt.plan.modelRoute?.authRequirement === "api-key") {
         try {
           await authController.applyAuthProfileCandidate(candidate, candidateIndex);
@@ -396,7 +431,9 @@ export async function prepareEmbeddedRunRuntime(input: {
   } else if (forwardedPluginHarnessProfileId) {
     const initialAttempt = preparedAuthAttempts[authState.profileIndex];
     if (
-      !admitAuthProfile(initialAttempt?.kind === "profile" ? initialAttempt.profileId : undefined)
+      !admitAuthProfile.admit(
+        initialAttempt?.kind === "profile" ? initialAttempt.profileId : undefined,
+      )
     ) {
       if (!(await advancePluginHarnessAuthAttempt())) {
         throw new Error(
@@ -482,6 +519,9 @@ export async function prepareEmbeddedRunRuntime(input: {
     pluginHarnessOwnsAuthBootstrap,
     attemptedThinking,
     advanceAttemptAuthProfile,
+    hasRemainingAuthAttempt: pluginHarnessOwnsAuthBootstrap
+      ? hasRemainingPluginAuthAttempt
+      : authController.hasRemainingAuthAttempt,
     maybeRefreshRuntimeAuthForAuthError: authController.maybeRefreshRuntimeAuthForAuthError,
     stopRuntimeAuthRefreshTimer: authController.stopRuntimeAuthRefreshTimer,
     getApiKeyInfo: () => authState.apiKeyInfo,

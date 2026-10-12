@@ -241,6 +241,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
           }),
           getApiKeyInfo: () => null,
           advanceAttemptAuthProfile: async () => false,
+          hasRemainingAuthAttempt: () => false,
         },
         getSessionId: () => "async-progress",
       });
