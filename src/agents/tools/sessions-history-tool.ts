@@ -479,6 +479,8 @@ export function createSessionsHistoryTool(opts?: {
         cfg,
         agentId: targetAgentId,
         expectedSessionId: access.expectedSessionId,
+        revalidateCurrent: access.revalidateCurrent,
+        admissionIdentities: access.admissionIdentities,
         targetSessionKey: resolvedKey,
         run: async () =>
           await gatewayCall<

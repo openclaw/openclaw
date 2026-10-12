@@ -20,6 +20,12 @@ import {
   type SessionVisibilityDecisionRow,
   type SessionVisibilityDecision,
   type SessionOwnershipLookupFailure,
+  type SessionChannelScope,
+} from "./session-visibility-internal.js";
+
+export {
+  resolveSessionChannelScope,
+  type SessionChannelScope,
 } from "./session-visibility-internal.js";
 
 type GatewayCaller = typeof defaultCallGateway;
@@ -131,7 +137,13 @@ export type SessionVisibilityRow = SessionVisibilityDecisionRow;
 /** Resolve configured session-tool visibility, defaulting invalid or missing values to all. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const value = normalizeLowercaseStringOrEmpty(cfg.tools?.sessions?.visibility);
-  if (value === "self" || value === "tree" || value === "agent" || value === "all") {
+  if (
+    value === "self" ||
+    value === "tree" ||
+    value === "channel" ||
+    value === "agent" ||
+    value === "all"
+  ) {
     return value;
   }
   return "all";
@@ -146,7 +158,11 @@ export function resolveEffectiveSessionToolsVisibility(params: {
   if (!params.sandboxed) {
     return visibility;
   }
-  return resolveSandboxSessionToolsVisibility(params.cfg) === "spawned" ? "tree" : visibility;
+  return resolveSandboxSessionToolsVisibility(params.cfg) === "spawned"
+    ? visibility === "channel"
+      ? "self"
+      : "tree"
+    : visibility;
 }
 
 /** Resolve sandbox-specific session visibility clamp for agent defaults. */
@@ -281,6 +297,9 @@ type SessionVisibilityCheckerParams = {
   defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
+  requesterChannelScope?: SessionChannelScope;
+  /** Host-owned stored scope lookup; missing facts fail closed in channel mode. */
+  channelScopeForSession?: (key: string) => SessionChannelScope | undefined;
   mainSessionKey?: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
@@ -300,6 +319,18 @@ function createSessionVisibilityCheckerWithResult(
     if (incognitoDenial) {
       return toSessionAccessResult(incognitoDenial, params.action, targetSessionKey);
     }
+    let channelScope: SessionChannelScope | undefined;
+    if (params.visibility === "channel") {
+      try {
+        channelScope = params.channelScopeForSession?.(targetSessionKey);
+      } catch {
+        // Host metadata lookup failures cannot widen the channel boundary.
+      }
+      const ceiling = decisionChecker.check({ key: targetSessionKey, channelScope });
+      if (!ceiling.allowed) {
+        return toSessionAccessResult(ceiling, params.action, targetSessionKey);
+      }
+    }
     if (params.action !== "list") {
       const scoped = resolveScopedSessionAccess({
         action: params.action,
@@ -314,6 +345,7 @@ function createSessionVisibilityCheckerWithResult(
     const isSpawnedSession = spawnedKeySet?.has(targetSessionKey) === true;
     const result = decisionChecker.check({
       key: targetSessionKey,
+      channelScope,
       spawnedBy: isSpawnedSession ? params.requesterSessionKey : undefined,
     });
     if (!result.allowed) {

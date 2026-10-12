@@ -690,7 +690,7 @@ export const ToolsSchema = z
          * - "agent": any session belonging to the current agent id (can include other users)
          * - "all": any session (default; cross-agent access is governed by tools.agentToAgent)
          */
-        visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+        visibility: z.enum(["self", "tree", "channel", "agent", "all"]).optional(),
       })
       .optional(),
     loopDetection: ToolLoopDetectionSchema,

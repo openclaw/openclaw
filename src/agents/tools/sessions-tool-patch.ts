@@ -108,7 +108,11 @@ export async function runSessionsToolPatchMany(params: {
   ) {
     throw new ToolInputError(`targets must contain 1–${SESSIONS_PATCH_MANY_MAX_TARGETS} sessions`);
   }
-  const targets: Array<{ index: number; agentId: string; target: SessionsPatchManyTarget }> = [];
+  const targets: Array<{
+    index: number;
+    agentId: string;
+    target: SessionsPatchManyTarget;
+  }> = [];
   const failures = new Map<number, string>();
   for (const [index, input] of params.targets.entries()) {
     try {

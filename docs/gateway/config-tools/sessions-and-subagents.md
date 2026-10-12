@@ -109,13 +109,13 @@ Controls which sessions can be targeted by the session tools (`sessions_list`, `
 
 Default: `all` (every session on the Gateway, including other agents' and other
 users' transcripts). Cross-agent access is governed by `tools.agentToAgent` and
-is on by default. Use `agent`, `tree`, or `self` to narrow visibility.
+is on by default. Use `agent`, `channel`, `tree`, or `self` to narrow visibility.
 
 ```json5
 {
   tools: {
     sessions: {
-      // "self" | "tree" | "agent" | "all"
+      // "self" | "tree" | "channel" | "agent" | "all"
       visibility: "all",
     },
   },
@@ -126,10 +126,12 @@ is on by default. Use `agent`, `tree`, or `self` to narrow visibility.
   <Accordion title="Visibility scopes">
     - `self`: only the current session key.
     - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the canonical main session, it includes every same-agent session for list, history, search, send, and status.
+    - `channel`: current session + verified sessions of the same agent in the same channel, including sibling threads. Stored provider, account, opaque destination, chat kind, and workspace/space must match. Missing or inconsistent route facts deny cross-session access. Main and DM callers without a verified channel remain self-only; main, spawned ownership, agent-to-agent policy, and scoped access grants cannot widen this boundary.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting is governed by `tools.agentToAgent`, which is on by default.
-    - `self` has no main-session visibility exception. Incognito denial remains absolute. Narrowing visibility to `agent`, `tree`, or `self` blocks ordinary cross-agent access unless a per-agent `tools.agentToAgent.send` rule permits a send-only exception. `tree` also permits owned native/ACP children across agent boundaries. `agent` does not include that child exception, so keep explicit `tree` if your workflow relies on it.
+    - `self` has no main-session visibility exception. Incognito denial remains absolute. Narrowing visibility to `agent`, `channel`, `tree`, or `self` blocks ordinary cross-agent access unless a per-agent `tools.agentToAgent.send` rule permits a send-only exception; `channel` remains a strict same-agent channel ceiling. `tree` also permits owned native/ACP children across agent boundaries. `agent` does not include that child exception, so keep explicit `tree` if your workflow relies on it.
     - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), access stays limited to spawned sessions even if the caller is main or `tools.sessions.visibility="all"`.
+    - With `visibility="channel"`, the default sandbox spawned-session clamp intersects the scopes as `self`, not `tree`.
     - When not `all`, `sessions_list` includes a compact `visibility` field
       describing the effective mode and a warning that some sessions may be
       omitted outside the current scope.
@@ -141,10 +143,20 @@ Ambient group watches still queue activity notices and tell the main session
 where something happened. They do not grant access. The default `all` scope
 already covers sessions across agents, including conversations with other users.
 A per-peer `session.dmScope` separates DM context but does not restrict session
-tools. For narrower access, explicitly choose `agent`, `tree`, or `self`, or
+tools. For narrower access, explicitly choose `agent`, `channel`, `tree`, or `self`, or
 restrict agent pairs with `tools.agentToAgent.allow`. Set
 `tools.agentToAgent.enabled: false` to block ordinary cross-agent access; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`. `tree` retains the
 canonical main-session exception; `self` restricts even main to its current session.
+
+The `channel` setting authorizes retrieval; it does not merge thread sessions or
+automatically inject sibling-thread history. It also filters transcript-backed
+memory search, but it does not isolate shared memory files, filesystem access,
+or a channel plugin's direct message/history tools. Restrict those capabilities
+separately when one agent serves multiple customers. Historical sessions without
+verified channel metadata fail closed; archived transcript hits in memory search
+are excluded because a reused live key does not prove their former channel.
+This setting cannot separate customer data already merged into a shared transcript.
+Use separate routed sessions from the start.
 
 ## `tools.sessions_spawn`
 

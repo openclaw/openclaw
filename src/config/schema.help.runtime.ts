@@ -588,7 +588,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
-    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict reads and ordinary sends. Explicit agents.entries.<id>.tools.agentToAgent.send destinations can permit sends without widening reads.',
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "channel" = current session + verified same-agent channel threads with matching provider/account/target/workspace; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict reads and ordinary sends. Explicit agents.entries.<id>.tools.agentToAgent.send destinations can permit sends without widening reads; channel remains a strict ceiling.',
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":

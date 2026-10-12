@@ -103,7 +103,185 @@ function createTool(params: {
 }
 
 describe("sessions_search tool", () => {
+  it("searches only same-channel candidates before returning snippets", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:1.001";
+    const sibling = "agent:main:slack:channel:c111:thread:1.002";
+    const other = "agent:main:slack:channel:c222:thread:1.003";
+    const row = (key: string, to: string) => ({
+      key,
+      agentId: "main",
+      chatType: "channel",
+      space: "t111",
+      origin: { provider: "slack", chatType: "channel" },
+      deliveryContext: { channel: "slack", accountId: "default", to },
+    });
+    const rows = [
+      row(requester, "channel:c111"),
+      row(sibling, "channel:c111"),
+      row(other, "channel:c222"),
+    ];
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsSearchTool({
+      config: { tools: { sessions: { visibility: "channel" } } },
+      agentSessionKey: requester,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.describe") {
+          const key = (request.params as { key?: string }).key;
+          return { session: rows.find((entry) => entry.key === key) } as T;
+        }
+        if (request.method === "sessions.list") {
+          return { sessions: rows, hasMore: false } as T;
+        }
+        const keys = (request.params as { sessionKeys?: string[] }).sessionKeys ?? [];
+        return {
+          results: keys.map((key) =>
+            hit({
+              sessionKey: key,
+              snippet: key === other ? "OTHER CUSTOMER SECRET" : "same channel context",
+            }),
+          ),
+        } as T;
+      },
+    });
+    const result = await tool.execute("channel-search", { query: "context" });
+    expect(result.details).toMatchObject({
+      results: [
+        expect.objectContaining({ sessionKey: requester }),
+        expect.objectContaining({ sessionKey: sibling }),
+      ],
+    });
+    expect(JSON.stringify(result.details)).not.toContain("OTHER CUSTOMER SECRET");
+    const searched = requests
+      .filter((request) => request.method === "sessions.search")
+      .flatMap((request) => (request.params as { sessionKeys: string[] }).sessionKeys);
+    expect(searched).toContain(sibling);
+    expect(searched).not.toContain(other);
+  });
+
+  it("rechecks same-channel authority after inventory before transcript search", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:2.001";
+    const sibling = "agent:main:slack:channel:c111:thread:2.002";
+    const makeRow = (key: string, to: string) => ({
+      key,
+      agentId: "main",
+      chatType: "channel" as const,
+      space: "t111",
+      origin: { provider: "slack", chatType: "channel" as const },
+      deliveryContext: { channel: "slack", accountId: "default", to },
+    });
+    const requesterRow = makeRow(requester, "channel:c111");
+    const admittedSibling = makeRow(sibling, "channel:c111");
+    const reassignedSibling = makeRow(sibling, "channel:c222");
+    const requests: CallGatewayRequest[] = [];
+    let inventoryReturned = false;
+    const tool = createSessionsSearchTool({
+      config: { tools: { sessions: { visibility: "channel" } } },
+      agentSessionKey: requester,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.list") {
+          inventoryReturned = true;
+          return { sessions: [requesterRow, admittedSibling], hasMore: false } as T;
+        }
+        if (request.method === "sessions.describe") {
+          const key = (request.params as { key?: string }).key;
+          if (key === sibling) {
+            return { session: inventoryReturned ? reassignedSibling : admittedSibling } as T;
+          }
+          return { session: requesterRow } as T;
+        }
+        const keys = (request.params as { sessionKeys?: string[] }).sessionKeys ?? [];
+        return {
+          results: keys.map((key) =>
+            hit({
+              sessionKey: key,
+              snippet: key === sibling ? "REASSIGNED CHANNEL SECRET" : "requester context",
+            }),
+          ),
+        } as T;
+      },
+    });
+
+    const result = await tool.execute("channel-search-reassignment", { query: "context" });
+
+    expect(JSON.stringify(result.details)).not.toContain("REASSIGNED CHANNEL SECRET");
+    const searched = requests
+      .filter((request) => request.method === "sessions.search")
+      .flatMap((request) => (request.params as { sessionKeys: string[] }).sessionKeys);
+    expect(searched).toEqual([requester]);
+  });
+
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("rejects route reassignment after description but before transcript I/O", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:3.001";
+    const sibling = "agent:main:slack:channel:c111:thread:3.002";
+    const store = path.join(tempDirs.make("openclaw-channel-admission-"), "sessions.sqlite");
+    replaceSessionEntrySync(
+      { storePath: store, sessionKey: requester },
+      { sessionId: "requester-session", updatedAt: 1 },
+    );
+    replaceSessionEntrySync(
+      { storePath: store, sessionKey: sibling },
+      { sessionId: "sibling-session", updatedAt: 1 },
+    );
+    const makeRow = (key: string, sessionId: string, to: string) => ({
+      key,
+      agentId: "main",
+      sessionId,
+      chatType: "channel" as const,
+      space: "t111",
+      origin: { provider: "slack", chatType: "channel" as const },
+      deliveryContext: { channel: "slack", accountId: "default", to },
+    });
+    const requesterRow = makeRow(requester, "requester-session", "channel:c111");
+    const admittedSibling = makeRow(sibling, "sibling-session", "channel:c111");
+    const reassignedSibling = makeRow(sibling, "sibling-session", "channel:c222");
+    const requests: CallGatewayRequest[] = [];
+    let siblingDescriptions = 0;
+    const tool = createSessionsSearchTool({
+      config: {
+        session: { store },
+        tools: { sessions: { visibility: "channel" } },
+      },
+      agentSessionKey: requester,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.list") {
+          return { sessions: [requesterRow, admittedSibling], hasMore: false } as T;
+        }
+        if (request.method === "sessions.describe") {
+          const key = (request.params as { key?: string }).key;
+          if (key === sibling) {
+            siblingDescriptions += 1;
+            return {
+              session: siblingDescriptions === 1 ? admittedSibling : reassignedSibling,
+            } as T;
+          }
+          return { session: requesterRow } as T;
+        }
+        return {
+          results: [
+            hit({
+              sessionKey: sibling,
+              snippet: "POST-DESCRIPTION REASSIGNED SECRET",
+            }),
+          ],
+        } as T;
+      },
+    });
+
+    const result = await tool.execute("channel-search-admission-reassignment", {
+      query: "context",
+      sessionKey: sibling,
+    });
+
+    expect(result.details).toMatchObject({ results: [] });
+    expect(JSON.stringify(result.details)).not.toContain("POST-DESCRIPTION REASSIGNED SECRET");
+    expect(requests.some((request) => request.method === "sessions.search")).toBe(false);
+    expect(siblingDescriptions).toBe(2);
+  });
 
   it("rejects a literal global target owned by another fixed-store agent when agent-to-agent is disabled", async () => {
     const requests: CallGatewayRequest[] = [];

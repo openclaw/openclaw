@@ -7,6 +7,7 @@ import { SessionRunStatusSchema } from "../../../packages/gateway-protocol/src/s
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/session-utils-core.js";
+import { resolveSessionChannelScope } from "../../plugin-sdk/session-visibility.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
@@ -41,6 +42,7 @@ import {
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
   createSessionVisibilityRowChecker,
+  resolveSessionToolChannelScope,
   classifySessionListKind,
   deriveChannel,
   resolveDisplaySessionKey,
@@ -99,7 +101,12 @@ const SessionsListOutputSchema = Type.Object(
     visibility: Type.Optional(
       Type.Object(
         {
-          mode: Type.Union([Type.Literal("self"), Type.Literal("tree"), Type.Literal("agent")]),
+          mode: Type.Union([
+            Type.Literal("self"),
+            Type.Literal("tree"),
+            Type.Literal("channel"),
+            Type.Literal("agent"),
+          ]),
           restricted: Type.Literal(true),
           warning: Type.String(),
         },
@@ -212,7 +219,14 @@ export function createSessionsListTool(opts?: {
         Boolean(gatewayContext) ||
         hasGatewayToolRoutingContext();
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
+      const requesterChannelScope = await resolveSessionToolChannelScope({
+        visibility,
+        sessionKey: effectiveRequesterKey,
+        agentId: requesterAgentId,
+        callGateway: gatewayCall,
+      });
       const visibilityGuard = createSessionVisibilityRowChecker({
+        requesterChannelScope,
         action: "list",
         defaultAgentId: requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
@@ -330,6 +344,7 @@ export function createSessionsListTool(opts?: {
           seenSessions.add(identity);
           const access = visibilityGuard.check({
             key,
+            channelScope: resolveSessionChannelScope(entry),
             agentId: resolvedAgentId,
             ownerSessionKey:
               typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"

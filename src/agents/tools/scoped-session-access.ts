@@ -36,12 +36,14 @@ export async function runWithScopedSessionAccess<T>(params: {
   agentId?: string;
   storePath?: string;
   expectedSessionId?: string;
+  revalidateCurrent?: () => Promise<void>;
+  admissionIdentities?: Iterable<string | undefined>;
   signal?: AbortSignal;
   targetSessionKey: string;
   run: () => Promise<T>;
 }): Promise<T> {
   const expectedSessionId = params.expectedSessionId?.trim();
-  if (!expectedSessionId) {
+  if (!expectedSessionId && !params.revalidateCurrent) {
     return await params.run();
   }
   const { sessionAgentId: agentId } = resolveSessionAgentIds({
@@ -51,23 +53,29 @@ export async function runWithScopedSessionAccess<T>(params: {
   });
   const storePath =
     params.storePath ?? resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-  const assertExpectedIncarnation = () =>
-    withSessionEntryReadOnlyInWorker(
-      { agentId, storePath, sessionKey: params.targetSessionKey },
-      () => params.signal?.throwIfAborted(),
-      async (read) => {
-        if (!read.ok) {
-          throw read.error;
-        }
-        if (read.value?.sessionId !== expectedSessionId || read.value.archivedAt !== undefined) {
-          throw new Error(`Session "${params.targetSessionKey}" changed after access was granted.`);
-        }
-      },
-    );
+  const assertExpectedIncarnation = async () => {
+    if (expectedSessionId) {
+      await withSessionEntryReadOnlyInWorker(
+        { agentId, storePath, sessionKey: params.targetSessionKey },
+        () => params.signal?.throwIfAborted(),
+        async (read) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          if (read.value?.sessionId !== expectedSessionId || read.value.archivedAt !== undefined) {
+            throw new Error(
+              `Session "${params.targetSessionKey}" changed after access was granted.`,
+            );
+          }
+        },
+      );
+    }
+    await params.revalidateCurrent?.();
+  };
   const admission = await beginSessionWorkAdmission({
     agentId,
     scope: storePath,
-    identities: [params.targetSessionKey, expectedSessionId],
+    identities: [params.targetSessionKey, expectedSessionId, ...(params.admissionIdentities ?? [])],
     assertAllowed: assertExpectedIncarnation,
     revalidateAllowed: assertExpectedIncarnation,
     ...(params.signal ? { signal: params.signal } : {}),

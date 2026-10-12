@@ -34,3 +34,27 @@ it("checks scoped incarnations in the reader worker before allowing effects", as
     expect(run).toHaveBeenCalledOnce();
   });
 });
+it("revalidates route authority at the final admission boundary", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const run = vi.fn(async () => "effect");
+    const revalidateCurrent = vi
+      .fn<() => Promise<void>>()
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error("channel authority changed"));
+
+    await expect(
+      runWithScopedSessionAccess({
+        cfg: {},
+        agentId: "main",
+        storePath: database.path,
+        targetSessionKey: "agent:main:slack:channel:c111:thread:2",
+        admissionIdentities: ["agent:main:slack:channel:c111:thread:1"],
+        revalidateCurrent,
+        run,
+      }),
+    ).rejects.toThrow("channel authority changed");
+    expect(revalidateCurrent).toHaveBeenCalledTimes(2);
+    expect(run).not.toHaveBeenCalled();
+  });
+});

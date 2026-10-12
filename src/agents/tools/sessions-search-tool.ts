@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
+import { resolveSessionChannelScope } from "../../plugin-sdk/session-visibility.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -30,6 +31,7 @@ import {
 } from "./scoped-session-access.js";
 import {
   createSessionVisibilityRowChecker,
+  resolveSessionToolChannelScope,
   formatSessionToolAccessDenial,
   isSessionToolMainAlias,
   resolveDisplaySessionKey,
@@ -216,6 +218,7 @@ async function listVisibleSearchSessions(params: {
           }
           const visibilityRow = {
             key: row.key,
+            channelScope: resolveSessionChannelScope(row),
             ...(typeof row.agentId === "string"
               ? { agentId: row.agentId }
               : agentId
@@ -406,7 +409,14 @@ export function createSessionsSearchTool(opts?: {
         };
       }
 
+      const requesterChannelScope = await resolveSessionToolChannelScope({
+        visibility,
+        sessionKey: effectiveRequesterKey,
+        agentId: requesterAgentId,
+        callGateway: gatewayCall,
+      });
       const rowGuard = createSessionVisibilityRowChecker({
+        requesterChannelScope,
         action: "history",
         defaultAgentId: requesterAgentId,
         requesterAgentId,
@@ -493,12 +503,9 @@ export function createSessionsSearchTool(opts?: {
       for (const [agentId, candidates] of [...sessionsByAgent].toSorted(([left], [right]) =>
         left.localeCompare(right),
       )) {
-        for (
-          let offset = 0;
-          offset < candidates.length;
-          offset += SESSIONS_SEARCH_MAX_SESSION_KEYS
-        ) {
-          const chunk = candidates.slice(offset, offset + SESSIONS_SEARCH_MAX_SESSION_KEYS);
+        const chunkSize = visibility === "channel" ? 1 : SESSIONS_SEARCH_MAX_SESSION_KEYS;
+        for (let offset = 0; offset < candidates.length; offset += chunkSize) {
+          const chunk = candidates.slice(offset, offset + chunkSize);
           const runSearch = () =>
             gatewayCall<{
               results?: GatewaySearchHit[];
@@ -515,15 +522,43 @@ export function createSessionsSearchTool(opts?: {
               },
             });
           const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
-          const result = scopedCandidate?.expectedSessionId
-            ? await runWithScopedSessionAccess({
-                cfg,
-                agentId,
-                expectedSessionId: scopedCandidate.expectedSessionId,
-                targetSessionKey: scopedCandidate.key,
-                run: runSearch,
-              })
-            : await runSearch();
+          let expectedSessionId = scopedCandidate?.expectedSessionId;
+          let revalidateCurrent: (() => Promise<void>) | undefined;
+          let admissionIdentities: string[] | undefined;
+          if (visibility === "channel" && scopedCandidate) {
+            const freshAccess = await resolveSessionToolAccess({
+              action: "history",
+              displayAction: "search",
+              requesterAgentId,
+              requesterSessionKey: effectiveRequesterKey,
+              sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
+              mainSessionKey,
+              targetAgentId: agentId,
+              targetSessionKey: scopedCandidate.key,
+              requesterOwned: false,
+              visibility,
+              a2aPolicy,
+              callGateway: gatewayCall,
+            });
+            if (!freshAccess.allowed) {
+              continue;
+            }
+            expectedSessionId = freshAccess.expectedSessionId;
+            revalidateCurrent = freshAccess.revalidateCurrent;
+            admissionIdentities = freshAccess.admissionIdentities;
+          }
+          const result =
+            scopedCandidate && (expectedSessionId || revalidateCurrent)
+              ? await runWithScopedSessionAccess({
+                  cfg,
+                  agentId,
+                  expectedSessionId,
+                  revalidateCurrent,
+                  admissionIdentities,
+                  targetSessionKey: scopedCandidate.key,
+                  run: runSearch,
+                })
+              : await runSearch();
           indexing ||= result.indexing === true;
           archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
           backendTruncated ||= result.truncated === true;
