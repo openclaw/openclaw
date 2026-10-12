@@ -351,16 +351,16 @@ export async function maybeRepairGatewayServiceConfig(
     !process.env.OPENCLAW_GATEWAY_PORT?.trim()
       ? (parseTcpPortFromArgs(command.programArguments) ?? port)
       : port;
-  const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
-    expectedPlan.environment,
-  );
   const audit = await auditGatewayServiceConfig({
     env: process.env,
     command,
     expectedGatewayToken,
-    expectedManagedServiceEnvKeys,
+    expectedManagedServiceEnvKeys: readManagedServiceEnvKeysFromEnvironment(
+      expectedPlan.environment,
+    ),
     expectedServicePath: expectedPlan.environment.PATH,
     expectedPort: repairPort,
+    expectedDurableEnvironment: expectedPlan.environment,
     ...(installationDrift ? { expectedCommand: expectedPlan } : {}),
   });
   reportServiceDefinitionDrift(audit);

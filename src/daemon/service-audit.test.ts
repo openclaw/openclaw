@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/service-audit-mocks.js";
 import {
   auditGatewayServiceConfig,
+  checkManagedServiceEnvDrift,
   checkTokenDrift,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES as codes,
@@ -511,5 +512,204 @@ describe("systemd shutdown timeout audit", () => {
         level: "recommended",
       });
     }
+  });
+});
+
+describe("checkManagedServiceEnvDrift", () => {
+  it("returns null when serviceEnvironment is undefined", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: undefined,
+      durableEnvironment: { TAVILY_API_KEY: "tvly-new" },
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when durableEnvironment is undefined", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-old",
+      },
+      durableEnvironment: undefined,
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when service has no managed keys", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        TAVILY_API_KEY: "tvly-old",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-new",
+      },
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when managed keys match durable environment", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY,OPENROUTER_API_KEY",
+        TAVILY_API_KEY: "tvly-val",
+        OPENROUTER_API_KEY: "or-val",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-val",
+        OPENROUTER_API_KEY: "or-val",
+      },
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("detects drift when managed key value changes in durable environment", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-old-secret",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-new-secret",
+      },
+      platform: "darwin",
+    });
+    expect(result).toStrictEqual({
+      code: codes.gatewayEnvDrift,
+      message:
+        "Durable service environment differs from service definition for managed keys (TAVILY_API_KEY). The daemon will use the old environment after restart.",
+      detail: "drifted keys: TAVILY_API_KEY",
+      environmentKeys: ["TAVILY_API_KEY"],
+      level: "recommended",
+    });
+    // Secrets must NOT be exposed anywhere in the returned issue
+    expect(JSON.stringify(result)).not.toContain("tvly-old-secret");
+    expect(JSON.stringify(result)).not.toContain("tvly-new-secret");
+  });
+
+  it("detects drift when value differs only by leading or trailing whitespace", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-secret ",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-secret",
+      },
+      platform: "darwin",
+    });
+    expect(result).toStrictEqual({
+      code: codes.gatewayEnvDrift,
+      message:
+        "Durable service environment differs from service definition for managed keys (TAVILY_API_KEY). The daemon will use the old environment after restart.",
+      detail: "drifted keys: TAVILY_API_KEY",
+      environmentKeys: ["TAVILY_API_KEY"],
+      level: "recommended",
+    });
+  });
+
+  it("skips added keys absent from service definition that startup will load normally", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-same",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-same",
+        ANTHROPIC_API_KEY: "sk-ant-new",
+      },
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("detects drift when managed durable key is removed from durable environment", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-old",
+      },
+      durableEnvironment: {},
+      platform: "darwin",
+    });
+    expect(result).toStrictEqual({
+      code: codes.gatewayEnvDrift,
+      message:
+        "Durable service environment differs from service definition for managed keys (TAVILY_API_KEY). The daemon will use the old environment after restart.",
+      detail: "drifted keys: TAVILY_API_KEY",
+      environmentKeys: ["TAVILY_API_KEY"],
+      level: "recommended",
+    });
+  });
+
+  it("skips non-durable SecretRef keys captured during install absent from durable sources", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY,SECRETREF_ENV_ID",
+        TAVILY_API_KEY: "tvly-same",
+        SECRETREF_ENV_ID: "captured-secret-value",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-same",
+      },
+      secretRefKeys: ["SECRETREF_ENV_ID"],
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("skips systemd where managed keys are overridden dynamically at startup", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+        TAVILY_API_KEY: "tvly-old",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+      },
+      durableEnvironment: {
+        TAVILY_API_KEY: "tvly-new",
+      },
+      platform: "linux",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("emits gatewayEnvDrift issue in auditGatewayServiceConfig when expectedDurableEnvironment differs", async () => {
+    const auditResult = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/bin:/bin",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+          TAVILY_API_KEY: "tvly-old",
+        },
+      },
+      expectedDurableEnvironment: {
+        TAVILY_API_KEY: "tvly-new",
+      },
+    });
+
+    expect(hasIssue(auditResult, codes.gatewayEnvDrift)).toBe(true);
+    expect(
+      auditResult.issues.find((issue) => issue.code === codes.gatewayEnvDrift)?.environmentKeys,
+    ).toEqual(["TAVILY_API_KEY"]);
+  });
+
+  it("skips OPENCLAW_GATEWAY_TOKEN since token drift has dedicated audit", () => {
+    const result = checkManagedServiceEnvDrift({
+      serviceEnvironment: {
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_TOKEN",
+        OPENCLAW_GATEWAY_TOKEN: "tok-old",
+      },
+      durableEnvironment: {
+        OPENCLAW_GATEWAY_TOKEN: "tok-new",
+      },
+      platform: "darwin",
+    });
+    expect(result).toBeNull();
   });
 });
