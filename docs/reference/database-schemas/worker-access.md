@@ -113,6 +113,13 @@ cache refreshes. Row receipts do not grant permission, and a missing receipt is
 not proof of absence. Outside processes use the Gateway or exclusive offline
 ownership; ordinary readers do not poll for foreign commits.
 
+Agent read-only opens reuse the physical owner's admitted schema and ownership
+proof. Tracked DDL or file replacement requires fresh admission; the durable
+quarantine guard still runs before opening. Lease admission marks the integrity
+receipt dirty once. A healthy close without a completed checkpoint leaves that
+receipt dirty, while failed disposal revokes it and the final checkpointed closer
+can certify it. These changes do not alter database formats or update behavior.
+
 Memory retrieval workers borrow the existing agent read-only owner across query
 awaits and release each borrow before replying. The owner retains the idle reader
 and its prepared statements, with committed-write invalidation and physical-file

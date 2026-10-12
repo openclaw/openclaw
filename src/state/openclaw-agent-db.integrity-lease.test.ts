@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -313,6 +314,34 @@ it.each(["before", "after"] as const)(
     expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
   },
 );
+
+it("preserves dirty proof without quarantine SQL when a healthy peer closes before checkpoint", () => {
+  const owner = openOwner();
+  const peerLease = claimOpenClawAgentDatabaseLease({
+    agentId: "integrity-lease",
+    path: owner.database.path,
+    env: owner.env,
+  });
+  expect(owner.record()?.clean_close).toBe(0);
+  const quarantineSql: string[] = [];
+  const observer = observeHostDataSql((sql, database) => {
+    if (
+      database?.location() === resolveQuarantineStorePath(owner.env) ||
+      /\b(?:quarantined_databases|agent_integrity_verifications)\b/i.test(sql)
+    ) {
+      quarantineSql.push(sql);
+    }
+  });
+  try {
+    releaseOpenClawAgentDatabaseLease(peerLease, { env: owner.env }, "uncheckpointed");
+    expect(quarantineSql).toEqual([]);
+  } finally {
+    observer.restore();
+  }
+  expect(owner.record()?.clean_close).toBe(0);
+  closeOpenClawAgentDatabaseByPath(owner.database.path);
+  expect(owner.record()?.clean_close).toBe(1);
+});
 
 it.each(["closing", "unregistering", "reopening shared state before closing"])(
   "does not recreate deletion history when %s an external store after shared state is lost",
