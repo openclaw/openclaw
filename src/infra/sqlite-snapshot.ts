@@ -343,14 +343,9 @@ function removePublishedTargetIfOwned(
 }
 
 function sameFileStatFingerprint(left: Stats, right: Stats): boolean {
-  // Creating the publication hard link changes source ctime, so compare the
-  // mutation fields that remain stable for the same bytes and pathname owner.
-  return (
-    sameFileIdentity(left, right) &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.birthtimeMs === right.birthtimeMs
-  );
+  // Links and transfers can change timestamps without changing the retained
+  // inode or bytes. Publication verifies content separately below.
+  return sameFileIdentity(left, right) && left.size === right.size;
 }
 
 function assertSynchronousCallbackResult(result: unknown, label: string): void {
