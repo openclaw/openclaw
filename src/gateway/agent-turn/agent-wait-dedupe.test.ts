@@ -648,7 +648,7 @@ describe("agent.wait gateway dedupe observations", () => {
   ] as const)(
     "keeps $activeKind observation interruption nonterminal (timeout=$timeoutMs, reset=$reset)",
     async ({ activeKind, timeoutMs, reset }) => {
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const runId = `run-public-timeout-${activeKind ?? "untracked"}-${timeoutMs}`;
       const dedupe = new Map<string, DedupeEntry>();
       const timedOut = waitThroughGateway({ runId, timeoutMs }, activeKind);
