@@ -1,6 +1,4 @@
 // Control UI config module wires vitest behavior.
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
@@ -9,6 +7,7 @@ import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
 import type { Vitest } from "vitest/node";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { canRunChromiumExecutable } from "../scripts/lib/chromium-executable.mts";
 import {
   filterFilesByPatterns,
   intersectIncludePatterns,
@@ -89,24 +88,19 @@ const systemChromiumExecutableCandidates = [
   "/usr/bin/google-chrome-stable",
 ] as const;
 
-function canRunChromiumExecutable(executablePath: string): boolean {
-  const result = spawnSync(executablePath, ["--version"], { stdio: "ignore" });
-  return result.status === 0;
-}
-
 function resolveChromiumLaunchOptions(): { executablePath: string } | undefined {
   const override = process.env[chromiumExecutableOverrideEnvKey]?.trim();
-  if (override && existsSync(override) && canRunChromiumExecutable(override)) {
+  if (override && canRunChromiumExecutable(override)) {
     return { executablePath: override };
   }
 
   const defaultExecutablePath = chromium.executablePath();
-  if (existsSync(defaultExecutablePath) && canRunChromiumExecutable(defaultExecutablePath)) {
+  if (canRunChromiumExecutable(defaultExecutablePath)) {
     return undefined;
   }
 
-  const systemExecutablePath = systemChromiumExecutableCandidates.find(
-    (candidate) => existsSync(candidate) && canRunChromiumExecutable(candidate),
+  const systemExecutablePath = systemChromiumExecutableCandidates.find((candidate) =>
+    canRunChromiumExecutable(candidate),
   );
   return systemExecutablePath ? { executablePath: systemExecutablePath } : undefined;
 }

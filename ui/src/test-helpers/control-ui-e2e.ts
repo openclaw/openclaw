@@ -1,6 +1,6 @@
 // Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import type { Locator, Page } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import { canRunChromiumExecutable as canRunPlaywrightChromium } from "../../../scripts/lib/chromium-executable.mts";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type {
@@ -66,6 +67,7 @@ export type {
   MockGatewayRequest,
   MockGatewayWindow,
 } from "./control-ui-e2e-contract.ts";
+export { canRunChromiumExecutable as canRunPlaywrightChromium } from "../../../scripts/lib/chromium-executable.mts";
 
 export {
   captureControlUiE2eFailureDiagnostics,
@@ -578,13 +580,6 @@ export function resolvePlaywrightChromiumExecutablePath(
     systemChromiumExecutableCandidates.find((candidate) => canRun(candidate)) ??
     defaultExecutablePath
   );
-}
-
-export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolean {
-  if (!existsSync(chromiumExecutablePath)) {
-    return false;
-  }
-  return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
 }
 
 // Pause an installed virtual clock slightly ahead of its current time so
