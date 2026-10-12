@@ -7840,7 +7840,6 @@
 ["src/gateway/server.placement-abandonment.lifecycle.test.ts","./worker-environments/node-worker-tunnel.test-support.js","c7b68b3c4788f4dc1ebb3afdbdfde09a782260dc6459ee5f7f25c0c9bb560be7",1]
 ["src/gateway/server.placement-abandonment.lifecycle.test.ts","./worker-environments/placement-dispatch-test-fixtures.js","9816f48192d4419029105cbc6f622e52e54d457be89e1c58126d358fed7755bf",1]
 ["src/gateway/server.placement-abandonment.lifecycle.test.ts","./worker-environments/placement-record.js","18fe75b5d8f3d8470b60d8078d347e14489d2700a00517d21f55e2fe386d1977",1]
-["src/gateway/server.sessions.agent-model-catalog.test.ts","../agents/model-runtime-choice.js","250c73c9c36af0e968bbde4b42f765a666a4eb8b92092ea11f5606ac6093c01e",1]
 ["src/gateway/server.sessions.create-worktree-spawn.test.ts","../projects/project-clone.js","552ccf62fca533b971ea7f08f3667ac6b064f50ef176be308f2ff728bb05a0a7",1]
 ["src/gateway/server.sessions.create.clone-identity.e2e.test.ts","../agents/github-oauth-client.js","13b9b41f00ab467cfaa1940b1df674a7d2126ebb73b8b2642b6214454a3204b0",1]
 ["src/gateway/server.sessions.create.projects.test.ts","../auto-reply/reply/conversation-label-generator.js","8e736c928705022080c02d1171b1f17d95e15913f9ae39aab05e5501b9e4a5b0",1]

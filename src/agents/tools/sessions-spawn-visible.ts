@@ -24,7 +24,7 @@ import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
 import { resolveAgentIdentity } from "../identity.js";
@@ -62,6 +62,7 @@ import {
   summarizeVisibleSessionSpawnError,
 } from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
+import { resolveVisibleChildThinkingLevel } from "./sessions-spawn-visible-thinking.js";
 import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
@@ -363,22 +364,29 @@ export async function maybeSpawnVisibleSession(params: {
     };
   }
 
+  const requesterPreferences =
+    params.options?.requesterThinkingLevel === undefined ||
+    (targetAgentId === requesterAgentId && !params.options?.requesterModel)
+      ? await readRequesterPreferences({
+          cfg,
+          requesterInternalKey: requesterKey,
+          requesterAgentId,
+          assertActive,
+        })
+      : undefined;
+  assertActive();
   const modelPlan = await resolveSubagentModelAndThinkingPlan({
     cfg,
     targetAgentId,
+    requesterAgentConfig: resolveAgentConfig(cfg, requesterAgentId),
+    targetAgentConfig: resolveAgentConfig(cfg, targetAgentId),
     modelOverride,
     workspaceDir: spawnedWorkspaceDir,
+    callerThinkingRaw:
+      params.options?.requesterThinkingLevel ?? requesterPreferences?.thinkingLevel,
     inheritedModel:
       targetAgentId === requesterAgentId
-        ? (params.options?.requesterModel ??
-          (
-            await readRequesterPreferences({
-              cfg,
-              requesterInternalKey: requesterKey,
-              requesterAgentId,
-              assertActive,
-            })
-          ).model)
+        ? (params.options?.requesterModel ?? requesterPreferences?.model)
         : undefined,
   });
   assertActive();
@@ -420,6 +428,13 @@ export async function maybeSpawnVisibleSession(params: {
         throw new ToolInputError("Public ingress work requires an immediate isolated child.");
       }
     }
+    const resolvedThinkingLevel = await resolveVisibleChildThinkingLevel({
+      cfg,
+      targetAgentId,
+      resolvedModel,
+      level: initialSessionPatch.thinkingLevel,
+      loadModelCatalog: params.options?.loadModelCatalog,
+    });
     const gatewayCall = params.options?.callGateway ?? callInProcessGatewayTool;
     const createGatewayCall: InProcessGatewayCaller =
       params.options?.callGateway ??
@@ -473,6 +488,7 @@ export async function maybeSpawnVisibleSession(params: {
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
+        ...(resolvedThinkingLevel ? { thinkingLevel: resolvedThinkingLevel } : {}),
         ...(placement ? { titleSource } : { task: taskMessage }),
         timeoutMs:
           runTimeoutSeconds === 0
