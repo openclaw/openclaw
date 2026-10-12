@@ -500,6 +500,47 @@ describe("ConfigPage camera selection", () => {
 });
 
 describe("ConfigPage curated mutation eligibility", () => {
+  it("updates mobile pairing eligibility when connection and admin access are published", () => {
+    const openDevicePairSetup = vi.fn();
+    const context = {
+      gateway: { snapshot: { phase: "disconnected", hello: null, client: null } },
+      runtimeConfig: { state: { connected: false } },
+      overlays: { openDevicePairSetup },
+    } as unknown as ApplicationContext;
+    const view = mountConfigPage(context, { pageId: "security" });
+    const pairingButton = view.container.querySelector<HTMLButtonElement>(
+      ".security-page button.btn",
+    )!;
+    expect(pairingButton.disabled).toBe(true);
+
+    context.runtimeConfig.state.connected = true;
+    Object.assign(context.gateway.snapshot, {
+      phase: "connected",
+      hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
+    });
+    publishConfigSource(context.runtimeConfig);
+    expect(pairingButton.disabled).toBe(false);
+    pairingButton.click();
+    expect(openDevicePairSetup).toHaveBeenCalledOnce();
+
+    Object.assign(context.gateway.snapshot, {
+      hello: { auth: { role: "operator", scopes: ["operator.read"] } },
+    });
+    publishConfigSource(context.gateway);
+    expect(pairingButton.disabled).toBe(true);
+    pairingButton.click();
+    expect(openDevicePairSetup).toHaveBeenCalledOnce();
+
+    Object.assign(context.gateway.snapshot, {
+      hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
+    });
+    publishConfigSource(context.gateway);
+    expect(pairingButton.disabled).toBe(false);
+    context.runtimeConfig.state.connected = false;
+    publishConfigSource(context.runtimeConfig);
+    expect(pairingButton.disabled).toBe(true);
+  });
+
   it.each([
     ["read-only operator", { connected: true }, ["operator.read"], false, true],
     ["config.set absent", { connected: true }, ["operator.admin"], false, false],

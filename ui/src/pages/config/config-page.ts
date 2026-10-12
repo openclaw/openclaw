@@ -199,6 +199,7 @@ export class ConfigPageController {
   }
 
   get application() {
+    this.observe();
     return this.context;
   }
   get browserLinksEnabled() {

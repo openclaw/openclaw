@@ -4,7 +4,6 @@ import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership
 import {
   isSubagentSessionKey,
   normalizeAgentId,
-  normalizeAgentIdStrict,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
@@ -15,7 +14,10 @@ import {
 } from "../../tools/sessions-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import type { SessionCapabilityLookup } from "../spawn/subagent-session-store.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+} from "./subagent-child-owner-match.js";
 import type { ResolvedSubagentController } from "./subagent-control.types.js";
 import {
   readSubagentExecRequestController,
@@ -303,15 +305,10 @@ function selectControlledSubagentRunFacts(
     runs.filter(
       (entry) =>
         isSubagentRunVisibleToSession(entry, sessionKey, agentId, cfg) &&
-        (entry.childAgentId === undefined
-          ? index.latestRunsByChildSessionKey.get(entry.childSessionKey.trim())
-          : latestSubagentRun(runs, (candidate) =>
-              matchesSubagentChildSessionOwner(
-                candidate,
-                entry.childSessionKey,
-                entry.childAgentId,
-              ),
-            )) === entry,
+        (resolveSubagentChildAgentId(entry) === undefined ||
+          latestSubagentRun(runs, (candidate) =>
+            matchesSubagentChildSessionOwner(candidate, entry.childSessionKey, entry.childAgentId),
+          ) === entry),
     ),
   );
 }
@@ -417,35 +414,15 @@ export function ensureSubagentControllerOwnsRun(params: {
 export function getLatestOwnedSubagentRun(
   childSessionKey: string,
   agentId: string | undefined,
-  cfg: OpenClawConfig,
+  _cfg: OpenClawConfig,
 ): SubagentRunRecord | undefined {
   const key = childSessionKey.trim();
-  // Qualified keys own their namespace; legacy raw rows retain requester-agent separation.
-  const owner =
-    agentId === undefined || parseAgentSessionKey(key)
-      ? undefined
-      : normalizeAgentIdStrict(agentId);
-  return (
-    getLatestLiveSubagentRunByChildSessionKey(
-      key,
-      owner === undefined
-        ? undefined
-        : (candidate) =>
-            owner.ok &&
-            matchesSubagentChildSessionOwner(candidate, key, owner.value) &&
-            (candidate.childAgentId !== undefined ||
-              resolveRunRequesterAgentId(candidate, cfg) === owner.value),
-    ) ?? undefined
-  );
+  return getLatestLiveSubagentRunByChildSessionKey(key, undefined, agentId) ?? undefined;
 }
 
 export function isCurrentSubagentRun(entry: SubagentRunRecord, cfg: OpenClawConfig): boolean {
   return isSameSubagentRunOwner(
-    getLatestOwnedSubagentRun(
-      entry.childSessionKey,
-      entry.childAgentId ?? resolveRunRequesterAgentId(entry, cfg),
-      cfg,
-    ),
+    getLatestOwnedSubagentRun(entry.childSessionKey, resolveSubagentChildAgentId(entry), cfg),
     entry,
   );
 }

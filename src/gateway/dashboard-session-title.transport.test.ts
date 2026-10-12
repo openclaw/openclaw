@@ -34,6 +34,7 @@ async function withTitleProvider(
   }) => Promise<void>,
   params?: Record<string, unknown>,
   defaultParams?: Record<string, unknown>,
+  api: "openai-completions" | "ollama" = "openai-completions",
 ) {
   await withOpenClawTestState({ label: "title-transport" }, async (state) => {
     const requests: TitleRequest[] = [];
@@ -45,6 +46,18 @@ async function withTitleProvider(
             url: request.url,
             body: JSON.parse(body),
           });
+          if (api === "ollama") {
+            response.writeHead(200, { "content-type": "application/x-ndjson" });
+            response.end(
+              JSON.stringify({
+                model: "qwen3.6:35b",
+                message: { role: "assistant", content: raw },
+                done: true,
+                done_reason: "stop",
+              }) + "\n",
+            );
+            return;
+          }
           response.writeHead(200, { "content-type": "text/event-stream" });
           response.end(
             `data: ${JSON.stringify({
@@ -61,31 +74,34 @@ async function withTitleProvider(
         });
       },
       async (baseUrl) => {
+        const fixtureProvider = api === "ollama" ? "ollama" : provider;
+        const fixtureModel = api === "ollama" ? "qwen3.6:35b" : model;
+        const fixtureModelRef = fixtureProvider + "/" + fixtureModel;
         const cfg: OpenClawConfig = {
-          plugins: { enabled: false },
+          plugins: api === "ollama" ? { allow: ["ollama"] } : { enabled: false },
           agents: {
             defaults: {
               workspace: state.workspaceDir,
               skipBootstrap: true,
-              model: { primary: `${provider}/${primaryModel}` },
-              utilityModel: modelRef,
-              ...(params ? { models: { [modelRef]: { params } } } : {}),
+              model: { primary: fixtureProvider + "/" + primaryModel },
+              utilityModel: fixtureModelRef,
+              ...(params ? { models: { [fixtureModelRef]: { params } } } : {}),
               ...(defaultParams ? { params: defaultParams } : {}),
             },
           },
           models: {
             mode: "replace",
             providers: {
-              [provider]: {
-                baseUrl: `${baseUrl}/v1`,
+              [fixtureProvider]: {
+                baseUrl: api === "ollama" ? baseUrl : baseUrl + "/v1",
                 apiKey: "test-key",
-                api: "openai-completions",
+                api,
                 agentRuntime: { id: "openclaw" },
                 request: { allowPrivateNetwork: true },
-                models: [primaryModel, model].map((id): ModelDefinitionConfig => ({
+                models: [primaryModel, fixtureModel].map((id): ModelDefinitionConfig => ({
                   id,
                   name: id,
-                  api: "openai-completions",
+                  api,
                   reasoning: false,
                   input: ["text"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -108,7 +124,44 @@ async function withTitleProvider(
 }
 
 describe("generated titles over the real OpenAI-compatible transport", () => {
-  it("reserves reasoning tokens without consuming the title's answer budget", async () => {
+  it("disables configured native Ollama thinking only for the utility request", async () => {
+    await withTitleProvider(
+      "Utility thinking disabled",
+      async ({ cfg, agentDir, requests }) => {
+        const definition = cfg.models!.providers!.ollama!.models[1]!;
+        definition.reasoning = true;
+        definition.params = { think: true, num_ctx: 8192 };
+        await runIsolatedCompletion({
+          config: cfg,
+          agentId: "main",
+          agentDir,
+          provider: "ollama",
+          model: "qwen3.6:35b",
+          thinkLevel: "high",
+          systemPrompt: "Write a title.",
+          prompt: "Debug title generation.",
+          timeoutMs: 5_000,
+        });
+        await expect(
+          prepareDashboardSessionTitle({
+            cfg,
+            agentId: "main",
+            userMessage: "Debug title generation.",
+          }),
+        ).resolves.toBe("Utility thinking disabled");
+        expect(requests.map(({ url, body }) => ({ url, think: body.think }))).toEqual([
+          { url: "/api/chat", think: true },
+          { url: "/api/chat", think: false },
+        ]);
+        expect(requests[1]!.body.options).toMatchObject({ num_predict: 4096, num_ctx: 8192 });
+      },
+      undefined,
+      undefined,
+      "ollama",
+    );
+  });
+
+  it("disables reasoning without expanding the title answer budget", async () => {
     await withTitleProvider("Utility budget verified", async ({ cfg, requests }) => {
       for (const definition of cfg.models!.providers![provider]!.models) {
         definition.reasoning = true;
@@ -123,7 +176,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
       ).resolves.toBe("Utility budget verified");
       expect(requests).toHaveLength(1);
       const body = requests[0]!.body;
-      expect(body.max_tokens ?? body.max_completion_tokens).toBe(12_288);
+      expect(body.max_tokens ?? body.max_completion_tokens).toBe(4_096);
       expect(body.tools ?? []).toEqual([]);
     });
   });
@@ -133,7 +186,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
       name: "model aliases overriding global defaults",
       params: {
         chatTemplateKwargs: { enable_thinking: false, configured_only: true },
-        extraBody: { min_p: 0.2, store: false },
+        extraBody: { min_p: 0.2, store: false, enable_thinking: true },
       },
       defaultParams: {
         chat_template_kwargs: { enable_thinking: true, default_only: true },
@@ -149,9 +202,10 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           chat_template_kwargs: { enable_thinking: true, extra_body_only: true },
           min_p: 0.2,
           store: false,
+          enable_thinking: true,
         },
       },
-      expectedTemplate: { enable_thinking: true, extra_body_only: true },
+      expectedTemplate: { enable_thinking: false, extra_body_only: true },
     },
   ])(
     "preserves $name through registered utility completion transport",
@@ -168,7 +222,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           ).resolves.toBe("Utility payload verified");
           expect(requests).toHaveLength(1);
           const body = requests[0]!.body;
-          expect(body).toMatchObject({ model, stream: true, min_p: 0.2 });
+          expect(body).toMatchObject({ model, stream: true, min_p: 0.2, enable_thinking: false });
           expect(body.chat_template_kwargs).toEqual(expectedTemplate);
           expect(Object.hasOwn(body, "store")).toBe(false);
           expect(body.tools ?? []).toEqual([]);
@@ -223,7 +277,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           })),
         ).toEqual([
           { template: { enable_thinking: false }, minP: 0.3 },
-          { template: { enable_thinking: true }, minP: 0.7 },
+          { template: { enable_thinking: false }, minP: 0.7 },
           { template: { enable_thinking: false }, minP: 0.3 },
         ]);
       },

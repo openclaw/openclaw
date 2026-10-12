@@ -66,9 +66,8 @@ or result delivery fails; recovery reconciles through its original owner instead
 of repeating the write. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness).
 
-SQLite remains the supported runtime store. Preparation for PostgreSQL should
-improve the existing store owners and their tests before adding a driver or
-configuration option. The initial target is remote persistence for one Gateway;
+SQLite remains the supported default. The experimental PostgreSQL adapter
+supports remote persistence for one Gateway;
 multiple active Gateways would require a separate ownership and coordination
 design. A shared database alone does not make process-local writer queues,
 session lifecycles, or host-owned leases safe across Gateway instances.
@@ -88,36 +87,21 @@ Prose, fragments without a statement prefix, and substitutions are ignored, acce
 
 ### Experimental PostgreSQL engine (workboard pilot)
 
-`database.engine: "postgres"` selects the experimental PostgreSQL engine for
-workboard only. Set `database.postgres.connection` to a PostgreSQL DSN, preferably
-through a SecretRef. The host resolves the secret before opening the worker;
-missing or unresolvable connections and unreachable servers fail without falling
-back to SQLite. SQLite remains the supported default (`database.engine: "sqlite"`),
-and updates require no configuration or migration for SQLite stores. Other stores
-continue to use SQLite. A follow-up adapter will generalize selection to every
-store and add Doctor reporting.
-
-The workboard database path holds a small SQLite anchor with a durable store
-UUID. Its first 16 hexadecimal characters select the PostgreSQL schema
-`<schemaPrefix>_workboard_<uuid-prefix>` (prefix defaults to `openclaw`); moving the anchor preserves that identity.
-Back up and restore both the anchor and its PostgreSQL schema together.
-The pilot refuses an existing SQLite workboard store containing data; it does
-not port that data to PostgreSQL. Opening an anchor with the SQLite engine
-refuses and names its PostgreSQL schema; it never creates SQLite workboard tables
-in the anchor. This check runs once per open, never per operation. The connection
-owns its `search_path`.
-Writers use `READ COMMITTED` with one transaction-scoped advisory lock derived
-from the store UUID; snapshot reads use `REPEATABLE READ READ ONLY`. Connections set
-`synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: an operating
-system or database crash can lose recent acknowledged commits.
+`database.engine: "postgres"` selects PostgreSQL for every store with a registered
+PostgreSQL schema; workboard is currently the only supported store. Doctor
+reports each store's engine and warns about stores that remain on SQLite.
+See [Database engines (experimental)](/reference/database-engines) for SecretRef
+configuration, isolation and durability, matched anchor/schema backups,
+limitations, and engine-boundary observation. Missing secrets, connection failures,
+and admission errors never fall back to SQLite. Existing SQLite workboard data
+refuses the switch until a port tool is available.
 
 `pnpm db:postgres:gen --target workboard` generates the workboard DDL from its
 SQLite schema; `pnpm db:postgres:check` verifies freshness. Admission installs the
 tables and records the current store version in one transaction. There are no
 PostgreSQL migrations yet: an existing version mismatch refuses to open and names
-the expected version. PostgreSQL text cannot store NUL characters, so NUL-bearing
-values fail with an engine error. This pilot does not enable multiple active
-Gateways against the same store.
+the expected version. Opening a PostgreSQL anchor with the SQLite engine also
+refuses; it never creates SQLite workboard tables in the anchor.
 
 ### Keep operations at the owning store
 

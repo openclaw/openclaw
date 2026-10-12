@@ -513,7 +513,6 @@ async function runPendingMaintenance(
           admitted = true;
           return { activeSessionKeys, preservation: operation.input.preservation };
         },
-        forceInProcess: false,
         plan: operation,
       });
       if (result.kind === "maintenance-plan") {
@@ -551,7 +550,6 @@ async function runPendingMaintenance(
       const age = await runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-age" },
         assertCommitAllowed: assertInputsCurrent,
-        forceInProcess: false,
         plan: {
           kind: "maintenance-age",
           databaseOptions: operation.databaseOptions,

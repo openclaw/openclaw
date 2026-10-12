@@ -24,6 +24,9 @@ would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
+Storage-engine PRs and scheduled main runs include a hosted PostgreSQL 17
+[conformance job](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
+
 Full hybrid extension lint packs the same canonical chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 
 Default fork first attempts run their existing core lint stripes on Blacksmith16, retaining the same core and extension chunk assignments and restore-only caches. Retries and the GitHub override remain hosted; see [runner placement](/ci/runners#runners).

@@ -1245,6 +1245,14 @@
     "./plugin-sdk/sqlite-worker-runtime": {
       "default": "./dist/plugin-sdk/sqlite-worker-runtime.js"
     },
+    "./plugin-sdk/database-engine-runtime": {
+      "types": "./dist/plugin-sdk/database-engine-runtime.d.ts",
+      "default": "./dist/plugin-sdk/database-engine-runtime.js"
+    },
+    "./plugin-sdk/database-engine-worker-runtime": {
+      "types": "./dist/plugin-sdk/database-engine-worker-runtime.d.ts",
+      "default": "./dist/plugin-sdk/database-engine-worker-runtime.js"
+    },
     "./plugin-sdk/session-transcript-hit": {
       "default": "./dist/plugin-sdk/session-transcript-hit.js"
     },

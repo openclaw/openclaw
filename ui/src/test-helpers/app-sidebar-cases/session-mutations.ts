@@ -19,6 +19,7 @@ import {
 } from "../app-sidebar.ts";
 import { registerSessionPluginAction } from "../control-ui-plugin-action.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -196,7 +197,7 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
     const menu = await openMenu();
     publish([replacement]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     await menu.updateComplete;
     expect(menu.querySelector(actionSelector)).toBeNull();
   });
@@ -492,7 +493,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
 
     error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
   });
 

@@ -1372,7 +1372,7 @@ describe("spawnAcpDirect", () => {
         {
           requesterSessionKey: "global",
           childSessionKey: expect.stringMatching(/^agent:research:acp:/),
-          agentId: "research",
+          childAgentId: "research",
           requesterAgentId: "research",
         },
         { assertCurrent: undefined },

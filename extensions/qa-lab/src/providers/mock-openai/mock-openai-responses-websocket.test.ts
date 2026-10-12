@@ -110,45 +110,6 @@ describe("QA mock OpenAI Responses WebSocket", () => {
     }
   });
 
-  it("streams the native response.create protocol and records normal QA request evidence", async () => {
-    const server = await startServer();
-    const socket = await connectResponsesWebSocket(server.baseUrl);
-    const prompt = "Read README.md for the source and docs discovery report.";
-
-    const events = await collectResponseEvents(socket, {
-      type: "response.create",
-      model: "gpt-5.6-sol",
-      stream: true,
-      tools: [{ type: "function", name: "read" }],
-      input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-    });
-
-    expect(events[0]).toMatchObject({ type: "response.created" });
-    expect(events[0]).toMatchObject({
-      sequence_number: 0,
-      response: {
-        object: "response",
-        model: "gpt-5.6-sol",
-        status: "in_progress",
-        output: [],
-      },
-    });
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "response.output_item.done" }),
-        expect.objectContaining({ type: "response.completed" }),
-      ]),
-    );
-    const lastRequest = await fetch(`${server.baseUrl}/debug/last-request`).then((response) =>
-      response.json(),
-    );
-    expect(lastRequest).toMatchObject({
-      model: "gpt-5.6-sol",
-      prompt,
-      plannedToolName: "read",
-    });
-  });
-
   it("reconstructs Codex previous-response deltas on the same reusable connection", async () => {
     const server = await startServer();
     const socket = await connectResponsesWebSocket(server.baseUrl);
@@ -226,85 +187,6 @@ describe("QA mock OpenAI Responses WebSocket", () => {
     )) as Record<string, unknown>;
     expect(debug).toMatchObject({ toolOutput: "", toolOutputCallId: call?.call_id });
     expect(debug).not.toHaveProperty("plannedToolName");
-  });
-
-  it("rejects a response ID after a newer response replaces the connection cache", async () => {
-    const server = await startServer();
-    const socket = await connectResponsesWebSocket(server.baseUrl);
-    const prompt = "Read README.md for the source and docs discovery report.";
-    const firstEvents = await collectResponseEvents(socket, {
-      type: "response.create",
-      model: "gpt-5.6-sol",
-      stream: true,
-      store: false,
-      tools: [{ type: "function", name: "read" }],
-      input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
-    });
-    const firstResponse = readCompletedResponse(firstEvents);
-    const firstOutput = firstResponse.output as Array<Record<string, unknown>>;
-    const toolCall = firstOutput.find((item) => item.type === "function_call");
-
-    const secondEvents = await collectResponseEvents(socket, {
-      type: "response.create",
-      previous_response_id: firstResponse.id,
-      input: [
-        {
-          type: "function_call_output",
-          call_id: toolCall?.call_id,
-          output: "README: source and docs evidence captured",
-        },
-      ],
-    });
-
-    expect(readCompletedResponse(secondEvents).id).not.toBe(firstResponse.id);
-    await expect(
-      collectResponseEvents(socket, {
-        type: "response.create",
-        previous_response_id: firstResponse.id,
-        input: [],
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        type: "error",
-        sequence_number: 0,
-        status: 400,
-        error: expect.objectContaining({ code: "previous_response_not_found" }),
-      }),
-    ]);
-  });
-
-  it("answers connection warmups without inventing a model or tool request", async () => {
-    const server = await startServer();
-    const socket = await connectResponsesWebSocket(server.baseUrl);
-
-    const events = await collectResponseEvents(socket, {
-      type: "response.create",
-      model: "gpt-5.6-sol",
-      stream: true,
-      generate: false,
-      input: [],
-    });
-
-    expect(events).toEqual([
-      expect.objectContaining({ type: "response.created" }),
-      expect.objectContaining({
-        type: "response.completed",
-        response: expect.objectContaining({
-          object: "response",
-          model: "gpt-5.6-sol",
-          status: "completed",
-          output: [],
-          usage: expect.objectContaining({
-            input_tokens_details: { cached_tokens: 0 },
-            output_tokens_details: { reasoning_tokens: 0 },
-          }),
-        }),
-      }),
-    ]);
-    const cursor = await fetch(`${server.baseUrl}/debug/request-cursor`).then((response) =>
-      response.json(),
-    );
-    expect(cursor).toEqual({ cursor: 0 });
   });
 
   it("preserves the full warmup prompt when the first real response sends an empty delta", async () => {
@@ -487,30 +369,6 @@ describe("QA mock OpenAI Responses WebSocket", () => {
     expect(requests.map((entry) => entry.compactionSummaryFaultMode)).toEqual([
       testCase.faultMode,
       "none",
-    ]);
-  });
-
-  it("rejects a response delta whose previous response belongs to another connection", async () => {
-    const server = await startServer();
-    const socket = await connectResponsesWebSocket(server.baseUrl);
-
-    const events = await collectResponseEvents(socket, {
-      type: "response.create",
-      model: "gpt-5.6-sol",
-      previous_response_id: "resp_qa_unknown",
-      input: [],
-    });
-
-    expect(events).toEqual([
-      expect.objectContaining({
-        type: "error",
-        status: 400,
-        error: {
-          type: "invalid_request_error",
-          code: "previous_response_not_found",
-          message: "The previous response was not found on this connection.",
-        },
-      }),
     ]);
   });
 

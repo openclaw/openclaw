@@ -114,7 +114,6 @@ export async function runSessionDeletionPlanning(
   const result = await runSqliteSessionReclamation({
     diagnostics,
     assertCommitAllowed: assertCurrent,
-    forceInProcess: false,
     plan: {
       kind: "deletion-plan",
       databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
@@ -136,8 +135,6 @@ export async function runSqliteSessionReclamation(params: {
     result: Extract<SessionMaintenanceReadResult, { kind: "maintenance-plan" }>,
     assertCurrent: () => void,
   ) => void;
-  /** @deprecated Native transactions are selected by the incognito or maintenance owner. */
-  forceInProcess?: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (
     result: SqliteSessionReclamationResult,

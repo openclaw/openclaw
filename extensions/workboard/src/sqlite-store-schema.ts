@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
+  openEngineStore,
+  type EngineConnection,
+  type DatabaseEngineInput,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
   configureSqliteConnectionPragmas,
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -9,13 +14,11 @@ import {
   getSqliteDatabaseAdmission,
   openNodeSqliteDatabase,
   publishSqliteDatabaseAdmission,
-  type PostgresSyncConnection,
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import type { WorkboardDatabaseInput } from "./database-config.js";
-import { openWorkboardPostgresDatabase } from "./postgres-store.js";
+import { WORKBOARD_POSTGRES_SCHEMA_SQL } from "./workboard-postgres-schema.js";
 import { SCHEMA_VERSION, WORKBOARD_SCHEMA_SQL } from "./workboard-schema.js";
-export type WorkboardSqlConnection = DatabaseSync | PostgresSyncConnection;
+export type WorkboardSqlConnection = EngineConnection;
 
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
@@ -25,19 +28,6 @@ const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
   schemaDependent: true,
   read: (value) => (value === true ? true : undefined),
 };
-
-function refusePostgresAnchor(db: DatabaseSync): void {
-  try {
-    const anchor = db.prepare("SELECT schema FROM openclaw_engine_anchor LIMIT 1").get();
-    throw new Error(
-      `This workboard store lives in PostgreSQL schema ${String(anchor?.schema ?? "unknown")}; set database.engine to postgres and configure database.postgres.connection.`,
-    );
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "no such table: openclaw_engine_anchor") {
-      throw error;
-    }
-  }
-}
 
 function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
   return new Set(
@@ -108,19 +98,21 @@ function prepareWorkboardDatabasePath(dbPath: string): void {
 export function createWorkboardDatabase(
   dbPath: string,
   retainClose?: (close: () => void) => void,
-  postgresInput?: WorkboardDatabaseInput,
+  postgresInput?: DatabaseEngineInput,
 ): {
   db: WorkboardSqlConnection;
   close: () => void;
 } {
   prepareWorkboardDatabasePath(dbPath);
   const db = openNodeSqliteDatabase(dbPath);
-  let postgres: ReturnType<typeof openWorkboardPostgresDatabase> | undefined;
+  let selected: EngineConnection | undefined;
   let maintenance: ReturnType<typeof configureSqliteConnectionPragmas> | undefined;
   let maintenanceClosed = false;
   let databaseClosed = false;
   const close = () => {
-    postgres?.close();
+    if (selected && selected !== db) {
+      selected.close();
+    }
     if (!maintenanceClosed) {
       maintenance?.close();
       maintenanceClosed = true;
@@ -132,28 +124,35 @@ export function createWorkboardDatabase(
   };
   try {
     retainClose?.(close);
-    if (!postgresInput) {
-      refusePostgresAnchor(db);
-    }
-    maintenance = configureSqliteConnectionPragmas(db, {
-      busyTimeoutMs: WORKBOARD_SQLITE_BUSY_TIMEOUT_MS,
-      checkpointIntervalMs: 0,
-      databaseLabel: "workboard database",
-      databasePath: dbPath,
-      foreignKeys: true,
-      synchronous: "NORMAL",
+    selected = openEngineStore({
+      anchor: db,
+      schema: {
+        id: "workboard",
+        version: SCHEMA_VERSION,
+        sqlite: WORKBOARD_SCHEMA_SQL,
+        postgres: WORKBOARD_POSTGRES_SCHEMA_SQL,
+      },
+      input: postgresInput,
+      prepareAnchor: () => {
+        maintenance = configureSqliteConnectionPragmas(db, {
+          busyTimeoutMs: WORKBOARD_SQLITE_BUSY_TIMEOUT_MS,
+          checkpointIntervalMs: 0,
+          databaseLabel: "workboard database",
+          databasePath: dbPath,
+          foreignKeys: true,
+          synchronous: "NORMAL",
+        });
+      },
+      openSqlite: () => ensureWorkboardSchema(db),
     });
-    if (postgresInput) {
-      postgres = openWorkboardPostgresDatabase(db, postgresInput);
-    } else {
-      ensureWorkboardSchema(db);
-    }
     hardenWorkboardDatabaseFiles(dbPath);
-    return { db: postgres ?? db, close };
+    return { db: selected, close };
   } catch (error) {
     if (!retainClose) {
       try {
-        postgres?.close();
+        if (selected && selected !== db) {
+          selected.close();
+        }
         maintenance?.close();
       } finally {
         db.close();

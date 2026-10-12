@@ -48,6 +48,7 @@ describe("session observer completion", () => {
         model: "gpt-test",
         authProfileId: undefined,
         outputTextPolicy: "strict-visible" as const,
+        thinkLevel: "off" as const,
         agentId: "main",
         agentDir: "/tmp/agent",
       })),

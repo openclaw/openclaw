@@ -17,7 +17,8 @@ import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import {
-  pruneCronRunHistoryInDatabase,
+  applyCronRunHistoryMaintenanceInDatabase,
+  planCronRunHistoryMaintenance,
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "../../cron/store/run-history.kernel.js";
@@ -481,13 +482,20 @@ it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
             persistHistory([{ ...record, detail: { ...detail, sessionId: latest.sessionId } }]);
           } else if (change === "retention") {
             storageChanged =
-              runOpenClawStateWriteTransaction(({ db }) =>
-                pruneCronRunHistoryInDatabase(
+              runOpenClawStateWriteTransaction(({ db }) => {
+                const now = record.endedAt + 7 * 24 * 60 * 60_000;
+                const plan = planCronRunHistoryMaintenance(
+                  readCronRunRecordsInDatabase(db),
+                  now,
+                  new Set(),
+                );
+                return applyCronRunHistoryMaintenanceInDatabase(
                   db,
-                  record.endedAt + 7 * 24 * 60 * 60_000,
+                  plan,
+                  now,
                   prepareCronRunReceiptWriteSchema(db),
-                ),
-              ) === 1;
+                ).pruned;
+              }) === 1;
           } else if (change === "transcript owner") {
             storageChanged =
               runOpenClawAgentWriteTransaction(

@@ -25,7 +25,6 @@ export function buildSubagentRunView(params: {
     const superseded = childRuns.some((candidate) =>
       matchesSubagentChildSessionOwner(candidate, entry.childSessionKey, entry.childAgentId),
     );
-    // Hidden legacy rows still fence every older owner under the raw key.
     childRuns.push(entry);
     seen.set(entry.childSessionKey, childRuns);
     if (superseded) {

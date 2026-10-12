@@ -16,6 +16,7 @@ import { readSessionActivitySummary } from "./activity-summary.js";
 import {
   readPreparedSessionEntryChange,
   readPreparedSessionEntryPublicationSource,
+  readPreparedSessionSharingChange,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import type {
   SessionActorHotState,
@@ -179,6 +180,8 @@ function ensureReplicaSubscription(): void {
             previousProjection
               ? { hasBoard: previousProjection.hasBoard }
               : undefined);
+          // Metadata receipts retain side-table facts when their writer did not change sharing.
+          const sharingUnchanged = readPreparedSessionSharingChange(change) === "unchanged";
           cell.entry = freezeJsonSnapshot({
             target: cell.target,
             entry: structuredClone(prepared.fullEntry),
@@ -186,6 +189,8 @@ function ensureReplicaSubscription(): void {
             writeToken,
             snapshots: "full",
             projection,
+            members: sharingUnchanged ? previous?.members : undefined,
+            participants: sharingUnchanged ? previous?.participants : undefined,
           });
           cell.predicateColumns = deriveSessionPredicateColumns(JSON.stringify(prepared.fullEntry));
           cell.bytes = JSON.stringify(cell.entry).length * 2;
