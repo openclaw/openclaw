@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { format } from "oxfmt";
 import * as ts from "typescript/unstable/ast";
+import { inspectDatabaseWorkerCompatibility } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
@@ -2614,28 +2615,19 @@ function findCalls(source) {
 export function inventory(root = defaultRoot, ref = "", staged = false) {
   using parser = createNativeTypeScriptParser({ cwd: root });
   const roots = ["src", "extensions", "packages", "scripts"];
-  const pattern = [...primitives.keys()].join("|");
+  const pattern = new RegExp([...primitives.keys()].join("|"));
   const snapshot = ref !== "" || staged;
   const result = spawnSync(
     snapshot ? "git" : "rg",
     snapshot
-      ? [
-          "grep",
-          "-l",
-          "-z",
-          "-E",
-          ...(ref ? [] : ["--cached"]),
-          pattern,
-          ...(ref ? [ref] : []),
-          "--",
-          ...roots,
-        ]
+      ? ref
+        ? ["ls-tree", "-r", "--name-only", "-z", ref, "--", ...roots]
+        : ["ls-files", "-z", "--", ...roots]
       : [
-          "-l",
+          "--files",
           "--null",
           "-g",
           "*.{ts,tsx,js,mjs,mts,cts,cjs}",
-          pattern,
           ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
         ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
@@ -2643,16 +2635,22 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
   if (result.error || (result.status !== 0 && result.status !== 1)) {
     throw result.error ?? new Error(result.stderr || "SQLite inventory source scan failed");
   }
-  const files = result.stdout
+  const sourceFiles = result.stdout
     .split("\0")
-    .map((file) => (ref ? file.slice(ref.length + 1) : file))
     .filter((file) => /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) && !excluded.test(file));
-  const texts = snapshot ? loadRatchetSources(root, files, ref) : null;
+  const texts = snapshot
+    ? loadRatchetSources(root, sourceFiles, ref)
+    : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
+  const compatibility = inspectDatabaseWorkerCompatibility(root, texts);
+  if (!ref && compatibility.violations.length > 0) {
+    throw new Error(
+      "Deprecated synchronous SQLite compatibility guard failed:\n" +
+        compatibility.violations.join("\n"),
+    );
+  }
+  const files = sourceFiles.filter((file) => pattern.test(texts.get(file)));
   const sources = parser.parseSourceFiles(
-    files.map((fileName) => ({
-      fileName,
-      text: texts ? texts.get(fileName) : fs.readFileSync(path.join(root, fileName), "utf8"),
-    })),
+    files.map((fileName) => ({ fileName, text: texts.get(fileName) })),
   );
   const invalidSource = parser.getSyntacticDiagnostics()[0];
   if (invalidSource) {
@@ -2674,6 +2672,14 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
       const groups = new Map();
       for (const call of calls) {
         const classification = classify(file, call.operation, call.binding, call.guards);
+        if (
+          classification.tier === "T1" &&
+          compatibility.operations.get(file)?.has(call.operation)
+        ) {
+          classification.tier = "T1-compat";
+          classification.evidence =
+            "Deprecated SDK compatibility only; no bundled value references outside reviewed compatibility boundaries. Remove at the next Plugin SDK major.";
+        }
         const group = groups.get(classification.tier) ?? {
           file,
           owner: ownerOf(file),
@@ -2725,11 +2731,11 @@ function render(rows) {
     "",
     `This snapshot contains **${total.files} non-test files and ${total.calls} call expressions** for the five primitives below. The campaign previously reported 404 files; that is a historical estimate, not a fixed target or a count of call expressions. This inventory follows current source and excludes import-only matches, comments, tests, fixtures, and test support. Its scan scope and exclusions are explicit below.`,
     "",
-    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser and `rg`; it does not load application code or open a database.",
+    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser, compatibility reference graph, and `rg`; it does not load application code or open a database.",
     "",
     "## Scope and interpretation",
     "",
-    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
+    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T1-compat is deprecated-only SDK compatibility with mechanically checked absence of bundled runtime callers. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
@@ -2743,7 +2749,7 @@ function render(rows) {
     "",
     "| Tier | Files | Call expressions |",
     "| --- | ---: | ---: |",
-    ...["T1", "T2", "T3", "W"].map((tier) => {
+    ...["T1", "T1-compat", "T2", "T3", "W"].map((tier) => {
       const count = totals(rows.filter((row) => row.tier === tier));
       return `| ${tier} | ${count.files} | ${count.calls} |`;
     }),
@@ -2786,7 +2792,7 @@ function render(rows) {
     "",
     "Counts use `Q/F/S/A/R` in that order. Source locations are available in `--json`; the first call line below is a navigation hint. Owner labels are source directory boundaries, not CODEOWNERS assignments. Generic runtime candidates require caller evidence before claiming a main-thread defect or a completed migration.",
   ];
-  for (const tier of ["T1", "T2", "T3", "W"]) {
+  for (const tier of ["T1", "T1-compat", "T2", "T3", "W"]) {
     lines.push(
       "",
       `### ${tier}`,
@@ -2814,7 +2820,22 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   } else {
     const rows = inventory();
     if (args[0] === "--json") {
-      console.log(JSON.stringify({ totals: totals(rows), files: rows }, null, 2));
+      console.log(
+        JSON.stringify(
+          {
+            totals: totals(rows),
+            tiers: Object.fromEntries(
+              ["T1", "T1-compat", "T2", "T3", "W"].map((tier) => [
+                tier,
+                totals(rows.filter((row) => row.tier === tier)),
+              ]),
+            ),
+            files: rows,
+          },
+          null,
+          2,
+        ),
+      );
     } else {
       const formatted = await format(outputPath, render(rows), { proseWrap: "preserve" });
       if (formatted.errors.length > 0) {

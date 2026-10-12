@@ -241,6 +241,39 @@ inline maintenance and archive persistence still share the released opaque SDK
 deletion transaction; moving those calls requires that transaction owner's cutover.
 This changes no schemas, retention, stored bytes, or update behavior.
 
+## Live T1 and deprecated compatibility
+
+`pnpm check:database-worker-ratchet` reports live **T1** separately from
+**T1-compat** (deprecated-only synchronous compatibility). T1 remains a
+conservative inventory of bundled-reachable or unproven runtime/mixed SQL;
+T1-compat is not worker execution or a runtime speedup. The combined count still
+shows the retained synchronous implementation.
+
+An operation enters T1-compat only through the reviewed operation registry in
+`scripts/lib/database-worker-compat.mts`. Its declaration must retain
+`@deprecated`, and the source graph must have no bundled value references except
+from other reviewed compatibility boundaries. The check follows import and
+reexport aliases, including SDK barrels, and rejects escaped callbacks and
+namespace values as well as direct calls. Type-only references and pure
+reexports preserve the released SDK surface without becoming runtime callers.
+Tests remain outside this production inventory. Returned-method families and
+shared kernels stay in T1 until their complete caller boundary can be enforced;
+a deprecation marker alone does not move them to T1-compat.
+
+The same check runs from the inventory generator and the worker ratchet, including
+staged-source checks. Adding a bundled caller fails even if another T1 call is
+removed in the same change. A shared kernel stays T1 unless every native caller
+has a proven compatibility boundary; worker callers alone do not prove that.
+Boot admission, migrations, Doctor/CLI one-shots, and lock primitives retain their
+existing T2/T3 classifications.
+
+Remove a T1-compat API and its remaining synchronous kernel in the next Plugin SDK
+major, together with obsolete SDK exports and registry entries. Publish release
+notes naming the removed API and its asynchronous replacement. Until that major,
+keep the deprecated API's completion and transaction contract; migrate bundled
+callers to the owning worker operation instead of removing the compatibility
+implementation.
+
 ## Session target discovery
 
 Gateway combined listings, search preparation, cron owner discovery, delivery
