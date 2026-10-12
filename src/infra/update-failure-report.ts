@@ -156,16 +156,15 @@ export async function submitUpdateFailureReport(
   const stateDir = options.stateDir ?? resolveStateDir(env);
   const stateEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
   const context = captureOpenClawStateWorkerContext({ env: stateEnv });
-  if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-    throw new Error("Update report submission requires a current authenticated client.");
-  }
-  const finalizeReceipt = options.finalizeReceipt ?? finalizeUpdateFailureReportReceipt;
-  const readReceipt = options.readReceipt ?? readUpdateFailureReportReceipt;
-  const ensureReconciliationAuthority = () => {
+  const ensureAuthority = (operation: "submission" | "reconciliation") => {
     if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-      throw new Error("Update report reconciliation requires a current authenticated client.");
+      throw new Error(`Update report ${operation} requires a current authenticated client.`);
     }
   };
+  ensureAuthority("submission");
+  const finalizeReceipt = options.finalizeReceipt ?? finalizeUpdateFailureReportReceipt;
+  const readReceipt = options.readReceipt ?? readUpdateFailureReportReceipt;
+  const ensureReconciliationAuthority = () => ensureAuthority("reconciliation");
   const cleanRetiredArtifacts = (receipt: UpdateFailureReportSweepReceipt, keepCurrent: boolean) =>
     cleanRetiredUpdateFailureReportArtifacts(
       prepared,
@@ -352,6 +351,11 @@ export async function submitUpdateFailureReport(
   }
 
   const ownedPrepared = bindSavedReportArtifact(prepared, reservationId);
+  const ownedResult = (status: "pending" | "retryable" | "stale", message: string) => ({
+    message,
+    savedReportPath: ownedPrepared.savedReportPath,
+    status,
+  });
   const currentResult = async () =>
     resultFromExistingReceipt(
       await readReceipt(prepared.attemptId, stateEnv, context),
@@ -366,15 +370,9 @@ export async function submitUpdateFailureReport(
       if (!(await cleanupOwnedPreparation())) {
         return currentResult();
       }
-      return {
-        message: "This failed update attempt is stale or unavailable.",
-        savedReportPath: ownedPrepared.savedReportPath,
-        status: "stale",
-      };
+      return ownedResult("stale", "This failed update attempt is stale or unavailable.");
     }
-    if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-      throw new Error("Update report submission requires a current authenticated client.");
-    }
+    ensureAuthority("submission");
     const publicationReserved = await retryUpdateReportStateWrite(() =>
       markUpdateFailureReportReceiptPrepared(
         prepared.attemptId,
@@ -389,9 +387,7 @@ export async function submitUpdateFailureReport(
       return currentResult();
     }
     context.admission.assertCurrent();
-    if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-      throw new Error("Update report submission requires a current authenticated client.");
-    }
+    ensureAuthority("submission");
     await publishPreparedUpdateFailureReport(ownedPrepared);
   } catch (error) {
     try {
@@ -496,11 +492,7 @@ export async function submitUpdateFailureReport(
       return currentResult();
     }
     if (error.reason === "stale") {
-      return {
-        message: error.message,
-        savedReportPath: ownedPrepared.savedReportPath,
-        status: "stale",
-      };
+      return ownedResult("stale", error.message);
     }
     throw error;
   }
@@ -519,12 +511,10 @@ export async function submitUpdateFailureReport(
     };
   }
   if (created.status === "outcome-unknown") {
-    return {
-      message:
-        "GitHub issue submission may have completed, but confirmation was unavailable. Do not submit this report again.",
-      savedReportPath: ownedPrepared.savedReportPath,
-      status: "pending",
-    };
+    return ownedResult(
+      "pending",
+      "GitHub issue submission may have completed, but confirmation was unavailable. Do not submit this report again.",
+    );
   }
   if (
     created.status === "fallback-unavailable" ||
@@ -536,26 +526,22 @@ export async function submitUpdateFailureReport(
       status: "retryable",
     };
     if (!(await persistKnownNoStartReceipt(receipt))) {
-      return {
-        message:
-          "GitHub issue creation did not start, but retry state could not be saved. Do not retry this report yet.",
-        savedReportPath: ownedPrepared.savedReportPath,
-        status: "pending",
-      };
+      return ownedResult(
+        "pending",
+        "GitHub issue creation did not start, but retry state could not be saved. Do not retry this report yet.",
+      );
     }
     const reason = created.status === "fallback-unavailable" ? created.cause : created.reason;
     const unavailable =
       reason === "authentication-unavailable"
         ? "GitHub authentication is unavailable."
         : "GitHub submission is unavailable.";
-    return {
-      message:
-        options.allowBrowserFallback === false
-          ? `${unavailable} No issue was submitted. Fix the problem, then choose Report update failure to retry.\nSaved sanitized report: ${ownedPrepared.savedReportPath}`
-          : "The sanitized report was saved, but it is too large for a browser handoff.",
-      savedReportPath: ownedPrepared.savedReportPath,
-      status: "retryable",
-    };
+    return ownedResult(
+      "retryable",
+      options.allowBrowserFallback === false
+        ? `${unavailable} No issue was submitted. Fix the problem, then choose Report update failure to retry.\nSaved sanitized report: ${ownedPrepared.savedReportPath}`
+        : "The sanitized report was saved, but it is too large for a browser handoff.",
+    );
   }
   const message =
     created.reason === "browser-requested"
@@ -591,12 +577,10 @@ export async function submitUpdateFailureReport(
     status: "fallback",
   };
   if (!(await persistKnownNoStartReceipt(receipt))) {
-    return {
-      message:
-        "The browser report handoff could not be saved safely. No issue submission was started; retry this action later.",
-      savedReportPath: ownedPrepared.savedReportPath,
-      status: "retryable",
-    };
+    return ownedResult(
+      "retryable",
+      "The browser report handoff could not be saved safely. No issue submission was started; retry this action later.",
+    );
   }
   // Persistence may wait on contention. Retain its receipt, but never expose a
   // handoff for an attempt or authority that retired during those waits.
@@ -604,11 +588,7 @@ export async function submitUpdateFailureReport(
     await assertCurrentPreCreateState();
   } catch (error) {
     if (error instanceof UpdateReportPreCreateGuardError && error.reason === "stale") {
-      return {
-        message: error.message,
-        savedReportPath: ownedPrepared.savedReportPath,
-        status: "stale",
-      };
+      return ownedResult("stale", error.message);
     }
     throw error;
   }

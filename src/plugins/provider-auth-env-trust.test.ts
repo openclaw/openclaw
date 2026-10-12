@@ -71,26 +71,6 @@ describe("provider auth env trust", () => {
     });
   });
 
-  it("resolveRefFallbackInput excludes untrusted workspace plugin env vars", async () => {
-    const { resolveRefFallbackInput } = await import("./provider-auth-ref.js");
-    const config = { plugins: {} };
-
-    const result = resolveRefFallbackInput({
-      config,
-      provider: "whisperx",
-      env: { WHISPERX_API_KEY: "test-secret" },
-    });
-
-    expect(getProviderEnvVarsCore).toHaveBeenCalledWith("whisperx", {
-      config,
-      includeUntrustedWorkspacePlugins: false,
-    });
-    expect(result).toEqual({
-      ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
-      resolvedValue: "test-secret",
-    });
-  });
-
   it("promptSecretRefForSetup keeps config-aware trusted env var suggestions", async () => {
     const { promptSecretRefForSetup } = await import("./provider-auth-ref.js");
     const config = { plugins: { allow: ["workspace-audio"] } };

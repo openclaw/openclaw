@@ -6,6 +6,8 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { captureSessionMemoryTranscript } from "./capture.js";
@@ -45,9 +47,10 @@ describe("session memory capture", () => {
   }
 
   async function captureDuringRepair() {
-    const database = openOpenClawAgentDatabase(
-      toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
-    );
+    const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptReadScope(scope));
+    // Projection readiness precedes the reconciliation writer's final orphan sweep.
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
+    const database = openOpenClawAgentDatabase(databaseOptions);
     database.db
       .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
       .run(scope.sessionId);
@@ -64,7 +67,7 @@ describe("session memory capture", () => {
   )(
     "respects an earlier reset (preserve: $preserve, compacted: $compacted)",
     async ({ preserve, compacted }) => {
-      await accessor.replaceTranscriptEvents(scope, [
+      await replaceTranscriptEvents(scope, [
         message("closed", null, "user"),
         message("kept", "closed", "user"),
         message("answer", "kept", "assistant"),
@@ -101,7 +104,7 @@ describe("session memory capture", () => {
   );
 
   it("spans compaction and selects the explicit branch without changing provenance", async () => {
-    await accessor.replaceTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       {
         ...message("restricted", null, "user"),
         message: { role: "user", content: "restricted", __openclaw: { senderIsOwner: false } },
@@ -121,7 +124,7 @@ describe("session memory capture", () => {
   });
 
   it("does not charge discarded reset-tail tools against the capture budget", async () => {
-    await accessor.replaceTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       message("kept", null, "assistant", "k".repeat(1_024)),
       message("tool", "kept", "toolResult", "x".repeat(8 * 1024 * 1024 - 512)),
       { type: "reset", id: "reset", parentId: "tool", firstKeptEntryId: "kept" },
@@ -135,7 +138,7 @@ describe("session memory capture", () => {
   });
 
   it("skips oversized rows while retaining the bounded recent conversation", async () => {
-    await accessor.replaceTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       message("older", null, "assistant"),
       message("oversized", "older", "assistant", "x".repeat(8 * 1024 * 1024)),
       message("latest", "oversized", "assistant"),
@@ -150,7 +153,7 @@ describe("session memory capture", () => {
   });
 
   it("does not scan beyond the message cap to fill an excerpt", async () => {
-    await accessor.replaceTranscriptEvents(
+    await replaceTranscriptEvents(
       scope,
       Array.from({ length: 4_097 }, (_, index) =>
         message(

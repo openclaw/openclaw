@@ -1,7 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
-import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import {
+  isUpdateGatewayReadinessPending,
+  isUpdatePostInstallVerificationDeferred,
+} from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   formatUpdateActivationTimeoutGuidance,
@@ -42,7 +45,13 @@ export function resolveUpdateResultNextAction(params: {
   environment?: { container: boolean; stateDir: string };
 }): string | undefined {
   const { result, env } = params;
-  if (isUpdateGatewayReadinessPending(result)) {
+  if (result.status === "skipped" && result.reason === "gateway-readiness-unverified") {
+    const deferred = result.steps.find(isUpdatePostInstallVerificationDeferred)?.advisory;
+    if (deferred) {
+      return deferred.message;
+    }
+  }
+  if (isUpdateGatewayReadinessPending(result) && result.reason !== "state-migrated-no-rollback") {
     return `The readiness observation ended without confirmation. Leave the Gateway starting and keep recovery backups; check current progress with \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`;
   }
   if (result.reason === "dirty") {
@@ -79,7 +88,7 @@ export function resolveUpdateResultNextAction(params: {
         const refusal =
           result.rollbackOutcome?.reason ??
           result.steps.findLast((step) => step.name === "database rollback")?.stderrTail;
-        return `Rollback refused: ${refusal ?? "restoring the backup would discard later writes"}. The Gateway is running on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw doctor", env)}\` to inspect the remaining repair.`;
+        return `Rollback refused: ${refusal ?? "restoring the backup would discard later writes"}. The Gateway is running on the preserved migrated state. Keep the recovery snapshots and run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
       }
     }
     if (
@@ -143,9 +152,11 @@ export function resolveUpdateResultNextAction(params: {
       deployment,
       configRefusal,
       state,
-      servingVersion
-        ? `Fix ${truncateUtf16Safe(result.reason ?? "the update failure", 240)} then run \`${formatCliCommand("openclaw update", env)}\` again.`
-        : undefined,
+      result.reason === "state-migrated-no-rollback"
+        ? `Keep the new installation and recovery snapshots; do not roll back code alone. Run \`${formatCliCommand("openclaw update repair", env)}\` from the installed version to finish config and plugin maintenance.`
+        : servingVersion
+          ? `Fix ${truncateUtf16Safe(result.reason ?? "the update failure", 240)} then run \`${formatCliCommand("openclaw update", env)}\` again.`
+          : undefined,
       reason === "state-migration-started" || (!servingVersion && (reason || !detail))
         ? resolveUnsafeUpdateRecoveryGuidance(reason, env)
         : undefined,
@@ -161,7 +172,7 @@ export function resolveUpdateResultNextAction(params: {
     if (params.restart === false && result.postUpdate?.plugins?.changed) {
       return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
     }
-    return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${params.environment?.stateDir ?? resolveStateDir(env)}. Keep the same state/config overrides.`;
+    return `After confirming the update and your conversations are healthy, preview retained migration originals eligible for permanent cleanup with \`${command("openclaw update cleanup --dry-run")}\` for state \`${params.environment?.stateDir ?? resolveStateDir(env)}\`. Use the same profile, state, and config settings.`;
   }
   return undefined;
 }

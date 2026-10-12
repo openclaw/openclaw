@@ -58,6 +58,7 @@ function createBrowser(
         hello,
       },
     },
+    agents: { state: { agentsList: { sessionPlacement: {} } } },
     sessions: {
       state: {
         groupSettings: [{ name: "Client", cwd: "/workspace/client", worktree: false }],
@@ -81,6 +82,7 @@ function createBrowser(
       runtimeId: "",
     }),
     {
+      readAgents: () => context.agents,
       requestUpdate: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate,
@@ -215,7 +217,7 @@ describe("DraftPlaceBrowser", () => {
   );
 
   it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
-    const request = vi.fn(async () => ({ projects: [] }));
+    const request = vi.fn(async (_method: string) => ({ projects: [] }));
     const fixture = createBrowser(request);
     await fixture.browser.refreshProjects();
     const reads = request.mock.calls.length;
@@ -226,7 +228,12 @@ describe("DraftPlaceBrowser", () => {
     expect(request).toHaveBeenCalledTimes(reads);
     fixture.update();
     await fixture.browser.refreshProjects();
-    expect(request).toHaveBeenCalledTimes(reads + 1);
+    expect(
+      request.mock.calls
+        .slice(reads)
+        .map(([method]) => method)
+        .toSorted(),
+    ).toEqual(["projects.list"]);
   });
   it("keeps environment search transient and separate from project search", () => {
     const { browser } = createBrowser(async () => ({}));
@@ -562,6 +569,9 @@ describe("DraftGatewayState", () => {
     fixture.hello.auth.scopes.push("operator.write");
     fixture.browser.browser.setDraft("/draft-folder");
     fixture.update();
+    // Adding write access retires the old policy scope, independently of recovery migration.
+    expect(fixture.onInvalidate).toHaveBeenCalledWith(true, "gateway-changed");
+    fixture.onInvalidate.mockClear();
     await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
     await waitForFast(() => expect(fixture.browser.projects).toHaveLength(1));
     await waitForFast(() => expect(fixture.gateway.cloudProfilesReady).toBe(true));
@@ -588,7 +598,11 @@ describe("DraftGatewayState", () => {
     fixture.client.recoveryScopeReady = true;
     fixture.update();
     expect(fixture.browser.projectId).toBe("project");
-    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(2);
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(
+        2,
+      ),
+    );
 
     fixture.hello.auth.recoveryScope = "principal-b";
     fixture.update();
@@ -721,8 +735,6 @@ describe("DraftGatewayState", () => {
       groupStatus: "resolved",
       groupCwd: "/workspace/client",
       groupWorktree: false,
-      groupCatalogGeneration: 1,
-      groupDefaultsStatus: "ready",
       catalogLabel: "",
       startTerminal: false,
     });

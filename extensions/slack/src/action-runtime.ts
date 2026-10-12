@@ -180,18 +180,12 @@ async function isSlackDmTargetConfigured(params: {
   return configuredUsers.some((entry) => normalizeConfiguredSlackDmUserId(entry) === userId);
 }
 
-function isCurrentSlackReadTarget(params: {
-  account: ResolvedSlackAccount;
-  target: string;
-  context?: SlackActionContext;
-}): boolean {
-  const requesterAccountId = params.context?.requesterAccountId?.trim();
+function hasSlackRequesterAccount(account: ResolvedSlackAccount, context?: SlackActionContext) {
+  const requesterAccountId = context?.requesterAccountId?.trim();
   return Boolean(
-    normalizeOptionalLowercaseString(params.context?.currentChannelProvider) === "slack" &&
+    normalizeOptionalLowercaseString(context?.currentChannelProvider) === "slack" &&
     requesterAccountId &&
-    normalizeAccountId(requesterAccountId) === normalizeAccountId(params.account.accountId) &&
-    params.context &&
-    slackContextTargetsMatch(params.target, params.context),
+    normalizeAccountId(requesterAccountId) === normalizeAccountId(account.accountId),
   );
 }
 
@@ -203,12 +197,9 @@ function assertSlackMemberInfoAllowed(params: {
   if (params.context?.conversationReadOrigin === "direct-operator") {
     return;
   }
-  const requesterAccountId = params.context?.requesterAccountId?.trim();
   const requesterSenderId = normalizeOptionalLowercaseString(params.context?.requesterSenderId);
   if (
-    normalizeOptionalLowercaseString(params.context?.currentChannelProvider) !== "slack" ||
-    !requesterAccountId ||
-    normalizeAccountId(requesterAccountId) !== normalizeAccountId(params.account.accountId) ||
+    !hasSlackRequesterAccount(params.account, params.context) ||
     !requesterSenderId ||
     requesterSenderId !== normalizeOptionalLowercaseString(params.userId)
   ) {
@@ -301,15 +292,16 @@ async function assertSlackReadTargetAllowed(params: {
   const deny = () => {
     throw new Error("Slack read target channel is not allowed.");
   };
-  const currentConversation = isCurrentSlackReadTarget({
-    account: params.account,
-    target: formatSlackTarget({
-      teamId: params.teamId,
-      kind: "channel",
-      id: params.channelId,
-    }),
-    context: params.context,
+  const target = formatSlackTarget({
+    teamId: params.teamId,
+    kind: "channel",
+    id: params.channelId,
   });
+  const currentConversation = Boolean(
+    hasSlackRequesterAccount(params.account, params.context) &&
+    params.context &&
+    slackContextTargetsMatch(target, params.context),
+  );
   const directOperator = params.conversationReadOrigin === "direct-operator";
   if (/^D/i.test(params.channelId)) {
     if (!resolveSlackDmReadAllowed(params.account)) {
@@ -443,12 +435,7 @@ function resolveTrustedCurrentSlackTeamId(params: {
   target?: NonNullable<ReturnType<typeof parseSlackTarget>>;
   context?: SlackActionContext;
 }): string | undefined {
-  const requesterAccountId = params.context?.requesterAccountId?.trim();
-  if (
-    normalizeOptionalLowercaseString(params.context?.currentChannelProvider) !== "slack" ||
-    !requesterAccountId ||
-    normalizeAccountId(requesterAccountId) !== normalizeAccountId(params.account.accountId)
-  ) {
+  if (!hasSlackRequesterAccount(params.account, params.context)) {
     return undefined;
   }
 

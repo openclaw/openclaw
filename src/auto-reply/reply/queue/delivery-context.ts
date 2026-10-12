@@ -182,45 +182,14 @@ export async function prepareNextDeliveryGroup(
   assertDrainCurrent: () => void,
 ): Promise<{ items: FollowupRun[]; assertCurrent: () => void }> {
   const items = readItems().slice();
-  const sourceKey = (item: FollowupRun) =>
-    JSON.stringify([
-      resolveFollowupDeliveryStorageKey(item),
-      item.run.agentId,
-      item.run.sessionKey,
-      item.run.sessionId,
-      item.run.sessionFile,
-      item.admissionSessionId,
-      item.run.gatewayUiCommandTarget,
-    ]);
-  const sources = items.map((item) => ({
-    item,
-    run: item.run,
-    config: item.run.config,
-    lifecycle: item.turnAdoptionLifecycle,
-    operator: item.operatorAuthority,
-    key: sourceKey(item),
-  }));
   const assertCurrent = () => {
     assertDrainCurrent();
-    for (const source of sources) {
-      source.item.operatorAuthority?.assertCurrent();
-    }
-    const current = readItems();
-    for (const [index, source] of sources.entries()) {
-      const { item } = source;
-      if (
-        current[index] !== item ||
-        isFollowupRunAborted(item) ||
-        item.run !== source.run ||
-        item.run.config !== source.config ||
-        item.turnAdoptionLifecycle !== source.lifecycle ||
-        item.operatorAuthority !== source.operator ||
-        sourceKey(item) !== source.key
-      ) {
+    for (const item of items) {
+      item.operatorAuthority?.assertCurrent();
+      if (isFollowupRunAborted(item)) {
         throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
       }
     }
-    assertDrainCurrent();
   };
   assertCurrent();
   if (items.length <= 1) {

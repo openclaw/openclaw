@@ -29,6 +29,10 @@ A reply beginning with `LLM request rejected:` includes the provider's request-v
 
 For `Invalid service_tier argument`, check the selected model and speed setting. A provider or account supporting Fast or Ultrafast does not mean every model supports that tier. Retry with Standard (`/fast off`) or select a model that supports the requested tier. This error alone does not mean the conversation is corrupt. See [OpenAI Fast mode](/providers/openai/advanced#fast-mode).
 
+## Connection to the AI service failed
+
+If a reply says OpenClaw could not connect to the AI service, check the provider connection. For a local model, confirm that its server is running and reachable at the configured URL. A server that stops during a turn can leave completed work in the conversation; check those results before retrying. Use `openclaw logs --follow` for connection diagnostics.
+
 ## Unreadable conversation history
 
 If a reply says OpenClaw could not read the conversation's history, ask the Gateway operator to try `openclaw doctor --fix` on the host and profile that own the session. This notice also appears for unmentioned group turns when silent replies are allowed.

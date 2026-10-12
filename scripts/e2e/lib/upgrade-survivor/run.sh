@@ -1422,14 +1422,7 @@ candidate_update_spec() {
     printf '%s\n' "$CANDIDATE_SPEC"
     return 0
   fi
-  case "$CANDIDATE_SPEC" in
-    file:*)
-      printf '%s\n' "$CANDIDATE_SPEC"
-      ;;
-    *)
-      printf 'file:%s\n' "$CANDIDATE_SPEC"
-      ;;
-  esac
+  printf 'file:%s\n' "${CANDIDATE_SPEC#file:}"
 }
 
 is_extended_stable_release_version() {

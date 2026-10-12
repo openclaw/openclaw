@@ -47,10 +47,6 @@ function noteMacGatewayWarning(warning: string | null) {
   }
 }
 
-export async function noteMacLaunchAgentOverrides() {
-  noteMacGatewayWarning(collectMacLaunchAgentOverrideWarning());
-}
-
 /** Diagnose persistent disablement without taking activation authority from update or Doctor. */
 export async function noteMacDisabledGatewayLaunchAgent(env: NodeJS.ProcessEnv = process.env) {
   if (
@@ -96,10 +92,6 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
     "  launchctl remove <label>",
     `  ${formatCliCommand("openclaw gateway restart")}`,
   ].join("\n");
-}
-
-export async function noteMacStaleOpenClawUpdateLaunchdJobs() {
-  noteMacGatewayWarning(await collectMacStaleOpenClawUpdateLaunchdJobsWarning());
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
@@ -156,7 +148,9 @@ async function collectMacLaunchctlGatewayEnvOverrideWarning(
     .join("\n");
 }
 
-export async function noteMacLaunchctlGatewayEnvOverrides(cfg: OpenClawConfig) {
+export async function noteMacGatewayPlatformWarnings(cfg: OpenClawConfig): Promise<void> {
+  noteMacGatewayWarning(collectMacLaunchAgentOverrideWarning());
+  noteMacGatewayWarning(await collectMacStaleOpenClawUpdateLaunchdJobsWarning());
   noteMacGatewayWarning(await collectMacLaunchctlGatewayEnvOverrideWarning(cfg));
 }
 

@@ -5,9 +5,12 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readWorkspaceStateSnapshot } from "../../agents/workspace-state-store.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  closeAgentWorkAdmissions,
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
@@ -735,6 +738,28 @@ describe("plugin runtime session work admission", () => {
     });
   });
 
+  it("refuses plugin work and session creation while the agent is draining", async () => {
+    const runtime = createRuntimeAgent();
+    const reason = new Error("agent deletion began");
+    const reopen = closeAgentWorkAdmissions({ agentId: "main", reason });
+    const run = vi.fn(async () => {});
+    try {
+      await expect(
+        runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run),
+      ).rejects.toBe(reason);
+      await expect(
+        runtime.session.createSessionEntry({
+          cfg: {},
+          key: "agent:main:harness:codex:draining",
+          initialEntry: { agentHarnessId: "codex" },
+        }),
+      ).rejects.toBe(reason);
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      reopen();
+    }
+  });
+
   it("waits for a queued archive mutation and rejects the stale start", async () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
@@ -788,11 +813,28 @@ describe("plugin runtime session work admission", () => {
     });
     await mutationStarted.promise;
 
-    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
-    releaseMutation.resolve();
-    await mutation;
-
-    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+    const snapshotRead = createDeferred();
+    const readEntry = sessionEntryRead.readSessionEntryReadOnlyInWorker;
+    using captureRead = vi
+      .spyOn(sessionEntryRead, "readSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (...args) => {
+        const entry = await readEntry(...args);
+        snapshotRead.resolve();
+        return entry;
+      });
+    const run = vi.fn(async () => {});
+    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
+    try {
+      await snapshotRead.promise;
+      captureRead.mockRestore();
+      releaseMutation.resolve();
+      await mutation;
+      await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      releaseMutation.resolve();
+      await Promise.allSettled([mutation, work]);
+    }
   });
 
   it("holds admission through the callback and relays lifecycle interruption", async () => {
@@ -823,25 +865,22 @@ it("allows deprecated plugin SQL checks once before dispatch while typed guards 
   const state = await createOpenClawTestState({ layout: "state-only" });
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
   const ensure = createRuntimeAgent().ensureAgentWorkspace;
-  const originalAdmission = admission.createSqliteWorkerOperationAdmission;
   const originalOperation = workerStore.runOpenClawStateWorkerOperation;
   const originalMkdir = fsPromises.mkdir;
   let phase: string | undefined;
   let workspace: string;
   const events: string[] = [];
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((admit, data) =>
-    originalAdmission((request, grant) => {
-      phase = request.stage;
-      try {
-        admit(request, () => {
-          events.push(`grant:${phase}`);
-          return grant();
-        });
-      } finally {
-        phase = undefined;
-      }
-    }, data),
-  );
+  probe.admission(admission, (request, grant, admit) => {
+    phase = request.stage;
+    try {
+      admit(request, () => {
+        events.push(`grant:${phase}`);
+        return grant();
+      });
+    } finally {
+      phase = undefined;
+    }
+  });
   vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementation(
     (context, operation, options) =>
       originalOperation(

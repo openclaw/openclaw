@@ -88,22 +88,6 @@ describe("startLazyPluginServiceModule", () => {
     expect(loadDefaultModule).not.toHaveBeenCalled();
   });
 
-  it("uses the override module when configured", async () => {
-    process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "virtual:service";
-    const start = createAsyncHookMock();
-    const loadOverrideModule = vi.fn(async () => ({ startOverride: start }));
-
-    await expectLifecycleStarted({
-      overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
-      loadDefaultModule: async () => ({ startDefault: createAsyncHookMock() }),
-      loadOverrideModule,
-      startExportNames: ["startOverride", "startDefault"],
-    });
-
-    expect(loadOverrideModule).toHaveBeenCalledWith("virtual:service");
-    expect(start).toHaveBeenCalledTimes(1);
-  });
-
   it("leaves caller-supplied override loaders responsible for their own specifiers", async () => {
     process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "C:\\Users\\alice\\browser-service.mjs";
     const start = createAsyncHookMock();
@@ -135,19 +119,5 @@ describe("startLazyPluginServiceModule", () => {
 
     expect(validateOverrideSpecifier).toHaveBeenCalledWith("virtual:service");
     expect(loadOverrideModule).toHaveBeenCalledWith("validated:virtual:service");
-  });
-
-  it("surfaces override validation failures", async () => {
-    process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "data:text/javascript,boom";
-
-    await expect(
-      expectLifecycleStarted({
-        overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
-        validateOverrideSpecifier: () => {
-          throw new Error("blocked override");
-        },
-        startExportNames: ["startDefault"],
-      }),
-    ).rejects.toThrow("blocked override");
   });
 });

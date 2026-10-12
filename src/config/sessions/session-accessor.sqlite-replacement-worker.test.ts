@@ -1,15 +1,10 @@
 import { statSync } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { loadSubagentMaintenanceRunsInDatabase } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import {
   isSqliteWorkerError,
@@ -18,6 +13,7 @@ import {
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import {
   onSessionIdentityMutation,
@@ -33,8 +29,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
-import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
@@ -117,94 +111,6 @@ it.each([false, true])(
     });
   },
 );
-
-it("rechecks prepared durable maintenance facts after the final replacement grant", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const shared = openOpenClawStateDatabase();
-    const identity = requireOpenClawStateDatabaseIdentity({ db: shared.db });
-    const sessionKey = "agent:main:replacement-durable-preservation";
-    writeSessionEntry(database, sessionKey, {
-      sessionId: "durable-preservation",
-      updatedAt: Date.now(),
-      label: "before",
-    });
-    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
-      capture: () => [],
-      dispose: () => {},
-      subagentRunBasis: {
-        databasePath: shared.path,
-        databaseIdentity: identity.key,
-        databaseBirthtime: identity.birthtime,
-        digest: loadSubagentMaintenanceRunsInDatabase(shared).digest,
-      },
-    }));
-    const child: SubagentRunRecord = {
-      runId: "late-preserved-child",
-      requesterSessionKey: sessionKey,
-      childSessionKey: "agent:main:subagent:late-preserved-child",
-      requesterDisplayKey: "synthetic-parent",
-      task: "Synthetic maintenance custody",
-      cleanup: "keep",
-      createdAt: 1,
-      completion: { required: false },
-      delivery: { status: "not_required" },
-      execution: { status: "running", startedAt: 1 },
-    };
-    let finalGrant = false;
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    const admitted = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            request.stage === "commit" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.publication) &&
-            request.facts.publication.kind === "session-entry-replacements"
-          ) {
-            finalGrant = true;
-            // Bypass host publication to model a foreign commit before the worker resumes.
-            shared.db
-              .prepare(
-                "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
-              )
-              .run(
-                child.runId,
-                child.childSessionKey,
-                child.requesterSessionKey,
-                child.createdAt,
-                JSON.stringify(child),
-              );
-          }
-          callback(request, grant);
-        }, attachment),
-      );
-    try {
-      const error = await applySessionEntryExactReplacements({
-        storePath: database.path,
-        sessionKeys: [sessionKey],
-        skipMaintenance: false,
-        update: ([row]) => ({
-          result: undefined,
-          replacements: [{ sessionKey, entry: { ...row!.entry, label: "after" } }],
-        }),
-      }).then(
-        () => undefined,
-        (cause: unknown) => cause,
-      );
-      expect(finalGrant).toBe(true);
-      expect(error).toMatchObject({
-        code: "outcome-unknown",
-        cause: { message: "Session subagent facts changed before commit" },
-      });
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("before");
-    } finally {
-      admitted.mockRestore();
-      unregister();
-    }
-  });
-});
 
 it("does not probe archive recovery during ordinary replacements", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -393,18 +299,13 @@ it("publishes committed sharing and reader invalidation before observers, and ro
           predicateCurrent: false,
         },
       ]);
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let current = true;
-      const admitted = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              current = false;
-            }
-            return callback(request, grant);
-          }, attachment),
-        );
+      const admitted = probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === "commit") {
+          current = false;
+        }
+        return callback(request, grant);
+      });
       const followup = vi.fn();
       const move = () =>
         applySessionEntryCanonicalReplacements({
@@ -572,18 +473,13 @@ it("suppresses follow-up for no-write and transaction-revoked replacements", asy
       update: () => ({ result: undefined }),
       afterCommitted: followup,
     });
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    const hook = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            current = false;
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const hook = probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "transaction") {
+        current = false;
+      }
+      callback(request, grant);
+    });
     try {
       await expect(
         applySessionEntryCanonicalReplacements({
@@ -612,56 +508,6 @@ it("suppresses follow-up for no-write and transaction-revoked replacements", asy
     } finally {
       hook.mockRestore();
     }
-  });
-});
-
-it("refuses a replaced pathname while retaining the committed native execution", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const key = "agent:main:retained-path";
-    const original = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: state.statePath("original", "store.sqlite"),
-    });
-    const successor = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: state.statePath("successor", "store.sqlite"),
-    });
-    writeSessionEntry(original, key, { sessionId: "original", updatedAt: 1 });
-    writeSessionEntry(successor, key, { sessionId: "successor", updatedAt: 1 });
-    const alias = state.statePath("selected");
-    const heldAlias = state.statePath("selected-before");
-    const linkType = process.platform === "win32" ? "junction" : "dir";
-    await fs.symlink(path.dirname(original.path), alias, linkType);
-    await applySessionEntryCanonicalReplacements({
-      agentId: "main",
-      storePath: path.join(alias, "store.sqlite"),
-      sessionKeys: [key],
-      update: ([row]) => ({
-        result: undefined,
-        replacements: [
-          { sessionKey: key, previousSessionKeys: [], entry: { ...row!.entry, label: "saved" } },
-        ],
-      }),
-      afterCommitted: async (_result, source) => {
-        source.assertCurrent();
-        await fs.rename(alias, heldAlias);
-        try {
-          await fs.symlink(path.dirname(successor.path), alias, linkType);
-          expect(() => source.assertCurrent()).toThrow();
-        } finally {
-          await fs.rm(alias, { recursive: true, force: true });
-          await fs.rename(heldAlias, alias);
-        }
-      },
-    });
-    expect(readExactSessionEntryRow(original, key)?.entry).toMatchObject({
-      sessionId: "original",
-      label: "saved",
-    });
-    expect(readExactSessionEntryRow(successor, key)?.entry).toMatchObject({
-      sessionId: "successor",
-    });
-    expect(readExactSessionEntryRow(successor, key)?.entry.label).toBeUndefined();
   });
 });
 

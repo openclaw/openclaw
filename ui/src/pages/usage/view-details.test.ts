@@ -1,14 +1,17 @@
-// Control UI tests cover usage detail behavior through the rendered panel.
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+// Control UI tests cover usage detail behavior through the rendered panel.
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { SessionLogEntry, TimeSeriesPoint, UsageProps, UsageSessionEntry } from "./types.ts";
-import { renderSessionDetailPanel } from "./view-details.ts";
+import { SessionDetailPanel } from "./view-details.tsx";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  document.body.replaceChildren();
 });
 
 function point(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
@@ -90,52 +93,64 @@ function mount(
     awaitingGateway: false,
   });
   const container = document.createElement("div");
-  render(
-    renderSessionDetailPanel(
-      { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
-      {
-        timeSeries: { points },
-        timeSeriesLoading: false,
-        timeSeriesStatus: status(errors.timeSeries),
-        timeSeriesMode: "per-turn",
-        timeSeriesBreakdownMode: breakdownMode,
-        timeSeriesCursorStart: start,
-        timeSeriesCursorEnd: end,
-        sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
-        sessionLogsLoading: errors.sessionLogsLoading ?? false,
-        sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
-        sessionLogsExpanded: false,
-        logFilters: errors.logFilters ?? { roles: [], tools: [], hasTools: false, query: "" },
-        context: {
-          weight: errors.contextWeight,
-          loading: false,
-          status: status(),
+  const [cursor, setCursor] = createSignal({ start, end });
+  const [contextExpanded, setContextExpanded] = createSignal(errors.contextExpanded ?? false);
+  mountSolid(
+    () =>
+      SessionDetailPanel({
+        session: { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
+        detail: {
+          timeSeries: { points },
+          timeSeriesLoading: false,
+          timeSeriesStatus: status(errors.timeSeries),
+          timeSeriesMode: "per-turn",
+          timeSeriesBreakdownMode: breakdownMode,
+          get timeSeriesCursorStart() {
+            return cursor().start;
+          },
+          get timeSeriesCursorEnd() {
+            return cursor().end;
+          },
+          sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
+          sessionLogsLoading: errors.sessionLogsLoading ?? false,
+          sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
+          sessionLogsExpanded: false,
+          logFilters: errors.logFilters ?? { roles: [], tools: [], hasTools: false, query: "" },
+          context: {
+            weight: errors.contextWeight,
+            loading: false,
+            status: status(),
+          },
         },
-      },
-      {
-        onTimeSeriesModeChange: vi.fn(),
-        onTimeSeriesBreakdownChange: vi.fn(),
-        onTimeSeriesCursorRangeChange: errors.onCursorRangeChange ?? vi.fn(),
-        onToggleSessionLogsExpanded: vi.fn(),
-        onLogFilterRolesChange: vi.fn(),
-        onLogFilterToolsChange: vi.fn(),
-        onLogFilterHasToolsChange: vi.fn(),
-        onLogFilterQueryChange: vi.fn(),
-        onLogFilterClear: vi.fn(),
-        onToggleContextExpanded: errors.onToggleContextExpanded ?? vi.fn(),
-        onSelectSession: vi.fn(),
-      },
-      {
-        startDate: filters.startDate ?? "",
-        endDate: filters.endDate ?? "",
-        selectedDays: filters.selectedDays ?? [],
-        timeZone: filters.timeZone ?? "local",
-      },
-      errors.contextExpanded ?? false,
-      vi.fn(),
-    ),
-    container,
+        callbacks: {
+          onTimeSeriesModeChange: vi.fn(),
+          onTimeSeriesBreakdownChange: vi.fn(),
+          onTimeSeriesCursorRangeChange: (nextStart, nextEnd) => {
+            setCursor({ start: nextStart, end: nextEnd });
+            errors.onCursorRangeChange?.(nextStart, nextEnd);
+          },
+          onToggleSessionLogsExpanded: vi.fn(),
+          onLogFiltersChange: vi.fn(),
+          onToggleContextExpanded: () => {
+            setContextExpanded((current) => !current);
+            errors.onToggleContextExpanded?.();
+          },
+          onSelectSession: vi.fn(),
+        },
+        range: {
+          startDate: filters.startDate ?? "",
+          endDate: filters.endDate ?? "",
+          selectedDays: filters.selectedDays ?? [],
+          timeZone: filters.timeZone ?? "local",
+        },
+        get contextExpanded() {
+          return contextExpanded();
+        },
+        onClose: vi.fn(),
+      }),
+    { container },
   );
+  flush();
   return container;
 }
 
@@ -180,6 +195,58 @@ describe("renderSessionDetailPanel filtered usage", () => {
       expect(onCursorRangeChange).toHaveBeenCalledExactlyOnceWith(...expected);
     },
   );
+
+  it("retains the focused handle through consecutive cursor adjustments", () => {
+    const onCursorRangeChange = vi.fn();
+    const container = mount(
+      [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
+      null,
+      null,
+      "total",
+      {},
+      { onCursorRangeChange },
+    );
+    document.body.append(container);
+    try {
+      const handle = container.querySelector<HTMLElement>(".chart-handle-left")!;
+      handle.focus();
+      for (const timestamp of [2000, 3000]) {
+        handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+        flush();
+        expect(container.querySelector(".chart-handle-left")).toBe(handle);
+        expect(document.activeElement).toBe(handle);
+        expect(handle.getAttribute("aria-valuenow")).toBe(String(timestamp));
+        expect(onCursorRangeChange).toHaveBeenLastCalledWith(timestamp, 4000);
+        expect(container.querySelector(".session-detail-stats")?.textContent).toContain(
+          `${timestamp === 2000 ? 300 : 200} tokens`,
+        );
+      }
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("retains manually expanded log tools across a cursor update", () => {
+    const container = mount(
+      [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
+      null,
+      null,
+      "total",
+      {},
+      {
+        sessionLogsData: [{ timestamp: 3, role: "assistant", content: "[Tool: read]" }],
+        sessionLogsHasLoaded: true,
+      },
+    );
+    const tools = container.querySelector<HTMLDetailsElement>(".session-log-tools")!;
+    tools.open = true;
+    container
+      .querySelector(".chart-handle-left")
+      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    flush();
+    expect(container.querySelector(".session-log-tools")).toBe(tools);
+    expect(tools.open).toBe(true);
+  });
 
   it("formats timeline labels in the selected UTC time zone", () => {
     const timestamps = [
@@ -706,15 +773,19 @@ describe("renderSessionDetailPanel filtered usage", () => {
     ]);
     expect(fileEntries[2]?.querySelector(".muted")?.textContent).toBe("unknown");
     expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
-    container.querySelector<HTMLButtonElement>(".context-breakdown-header button")?.click();
+    document.body.append(container);
+    const toggle = container.querySelector<HTMLButtonElement>(".context-breakdown-header button")!;
+    toggle.focus();
+    toggle.click();
+    flush();
     expect(onToggleContextExpanded).toHaveBeenCalledOnce();
-
-    const expanded = mount([], null, null, "total", {}, { contextWeight, contextExpanded: true });
+    expect(container.querySelector(".context-breakdown-header button")).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
     expect(
-      expanded
+      container
         .querySelectorAll(".context-breakdown-card")[0]
         ?.querySelectorAll(".context-breakdown-item"),
     ).toHaveLength(5);
-    expect(expanded.querySelector(".context-breakdown-more")).toBeNull();
+    expect(container.querySelector(".context-breakdown-more")).toBeNull();
   });
 });

@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -229,6 +231,54 @@ describe("reload consent and current install preconditions", () => {
     ).resolves.toMatchObject({ pluginIds: [target.pluginId], application: { generation: 1 } });
     expect(applyRuntime).toHaveBeenCalledOnce();
   });
+
+  it.each(["transaction", "commit"] as const)(
+    "preserves durable consent when reload authority is revoked at worker %s admission",
+    async (stage) => {
+      const { state, record, reviewToken, applyRuntime } = await prepareReload();
+      const refused = new Error("plugin administrator authority revoked");
+      let current = true;
+      let reachedAdmission = false;
+      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+      const admission = vi
+        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (
+              request.stage === stage &&
+              isRecord(request.facts) &&
+              request.facts.kind === "state-lease"
+            ) {
+              reachedAdmission = true;
+              current = false;
+            }
+            admit(request, grant);
+          }, attachment),
+        );
+      try {
+        await expect(
+          reloadManagedPlugin({
+            plugins: [{ pluginId: "reload-proof" }],
+            acknowledgeCapabilities: { reviewToken },
+            env: state.env,
+            applyRuntime,
+            beforePersistentApply() {
+              if (!current) {
+                throw refused;
+              }
+            },
+          }),
+        ).rejects.toBe(refused);
+      } finally {
+        admission.mockRestore();
+      }
+      expect(reachedAdmission).toBe(true);
+      expect(
+        readPersistedInstalledPluginIndexInstallRecords({ env: state.env })?.["reload-proof"],
+      ).toEqual(record);
+      expect(applyRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it("stops a multi-target reload when another selected package needs a different review", async () => {
     const { state, record, reviewToken, applyRuntime, config } = await prepareReload();

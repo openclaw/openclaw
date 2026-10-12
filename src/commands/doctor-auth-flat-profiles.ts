@@ -215,19 +215,12 @@ function extractProviderFromModelRef(modelRef: string): string | undefined {
 
 function collectLegacyConfigAuthProfileProviderHints(
   cfg: OpenClawConfig,
-): ReadonlyMap<string, string> {
-  const hints = new Map<string, string>();
-  const conflicted = new Set<string>();
+): ReadonlyMap<string, string | null> {
+  const hints = new Map<string, string | null>();
   const addHint = (profileId: string, provider: string): void => {
     const existing = hints.get(profileId);
-    if (existing && existing !== provider) {
-      hints.delete(profileId);
-      conflicted.add(profileId);
-      return;
-    }
-    if (!conflicted.has(profileId)) {
-      hints.set(profileId, provider);
-    }
+    // Ambiguous evidence stays ambiguous even if a later reference repeats one provider.
+    hints.set(profileId, existing === undefined || existing === provider ? provider : null);
   };
   const addModelHints = (models: unknown): void => {
     if (!isRecord(models)) {
@@ -643,13 +636,13 @@ function loadAuthProfileMigrationTargetStore(
     return store;
   }
   if (inspection.status !== "missing") {
-    throw new Error("canonical auth profile store is unreadable; legacy source left in place");
+    throw new Error("current auth profile store is unreadable; legacy source left in place");
   }
   const stateInspection = explicitSharedRead
     ? inspectPersistedSharedAuthProfileStateRaw(env)
     : inspectPersistedAuthProfileStateRaw(agentDir, database);
   if (stateInspection.status === "unreadable") {
-    throw new Error("canonical auth profile state is unreadable; legacy source left in place");
+    throw new Error("current auth profile state is unreadable; legacy source left in place");
   }
   return {
     version: AUTH_STORE_VERSION,
@@ -908,15 +901,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         unresolvedSidecarProfileIds.size > 0
           ? `Migrated ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} from ${shortenHomePath(candidate.authPath)} into SQLite as configured-unavailable without credentials; re-authenticate ${unresolvedSidecarProfileIds.size === 1 ? "this profile" : "these profiles"} to restore access.`
           : undefined;
-      const awsSdkMarkers =
-        isRecord(rawStore) && isRecord(rawStore.profiles)
-          ? readAwsSdkAuthProfileMarkers(candidate)
-          : null;
-      if (awsSdkMarkers && isRecord(rawStore)) {
-        removeAwsSdkProfileMarkers(
-          rawStore,
-          awsSdkMarkers.map((profile) => profile.profileId),
-        );
+      const rawProfiles =
+        isRecord(rawStore) && isRecord(rawStore.profiles) ? rawStore.profiles : undefined;
+      const awsSdkMarkers = rawProfiles ? readAwsSdkAuthProfileMarkers(candidate) : null;
+      if (rawProfiles && awsSdkMarkers) {
+        for (const { profileId } of awsSdkMarkers) {
+          delete rawProfiles[profileId];
+        }
       }
       const canonicalizedSecretRefs = normalizeLegacyAuthProfileFields(rawStore);
       const maybeCanonicalStore =
@@ -1026,7 +1017,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
                 // This store includes the separately persisted auth_profile_state row,
                 // so state-only concurrent changes abort before either table is written.
                 if (!isDeepStrictEqual(authoritative, existing)) {
-                  throw new Error("canonical auth profile store changed during legacy migration");
+                  throw new Error("current auth profile store changed during legacy migration");
                 }
                 saveAuthProfileStoreWithPreparedOwner(
                   next,
@@ -1238,15 +1229,6 @@ function readAwsSdkAuthProfileMarkers(
   return markers.length > 0 ? markers : null;
 }
 
-function removeAwsSdkProfileMarkers(raw: Record<string, unknown>, profileIds: string[]): void {
-  if (!isRecord(raw.profiles)) {
-    return;
-  }
-  for (const profileId of profileIds) {
-    delete raw.profiles[profileId];
-  }
-}
-
 function rewriteMappedAuthProfileRefs(
   config: OpenClawConfig,
   profileIdMap: ReadonlyMap<string, string>,
@@ -1342,7 +1324,7 @@ export function maybeRepairOpenAICodexAuthConfig(
   }
   return {
     config,
-    changes: changed ? ["Migrated legacy auth profile config to canonical providers."] : [],
+    changes: changed ? ["Migrated legacy auth profile config to current providers."] : [],
     warnings: [],
   };
 }

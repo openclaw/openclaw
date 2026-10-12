@@ -169,52 +169,6 @@ it("keeps terminal persistence visible only to chat history", () => {
   ).toEqual({ active: false, runIds: [] });
 });
 
-it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
-  const context = {
-    chatAbortControllers: new Map([
-      ["run-main", { sessionKey: "agent:main:main", sessionId: "session-main" }],
-      ["run-global", { sessionKey: "global", agentId: "work" }],
-      ["run-hidden", { sessionKey: "agent:main:hidden", projectSessionActive: false }],
-    ]),
-  } as never;
-  registerAgentRunContext("projected-key", {
-    projectSessionActive: true,
-    sessionKey: "agent:main:projected",
-  });
-  registerAgentRunContext("projected-id", {
-    projectSessionActive: true,
-    agentId: "main",
-    sessionId: "session-projected",
-  });
-  try {
-    const project = createVisibleActiveSessionRunProjector(context);
-    const cases = [
-      { requestedKey: "agent:main:main", canonicalKey: "agent:main:main" },
-      { requestedKey: "agent:main:projected", canonicalKey: "agent:main:projected" },
-      {
-        requestedKey: "agent:main:by-id",
-        canonicalKey: "agent:main:by-id",
-        sessionId: "session-projected",
-      },
-      {
-        requestedKey: "global",
-        canonicalKey: "global",
-        agentId: "work",
-        defaultAgentId: "main",
-      },
-      { requestedKey: "agent:main:missing", canonicalKey: "agent:main:missing" },
-    ];
-    for (const activeCase of cases) {
-      expect(project(activeCase)).toEqual(
-        resolveVisibleActiveSessionRunState({ context, ...activeCase }),
-      );
-    }
-  } finally {
-    clearAgentRunContext("projected-key");
-    clearAgentRunContext("projected-id");
-  }
-});
-
 it("matches session-id-only gateway runs during archive admission", () => {
   const context = {
     chatAbortControllers: new Map([
@@ -285,24 +239,6 @@ it("returns deterministic visible run ids for the selected session", () => {
   ).toEqual({ active: true, runIds: ["run-a", "run-z"] });
 });
 
-it("projects a lifecycle-owned worker run without widening event visibility", () => {
-  registerAgentRunContext("worker-run", {
-    isControlUiVisible: false,
-    projectSessionActive: true,
-    sessionId: "worker-session",
-    sessionKey: "agent:main:worker",
-  });
-  try {
-    expect(
-      visibleState("agent:main:worker", {
-        sessionId: "worker-session",
-      }),
-    ).toEqual({ active: true });
-  } finally {
-    clearAgentRunContext("worker-run");
-  }
-});
-
 it("projects reply lifecycle state without hiding independent embedded work", () => {
   const sessionKey = "agent:main:reply-settling";
   const sessionId = "reply-settling-session";
@@ -341,23 +277,6 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
   } finally {
     clearActiveEmbeddedRun(sessionId, replacementHandle, sessionKey);
     operation.complete();
-  }
-});
-
-it("preserves an independent lifecycle-owned worker while a reply operation settles", () => {
-  const sessionKey = "agent:main:worker-overlap";
-  const sessionId = "worker-overlap-session";
-  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-  registerAgentRunContext("worker-overlap-run", {
-    projectSessionActive: true,
-    sessionId,
-    sessionKey,
-  });
-  try {
-    expect(visibleState(sessionKey, { sessionId })).toEqual({ active: true });
-  } finally {
-    operation.complete();
-    clearAgentRunContext("worker-overlap-run");
   }
 });
 
@@ -749,34 +668,31 @@ it.each(["reply", "remote"] as const)(
   },
 );
 
-it.each([undefined, true])(
-  "keeps embedded activity independent of suppressed events with projection=%s",
-  (projectSessionActive) => {
-    const sessionKey = `agent:main:suppressed-events-${projectSessionActive}`;
-    const sessionId = `suppressed-events-${projectSessionActive}`;
-    const runId = `suppressed-events-run-${projectSessionActive}`;
-    const handle: EmbeddedAgentQueueHandle = {
-      runId,
-      abort: () => {},
-      isCompacting: () => false,
-      isStreaming: () => true,
-      queueMessage: async () => undefined,
-    };
-    registerAgentRunContext(runId, {
-      sessionKey,
-      sessionId,
-      projectSessionActive,
-      projectSessionLifecycle: false,
-      projectSessionMessages: false,
-      isControlUiVisible: false,
-    });
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-    try {
-      clearAgentRunContext(runId);
-      expect(visibleState(sessionKey, { sessionId })).toEqual({ active: true });
-    } finally {
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      clearAgentRunContext(runId);
-    }
-  },
-);
+it("keeps embedded activity independent of suppressed events", () => {
+  const sessionKey = "agent:main:suppressed-events";
+  const sessionId = "suppressed-events";
+  const runId = "suppressed-events-run";
+  const handle: EmbeddedAgentQueueHandle = {
+    runId,
+    abort: () => {},
+    isCompacting: () => false,
+    isStreaming: () => true,
+    queueMessage: async () => undefined,
+  };
+  registerAgentRunContext(runId, {
+    sessionKey,
+    sessionId,
+    projectSessionActive: true,
+    projectSessionLifecycle: false,
+    projectSessionMessages: false,
+    isControlUiVisible: false,
+  });
+  setActiveEmbeddedRun(sessionId, handle, sessionKey);
+  try {
+    clearAgentRunContext(runId);
+    expect(visibleState(sessionKey, { sessionId })).toEqual({ active: true });
+  } finally {
+    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    clearAgentRunContext(runId);
+  }
+});

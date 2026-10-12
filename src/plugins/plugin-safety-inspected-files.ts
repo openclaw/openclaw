@@ -102,6 +102,7 @@ export function collectPluginSafetyInspectedFiles(
       for (const theme of manifest?.themes ?? []) {
         [
           theme.source,
+          ...Object.values(theme.icons ?? {}),
           ...Object.values(theme.hats ?? {}),
           ...Object.values(theme.critters ?? {}).map((critter) => critter.source),
         ].forEach(add);

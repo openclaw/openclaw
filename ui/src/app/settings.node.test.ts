@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { openSlot } from "../pages/chat/sidebar-layout.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import {
@@ -11,11 +12,9 @@ import {
 } from "../test-helpers/settings-node.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
-import {
-  applyServerUiPrefs,
-  resetServerUiPrefsSync,
-  resolveServerUiPrefState,
-} from "./server-prefs.ts";
+import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
+import { resetServerUiPrefsSync } from "./server-prefs.ts";
+import { backgroundPreferenceStorageKey, saveBackgroundPreference } from "./settings-background.ts";
 import {
   loadGatewaySessionSelection,
   loadLocalUserIdentity,
@@ -317,52 +316,52 @@ describe("gateway settings and layout persistence", () => {
     expect(loadSettings().navWidth).toBe(258);
     expect(readStored()).not.toHaveProperty("navCollapsed");
 
-    // Corrupt the persisted list; load falls back to the default pinned set.
+    // Corrupt the persisted list; load falls back to the empty rail.
     writeStored({
       ...readStored(),
       sidebarEntries: "route:tasks",
       navWidth: 220,
       navCollapsed: true,
     });
-    expect(loadSettings().sidebarEntries).toEqual([
-      "route:agents-home",
-      "route:dashboards",
-      "route:systems",
-      "route:cron",
-      "route:plugins",
-    ]);
+    expect(loadSettings().sidebarEntries).toEqual([]);
     expect(loadSettings().navWidth).toBe(258);
     expect(loadSettings().navCollapsed).toBe(false);
   });
 
-  it("loads and upgrades settings written by 2026.7.1", () => {
-    const gatewayUrl = expectedGatewayUrl("");
-    const sessionsByGateway = {
-      [gatewayUrl]: { sessionKey: "agent:main:work", lastActiveSessionKey: "agent:main:work" },
-    };
-    writeStored({
-      gatewayUrl,
-      theme: "claw",
-      themeMode: "dark",
-      navWidth: 300,
-      sessionsByGateway,
-      sidebarPinnedRoutes: ["workboard", "usage", "tasks", "usage", "worktrees", 7],
-    });
-    const settings = loadSettings();
-    expect(settings).toMatchObject({
-      gatewayUrl,
-      sessionKey: "agent:main:work",
-      lastActiveSessionKey: "agent:main:work",
-      themeMode: "dark",
-      navWidth: 300,
-    });
-    expect(settings.sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
-    expect(readStored().sidebarEntries).toEqual(settings.sidebarEntries);
-    saveSettings(settings);
-    expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
-    expect(readStored()).not.toHaveProperty("sidebarPinnedRoutes");
-    expect(loadSettings()).toEqual(settings);
-  });
+  it.each(["direct save", "unrelated locale patch"])(
+    "loads and upgrades 2026.7.1 settings through %s",
+    (action) => {
+      const gatewayUrl = expectedGatewayUrl("");
+      const sessionsByGateway = {
+        [gatewayUrl]: { sessionKey: "agent:main:work", lastActiveSessionKey: "agent:main:work" },
+      };
+      writeStored({
+        gatewayUrl,
+        theme: "claw",
+        themeMode: "dark",
+        navWidth: 300,
+        sessionsByGateway,
+        sidebarPinnedRoutes: ["workboard", "usage", "tasks", "usage", "worktrees", 7],
+      });
+      if (action === "unrelated locale patch") {
+        patchSettings({ locale: "de" });
+      }
+      const settings = loadSettings();
+      expect(settings).toMatchObject({
+        gatewayUrl,
+        sessionKey: "agent:main:work",
+        lastActiveSessionKey: "agent:main:work",
+        themeMode: "dark",
+        navWidth: 300,
+      });
+      expect(settings.sidebarEntries).toEqual(["plugin:workboard/workboard", "route:usage"]);
+      expect(readStored().sidebarEntries).toEqual(settings.sidebarEntries);
+      saveSettings(settings);
+      expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
+      expect(readStored()).not.toHaveProperty("sidebarPinnedRoutes");
+      expect(loadSettings()).toEqual(settings);
+    },
+  );
 
   it("persists roster mode and defaults invalid stored modes to chip", () => {
     saveSettings({ ...loadSettings(), sidebarAgentsMode: "roster" });
@@ -399,6 +398,26 @@ describe("gateway settings and layout persistence", () => {
     expect(loadUiPreferences("wss://other.example").openLinksExternally).not.toBe(true);
   });
 
+  it("publishes profile readiness on request without inventing a theme selection", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const initial = loadSettings();
+    const { gateway } = createGatewayStoreTestStore({ settings: initial });
+    const theme = createApplicationTheme(initial, gateway);
+    theme.refresh();
+    const listener = vi.fn();
+    theme.subscribe(listener);
+    try {
+      theme.refresh();
+      expect(listener).not.toHaveBeenCalled();
+      theme.refresh({ notify: true });
+      expect(listener).toHaveBeenCalledOnce();
+      expect(theme.serverSelection).toBeNull();
+    } finally {
+      theme.dispose();
+      gateway.stop();
+    }
+  });
+
   it("keeps live preferences scoped through cross-tab edits, gateway switches, and credential rotation", async () => {
     setTestLocation({ protocol: "https:", host: "gateway-a.example", pathname: "/" });
     const events = new EventTarget();
@@ -432,6 +451,23 @@ describe("gateway settings and layout persistence", () => {
       expect(theme.settings.realtimeTalkInputDeviceId).toBe("cross-tab-mic");
       expect(credentialReads).not.toHaveBeenCalled();
       expect(theme.settings).not.toHaveProperty("token");
+
+      const background = selectBackgroundSource({ kind: "none" });
+      saveBackgroundPreference(first.gatewayUrl, background);
+      events.dispatchEvent(
+        Object.assign(new Event("storage"), {
+          key: backgroundPreferenceStorageKey(first.gatewayUrl),
+        }),
+      );
+      expect(theme.settings.background).toEqual(background);
+      saveBackgroundPreference(second.gatewayUrl, selectBackgroundSource({ kind: "theme" }));
+      events.dispatchEvent(
+        Object.assign(new Event("storage"), {
+          key: backgroundPreferenceStorageKey(second.gatewayUrl),
+        }),
+      );
+      expect(theme.settings.background).toEqual(background);
+      expect(credentialReads).not.toHaveBeenCalled();
 
       const selectionKey = `openclaw.control.currentGateway.v1:${first.gatewayUrl}`;
       localStorage.setItem(selectionKey, second.gatewayUrl);

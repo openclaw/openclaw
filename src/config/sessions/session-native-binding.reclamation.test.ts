@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   readSessionProgressCard,
@@ -147,21 +148,17 @@ it("reclaims lifecycle artifacts with the native veto off the caller thread", as
       }
     });
     let granted = false;
-    const create = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        create((request, grant) => {
-          const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-          if (
-            request.stage === "commit" &&
-            isRecord(facts) &&
-            facts.kind === "session-native-binding"
-          ) {
-            granted = true;
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      if (
+        request.stage === "commit" &&
+        isRecord(facts) &&
+        facts.kind === "session-native-binding"
+      ) {
+        granted = true;
+      }
+      callback(request, grant);
+    });
     const sql = observeHostDataSql();
     try {
       await expect(fixture.cleanup()).resolves.toMatchObject({ removedEntries: 1 });

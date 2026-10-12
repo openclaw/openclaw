@@ -190,21 +190,12 @@ export async function waitForViaPlaywright(
         ),
       );
     }
-    if (opts.text) {
-      await waitFor(
-        page.getByText(opts.text).first().waitFor({
-          state: "visible",
-          timeout,
-        }),
-      );
-    }
-    if (opts.textGone) {
-      await waitFor(
-        page.getByText(opts.textGone).first().waitFor({
-          state: "hidden",
-          timeout,
-        }),
-      );
+    for (const field of ["text", "textGone"] as const) {
+      const text = opts[field];
+      if (text) {
+        const state = field === "text" ? "visible" : "hidden";
+        await waitFor(page.getByText(text).first().waitFor({ state, timeout }));
+      }
     }
     if (opts.selector) {
       const selector = normalizeOptionalString(opts.selector) ?? "";
@@ -233,11 +224,9 @@ export async function waitForViaPlaywright(
       // recreating this predicate in a replacement execution context.
       const documentHandle = await page.evaluateHandle(() => globalThis.document);
       try {
-        if (opts.assertCurrent) {
-          const assertion = assertInteractionCurrent(opts);
-          if (assertion) {
-            await assertion;
-          }
+        const assertion = assertInteractionCurrent(opts);
+        if (assertion) {
+          await assertion;
         }
         throwIfInteractionAborted(opts.signal);
         await waitFor(

@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { hasSameContextEngineInstance } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
@@ -100,30 +99,4 @@ export async function disposeDeferredMaintenanceContextEngine(
       errorMessage: formatErrorMessage(error),
     });
   }
-}
-
-type ContextEngineFactoryWork = {
-  contextEngine: ContextEngine;
-  factoryResourceOwners: Set<ContextEngineMaintenanceResources>;
-};
-
-/** Shared engine instances retain every factory lifetime until their final disposer starts. */
-export function mergeContextEngineFactoryWork(
-  params: ContextEngineFactoryWork,
-  activeEngine: ContextEngine,
-  activeResources: Set<ContextEngineMaintenanceResources>,
-  superseded?: ContextEngineFactoryWork,
-): Set<ContextEngineMaintenanceResources> {
-  if (superseded && hasSameContextEngineInstance(superseded.contextEngine, params.contextEngine)) {
-    for (const resources of superseded.factoryResourceOwners) {
-      params.factoryResourceOwners.add(resources);
-    }
-  }
-  if (hasSameContextEngineInstance(params.contextEngine, activeEngine)) {
-    for (const resources of params.factoryResourceOwners) {
-      activeResources.add(resources);
-    }
-    return activeResources;
-  }
-  return params.factoryResourceOwners;
 }

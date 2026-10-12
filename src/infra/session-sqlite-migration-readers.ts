@@ -350,7 +350,7 @@ function* iterateTranscriptEvents(
 }
 
 export function readSqliteEntryCount(target: SessionStoreTarget): number {
-  const result = readSessionDatabase(target, (database) => {
+  const result = readSessionDatabase(resolveTargetSqlitePath(target), (database) => {
     const projection = resolveSessionIdentityProjection(database);
     const raw = projection
       ? database.prepare(`SELECT count(*) AS count FROM ${projection.source}`).get()
@@ -370,7 +370,7 @@ export function readOnlySqliteValidationSnapshot(
     transcriptEventCountsBySessionId: new Map(),
     archivedSessionIds: new Set(),
   };
-  const result = readSessionDatabase(target, (database) => {
+  const result = readSessionDatabase(resolveTargetSqlitePath(target), (database) => {
     const projection = resolveSessionIdentityProjection(database);
     const sessionIdsBySessionKey = new Map<string, string>();
     if (projection) {
@@ -434,7 +434,7 @@ export function scanReadOnlySqliteActiveTranscriptFiles(
   target: SessionStoreTarget,
   visit: (sessionKey: string, sessionId: string, sessionFile?: string) => void,
 ): { ok: true } | { error: unknown; ok: false } {
-  const result = readSessionDatabase(target, (database) => {
+  const result = readSessionDatabase(resolveTargetSqlitePath(target), (database) => {
     const projection = resolveSessionIdentityProjection(database);
     if (!projection) {
       return;
@@ -456,10 +456,9 @@ export function scanReadOnlySqliteActiveTranscriptFiles(
 }
 
 function readSessionDatabase<T>(
-  target: SessionStoreTarget,
+  sqlitePath: string,
   read: (database: DatabaseSync) => T,
 ): ReadOnlySqliteResult<T | undefined> {
-  const sqlitePath = resolveTargetSqlitePath(target);
   if (!fs.existsSync(sqlitePath)) {
     return { ok: true, value: undefined };
   }
@@ -488,20 +487,7 @@ function resolveSessionIdentityProjection(database: DatabaseSync) {
 
 export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqliteDbStatsResult {
   const sqlitePath = resolveTargetSqlitePath(target);
-  if (!fs.existsSync(sqlitePath)) {
-    return {
-      ok: true,
-      stats: {
-        dbSizeBytes: 0,
-        largestSessions: [],
-        totalTranscriptRowBytes: 0,
-        walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
-      },
-    };
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openSqliteReadOnlyDatabase(sqlitePath, { readOnly: true });
+  const result = readSessionDatabase(sqlitePath, (database) => {
     const hasTranscriptEvents = tableExists(database, "transcript_events");
     const integrityRow = database.prepare("PRAGMA quick_check").get();
     let totalRow: { row_bytes?: unknown } | undefined;
@@ -527,32 +513,36 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
         .all();
     }
     return {
-      ok: true,
-      stats: {
-        dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
-        integrityCheck:
-          typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
-        largestSessions: largestRows.flatMap((row) => {
-          if (typeof row.session_id !== "string") {
-            return [];
-          }
-          return [
-            {
-              events: sqliteNumber(row.events),
-              rowBytes: sqliteNumber(row.row_bytes),
-              sessionId: row.session_id,
-            },
-          ];
-        }),
-        totalTranscriptRowBytes: sqliteNumber(totalRow?.row_bytes),
-        walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
-      },
+      dbSizeBytes: safeStatSync(sqlitePath)?.size ?? 0,
+      integrityCheck:
+        typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
+      largestSessions: largestRows.flatMap((row) => {
+        if (typeof row.session_id !== "string") {
+          return [];
+        }
+        return [
+          {
+            events: sqliteNumber(row.events),
+            rowBytes: sqliteNumber(row.row_bytes),
+            sessionId: row.session_id,
+          },
+        ];
+      }),
+      totalTranscriptRowBytes: sqliteNumber(totalRow?.row_bytes),
+      walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
     };
-  } catch (error) {
-    return { error, ok: false };
-  } finally {
-    database?.close();
-  }
+  });
+  return result.ok
+    ? {
+        ok: true,
+        stats: result.value ?? {
+          dbSizeBytes: 0,
+          largestSessions: [],
+          totalTranscriptRowBytes: 0,
+          walSizeBytes: safeStatSync(`${sqlitePath}-wal`)?.size ?? 0,
+        },
+      }
+    : result;
 }
 
 export function resolveTargetSqliteOptions(target: SessionStoreTarget, env?: NodeJS.ProcessEnv) {

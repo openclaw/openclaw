@@ -255,14 +255,11 @@ export async function prepareRetiredPhoneControlCleanup(params: {
   );
   const currentAllow = params.cfg.gateway?.nodes?.commands?.allow;
   const currentDeny = params.cfg.gateway?.nodes?.commands?.deny;
-  const reconstructedDeny = [...(currentDeny ?? [])];
-  const reconstructedDenySet = new Set(reconstructedDeny);
-  for (const command of leaseRemovedDenies) {
-    if (!reconstructedDenySet.has(command)) {
-      reconstructedDeny.push(command);
-      reconstructedDenySet.add(command);
-    }
-  }
+  const currentDenySet = new Set(currentDeny);
+  const reconstructedDeny = [
+    ...(currentDeny ?? []),
+    ...[...new Set(leaseRemovedDenies)].filter((command) => !currentDenySet.has(command)),
+  ];
   const removeSeededDeny = currentDeny !== undefined && isExactSeededDenyList(reconstructedDeny);
   // The lease journal snapshots persistentAllows through deny-wins policy before
   // activation, so commands in removedFromDeny are lease-only even if also allowed.

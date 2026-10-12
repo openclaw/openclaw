@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, symlink } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -45,6 +46,7 @@ it("retains committed raw-write facts when target binding or authority changes b
         timestamp: new Date(2).toISOString(),
       };
       let active = true;
+      const runExternalRetarget = AsyncLocalStorage.snapshot();
       const withWorker = metadataRuntime.withSessionMetadataWorker;
       const delayPublication: typeof withWorker = async (
         options,
@@ -55,7 +57,7 @@ it("retains committed raw-write facts when target binding or authority changes b
       ) => {
         const receipt = await withWorker(options, database, assertCurrent, operation, controls);
         if (change === "binding") {
-          await manager.setSessionTargetAsync(replacement);
+          await runExternalRetarget(() => manager.setSessionTargetAsync(replacement));
         } else {
           active = false;
         }

@@ -52,6 +52,7 @@ import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prep
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import type {
   EmbeddedAttemptExecutionState,
@@ -96,7 +97,7 @@ export async function runEmbeddedAttempt(
 }
 
 async function runEmbeddedAttemptOwned(
-  input: EmbeddedRunAttemptParams,
+  input: EmbeddedRunAttemptInternalParams,
   retainToolCleanup: (release: () => Promise<void>) => void,
   resourceAbortSignal: AbortSignal | undefined,
 ): Promise<EmbeddedRunAttemptResult> {

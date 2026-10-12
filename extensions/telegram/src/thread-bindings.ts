@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  registerSessionBindingAdapter,
   resolveThreadBindingLifecycle,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -10,7 +9,10 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createAccountScopedBindingAdapter } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import {
+  createAccountScopedBindingAdapterV2,
+  registerSessionBindingAdapterV2,
+} from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   loadBindingsFromStore,
@@ -89,12 +91,8 @@ async function initializeThreadBindingManager(
     DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   );
 
-  const loaded = await loadBindingsFromStore(accountId);
-  for (const entry of loaded) {
-    const key = resolveBindingKey({
-      accountId,
-      conversationId: entry.conversationId,
-    });
+  for (const entry of await loadBindingsFromStore(accountId)) {
+    const key = resolveBindingKey(entry);
     getThreadBindingsState().bindingsByAccountConversation.set(key, {
       ...entry,
       accountId,
@@ -273,7 +271,8 @@ async function initializeThreadBindingManager(
 
   const projectSessionBinding = (record: TelegramThreadBindingRecord) =>
     toSessionBindingRecord(record, { idleTimeoutMs, maxAgeMs });
-  const sessionBindingAdapter = createAccountScopedBindingAdapter({
+  const sessionBindingAdapter = createAccountScopedBindingAdapterV2({
+    assertCurrent: assertManagerCurrent,
     channel: "telegram",
     accountId,
     capabilities: {
@@ -392,6 +391,26 @@ async function initializeThreadBindingManager(
       });
     },
     project: projectSessionBinding,
+    // Reads consume only facts published by this manager after worker commits.
+    listBySessionKeyAsync: async (key) => manager.listBySessionKey(key),
+    getByConversationAsync: async (ref) => manager.getByConversationId(ref.conversationId),
+    inspectByConversationAsync: async (ref) => manager.getByConversationId(ref.conversationId),
+    inspectByConversations: (refs) => {
+      const records = refs.map((ref) => manager.getByConversationId(ref.conversationId));
+      return {
+        records,
+        assertCurrent: () => {
+          assertManagerCurrent();
+          if (
+            refs.some(
+              (ref, index) => manager.getByConversationId(ref.conversationId) !== records[index],
+            )
+          ) {
+            throw new Error("Telegram thread binding selection changed");
+          }
+        },
+      };
+    },
     listBySessionKey: manager.listBySessionKey,
     getByConversation: (ref) => manager.getByConversationId(ref.conversationId),
     touchConversation: (conversationId, at) => {
@@ -415,7 +434,7 @@ async function initializeThreadBindingManager(
       }),
   });
 
-  registerSessionBindingAdapter(sessionBindingAdapter);
+  registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   const sweeperEnabled = params.enableSweeper !== false;
   if (sweeperEnabled) {
@@ -528,44 +547,36 @@ export const setTelegramThreadBindingIdleTimeoutBySessionKeyAsync =
 export const setTelegramThreadBindingMaxAgeBySessionKeyAsync =
   createAsyncLifecycleSetter("maxAgeMs");
 
-function updateTelegramBindingsSynchronously(params: {
-  accountId?: string;
-  targetSessionKey: string;
-  update: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord;
-}): TelegramThreadBindingRecord[] {
-  const manager = getTelegramThreadBindingManager(params.accountId);
-  if (!manager) {
-    return [];
-  }
-  const targetSessionKey = params.targetSessionKey.trim();
-  const now = Date.now();
-  const updated: TelegramThreadBindingRecord[] = [];
-  for (const entry of manager.listBySessionKey(targetSessionKey)) {
-    const next = manager.updateConversationSync(entry.conversationId, (current) =>
-      current.targetSessionKey === targetSessionKey ? params.update(current, now) : undefined,
-    );
-    if (next?.targetSessionKey === targetSessionKey) {
-      updated.push(next);
-    }
-  }
-  return updated;
-}
-
 function createSyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleField>(
   field: Field,
 ) {
   return (params: TelegramThreadBindingLifecycleParams<Field>): TelegramThreadBindingRecord[] => {
     const value = resolveNonNegativeIntegerOption(params[field], 0);
-    return updateTelegramBindingsSynchronously({
-      ...params,
-      update: (entry, now) => ({ ...entry, [field]: value, lastActivityAt: now }),
-    });
+    const prepared = { ...params };
+    const manager = getTelegramThreadBindingManager(prepared.accountId);
+    if (!manager) {
+      return [];
+    }
+    const targetSessionKey = prepared.targetSessionKey.trim();
+    const now = Date.now();
+    const updated: TelegramThreadBindingRecord[] = [];
+    for (const entry of manager.listBySessionKey(targetSessionKey)) {
+      const next = manager.updateConversationSync(entry.conversationId, (current) =>
+        current.targetSessionKey === targetSessionKey
+          ? { ...current, [field]: value, lastActivityAt: now }
+          : undefined,
+      );
+      if (next?.targetSessionKey === targetSessionKey) {
+        updated.push(next);
+      }
+    }
+    return updated;
   };
 }
 
-/** @deprecated Use the Async counterpart. Retained through the next Plugin SDK major. */
+/** @deprecated Use setTelegramThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
 export const setTelegramThreadBindingIdleTimeoutBySessionKey =
   createSyncLifecycleSetter("idleTimeoutMs");
 
-/** @deprecated Use the Async counterpart. Retained through the next Plugin SDK major. */
+/** @deprecated Use setTelegramThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
 export const setTelegramThreadBindingMaxAgeBySessionKey = createSyncLifecycleSetter("maxAgeMs");

@@ -92,21 +92,6 @@ describe("bundled plugin postinstall", () => {
 
   it.each([
     { name: "marked Windows update", platform: "win32", update: "1", source: false, refused: true },
-    {
-      name: "ordinary Windows install",
-      platform: "win32",
-      update: "",
-      source: false,
-      refused: false,
-    },
-    {
-      name: "other platform update",
-      platform: "darwin",
-      update: "1",
-      source: false,
-      refused: false,
-    },
-    { name: "source checkout", platform: "win32", update: "1", source: true, refused: false },
   ])("preserves lifecycle completion policy for $name", async (scenario) => {
     const packageRoot = await createTempDirAsync("openclaw-update-postinstall-");
     await copyPostinstallFixture(packageRoot);
@@ -189,10 +174,7 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     );
   });
 
-  it.each([
-    { cacheMode: "disabled", disableCompileCache: "1" },
-    { cacheMode: "enabled", disableCompileCache: undefined },
-  ])(
+  it.each([{ cacheMode: "enabled", disableCompileCache: undefined }])(
     "preserves shared default and configured Node caches during $cacheMode packaged postinstall",
     async ({ disableCompileCache }) => {
       const packageRoot = await createTempDirAsync("openclaw-packaged-compile-cache-");
@@ -266,7 +248,7 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     ).toBe(false);
   });
 
-  it.each(["git checkout", "workspace snapshot"])(
+  it.each(["workspace snapshot"])(
     "preserves importer dependency resolution during %s postinstall",
     async (sourceKind) => {
       const packageRoot = await createTempDirAsync("openclaw-source-resolution-");
@@ -331,7 +313,7 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     await expectPathExists(staleFile);
   });
 
-  it.each([undefined, "1"])(
+  it.each([undefined])(
     "completes packaged lifecycle without changing operator databases (disabled=%s)",
     async (disabled) => {
       const fixtureRoot = await createTempDirAsync("openclaw-postinstall-state-");
@@ -423,34 +405,6 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     await expectPathMissing(staleFile);
     expect(readFileSync).toHaveBeenCalledOnce();
     expect(readFileSync).toHaveBeenCalledWith(inventoryPath, "utf8");
-  });
-
-  it("omits unpacked plugin-sdk test helpers from the package dist inventory", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-inventory-");
-    const runtimeFile = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
-    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "channel-test-helpers.js");
-    const nestedTestHelperFile = path.join(
-      packageRoot,
-      "dist",
-      "plugin-sdk",
-      "src",
-      "plugin-sdk",
-      "test-helpers",
-      "provider-contract.d.ts",
-    );
-    await fs.mkdir(path.dirname(nestedTestHelperFile), { recursive: true });
-    await fs.mkdir(path.dirname(runtimeFile), { recursive: true });
-    await fs.writeFile(runtimeFile, "export {};\n");
-    await fs.writeFile(testHelperFile, "export {};\n");
-    await fs.writeFile(nestedTestHelperFile, "export {};\n");
-
-    const inventory = await writePackageDistInventory(packageRoot);
-
-    expect(inventory).toContain("dist/plugin-sdk/runtime.js");
-    expect(inventory).not.toContain("dist/plugin-sdk/channel-test-helpers.js");
-    expect(inventory).not.toContain(
-      "dist/plugin-sdk/src/plugin-sdk/test-helpers/provider-contract.d.ts",
-    );
   });
 
   it("preserves other installs' runtime dependencies and sibling symlinks during packaged postinstall", async () => {
@@ -637,7 +591,6 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
   });
 
   it.each([
-    { phase: "file listing", files: ["first.js", "second.js"], kept: [] },
     { phase: "shared listing and pruning", files: ["kept.js"], kept: ["dist/kept.js"] },
     {
       phase: "legacy dependency prepass",

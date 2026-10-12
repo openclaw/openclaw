@@ -20,7 +20,7 @@ export function withSessionRegistryEntriesInWorker<T>(
         assertReaderCurrent();
       };
       assertCurrent();
-      const entries = await reader.readEntries({
+      const { entries } = await reader.readEntries({
         agentId: database.agentId,
         storePath: database.path,
         env: database.env,
@@ -50,7 +50,7 @@ export async function readExpiredCronRunEntriesInWorker(
         assertAgentDatabaseAdmitted(database.agentId, { env: database.env });
       };
       assertAdmitted();
-      const entries = await reader.readEntries({
+      const { entries } = await reader.readEntries({
         agentId: database.agentId,
         storePath: database.path,
         env: database.env,

@@ -10,6 +10,7 @@ import {
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
@@ -65,7 +66,12 @@ it("reads CLI presence after an earlier admitted transcript write settles", asyn
     const writing = admit({ agentId: target.agentId, path: target.storePath }, async () => {
       entered.resolve();
       await withinTest(resume.promise, signal);
-      await createRecorder(target, "Earlier admitted user turn").persistApproved();
+      const appended = appendTranscriptMessageSync(target, {
+        eventId: "earlier-admitted-user-turn",
+        parentId: null,
+        message: { role: "user", content: "Earlier admitted user turn" },
+      });
+      expect(appended.ok).toBe(true);
     });
     let reading: Promise<boolean> | undefined;
     let restore = () => {};
@@ -161,10 +167,16 @@ it.each(["schema", "owner"] as const)(
         new DatabaseSync(target.storePath).close();
       } else {
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
-          "UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'",
-        );
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+        fs.renameSync(target.storePath, `${target.storePath}.template`);
+        fs.copyFileSync(
+          `${target.storePath}.template`,
+          target.storePath,
+          fs.constants.COPYFILE_EXCL,
+        );
+        const database = new DatabaseSync(target.storePath);
+        database.exec("UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'");
+        database.close();
       }
       await expect(
         loadCliSessionContextEngineMessages({ sessionTarget: target }),

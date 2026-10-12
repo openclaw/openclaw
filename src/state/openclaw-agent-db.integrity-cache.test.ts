@@ -277,6 +277,29 @@ it("does not lend remembered integrity to another file at the same path", () => 
   );
 });
 
+it("rechecks the media version guard after a validated handle is replaced by a populated v0 store", () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-media-replacement-") };
+  const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+  expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+
+  fs.copyFileSync(databasePath, `${databasePath}.replacement`);
+  fs.renameSync(`${databasePath}.replacement`, databasePath);
+  const { DatabaseSync } = sqlite.requireNodeSqlite();
+  const downgraded = new DatabaseSync(databasePath);
+  try {
+    downgraded.exec(`
+      PRAGMA user_version = 0;
+      UPDATE schema_meta SET schema_version = 0 WHERE meta_key = 'primary';
+    `);
+  } finally {
+    downgraded.close();
+  }
+
+  expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+    "run openclaw doctor --fix to migrate persisted media",
+  );
+});
+
 it.each([
   { mode: "version", runtimeProof: "shared" },
   { mode: "version", runtimeProof: "reset" },
@@ -301,7 +324,7 @@ it.each([
         : claimOpenClawAgentDatabaseLease({ ...options, path: original.path });
     try {
       if (runtimeProof === "foreign") {
-        // A live foreign lease disallows reuse of this process's retained proof.
+        // A live foreign lease does not revoke this process's checked physical file.
         openOpenClawStateDatabase({ env })
           .db.prepare(
             "UPDATE agent_database_leases SET owner_pid = ?, owner_start_time = NULL WHERE lease_id = ?",
@@ -337,7 +360,7 @@ it.each([
           .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='preserved'")
           .get(),
       ).toEqual({ state_json: '{"ok":true}' });
-      const reused = runtimeProof === "shared";
+      const reused = runtimeProof !== "reset";
       expect(diagnostics?.integrityGateOutcome).toBe(reused ? "cached" : "healthy");
       if (reused) {
         expect(logger.info).not.toHaveBeenCalled();
@@ -349,7 +372,7 @@ it.each([
             path: original.path,
             admissionMode: "sync",
             integrityGateOutcome: "healthy",
-            integrityGateReason: runtimeProof === "reset" ? "no-proof" : "lease-class",
+            integrityGateReason: "no-proof",
           }),
         );
       }

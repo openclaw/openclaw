@@ -47,25 +47,18 @@ export function getSlackExecApprovalApprovers(params: {
   });
 }
 
-function isSlackExecApprovalTargetRecipient(params: {
-  cfg: OpenClawConfig;
-  senderId?: string | null;
-  accountId?: string | null;
-}): boolean {
-  return isChannelExecApprovalTargetRecipient({
-    ...params,
-    channel: "slack",
-    normalizeSenderId: normalizeSlackApproverId,
-    matchTarget: ({ target, normalizedSenderId }) =>
-      normalizeSlackApproverId(target.to) === normalizedSenderId,
-  });
-}
-
 const slackExecApprovalProfile = createChannelExecApprovalProfile({
   resolveConfig: (params) => resolveSlackAccount(params).config.execApprovals,
   resolveApprovers: getSlackExecApprovalApprovers,
   normalizeSenderId: normalizeSlackApproverId,
-  isTargetRecipient: isSlackExecApprovalTargetRecipient,
+  isTargetRecipient: (params) =>
+    isChannelExecApprovalTargetRecipient({
+      ...params,
+      channel: "slack",
+      normalizeSenderId: normalizeSlackApproverId,
+      matchTarget: ({ target, normalizedSenderId }) =>
+        normalizeSlackApproverId(target.to) === normalizedSenderId,
+    }),
 });
 
 export const isSlackExecApprovalClientEnabled = slackExecApprovalProfile.isClientEnabled;

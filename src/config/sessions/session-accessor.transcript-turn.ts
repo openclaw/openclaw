@@ -32,6 +32,7 @@ import type {
   SessionTranscriptTurnPersistOptions,
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
@@ -63,6 +64,15 @@ function resolveTranscriptTurnAgentId(params: {
     throw new Error(
       `Session key owner "${keyAgentId}" does not match requested agent "${scopedAgentId}".`,
     );
+  }
+  const incognito = captureIncognitoSessionOperation({
+    agentId: scopedAgentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    env: params.env,
+  });
+  if (incognito) {
+    return incognito.actor.agentId;
   }
   const persistedStoreOwner =
     params.sessionStore && !params.storePath
@@ -109,7 +119,12 @@ export async function appendTranscriptMessages<TMessage>(
   options: Pick<SessionTranscriptTurnPersistOptions, "config" | "cwd"> & {
     messages: readonly Omit<
       SessionTranscriptTurnMessageAppend,
-      "config" | "cwd" | "parentId" | "prepareMessageAfterIdempotencyCheck" | "shouldAppend"
+      | "config"
+      | "cwd"
+      | "parentId"
+      | "preparation"
+      | "prepareMessageAfterIdempotencyCheck"
+      | "shouldAppend"
     >[];
   },
 ): Promise<TranscriptMessageAppendResult<TMessage>[]> {

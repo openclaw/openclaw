@@ -67,6 +67,12 @@ export function collectWhatsAppStatusIssues(
       const relink = `Run: ${formatCliCommand("openclaw channels login")} (scan QR on the gateway host).`;
       const repair = `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`;
       const linkedRuntimePrefix = linked ? "Linked but " : "";
+      const addRuntimeIssue = (label: string, includeReconnectAttempts = true) =>
+        addIssue(
+          "runtime",
+          `${linkedRuntimePrefix}${label}${includeReconnectAttempts && reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
+          repair,
+        );
 
       if (statusState === "unstable") {
         addIssue(
@@ -102,11 +108,7 @@ export function collectWhatsAppStatusIssues(
           lastInboundAt != null
             ? ` (last inbound ${Math.max(0, Math.floor((Date.now() - lastInboundAt) / 60000))}m ago)`
             : "";
-        addIssue(
-          "runtime",
-          `${linkedRuntimePrefix}stale${staleSuffix}${lastError ? `: ${lastError}` : "."}`,
-          repair,
-        );
+        addRuntimeIssue(`stale${staleSuffix}`, false);
         return;
       }
 
@@ -121,11 +123,7 @@ export function collectWhatsAppStatusIssues(
             : healthState === "reconnecting"
               ? "reconnecting"
               : "stopped";
-        addIssue(
-          "runtime",
-          `${linkedRuntimePrefix}${stateLabel}${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
-          repair,
-        );
+        addRuntimeIssue(stateLabel);
         return;
       }
 
@@ -146,11 +144,7 @@ export function collectWhatsAppStatusIssues(
       }
 
       if (running && !connected) {
-        addIssue(
-          "runtime",
-          `${linkedRuntimePrefix}disconnected${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
-          repair,
-        );
+        addRuntimeIssue("disconnected");
       }
     },
   });

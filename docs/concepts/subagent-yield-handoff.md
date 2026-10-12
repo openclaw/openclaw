@@ -121,7 +121,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   direct user turn, cancellation, session reset or archive, and Gateway restart.
   After the successor binds its run scope, that scope owns the entitlement until
   it closes. Retiring the delivered child batch cannot revoke a still-running
-  requester.
+  requester. A new direct user turn retires the automation entitlement, not the
+  child batch’s separately retained completion source. Valid results can still
+  return under their original caller’s restrictions; they never borrow the new
+  turn’s identity or permissions.
 - **Completion-source custody.** Registration retains the live operator source
   separately from execution. Individual delivery and requester settlement use
   that captured permission ceiling, not the async caller that later schedules

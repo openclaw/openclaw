@@ -10,7 +10,10 @@ import {
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
 } from "../internal-runtime-context.js";
 import { isSessionContextMetadataEntry } from "./session-manager-codec.js";
-import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import {
+  prepareSessionManagerHydration,
+  readSessionManagerActorTranscript,
+} from "./session-manager-incognito.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-view-types.js";
 
@@ -114,7 +117,7 @@ export async function prepareCurrentTurnReplaySelection(
   const version = { ...view.version };
   const entryCount = view.entries.size;
   const assertOwned = captureOwnedTranscriptWriteAssertion(view.target);
-  const reader = prepareSessionManagerHydration(view.target, undefined, signal, manager);
+  const reader = prepareSessionManagerHydration(view.target, { signal, manager });
   const assertCurrent = () => {
     signal?.throwIfAborted();
     assertOwned();
@@ -156,13 +159,18 @@ export async function prepareCurrentTurnReplaySelection(
   if (!userId || entry?.id !== userId || !matchesUser(entry)) {
     return undefined;
   }
-  const result = await reader.readCurrentTurnEntry({
-    entryId: userId,
-    version,
-    includeEntry: false,
-  });
+  const transcript = readSessionManagerActorTranscript(view.target, version);
+  const anchor = transcript
+    ? transcript.anchors.find((candidate) => candidate.entryId === userId)
+    : (
+        await reader.readCurrentTurnEntry({
+          entryId: userId,
+          version,
+          includeEntry: false,
+        })
+      ).anchor;
   assertCurrent();
-  if (!result.anchor) {
+  if (!anchor) {
     return undefined;
   }
   assertCurrent();

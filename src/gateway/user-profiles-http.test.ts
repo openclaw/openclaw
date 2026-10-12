@@ -141,6 +141,52 @@ describe("profile avatar HTTP endpoint", () => {
     expect(res.writeHead).toHaveBeenCalledWith(204);
   });
 
+  it.each([
+    { method: "GET", revision: undefined, conditional: false, immutable: false },
+    { method: "GET", revision: "old-png", conditional: false, immutable: false },
+    { method: "GET", revision: "1725000123456", conditional: false, immutable: false },
+    { method: "GET", revision: "saved-png", conditional: false, immutable: true },
+    { method: "HEAD", revision: "saved-png", conditional: false, immutable: true },
+    { method: "GET", revision: "saved-png", conditional: true, immutable: true },
+    { method: "GET", revision: "old-png", conditional: true, immutable: false },
+  ])(
+    "serves $method revision=$revision conditional=$conditional with immutable=$immutable",
+    async ({ method, revision, conditional, immutable }) => {
+      const bytes = Buffer.from([1, 2, 3]);
+      avatarFixture.mockReturnValue({ bytes, mime: "image/png", sha256: "saved" });
+      const pathname = "/control/api/users/profile-1/avatar";
+      const req = request(revision ? `${pathname}?v=${revision}` : pathname, {
+        origin: "https://control.example",
+        ...(conditional ? { "if-none-match": '"saved-png"' } : {}),
+      });
+      req.method = method;
+      const res = response();
+      await handleUserProfileAvatarHttpRequest(req, res.response, pathname, {
+        auth: {} as never,
+        basePath: "/control",
+      });
+      expect(res.writeHead).toHaveBeenCalledWith(
+        conditional ? 304 : 200,
+        expect.objectContaining({
+          ETag: '"saved-png"',
+          "Cache-Control": immutable
+            ? "private, max-age=31536000, immutable"
+            : "private, max-age=0, must-revalidate",
+        }),
+      );
+      expect(res.setHeader).toHaveBeenCalledWith("Vary", "Origin, Authorization, Cookie");
+      expect(res.setHeader).toHaveBeenCalledWith(
+        "Access-Control-Allow-Origin",
+        "https://control.example",
+      );
+      if (conditional || method === "HEAD") {
+        expect(loadAvatarBytes).not.toHaveBeenCalled();
+      } else {
+        expect(res.end).toHaveBeenCalledWith(bytes);
+      }
+    },
+  );
+
   it("uses the host photo only for the owner, after auth and saved-avatar precedence", async () => {
     const hostAvatar = { bytes: Buffer.from([4, 5, 6]), mime: "image/jpeg", sha256: "host-photo" };
     resolveHostAccountAvatar.mockResolvedValue(hostAvatar);
@@ -151,13 +197,23 @@ describe("profile avatar HTTP endpoint", () => {
     }));
     const pathname = "/api/users/gateway-owner/avatar";
     const inferred = response();
-    await handleUserProfileAvatarHttpRequest(request(pathname), inferred.response, pathname, {
-      auth: {} as never,
-    });
+    await handleUserProfileAvatarHttpRequest(
+      request(`${pathname}?v=host-photo-jpeg`),
+      inferred.response,
+      pathname,
+      {
+        auth: {} as never,
+      },
+    );
     expect(inferred.writeHead).toHaveBeenCalledWith(
       200,
-      expect.objectContaining({ "Content-Type": "image/jpeg", ETag: '"host-photo-jpeg"' }),
+      expect.objectContaining({
+        "Content-Type": "image/jpeg",
+        ETag: '"host-photo-jpeg"',
+        "Cache-Control": "private, max-age=0, must-revalidate",
+      }),
     );
+    expect(inferred.setHeader).toHaveBeenCalledWith("Vary", "Origin, Authorization, Cookie");
     expect(inferred.end).toHaveBeenCalledWith(hostAvatar.bytes);
     expect(resolveHostAccountAvatar).toHaveBeenCalledOnce();
 
@@ -444,6 +500,36 @@ describe("profile avatar HTTP endpoint", () => {
       }
       if (code === 405) {
         expect(res.setHeader).toHaveBeenCalledWith("Allow", "GET, HEAD");
+      }
+    },
+  );
+
+  it.each([undefined, "42", "41"])(
+    "caches only a current revision's definite miss (%s)",
+    async (revision) => {
+      const profileId = "profile-negative-cache";
+      profileFixture.mockReturnValue({
+        id: profileId,
+        updatedAt: 42,
+        emails: [],
+        hasAvatar: false,
+      });
+      const pathname = `/api/users/${profileId}/avatar`;
+      const missing = response();
+      await handleUserProfileAvatarHttpRequest(
+        request(revision === undefined ? pathname : `${pathname}?v=${revision}`),
+        missing.response,
+        pathname,
+        { auth: {} as never },
+      );
+      expect(missing.response.statusCode).toBe(404);
+      expect(missing.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+      expect(missing.setHeader).toHaveBeenCalledWith(
+        "Cache-Control",
+        revision === "42" ? "private, max-age=60" : "no-store",
+      );
+      if (revision === "42") {
+        expect(missing.setHeader).toHaveBeenCalledWith("Vary", "Origin, Authorization, Cookie");
       }
     },
   );

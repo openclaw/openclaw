@@ -71,7 +71,9 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
     return (modelAuth ??= Object.freeze(
       createRuntimeModelAuth({
         ensureAuthProfileStore: authStore.ensureAuthProfileStore,
+        ensureAuthProfileStoreAsync: authStore.ensureAuthProfileStoreAsync,
         isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
+        isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
       }),
     ));
   },

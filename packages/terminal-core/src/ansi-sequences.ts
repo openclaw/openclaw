@@ -104,20 +104,6 @@ export class AnsiSequenceStripper {
     while (index < input.length) {
       const code = input.charCodeAt(index);
 
-      if (this.state === "text") {
-        if (code === 0x1b) {
-          this.state = "escape";
-        } else if (code === 0x9b) {
-          this.startCsi();
-        } else if (code === 0x9d) {
-          this.state = "osc";
-        } else {
-          output.push(input.charAt(index));
-        }
-        index += 1;
-        continue;
-      }
-
       if (this.state === "osc" || this.state === "osc-escape") {
         if (code === 0x07 || code === 0x9c || (this.state === "osc-escape" && code === 0x5c)) {
           this.state = "text";
@@ -135,6 +121,12 @@ export class AnsiSequenceStripper {
         } else {
           this.state = code === 0x1b ? "escape" : "osc";
         }
+        index += 1;
+        continue;
+      }
+
+      if (this.state === "text") {
+        output.push(input.charAt(index));
         index += 1;
         continue;
       }

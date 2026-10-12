@@ -13,7 +13,10 @@ import {
 import { readSessionChangedEvent } from "../sessions/reconcile.ts";
 import type { UiSessionDefaultsHost } from "../sessions/session-key.ts";
 
-export type ChatMetadataResult = CommandsListResult & { revision?: string };
+export type ChatMetadataResult = CommandsListResult & {
+  revision?: string;
+  requiredWorkerInferenceProfileId?: string;
+};
 export type ChatMetadataResponse =
   | (Partial<ChatMetadataResult> &
       Partial<Pick<ModelCatalogResult, "models" | "accountSelection" | "modelSelectionPolicy">>)

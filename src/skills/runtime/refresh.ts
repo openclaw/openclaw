@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveFsObservationMode } from "../../infra/fs-observation-mode.js";
 import { admitObservationRoot } from "../../infra/fs-observation-root.js";
 import { readObservationSnapshot } from "../../infra/fs-observation-snapshot.js";
+import { runWithMainThreadTask } from "../../infra/main-thread-stall.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -37,7 +38,6 @@ import {
 } from "./refresh-state.js";
 import { isIgnoredSkillsWatchPath, isSkillDiscoveryFileWatchPath } from "./refresh-watch-path.js";
 import {
-  clearWorkspaceWatchTargets,
   disposeWorkspacePathWatchState,
   evictWorkspaceWatchStates,
   nextSkillsWatchGeneration,
@@ -48,6 +48,7 @@ import {
   pathWatchers,
   publishRecoveredCoverage,
   publishSkillsWatchChanges,
+  releaseSkillsWatchers,
   setWorkspaceWatchTargets,
   settleWorkspaceWatchTargetsPlan,
   unsubscribeWorkspaceFromPath,
@@ -214,7 +215,10 @@ function createSkillsPathWatcher(
     state.pendingChange = change;
     clearTimeout(state.timer);
     state.pendingAt = performance.now() + SKILLS_WATCH_DEBOUNCE_MS;
-    state.timer = setTimeout(() => flushSkillsWatchChanges(state), SKILLS_WATCH_DEBOUNCE_MS);
+    state.timer = setTimeout(
+      () => runWithMainThreadTask("fs-watch:skills:flush", () => flushSkillsWatchChanges(state)),
+      SKILLS_WATCH_DEBOUNCE_MS,
+    );
   };
   const stability = createSkillFileScheduler({
     stabilityMs: SKILLS_WATCH_DEBOUNCE_MS,
@@ -345,88 +349,84 @@ function createSkillsPathWatcher(
           const inside = entry.path === targetRelative || entry.path.startsWith(targetPrefix);
           const ignored = inside && isIgnoredSkillsWatchPath(entry.path.slice(targetPrefix.length));
           if (inside && !ignored && scannedKinds) {
-            if (
-              !scannedKinds.has(entry.path) &&
-              scannedKinds.size >= MAX_SKILLS_WATCH_ENTRY_KINDS
-            ) {
+            const knownKind = scannedKinds.get(entry.path);
+            if (knownKind === undefined && scannedKinds.size >= MAX_SKILLS_WATCH_ENTRY_KINDS) {
               scannedKinds = undefined;
             } else {
-              scannedKinds.set(
-                entry.path,
-                scannedKinds.get(entry.path) === true || entry.kind !== "file",
-              );
+              scannedKinds.set(entry.path, knownKind === true || entry.kind !== "file");
             }
           }
           return ignored;
         },
-        onInvalidate: (hint) => {
-          if (!isCurrent()) {
-            return;
-          }
-          if (
-            subscriptionReady &&
-            plannedScope?.kind === "entry" &&
-            (!hint.changes || hint.changes.some((change) => change.type === "structural"))
-          ) {
-            // A blocked lexical entry can become a directory (or retarget).
-            // Re-admit the selected scope under the same Root, not a new authority.
-            state.generation = nextSkillsWatchGeneration();
-            publishSkillsWatchChanges([
-              { ...targetChange, changedPath: target.path, change: "skills" },
-            ]);
-            if (isCurrent()) {
-              void state.refreshScope();
-            }
-            return;
-          }
-          if (state.initialScan === "pending") {
-            return;
-          }
-          if (!hint.changes) {
-            schedule(target.path);
-            return;
-          }
-          for (const change of hint.changes) {
-            const changedPath = path.resolve(authority.rootDir, change.path);
-            const inside = isPathInside(target.path, changedPath);
-            const relative = path.relative(target.path, changedPath);
-            if (inside && isIgnoredSkillsWatchPath(relative)) {
-              continue;
+        onInvalidate: (hint) =>
+          runWithMainThreadTask("fs-watch:skills", () => {
+            if (!isCurrent()) {
+              return;
             }
             if (
-              !inside &&
-              !(change.type === "structural" && isPathInside(changedPath, target.path))
+              subscriptionReady &&
+              plannedScope?.kind === "entry" &&
+              (!hint.changes || hint.changes.some((change) => change.type === "structural"))
             ) {
-              continue;
-            }
-            if (
-              isSkillDiscoveryFileWatchPath(relative) &&
-              (change.type === "content" || scannedKinds?.has(change.path) !== false)
-            ) {
-              // Creation and atomic replacement can precede more writes. Only
-              // a scan-confirmed deletion may bypass guarded write settling.
+              // A blocked lexical entry can become a directory (or retarget).
+              // Re-admit the selected scope under the same Root, not a new authority.
               state.generation = nextSkillsWatchGeneration();
-              stability.schedule(changedPath);
-            } else if (change.type === "structural") {
-              const before = entryKinds?.get(change.path);
-              const after = scannedKinds?.get(change.path);
-              const supportingFile =
-                inside &&
-                relative !== "" &&
-                !isSkillDiscoveryFileWatchPath(relative) &&
-                entryKinds !== undefined &&
-                scannedKinds !== undefined &&
-                before !== true &&
-                after !== true &&
-                (before === false || after === false);
-              // File creation, deletion and atomic save are structural to fs-safe,
-              // but only directories/links/discovery files change Skills discovery.
-              schedule(changedPath, supportingFile ? "supporting" : "skills");
-            } else {
-              schedule(changedPath, "supporting");
+              publishSkillsWatchChanges([
+                { ...targetChange, changedPath: target.path, change: "skills" },
+              ]);
+              if (isCurrent()) {
+                void state.refreshScope();
+              }
+              return;
             }
-          }
-        },
+            if (state.initialScan === "pending") {
+              return;
+            }
+            if (!hint.changes) {
+              schedule(target.path);
+              return;
+            }
+            for (const change of hint.changes) {
+              const changedPath = path.resolve(authority.rootDir, change.path);
+              const inside = isPathInside(target.path, changedPath);
+              const relative = path.relative(target.path, changedPath);
+              if (inside && isIgnoredSkillsWatchPath(relative)) {
+                continue;
+              }
+              if (
+                !inside &&
+                !(change.type === "structural" && isPathInside(changedPath, target.path))
+              ) {
+                continue;
+              }
+              if (
+                isSkillDiscoveryFileWatchPath(relative) &&
+                (change.type === "content" || scannedKinds?.has(change.path) !== false)
+              ) {
+                // Creation and atomic replacement can precede more writes. Only
+                // a scan-confirmed deletion may bypass guarded write settling.
+                state.generation = nextSkillsWatchGeneration();
+                stability.schedule(changedPath);
+              } else if (change.type === "structural") {
+                const before = entryKinds?.get(change.path);
+                const after = scannedKinds?.get(change.path);
+                const supportingFile =
+                  inside &&
+                  relative !== "" &&
+                  !isSkillDiscoveryFileWatchPath(relative) &&
+                  entryKinds !== undefined &&
+                  scannedKinds !== undefined &&
+                  before !== true &&
+                  after !== true &&
+                  (before === false || after === false);
+                // File creation, deletion and atomic save are structural to fs-safe,
+                // but only directories/links/discovery files change Skills discovery.
+                schedule(changedPath, supportingFile ? "supporting" : "skills");
+              } else {
+                schedule(changedPath, "supporting");
+              }
+            }
+          }),
         onHealth: (health) => {
           if (isCurrent()) {
             reportHealth(health);
@@ -725,15 +725,9 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
   if (resetState) {
     resetSkillsRefreshStateForTest();
   }
-  const active = Array.from(pathWatchers.values());
   nativeWatchCapacityFailed = false;
-  pathWatchers.clear();
-  clearWorkspaceWatchTargets();
+  releaseSkillsWatchers("close");
   clearSkillRootRecordsCache();
-  workspaceWatchOwners.clear();
-  workspaceWatchTargetCache.clear();
-  workspaceWatchLastEnsuredAt.clear();
-  active.forEach((state) => void state.close());
   const results = await Promise.allSettled([
     ...replacingWatchers,
     ...retiringWatchers,
@@ -744,4 +738,13 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
     throw new AggregateError(errors, "Skills watcher shutdown failed");
   }
   watchersClosing = false;
+}
+
+/** Fence observation without native retirement for a process-owning Gateway stop. */
+export async function detachSkillsWatchers(): Promise<void> {
+  watchersClosing = true;
+  nativeWatchCapacityFailed = false;
+  releaseSkillsWatchers("detach");
+  clearSkillRootRecordsCache();
+  await closeRemoteSkillsWatchers();
 }

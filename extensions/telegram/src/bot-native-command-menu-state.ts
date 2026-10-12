@@ -1,4 +1,4 @@
-// Owns Telegram command-menu identity, process serialization, and durable locale state.
+// Owns Telegram command-menu identity and durable locale state.
 import type { LanguageCode } from "grammy/types";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -218,9 +218,6 @@ type TelegramMenuLocaleLedgerNormalization = {
   malformedEntryCount: number;
 };
 
-const syncTails = new Map<string, Promise<void>>();
-// Successful command hashes stay process-local so restarts always republish.
-const syncedCommandHashes = new Map<string, string>();
 const knownLanguageCodes = new Map<string, Set<LanguageCode>>();
 
 export function resolveTelegramMenuRemoteOwner(params: {
@@ -239,36 +236,6 @@ export function resolveTelegramMenuRemoteOwner(params: {
     hashKey: `${queueKey}:${tokenFingerprint ?? ""}`,
     ...(botId === undefined ? {} : { botId: String(botId) }),
   };
-}
-
-export function enqueueTelegramMenuSync(params: {
-  ownerKey: string;
-  sync: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): void {
-  const previous = syncTails.get(params.ownerKey) ?? Promise.resolve();
-  // A remote bot owns one mutation lane so reload generations cannot interleave.
-  const next = previous.then(params.sync).catch((error: unknown) => {
-    try {
-      params.onError(error);
-    } catch {
-      // Logging failures must not poison the remote owner's next generation.
-    }
-  });
-  syncTails.set(params.ownerKey, next);
-  void next.then(() => {
-    if (syncTails.get(params.ownerKey) === next) {
-      syncTails.delete(params.ownerKey);
-    }
-  });
-}
-
-export function readTelegramMenuCommandHash(key: string): string | null {
-  return syncedCommandHashes.get(key) ?? null;
-}
-
-export function writeTelegramMenuCommandHash(key: string, hash: string): void {
-  syncedCommandHashes.set(key, hash);
 }
 
 export function getProcessKnownTelegramMenuLocales(ownerKey: string): Set<LanguageCode> {
@@ -334,14 +301,13 @@ function normalizeTelegramMenuLocaleLedger(stored: unknown): TelegramMenuLocaleL
     rawLanguageCodes.length === canonicalLanguageCodes.length &&
     rawLanguageCodes.every((languageCode, index) => languageCode === canonicalLanguageCodes[index]);
   return {
-    ...(canonicalLanguageCodes.length > 0
-      ? {
-          value: {
+    value:
+      canonicalLanguageCodes.length > 0
+        ? {
             version: TELEGRAM_MENU_LOCALE_LEDGER_VERSION,
             languageCodes: canonicalLanguageCodes,
-          },
-        }
-      : {}),
+          }
+        : undefined,
     isCanonical,
     unsupportedLanguageCodes: [...unsupportedLanguageCodes].toSorted(),
     malformedEntryCount,

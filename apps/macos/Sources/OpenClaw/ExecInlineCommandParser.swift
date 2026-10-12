@@ -1,16 +1,44 @@
 import Foundation
 
+enum ExecShellMultiplexer {
+    enum Policy {
+        case allowlist
+        case validation
+    }
+
+    private static let shellNames: Set<String> = [
+        "ash", "bash", "dash", "fish", "ksh", "powershell", "pwsh", "sh", "zsh",
+    ]
+
+    static func normalizedExecutable(_ token: String) -> String {
+        let base = ExecCommandToken.basenameLower(token)
+        return base.hasSuffix(".exe") ? String(base.dropLast(4)) : base
+    }
+
+    static func isValidationShell(_ name: String) -> Bool {
+        name == "cmd" || self.shellNames.contains(name)
+    }
+
+    static func unwrap(_ argv: [String], policy: Policy) -> [String]? {
+        // Validation also recognizes Windows spellings; reusable grants retain
+        // the narrower executable and applet names accepted by the allowlist.
+        let normalize = policy == .validation ? self.normalizedExecutable : ExecCommandToken.basenameLower
+        guard let token = argv.first, ["busybox", "toybox"].contains(normalize(token)) else { return nil }
+        var appletIndex = 1
+        if appletIndex < argv.count, argv[appletIndex].trimmingCharacters(in: .whitespacesAndNewlines) == "--" {
+            appletIndex += 1
+        }
+        guard appletIndex < argv.count else { return nil }
+        let applet = normalize(argv[appletIndex])
+        guard self.shellNames.contains(applet) || (policy == .validation && applet == "cmd") else { return nil }
+        return Array(argv[appletIndex...])
+    }
+}
+
 enum ExecInlineCommandParser {
     struct Match {
-        let tokenIndex: Int
+        let valueTokenIndex: Int
         let inlineCommand: String?
-        let valueTokenOffset: Int
-
-        init(tokenIndex: Int, inlineCommand: String?, valueTokenOffset: Int = 1) {
-            self.tokenIndex = tokenIndex
-            self.inlineCommand = inlineCommand
-            self.valueTokenOffset = valueTokenOffset
-        }
     }
 
     private struct CombinedCommandFlag {
@@ -97,16 +125,15 @@ enum ExecInlineCommandParser {
             visitOption(token)
             let comparableToken = allowCombinedC ? token : token.lowercased()
             if flags.contains(comparableToken) {
-                return Match(tokenIndex: idx, inlineCommand: nil)
+                return Match(valueTokenIndex: idx + 1, inlineCommand: nil)
             }
             if allowCombinedC, let combined = self.parseCombinedCommandFlag(token) {
                 if let attachedCommand = combined.attachedCommand {
-                    return Match(tokenIndex: idx, inlineCommand: attachedCommand, valueTokenOffset: 0)
+                    return Match(valueTokenIndex: idx, inlineCommand: attachedCommand)
                 }
                 return Match(
-                    tokenIndex: idx,
-                    inlineCommand: nil,
-                    valueTokenOffset: 1 + combined.separateValueCount)
+                    valueTokenIndex: idx + 1 + combined.separateValueCount,
+                    inlineCommand: nil)
             }
             if allowCombinedC, !token.hasPrefix("-"), !token.hasPrefix("+") {
                 break
@@ -136,9 +163,8 @@ enum ExecInlineCommandParser {
         if let inlineCommand = match.inlineCommand {
             return inlineCommand
         }
-        let nextIndex = match.tokenIndex + match.valueTokenOffset
-        let payload = nextIndex < argv.count
-            ? argv[nextIndex]
+        let payload = match.valueTokenIndex < argv.count
+            ? argv[match.valueTokenIndex]
             : ""
         return payload.isEmpty ? nil : payload
     }

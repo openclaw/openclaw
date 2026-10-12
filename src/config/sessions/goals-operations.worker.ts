@@ -5,10 +5,8 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
-import {
-  mutateSessionGoalInDatabase,
-  type SessionGoalManagementInput,
-} from "./goals-operations.js";
+import { mutateSessionGoalInDatabase } from "./goals-operations.js";
+import type { SessionGoalManagementInput } from "./goals-operations.types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import {
@@ -16,7 +14,7 @@ import {
   transferSessionEntryWorkerCandidate,
 } from "./session-entry-patch.worker.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
-import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
+import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 
 export type SessionGoalManagementResult = Omit<
   ReturnType<typeof mutateSessionGoalInDatabase>,
@@ -27,7 +25,10 @@ export type SessionGoalManagementCandidate = {
   publication?: SessionEntryReplacementPublication;
 } & (
   | { result: SessionGoalManagementResult; refusedSource?: never }
-  | { result?: never; refusedSource: NonNullable<ReturnType<typeof readRefusedSessionSource>> }
+  | {
+      result?: never;
+      refusedSource: NonNullable<ReturnType<typeof readSessionSourceValidation>["refusedSource"]>;
+    }
 );
 
 export type SessionGoalManagementOperations = {
@@ -66,7 +67,8 @@ export function bindSqliteWorkerBackend(
     execute({ input: request }) {
       return writeTransaction("session.goal.mutate", "Goal transaction", (current) => {
         const assertSources = () => {
-          const refusedSource = readRefusedSessionSource(current, request.sources);
+          const validation = readSessionSourceValidation(current, request.sources);
+          const { refusedSource } = validation;
           if (refusedSource) {
             const refused: SessionGoalManagementCandidate = {
               kind: "session-goal-management",
@@ -75,10 +77,15 @@ export function bindSqliteWorkerBackend(
             transferSessionEntryWorkerCandidate(current, admit, refused);
             throw new Error("Goal source refusal was not rejected");
           }
+          if (validation.conversationMatches.length) {
+            admit("transaction", {
+              kind: "session-entry-patch-validated",
+              sourceValidation: validation,
+            });
+          }
         };
         assertSources();
         const { previous, ...result } = mutateSessionGoalInDatabase(current, request);
-        assertSources();
         const candidate: SessionGoalManagementCandidate = {
           kind: "session-goal-management",
           result,

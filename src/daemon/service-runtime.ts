@@ -124,8 +124,12 @@ export function isGatewayServiceStateLive(state: {
   );
 }
 
-const SERVICE_RUNTIME_INSPECTION_ERROR_MAX_CHARS = 500;
 const SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL = "service runtime inspection failed";
+
+export function formatServiceInspectionDetail(error: unknown): string {
+  const rawDetail = error instanceof Error ? error.message : String(error);
+  return truncateUtf16Safe(sanitizeForLog(rawDetail), 500);
+}
 
 /** Keeps native probe failures bounded and diagnostic-only for status presentation owners. */
 export function createServiceRuntimeInspectionFailure(
@@ -135,16 +139,13 @@ export function createServiceRuntimeInspectionFailure(
   inspectionFailure: NonNullable<GatewayServiceRuntime["inspectionFailure"]>;
 } {
   assertServiceInspectionFallbackAllowed(error);
-  const rawDetail = error instanceof Error ? error.message : String(error);
   return {
     status: "unknown",
     ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
     detail: SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL,
     inspectionFailure: {
       code: "service-runtime-inspection-failed",
-      detail:
-        truncateUtf16Safe(sanitizeForLog(rawDetail), SERVICE_RUNTIME_INSPECTION_ERROR_MAX_CHARS) ||
-        "unknown error",
+      detail: formatServiceInspectionDetail(error) || "unknown error",
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     },
   };

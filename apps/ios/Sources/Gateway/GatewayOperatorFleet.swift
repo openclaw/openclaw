@@ -117,7 +117,8 @@ final class GatewayOperatorFleet {
         // this runtime so a retry cannot replace an unchanged TLS transport.
         let sessionBox = config.webSocketSessionBox()
         defer {
-            // A canceled upgrade can leave a pooled TCP connection in this private session.
+            // Releases the session's delegate and idle pooled connections. It cannot reclaim a
+            // socket Foundation orphans when cancellation races the upgrade (WebSocketTaskBox.cancel).
             (sessionBox?.session as? GatewayTLSPinningSession)?.finishTasksAndInvalidate()
         }
         let runtimeID = runtime.id

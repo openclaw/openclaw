@@ -64,16 +64,16 @@ export async function writeMatrixStateChunks<T>(
   rows: {
     chunks: { key: string; value: T }[];
     meta: { key: string; value: T };
-    nextChunkKeys: Set<string>;
   },
   chunkKeyPrefix: string,
 ): Promise<void> {
+  const nextChunkKeys = new Set(rows.chunks.map((row) => row.key));
   for (const row of rows.chunks) {
     await store.register(row.key, row.value);
   }
   await store.register(rows.meta.key, rows.meta.value);
   for (const row of await store.entries()) {
-    if (row.key.startsWith(chunkKeyPrefix) && !rows.nextChunkKeys.has(row.key)) {
+    if (row.key.startsWith(chunkKeyPrefix) && !nextChunkKeys.has(row.key)) {
       await store.delete(row.key);
     }
   }

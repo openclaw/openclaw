@@ -23,6 +23,7 @@ import {
 import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -423,11 +424,11 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
 }> {
   return await withPluginLifecycleLease({}, async (lease) => {
     // The lifecycle owner shares refusal with outer package settlement.
-    const assertOwned = () => lease.assertOwned();
-    const assertCurrent = () => {
-      assertOwned();
-      params.writeOptions?.assertConfigPathForWrite?.();
-    };
+    const assertOwned = lease.assertOwned;
+    const assertCurrent = composeConfigWriteAssertions(
+      assertOwned,
+      params.writeOptions?.assertConfigPathForWrite,
+    );
     let tentativeWrite: InstalledPluginIndexWriteReceipt | undefined;
     const retainedMarkerPaths: string[] = [];
     const clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }> = [];
@@ -435,7 +436,7 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
       const storeOptions = { filePath: lease.databasePath };
       const prepared = await params.prepareInstallRecords(storeOptions);
       // Preparation and lease acquisition can outlive the approving operation.
-      // The index writer below completes its mutation synchronously.
+      // The worker rechecks the live caller at transaction and commit admission.
       await params.beforePersistentEffect?.();
       assertCurrent();
       tentativeWrite = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
@@ -444,6 +445,10 @@ async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResul
           ...storeOptions,
           config: params.nextConfig,
           lease,
+          assertCurrent: params.writeOptions?.assertConfigPathForWrite,
+          onAcknowledged: (receipt) => {
+            tentativeWrite = receipt;
+          },
         },
       );
       if (params.recheckStagedActivation) {

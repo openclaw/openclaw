@@ -41,6 +41,11 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import {
+  captureExternalSessionCommitGuard,
+  sessionEntryCommitGuardOptions,
+  type SessionSourceCheck,
+} from "./session-source-authority.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
   assertSessionStoreReadCandidate,
@@ -613,7 +618,7 @@ export function matchesSessionAbortTargetOwner(
  * storage-sized operation. Runtime abort side effects remain with callers.
  */
 export async function markSessionAbortTarget(params: {
-  isCurrent?: () => boolean;
+  isCurrent?: SessionSourceCheck;
   expectedTarget?: Pick<
     SessionEntry,
     "sessionId" | "lifecycleRevision" | "activeWriterRunId"
@@ -629,7 +634,7 @@ export async function markSessionAbortTarget(params: {
       params.scope,
       (currentEntry) => {
         if (
-          params.isCurrent?.() === false ||
+          (!params.isCurrent?.sessionSource && params.isCurrent?.() === false) ||
           params.expectedTarget === null ||
           (params.expectedTarget &&
             !matchesSessionAbortTargetOwner(currentEntry, params.expectedTarget))
@@ -657,11 +662,15 @@ export async function markSessionAbortTarget(params: {
         skipMaintenance: true,
         // The patch callback yields before BEGIN; the conversation can move without
         // changing this session row, so its snapshot comparison cannot fence Stop.
-        assertCommitAllowed: () => {
-          if (resolution.target && params.isCurrent?.() === false) {
-            throw new Error("The selected session changed before it could be stopped.");
-          }
-        },
+        ...sessionEntryCommitGuardOptions(
+          params.isCurrent?.sessionSource ??
+            (params.isCurrent &&
+              captureExternalSessionCommitGuard(() => {
+                if (resolution.target && params.isCurrent?.() === false) {
+                  throw new Error("The selected session changed before it could be stopped.");
+                }
+              })),
+        ),
       },
     );
     return updated && resolution.target

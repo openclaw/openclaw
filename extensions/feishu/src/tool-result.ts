@@ -2,7 +2,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
-import { formatFeishuApiError } from "./comment-shared.js";
+import { extractFeishuApiErrorMeta } from "./comment-shared.js";
 
 export function feishuExternalToolResult<TDetails>(details: TDetails) {
   // Only model-visible text is fenced; structured callers retain the exact remote payload.
@@ -29,23 +29,15 @@ export function toolExecutionErrorResult(error: unknown) {
   const response = isRecord(error) && isRecord(error.response) ? error.response : undefined;
   const data = isRecord(response?.data) ? response.data : undefined;
   if (data) {
-    const nestedError = isRecord(data.error) ? data.error : undefined;
+    const meta = extractFeishuApiErrorMeta({ message, response });
     message = formatErrorMessage(
-      formatFeishuApiError(
-        {
-          message,
-          response: {
-            status: response?.status,
-            data: {
-              code: data.code,
-              msg: data.msg,
-              log_id: data.log_id,
-              error: { log_id: nestedError?.log_id },
-            },
-          },
-        },
-        { includeNestedErrorLogId: true },
-      ),
+      JSON.stringify({
+        message,
+        http_status: meta.httpStatus,
+        feishu_code: meta.feishuCode,
+        feishu_msg: meta.feishuMsg,
+        feishu_log_id: meta.feishuLogId || meta.nestedErrorLogId,
+      }),
     );
   }
   return feishuExternalToolResult({ error: message });

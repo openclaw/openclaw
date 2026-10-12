@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
@@ -14,40 +15,37 @@ import {
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 
-const { note, readCommand, census, processMembers, ps, sysctl } = vi.hoisted(() => ({
+const { note, readCommand, census, processMembers, ps, readProcessCommand } = vi.hoisted(() => ({
   note: vi.fn(),
   readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
   census: vi.fn<typeof inspectOtherOpenClawProcesses>(),
   processMembers: vi.fn(),
   ps: vi.fn(),
-  sysctl: vi.fn(),
+  readProcessCommand: vi.fn(),
 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: ps,
 }));
-vi.mock("node:module", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:module")>();
-  const createRequire = (file: string | URL) => {
-    const require = actual.createRequire(file);
-    return Object.assign(
-      (id: string) =>
-        id === "koffi"
-          ? {
-              load: () => ({
-                func: (signature: string) => (signature.includes("sysctl(") ? sysctl : () => 0),
-              }),
-              errno: () => 22,
-            }
-          : require(id),
-      require,
-    );
+vi.mock("@openclaw/proc-safe/inspect", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/inspect")>()),
+  readProcessCommand,
+}));
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
+  return {
+    ...actual,
+    readProcessIdentity: (pid: number) =>
+      pid === 2_000_000_000
+        ? {
+            pid,
+            parentPid: process.pid,
+            startTimeMicros: 1,
+            startTimeResolutionMicros: 1,
+            exited: false,
+          }
+        : actual.readProcessIdentity(pid),
   };
-  return new Proxy(actual, {
-    get(target, key, receiver) {
-      return key === "createRequire" ? createRequire : Reflect.get(target, key, receiver);
-    },
-  });
 });
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 vi.mock("../daemon/service.js", () => ({
@@ -104,7 +102,7 @@ afterEach(() => {
   census.mockReset();
   processMembers.mockReset();
   ps.mockReset();
-  sysctl.mockReset();
+  readProcessCommand.mockReset();
 });
 
 async function runCaptureReport(repair = false, update = false) {
@@ -186,19 +184,11 @@ it.each([
       status: 0,
       stdout: `${process.pid} ${process.pid} S 0 ${uid}\n${peer} ${peer} S 0 ${sameUid ? uid : uid + 1}\n`,
     });
-    sysctl.mockImplementation((mib: Int32Array, _count: number, output: Buffer, size: Buffer) => {
-      if (mib[1] === 8) {
-        output.writeInt32LE(4096);
-        size.writeBigUInt64LE(4n);
-        return 0;
+    readProcessCommand.mockImplementation((pid: number) => {
+      if (pid === peer) {
+        throw new ProcSafeError("access-denied", "Process arguments denied");
       }
-      if (mib[2] === peer) {
-        return -1;
-      }
-      output.writeInt32LE(1);
-      const length = output.write("/node\0openclaw-doctor\0", 4) + 4;
-      size.writeBigUInt64LE(BigInt(length));
-      return 0;
+      return { executable: "/node", argv: ["/node", "openclaw-doctor"], environment: {} };
     });
     const group = await vi.importActual<
       typeof import("../process/supervisor/service-child-group-ownership.js")
@@ -208,7 +198,7 @@ it.each([
       "../infra/openclaw-process-census.js",
     );
     census.mockImplementation(actual.inspectOtherOpenClawProcesses);
-    // The synthetic PID is live for this proof; a real kernel absence must not bypass argv handling.
+    // Match the native identity fixture: neither liveness path may bypass argv handling.
     const kill = process.kill.bind(process);
     vi.spyOn(process, "kill").mockImplementation((pid, signal) =>
       pid === peer && signal === 0 ? true : kill(pid, signal),

@@ -92,8 +92,8 @@ metadata listing does not establish account entitlement.
 Live rows supply the native context and completion limits, reasoning and vision
 capabilities, and prompt/completion prices. Cerebras returns those prices as USD
 per-token strings; OpenClaw converts them to USD per million tokens. The public
-feed does not provide cache tariffs. Zero cache fields in OpenClaw's runtime
-estimate are not a claim about enterprise caching or billing.
+feed does not provide a separate cache tariff, so OpenClaw uses the input price
+for cache reads, matching Cerebras' standard input billing for cached tokens.
 
 Successful catalogs are cached for 60 seconds. If discovery fails, returns an
 empty catalog, or has no usable model rows, OpenClaw uses the bundled offline
@@ -122,6 +122,14 @@ shipped reference rather than deleting it or rewriting existing selections;
 retention does not guarantee upstream availability.
 
 Fresh onboarding follows Cerebras's current [Gemma 4 recommendation](https://www.cerebras.ai/blog/gemma-4-on-cerebras-the-fastest-inference-is-now-multimodal). Cerebras describes Gemma 4 31B as its reference medium-size model for equal-or-higher intelligence than GPT OSS, with multimodal agentic support. It is a public-preview model and may change or be discontinued on shorter notice than the production GPT OSS endpoint; existing OpenClaw configurations keep their selected model.
+
+## Prompt caching
+
+Cerebras automatically caches matching prompt prefixes. On the native API,
+OpenClaw sends a stable `prompt_cache_key` for each conversation to improve cache
+routing. Cached tokens reduce prompt processing and uncached-token rate-limit
+usage; they are billed at the standard input token price. See
+[Cerebras prompt caching](https://inference-docs.cerebras.ai/capabilities/prompt-caching).
 
 ## Manual config
 

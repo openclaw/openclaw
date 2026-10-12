@@ -135,6 +135,8 @@ export type ImageGenerationProvider = {
   defaultTimeoutMs?: number;
   models?: string[];
   capabilities: ImageGenerationProviderCapabilities;
+  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. */
   isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: ImageGenerationProviderConfiguredContext) => Promise<boolean>;
   generateImage: (req: ImageGenerationRequest) => Promise<ImageGenerationResult>;
 };

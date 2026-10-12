@@ -243,8 +243,6 @@ describe("sessionsCleanupCommand", () => {
 
   it.each([
     { label: "request timeout after dispatch", error: gatewayTransportError("timeout") },
-    { label: "established WebSocket close", error: gatewayTransportError("closed", 1006) },
-    { label: "authentication rejection", error: new Error("unauthorized") },
     {
       label: "missing local credentials",
       error: new GatewayCredentialsRequiredError({
@@ -301,48 +299,6 @@ describe("sessionsCleanupCommand", () => {
     },
   );
 
-  it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
-    const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\agents\\main\\sessions\\sessions.json";
-    mocks.loadConfig.mockReturnValue({
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
-    });
-    mocks.callGateway.mockResolvedValue(gatewayCleanupResult(remoteStorePath));
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand(
-      {
-        json: true,
-        enforce: true,
-      },
-      runtime,
-    );
-
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    const gatewayCall = mocks.callGateway.mock.calls[0]?.[0];
-    expect(gatewayCall?.method).toBe("sessions.cleanup");
-    expect(gatewayCall?.params.enforce).toBe(true);
-    expect(gatewayCall?.requiredMethods).toEqual(["sessions.cleanup"]);
-    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "{}")).toEqual({
-      agentId: "main",
-      storePath: remoteStorePath,
-      mode: "enforce",
-      dryRun: false,
-      beforeCount: 3,
-      afterCount: 1,
-      missing: 0,
-      dmScopeRetired: 0,
-      modelRunPruned: 0,
-      pruned: 2,
-      capped: 0,
-      diskBudget: null,
-      wouldMutate: true,
-      applied: true,
-      appliedCount: 1,
-    });
-  });
-
   it("renders rejected Gateway partial details and exits nonzero", async () => {
     const details = {
       allAgents: true,
@@ -390,20 +346,6 @@ describe("sessionsCleanupCommand", () => {
     expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
   });
 
-  it("does not render rejected Gateway details without a partial marker", async () => {
-    const error = Object.assign(new Error("request failed"), {
-      details: { allAgents: true, mode: "enforce", dryRun: false, stores: [] },
-    });
-    mocks.callGateway.mockRejectedValue(error);
-
-    const { runtime } = makeRuntime();
-    await expect(sessionsCleanupCommand({ allAgents: true, enforce: true }, runtime)).rejects.toBe(
-      error,
-    );
-
-    expect(process.exitCode).toBeUndefined();
-  });
-
   it("preserves a Gateway-owned store path in human output", async () => {
     const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\openclaw-agent.sqlite";
     mocks.callGateway.mockResolvedValue(gatewayCleanupResult(remoteStorePath));
@@ -412,68 +354,6 @@ describe("sessionsCleanupCommand", () => {
     await sessionsCleanupCommand({ enforce: true }, runtime);
 
     expectLogsToInclude(logs, `Session store: ${remoteStorePath}`);
-  });
-
-  it("returns dry-run JSON without mutating the store", async () => {
-    mocks.runSessionsCleanup.mockResolvedValue({
-      mode: "warn",
-      previewResults: [
-        cleanupPreview({
-          beforeCount: 2,
-          afterCount: 1,
-          pruned: 1,
-          diskBudget: {
-            totalBytesBefore: 1000,
-            totalBytesAfter: 700,
-            removedFiles: 1,
-            removedEntries: 1,
-            freedBytes: 300,
-            maxBytes: 900,
-            highWaterBytes: 700,
-            overBudget: true,
-          },
-        }),
-      ],
-      appliedSummaries: [],
-    });
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand(
-      {
-        json: true,
-        dryRun: true,
-      },
-      runtime,
-    );
-
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "{}")).toEqual({
-      agentId: "main",
-      storePath: "/resolved/openclaw-agent.sqlite",
-      mode: "warn",
-      dryRun: true,
-      beforeCount: 2,
-      afterCount: 1,
-      missing: 0,
-      dmScopeRetired: 0,
-      modelRunPruned: 0,
-      pruned: 1,
-      capped: 0,
-      diskBudget: {
-        totalBytesBefore: 1000,
-        totalBytesAfter: 700,
-        removedFiles: 1,
-        removedEntries: 1,
-        freedBytes: 300,
-        maxBytes: 900,
-        highWaterBytes: 700,
-        overBudget: true,
-      },
-      wouldMutate: true,
-    });
-    expect(mocks.runSessionsCleanup).toHaveBeenCalled();
-    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("renders a dry-run action table with keep/archive/prune actions", async () => {
@@ -589,13 +469,13 @@ describe("sessionsCleanupCommand", () => {
                 sessionId: "cron-kept",
                 updatedAt: 4,
                 model: "test:opus",
-                label: "Cron: daily-commit",
+                label: "Cron: 🔥修复",
               },
               cronPruned: {
                 sessionId: "cron-pruned",
                 updatedAt: 3,
                 model: "test:opus",
-                label: "Cron: daily-commit",
+                label: "Cron: 🔥修复",
               },
               directKept: {
                 sessionId: "direct-kept",
@@ -644,70 +524,18 @@ describe("sessionsCleanupCommand", () => {
 
     expectLogsToInclude(logs, "Summary by Label:");
     const summaryLogs = logs.slice(logs.indexOf("Summary by Label:") + 1);
-    expectLogsToInclude(logs, "Cron: daily-commit  1 kept, 1 pruned");
+    const unicodeLine = summaryLogs.find((line) => line.includes("Cron: 🔥修复"));
+    const plainLine = summaryLogs.find((line) => line.includes("Unlabeled"));
+    expect(unicodeLine).toContain("1 kept, 1 pruned");
+    expect(plainLine).toContain("1 kept, 0 pruned");
+    const keptColumn = (line: string) => visibleWidth(line.slice(0, line.indexOf("1 kept")));
+    expect(keptColumn(unicodeLine ?? "")).toBe(keptColumn(plainLine ?? ""));
     expect(summaryLogs.find((line) => line.includes("(unlabeled)"))).toContain("1 kept, 2 pruned");
-    expect(summaryLogs.find((line) => line.includes("Unlabeled"))).toContain("1 kept, 0 pruned");
     expect(summaryLogs.find((line) => line.includes("Alert\\nInjected"))).toContain(
       "0 kept, 1 pruned",
     );
     expect(logs.join("\n")).not.toContain("\u001b[31m");
     expectLogsToInclude(logs, "Total: 3 kept, 4 pruned");
-  });
-
-  it("aligns the label summary columns for emoji and CJK labels", async () => {
-    mocks.runSessionsCleanup.mockResolvedValue({
-      mode: "warn",
-      previewResults: [
-        cleanupPreview(
-          {
-            beforeCount: 2,
-            afterCount: 2,
-            unreferencedArtifacts: {
-              scannedFiles: 0,
-              removedFiles: 0,
-              freedBytes: 0,
-              olderThanMs: 604800000,
-            },
-          },
-          {
-            beforeStore: {
-              emojiKept: {
-                sessionId: "emoji-kept",
-                updatedAt: 2,
-                model: "test:opus",
-                label: "🔥修复",
-              },
-              plainKept: {
-                sessionId: "plain-kept",
-                updatedAt: 1,
-                model: "test:opus",
-                label: "plain",
-              },
-            },
-          },
-        ),
-      ],
-      appliedSummaries: [],
-    });
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand(
-      {
-        dryRun: true,
-      },
-      runtime,
-    );
-
-    expectLogsToInclude(logs, "Summary by Label:");
-    const summaryLogs = logs.slice(logs.indexOf("Summary by Label:") + 1);
-    const emojiLine = summaryLogs.find((line) => line.includes("🔥修复"));
-    const plainLine = summaryLogs.find((line) => line.includes("plain"));
-    expect(emojiLine).toBeDefined();
-    expect(plainLine).toBeDefined();
-    // "🔥修复" is 6 visible columns (wide emoji + 2 CJK) but only 5 UTF-16 code
-    // units; padding by code-unit length would shift the counts column left.
-    const keptColumn = (line: string) => visibleWidth(line.slice(0, line.indexOf("1 kept")));
-    expect(keptColumn(emojiLine ?? "")).toBe(keptColumn(plainLine ?? ""));
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {

@@ -136,7 +136,7 @@ export function resolveExecutionTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.execution : resolution,
+    resolveExecutionTargetResolution(resolution),
     cwd,
   );
 }
@@ -145,10 +145,7 @@ export function resolveExecutionTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.execution : resolution,
-    cwd,
-  );
+  return resolveExecutableTrustPath(resolveExecutionTargetResolution(resolution), cwd);
 }
 
 export function resolvePolicyTargetCandidatePath(
@@ -156,7 +153,7 @@ export function resolvePolicyTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.policy : resolution,
+    resolvePolicyTargetResolution(resolution),
     cwd,
   );
 }
@@ -165,10 +162,7 @@ export function resolvePolicyTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.policy : resolution,
-    cwd,
-  );
+  return resolveExecutableTrustPath(resolvePolicyTargetResolution(resolution), cwd);
 }
 
 export function resolveApprovalAuditTrustPath(

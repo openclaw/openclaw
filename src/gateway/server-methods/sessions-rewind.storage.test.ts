@@ -37,6 +37,7 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
@@ -539,37 +540,32 @@ describe("sessions.fork storage ownership", () => {
         const grants: string[] = [];
         const sourceReads: string[] = [];
         const agentPath = resolveOpenClawAgentSqlitePath({ agentId: sourceScope.agentId });
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
         const admission = repository
-          ? vi
-              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((callback, attachment) =>
-                createAdmission((request, grant) => {
-                  const facts = request.facts;
-                  if (
-                    (request.stage !== "transaction" && request.stage !== "commit") ||
-                    !isRecord(facts) ||
-                    !isRecord(facts.identity) ||
-                    facts.identity.nativeLocation !== agentPath
-                  ) {
-                    callback(request, grant);
-                    return;
-                  }
-                  // Repository S grants retain separate authority; observe only this agent writer.
-                  const sql = observeHostDataSql();
-                  try {
-                    grants.push(request.stage);
-                    callback(request, grant);
-                  } finally {
-                    sourceReads.push(
-                      ...sql.queries.filter((query) =>
-                        /^\s*(?:select|with)\b[\s\S]*\bsession_nodes\b/i.test(query),
-                      ),
-                    );
-                    sql.restore();
-                  }
-                }, attachment),
-              )
+          ? probe.admission(workerAdmission, (request, grant, callback) => {
+              const facts = request.facts;
+              if (
+                (request.stage !== "transaction" && request.stage !== "commit") ||
+                !isRecord(facts) ||
+                !isRecord(facts.identity) ||
+                facts.identity.nativeLocation !== agentPath
+              ) {
+                callback(request, grant);
+                return;
+              }
+              // Repository S grants retain separate authority; observe only this agent writer.
+              const sql = observeHostDataSql();
+              try {
+                grants.push(request.stage);
+                callback(request, grant);
+              } finally {
+                sourceReads.push(
+                  ...sql.queries.filter((query) =>
+                    /^\s*(?:select|with)\b[\s\S]*\bsession_nodes\b/i.test(query),
+                  ),
+                );
+                sql.restore();
+              }
+            })
           : undefined;
         let racedStorage: Awaited<ReturnType<typeof readMutationStorage>> | undefined;
         let repositoryForkId: string | undefined;
@@ -733,21 +729,17 @@ describe.each(["sessionMutationCommitGuard", "sessionMutationAuthorization"] as 
                     assertTargetCurrent: vi.fn(),
                   },
                 };
-          const create = workerAdmission.createSqliteWorkerOperationAdmission;
-          vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-            (callback, attachment) =>
-              create((request, grant) => {
-                workerCommitGrant = request.stage === "commit";
-                if (workerCommitGrant) {
-                  current = false;
-                }
-                try {
-                  callback(request, grant);
-                } finally {
-                  workerCommitGrant = false;
-                }
-              }, attachment),
-          );
+          probe.admission(workerAdmission, (request, grant, callback) => {
+            workerCommitGrant = request.stage === "commit";
+            if (workerCommitGrant) {
+              current = false;
+            }
+            try {
+              callback(request, grant);
+            } finally {
+              workerCommitGrant = false;
+            }
+          });
           const mutation = invokeMessageCut(method, scope, guards);
           await mutation.error;
 

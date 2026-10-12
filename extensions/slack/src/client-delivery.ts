@@ -14,7 +14,7 @@ import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalObjectRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "./errors.js";
 import {
   postSlackMessageWithIdentityFallback,
@@ -63,23 +63,16 @@ export function rethrowSlackPermanentOutboundApiRejection(err: unknown): never {
   throw err;
 }
 
-function readSlackRequestErrorCode(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const code = (value as { code?: unknown }).code;
-  return typeof code === "string" ? code.toUpperCase() : undefined;
-}
-
 function hasSlackDnsRequestSignal(err: unknown): boolean {
-  let current: unknown = err;
+  let current = asOptionalObjectRecord(err);
   const seen = new Set<unknown>();
-  for (let depth = 0; current && typeof current === "object" && depth < 6; depth += 1) {
+  for (let depth = 0; current && depth < 6; depth += 1) {
     if (seen.has(current)) {
       return false;
     }
     seen.add(current);
-    const code = readSlackRequestErrorCode(current);
+    const rawCode = current.code;
+    const code = typeof rawCode === "string" ? rawCode.toUpperCase() : undefined;
     if (code && SLACK_DNS_RETRY_CODES.has(code)) {
       return true;
     }
@@ -87,9 +80,7 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
     if (/\b(EAI_AGAIN|ENOTFOUND|UND_ERR_DNS_RESOLVE_FAILED)\b/i.test(message)) {
       return true;
     }
-    current =
-      (current as { original?: unknown; cause?: unknown }).original ??
-      (current as { cause?: unknown }).cause;
+    current = asOptionalObjectRecord(current.original ?? current.cause);
   }
   return false;
 }

@@ -1,7 +1,10 @@
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
 import * as admissions from "../../infra/sqlite-worker-operation-admission.js";
 import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
@@ -20,12 +23,15 @@ import {
   WorktreeRemovalLockError,
 } from "./errors.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
+import { worktreeRegistryPublication } from "./registry-publication.js";
 import {
   captureWorktreeRegistryReadGuard,
   prepareWorktreeRegistryGuard,
   readLiveRegistryWorktreeByOwner,
   readRegistryWorktree,
 } from "./registry-read.js";
+import { worktreeGcRevision } from "./registry-read.kernel.js";
+import { deferWorktreeCleanup, retireMissingRegistryWorktree } from "./registry-retirement.js";
 import {
   abortWorktreeRemovalRow,
   claimWorktreeRemovalRow,
@@ -37,7 +43,10 @@ import {
 } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { withWorktreeRunEnd, prepareWorktreeRunEndClose } from "./run-end-lifecycle.js";
-import { admitWorktreeRunLeaseRowAsync } from "./run-lease-store.js";
+import {
+  admitWorktreeRunLeaseRowAsync,
+  releaseWorktreeRunLeaseRowAsync,
+} from "./run-lease-store.js";
 import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
@@ -363,11 +372,29 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
     data: new Uint8Array([9, 8, 7]),
   };
   let writes = 0;
+  const facts = new Map();
+  const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
+    if (change.kind === "committed") {
+      for (const [key, fact] of change.receipt.facts) {
+        facts.set(key, fact);
+      }
+    }
+  });
   const lostReply = interceptWorktreeWorkerOperation(
     (execute) => async (command, executeOptions) => {
       const result = await execute(command, executeOptions);
       if (command.type === "worktrees.writeProvisionedSnapshot") {
         writes += 1;
+      }
+      if (
+        [
+          "worktrees.writeProvisionedSnapshot",
+          "worktrees.update",
+          "worktrees.deferCleanup",
+          "worktrees.admitRunLease",
+          "worktrees.releaseRunLease",
+        ].includes(command.type)
+      ) {
         throw new Error("Synthetic lost command reply");
       }
       return result;
@@ -375,8 +402,39 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
   );
   try {
     await insertRegistryWorktreeProvisionedChunk(env, input);
+    await updateRegistryWorktree(env, "synthetic", { lastActiveAt: 2 });
+    expect(facts.get(JSON.stringify(["worktrees", "synthetic"]))).toMatchObject({
+      kind: "postimage",
+      value: { last_active_at: 2 },
+    });
+    await expect(
+      deferWorktreeCleanup(env, {
+        observed: getRegistryWorktree(env, "synthetic")!,
+        reason: "retained after reply loss",
+      }),
+    ).resolves.toBe(true);
+    const context = captureOpenClawStateWorkerContext({ env });
+    await admitWorktreeRunLeaseRowAsync(
+      context,
+      {
+        worktreeId: "synthetic",
+        token: "lost-reply",
+        pid: process.pid,
+        startTime: null,
+        now: 2,
+      },
+      () => {},
+    );
+    expect(
+      facts.get(JSON.stringify(["state_leases", "worktree-run:synthetic", "lost-reply"])),
+    ).toMatchObject({ kind: "postimage" });
+    await releaseWorktreeRunLeaseRowAsync(env, "synthetic", "lost-reply", context);
+    expect(
+      facts.get(JSON.stringify(["state_leases", "worktree-run:synthetic", "lost-reply"])),
+    ).toEqual({ kind: "absent" });
   } finally {
     lostReply.mockRestore();
+    unsubscribe();
   }
   expect(writes).toBe(1);
 
@@ -450,4 +508,63 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
       .prepare("SELECT chunk_index FROM worktree_provisioned_file_chunks ORDER BY chunk_index")
       .all(),
   ).toEqual([{ chunk_index: 0 }, { chunk_index: 1 }]);
+});
+
+it("preserves retirement commits when combined facts or the recovery result exceed the receipt budget", async () => {
+  const { env, database } = await fixture();
+  const observed = getRegistryWorktree(env, "synthetic")!;
+  const publications: string[] = [];
+  const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
+    publications.push(change.kind);
+  });
+  let writes = 0;
+  const lostReply = interceptWorktreeWorkerOperation((execute) => async (command, options) => {
+    const result = await execute(command, options);
+    if (command.type === "worktrees.retireMissing") {
+      writes += 1;
+      throw new Error("Synthetic lost retirement reply");
+    }
+    return result;
+  });
+  try {
+    // The command stays small: large values are persisted fixture data, not retirement inputs.
+    for (const bytes of [
+      SQLITE_WORKER_MAX_MESSAGE_BYTES / 2 + 1024,
+      SQLITE_WORKER_MAX_MESSAGE_BYTES + 1024,
+    ]) {
+      const combined = bytes < SQLITE_WORKER_MAX_MESSAGE_BYTES;
+      database.db
+        .prepare(
+          "UPDATE worktrees SET branch = ?, gc_protection_json = ?, removed_at = NULL WHERE id = ?",
+        )
+        .run(
+          combined ? observed.branch : "x".repeat(bytes),
+          combined
+            ? JSON.stringify({
+                revision: worktreeGcRevision({ ...observed, removedAt: 2 }),
+                reason: "x".repeat(bytes),
+              })
+            : null,
+          observed.id,
+        );
+      publications.length = 0;
+      const retirement = retireMissingRegistryWorktree(env, observed, 2);
+      if (combined) {
+        const result = await retirement;
+        expect(result.record?.gcProtection?.length).toBe(bytes);
+      } else {
+        await expect(retirement).rejects.toThrow(
+          "retirement committed but its result is unavailable",
+        );
+      }
+      expect(
+        database.db.prepare("SELECT removed_at FROM worktrees WHERE id = ?").get(observed.id),
+      ).toEqual({ removed_at: 2 });
+      expect(publications).toEqual(["pending", "unknown", "settled"]);
+    }
+    expect(writes).toBe(2);
+  } finally {
+    lostReply.mockRestore();
+    unsubscribe();
+  }
 });

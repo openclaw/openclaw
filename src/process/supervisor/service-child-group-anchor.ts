@@ -9,7 +9,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
-import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
+import {
+  hasLiveOwnedProcessGroupMembers,
+  killOwnedProcessGroupMembers,
+} from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
@@ -98,6 +101,25 @@ export function runServiceChildGroupAnchor(): void {
     });
   };
 
+  const finish = (code: number) => {
+    process.exitCode = code;
+    process.stdin.destroy();
+    const disconnect = () => {
+      // end() flushes the receipt; destroy() also releases the readable socket.
+      control?.off("close", disconnect);
+      control?.destroy();
+      if (process.connected) {
+        process.disconnect?.();
+      }
+    };
+    if (control && !control.destroyed) {
+      control.once("close", disconnect);
+      control.end(disconnect);
+    } else {
+      disconnect();
+    }
+  };
+
   const closeAuthority = async (
     reason: Extract<ServiceChildAnchorMessage, { type: "closing" }>["reason"],
     hardKill: boolean,
@@ -126,7 +148,7 @@ export function runServiceChildGroupAnchor(): void {
         retirementReady.promise,
         delay(Math.max(0, deadline - Date.now())).then(() => false),
       ]);
-      control?.end(() => process.exit(acknowledged ? 0 : 1));
+      finish(acknowledged ? 0 : 1);
       return;
     }
     state = "closed";
@@ -162,7 +184,7 @@ export function runServiceChildGroupAnchor(): void {
       process.kill(0, "SIGKILL");
       return;
     }
-    control?.end(() => process.exit(0));
+    finish(0);
   };
 
   const closeInheritedLineage = () => {
@@ -207,6 +229,11 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     const cleanupDeadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+    const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
+    if (!start.ownedWorker && !forceCleanup && rootExit && pendingOutput.size > 0) {
+      // Preserve inherited diagnostics after root exit within the same cleanup budget.
+      await Promise.race([rootSettledDone.promise, termGraceDone, forceCleanupRequested.promise]);
+    }
     if (subreaper) {
       try {
         while (
@@ -252,7 +279,6 @@ export function runServiceChildGroupAnchor(): void {
       }
       return;
     }
-    const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
     if (start.ownedWorker) {
       if (!forceCleanup) {
         process.kill(0, "SIGTERM");
@@ -263,6 +289,9 @@ export function runServiceChildGroupAnchor(): void {
       }
       if (!rootExit) {
         command?.kill("SIGKILL");
+      }
+      if (!lineageClosed) {
+        killOwnedProcessGroupMembers();
       }
       // Nested command relays can outlive the application. Keep their reader alive
       // until they close lineage; killing this observer would discard that custody.
@@ -413,7 +442,8 @@ export function runServiceChildGroupAnchor(): void {
   const startCommand = async (next: ServiceChildStart) => {
     const controlFd = next.controlFd;
     if (controlFd === undefined) {
-      process.exitCode = 1;
+      state = "closed";
+      finish(1);
       return;
     }
     start = next;
@@ -691,7 +721,9 @@ export function runServiceChildGroupAnchor(): void {
         raw.acknowledgeClosing !== undefined &&
         raw.acknowledgeClosing !== true
       ) {
-        process.exit(1);
+        state = "closed";
+        finish(1);
+        return;
       }
       void startCommand(message);
     } else if (message.type === "parent-loss" && message.generation === start?.generation) {

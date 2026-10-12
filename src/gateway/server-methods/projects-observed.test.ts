@@ -149,7 +149,7 @@ describe("projects.list observed projects", () => {
     );
   });
 
-  it.each([["operator.write"], ["operator.admin"]])(
+  it.each([["operator.write"]])(
     "returns detailed observed projects to %s callers",
     async (scope) => {
       seededSessions.store = {

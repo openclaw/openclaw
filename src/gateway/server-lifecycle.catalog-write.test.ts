@@ -7,6 +7,7 @@ import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import { refreshRemoteModelCatalog } from "../model-catalog/remote-refresh.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
@@ -22,8 +23,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { connectUserModelAccount, readUserModelAuthProfile } from "../state/user-model-accounts.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { runGatewayStartupObservers } from "./server-startup-observers.js";
 import {
@@ -59,24 +60,13 @@ it("settles an accepted catalog refresh before Gateway close retires its state w
       providers: { anthropic: {} },
       models: [{ id: "catalog-close", provider: "anthropic", pricing: { status: "unknown" } }],
     };
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "modelCatalog.remote.write") {
-                  accepted.resolve();
-                  await release.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-    );
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "modelCatalog.remote.write") {
+        accepted.resolve();
+        await release.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     refreshing = lifecycle.run((catalogSignal) =>
       refreshRemoteModelCatalog({
         config: {},
@@ -159,24 +149,13 @@ it("joins accepted notices, signal cleanup, and upstream deletion after the Gate
         resolvePhysicalSessionStorePath({ sessionKey: watcher, env: fixture.state.env }),
         Date.now(),
       );
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, operationOptions) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "sessionState.sweep") {
-                  accepted.resolve();
-                  await release.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          operationOptions,
-        ),
-    );
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "sessionState.sweep") {
+        accepted.resolve();
+        await release.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     const logs = { info() {}, warn() {}, error() {} };
     // Startup tracks the original promise without lending its connection scope to storage.
     const operation = Promise.resolve().then(() =>
@@ -295,24 +274,13 @@ it("joins accepted workspace persistence and releases its lease after the Gatewa
     assert(kernel);
     const options = { env: fixture.state.env };
     const shared = openOpenClawStateDatabase(options).db;
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, operationOptions) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "localWorkspace.mutate") {
-                  accepted.resolve();
-                  await release.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          operationOptions,
-        ),
-    );
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "localWorkspace.mutate") {
+        accepted.resolve();
+        await release.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     writing = kernel.connectionWork.track(() =>
       withLocalWorkspaceStore({ worktreeId, ...options }, async (store) => {
         custody = store;

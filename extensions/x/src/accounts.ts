@@ -7,7 +7,7 @@ import { resolveXCostLimits } from "./cost-limits.js";
 
 const accounts = createAccountListHelpers<XAccountConfig>("x", {
   omitKeys: ["defaultAccount"],
-  nestedObjectKeys: ["guests", "costLimits"],
+  nestedObjectKeys: ["guests", "costLimits", "verifiedFromGitHub"],
   implicitDefaultAccount: { channelKeys: ["userId", "clientId", "refreshToken"] },
 });
 export const listXAccountIds = accounts.listAccountIds;

@@ -1,5 +1,4 @@
-import type { APISelectMenuOption } from "discord-api-types/v10";
-import { ButtonStyle } from "discord-api-types/v10";
+import { ButtonStyle, type APISelectMenuOption } from "discord-api-types/v10";
 import type {
   ModelsProviderData,
   ModelsRuntimeChoice,
@@ -25,6 +24,7 @@ import {
   createDiscordModelPickerRuntimeToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
+  getDiscordModelPickerRecentModelRefs,
   normalizeModelPickerPage,
   type DiscordModelPickerBucket,
   type DiscordModelPickerCommandContext,
@@ -199,9 +199,8 @@ function buildRenderedShell(
     containerComponents.push(new TextDisplay(`-# ${params.footer}`));
   }
 
-  const container = new Container(containerComponents);
   return {
-    components: [container],
+    components: [new Container(containerComponents)],
   };
 }
 
@@ -350,6 +349,7 @@ function buildModelRows(
     page: params.modelPage.page,
     providerPage: providerPage.page,
   };
+  const modelActionState = { ...modelViewState, ...compactRuntime };
 
   if (
     runtimeChoices &&
@@ -392,8 +392,7 @@ function buildModelRows(
   rows.push(
     createModelSelectRow(
       {
-        ...modelViewState,
-        ...compactRuntime,
+        ...modelActionState,
         action: "pick",
       },
       modelOptions,
@@ -402,11 +401,10 @@ function buildModelRows(
   );
 
   const modelNavRow = buildPaginationRow({
-    ...modelViewState,
+    ...modelActionState,
     totalPages: params.modelPage.totalPages,
     hasPrev: params.modelPage.hasPrev,
     hasNext: params.modelPage.hasNext,
-    ...compactRuntime,
     modelIndex: params.pendingModelIndex,
     modelToken: pendingModelToken,
     // Model navigation derives providerBucket from provider on interaction;
@@ -427,7 +425,6 @@ function buildModelRows(
     typeof params.pendingModelIndex === "number" &&
     params.pendingModelIndex > 0;
 
-  const modelActionState = { ...modelViewState, ...compactRuntime };
   const buttonRowItems: Button[] = [
     createModelPickerButton("Providers", {
       command: params.command,
@@ -671,11 +668,7 @@ export function renderDiscordModelPickerRecentsView(
   params: DiscordModelPickerRecentsViewParams,
 ): DiscordModelPickerRenderedView {
   const { data, quickModels, currentModel, modelBucket, ...navigationState } = params;
-  const defaultModelRef = `${data.resolvedDefault.provider}/${data.resolvedDefault.model}`;
-  const recentModels = [
-    defaultModelRef,
-    ...quickModels.filter((modelRef) => modelRef !== defaultModelRef),
-  ];
+  const recentModels = getDiscordModelPickerRecentModelRefs(data, quickModels);
   const rows = recentModels.map(
     (modelRef, index) =>
       new Row([

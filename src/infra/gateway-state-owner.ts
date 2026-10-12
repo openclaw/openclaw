@@ -50,7 +50,6 @@ export type StateDatabaseSchemaLease = {
 
 export type GatewayStateProjection = {
   readonly lockPath: string;
-  readonly verifiedAt: number | undefined;
   verifyStillHeld(): boolean;
   retain(): GatewayStateProjection;
   release(): void;
@@ -61,25 +60,13 @@ export function createGatewayStateProjection(
   lock: ReturnType<typeof acquireFileLockSync>,
 ): GatewayStateProjection {
   let references = 1;
-  let verifiedAt: number | undefined;
-  const verify = () => {
-    verifiedAt = undefined;
-    if (!lock.verifyStillHeld()) {
-      return false;
-    }
-    verifiedAt = performance.now();
-    return true;
-  };
   const reference = (): GatewayStateProjection => {
     let released = false;
     return {
       lockPath: lock.lockPath,
-      get verifiedAt() {
-        return released ? undefined : verifiedAt;
-      },
-      verifyStillHeld: () => !released && verify(),
+      verifyStillHeld: () => !released && lock.verifyStillHeld(),
       retain() {
-        if (released || !verify()) {
+        if (released || !lock.verifyStillHeld()) {
           throw new Error("Gateway state projection is no longer current");
         }
         references += 1;
@@ -113,7 +100,6 @@ type ProcessOwner = {
   projectionDirectories: StateOwnerDirectoryIdentity[];
   // Retained leases keep custody after this stops new admission.
   accepting: boolean;
-  verifiedAt?: number;
 };
 
 function hasPhysicalOwnership(owner: ProcessOwner): boolean {
@@ -129,7 +115,6 @@ function hasPhysicalOwnership(owner: ProcessOwner): boolean {
 }
 
 function verifyOwnerLock(owner: ProcessOwner, lock: StateOwnerFile | undefined): boolean {
-  owner.verifiedAt = undefined;
   owner.lost.signal.throwIfAborted();
   owner.heartbeat?.inspect();
   owner.lost.signal.throwIfAborted();
@@ -152,7 +137,6 @@ function verifyOwnerLock(owner: ProcessOwner, lock: StateOwnerFile | undefined):
     owner.heartbeat.worker.postMessage([projection.lockPath, raw], []);
     owner.heartbeat.paths.add(projection.lockPath);
   }
-  owner.verifiedAt = performance.now();
   return true;
 }
 
@@ -163,20 +147,15 @@ function loseOwner(owner: ProcessOwner, error: Error) {
     return;
   }
   owner.accepting = false;
-  owner.verifiedAt = undefined;
   readOwnerPaths.clear();
   owner.heartbeat?.stop();
   log.error(error.message);
   owner.lost.abort(error);
 }
 
-// Only explicit reads reuse proof for one second; overdue dispatch verifies
-// synchronously, so event-loop stalls cannot extend the read ownership window.
-const READ_OWNERSHIP_MAX_AGE_MS = 1000;
-
 const readOwnerPaths = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayStateReadOwnerPaths"),
-  () => new Map<string, { pathname: string; owner: ProcessOwner; expiresAt: number }>(),
+  () => new Map<string, ProcessOwner>(),
 );
 
 const owners = resolveGlobalSingleton(
@@ -310,43 +289,34 @@ function acquireOwnerFile(
       }
     }
   }
-  for (let retriedMissingParent = false; ;) {
-    try {
-      return acquireFileLockSync(pathname, {
-        lockPath: pathname,
-        retry:
-          busyTimeoutMs > 0
-            ? { factor: 1.25, minTimeout: 10, maxTimeout: 25, randomize: false }
-            : { retries: 0 },
-        timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
-        staleMs: Infinity,
-        staleRecovery: "remove-if-unchanged",
-        reentrantOwner: payload.ownerId,
-        payload: () => payload,
-        parsePayload: (raw) => (observed.holder = parseGatewayLockPayload(raw)),
-        shouldReclaim: stale,
-        shouldRemoveStaleLock: stale,
-      });
-    } catch (error) {
-      const code = extractErrorCode(error);
-      if (code === "ENOENT" && !retriedMissingParent) {
-        // A finished reset may remove an empty parent before exclusive create.
-        // No lock or protected operation exists yet; keep the original wait budget.
-        retriedMissingParent = true;
-        ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
-        continue;
-      }
-      if (code === "file_lock_timeout" || code === "file_lock_stale") {
-        const { holder } = observed;
-        const holderDetail = describeGatewayLockHolder(
-          holder ?? {},
-          pathname,
-          holder && isPidAlive(holder.pid) ? "live" : "unknown",
-        );
-        throw new GatewayStateOwnerContentionError(databasePath, error, holderDetail);
-      }
-      throw error;
+  try {
+    return acquireFileLockSync(pathname, {
+      lockPath: pathname,
+      retry:
+        busyTimeoutMs > 0
+          ? { factor: 1.25, minTimeout: 10, maxTimeout: 25, randomize: false }
+          : { retries: 0 },
+      timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
+      staleMs: Infinity,
+      staleRecovery: "remove-if-unchanged",
+      reentrantOwner: payload.ownerId,
+      payload: () => payload,
+      parsePayload: (raw) => (observed.holder = parseGatewayLockPayload(raw)),
+      shouldReclaim: stale,
+      shouldRemoveStaleLock: stale,
+    });
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "file_lock_timeout" || code === "file_lock_stale") {
+      const { holder } = observed;
+      const holderDetail = describeGatewayLockHolder(
+        holder ?? {},
+        pathname,
+        holder && isPidAlive(holder.pid) ? "live" : "unknown",
+      );
+      throw new GatewayStateOwnerContentionError(databasePath, error, holderDetail);
     }
+    throw error;
   }
 }
 
@@ -629,7 +599,6 @@ export function captureGatewayStateOwner(databasePath: string) {
       owners.get(pathname) !== owner ||
       !owner.accepting ||
       resolveGatewayStateOwnerPath(databasePath) !== pathname ||
-      !hasPhysicalOwnership(owner) ||
       (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
     ) {
       throw new GatewayStateOwnerContentionError(databasePath);
@@ -645,30 +614,18 @@ export function captureGatewayStateOwner(databasePath: string) {
   };
 }
 
-function hasRecentVerification(verifiedAt: number | undefined, now: number): boolean {
-  return verifiedAt !== undefined && now - verifiedAt < READ_OWNERSHIP_MAX_AGE_MS;
-}
-
-/** Only explicit reads reuse recent physical verification; mutations always check freshly. */
-export function assertStateDatabaseReadAllowed(databasePath: string): void {
+/** Reads within an admission reuse process custody; the next admission verifies the lock. */
+export function assertStateDatabaseReadAllowed(
+  databasePath: string,
+  captured?: Parameters<typeof assertStateDatabaseAccessAllowed>[1],
+): void {
   if (owners.size === 0) {
-    assertStateDatabaseAccessAllowed(databasePath);
+    assertStateDatabaseAccessAllowed(databasePath, captured);
     return;
   }
   const key = path.resolve(databasePath);
-  const now = performance.now();
   const cached = readOwnerPaths.get(key);
-  cached?.owner.heartbeat?.inspect();
-  const projection = cached?.owner.getProjection?.();
-  if (
-    cached &&
-    now < cached.expiresAt &&
-    owners.get(cached.pathname) === cached.owner &&
-    cached.owner.accepting &&
-    hasRecentVerification(cached.owner.verifiedAt, now) &&
-    (!cached.owner.getProjection ||
-      (projection && hasRecentVerification(projection.verifiedAt, now)))
-  ) {
+  if (cached?.accepting) {
     return;
   }
   readOwnerPaths.delete(key);
@@ -682,7 +639,7 @@ export function assertStateDatabaseReadAllowed(databasePath: string): void {
     (role !== "gateway" && role !== "agent-embedded")
   ) {
     // Maintenance/schema authority and foreign owners keep their existing fresh checks.
-    assertStateDatabaseAccessAllowed(databasePath);
+    assertStateDatabaseAccessAllowed(databasePath, captured);
     return;
   }
   if (
@@ -693,7 +650,7 @@ export function assertStateDatabaseReadAllowed(databasePath: string): void {
       `OpenClaw state ownership at ${databasePath} could not be verified; retry after maintenance finishes.`,
     );
   }
-  readOwnerPaths.set(key, { pathname, owner, expiresAt: now + READ_OWNERSHIP_MAX_AGE_MS });
+  readOwnerPaths.set(key, owner);
 }
 
 /** Ordinary SQLite access observes maintenance; it never borrows schema authority. */

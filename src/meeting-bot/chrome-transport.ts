@@ -246,24 +246,34 @@ function createMeetingChromeTransportWithAudioPolicy<
       logScope: options.platform.logScope,
     });
     try {
-      transport = await createBrowserMeetingRealtimeAudioTransport({
-        ...params,
-        nativeTransport: transport,
-        captureContinuation: captureOperatorToolGatewayContinuationContext,
-        hasConfiguredInputCommand: params.config.chrome.audioInputCommandOverride !== undefined,
-        buildCaptureScript: options.platform.browser.buildAudioCaptureScript?.bind(
-          options.platform.browser,
-        ),
-        meetingUrl: params.url,
-        targetId: params.tab?.targetId,
-        audioFormat: params.config.chrome.audioFormat,
-      });
+      transport = await captureBrowserAudio(params, transport, params.callBrowser, params.tab);
       const engine = await startRealtimeEngine(params, transport);
       return audioBridge.local(engine, params.audio);
     } catch (error) {
       await transport.dispose().catch(() => {});
       throw error;
     }
+  }
+
+  function captureBrowserAudio(
+    params: MeetingChromeLaunchParams<Config, Mode>,
+    nativeTransport: MeetingRealtimeAudioTransport,
+    callBrowser: MeetingBrowserRequestCaller,
+    tab?: MeetingBrowserTab,
+  ) {
+    return createBrowserMeetingRealtimeAudioTransport({
+      ...params,
+      nativeTransport,
+      callBrowser,
+      captureContinuation: captureOperatorToolGatewayContinuationContext,
+      hasConfiguredInputCommand: params.config.chrome.audioInputCommandOverride !== undefined,
+      buildCaptureScript: options.platform.browser.buildAudioCaptureScript?.bind(
+        options.platform.browser,
+      ),
+      meetingUrl: params.url,
+      targetId: tab?.targetId,
+      audioFormat: params.config.chrome.audioFormat,
+    });
   }
 
   async function launchInChrome(params: MeetingChromeLaunchParams<Config, Mode>): Promise<{
@@ -463,19 +473,7 @@ function createMeetingChromeTransportWithAudioPolicy<
         Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
         result.audioBridge.outputGeneration === true,
       );
-      transport = await createBrowserMeetingRealtimeAudioTransport({
-        ...params,
-        nativeTransport: transport,
-        captureContinuation: captureOperatorToolGatewayContinuationContext,
-        hasConfiguredInputCommand: params.config.chrome.audioInputCommandOverride !== undefined,
-        callBrowser,
-        buildCaptureScript: options.platform.browser.buildAudioCaptureScript?.bind(
-          options.platform.browser,
-        ),
-        meetingUrl: params.url,
-        targetId: browser.tab?.targetId,
-        audioFormat: params.config.chrome.audioFormat,
-      });
+      transport = await captureBrowserAudio(params, transport, callBrowser, browser.tab);
       audioTransport = transport;
       const engine = await startRealtimeEngine(params, transport, {
         nodeId,

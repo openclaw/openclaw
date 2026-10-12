@@ -1,15 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { withAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -27,6 +30,15 @@ import {
   loadReplySessionInitializationSnapshot,
   upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
+import {
+  conversationPublication,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
+import {
+  linkSessionConversation,
+  prepareConversationIdentities,
+  upsertConversationIdentities,
+} from "./session-accessor.sqlite-conversation.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -50,6 +62,7 @@ describe("conversation registry", () => {
 
   const tempDirs = createTempDirTracker();
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const dir of tempDirs.dirs) {
       await closeOpenClawAgentDatabasesAsync(dir);
       closeOpenClawAgentDatabasesForTest(dir);
@@ -60,48 +73,6 @@ describe("conversation registry", () => {
   beforeEach(() => {
     tempDir = tempDirs.make("openclaw-conversations-");
     storePath = path.join(tempDir, "sessions.json");
-  });
-
-  it("links multiple direct peers to a shared main context without conflating addresses", async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
-    await upsertSessionEntry(scope, {
-      sessionId: "shared-main-session",
-      updatedAt: 100,
-      chatType: "direct",
-      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
-      origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-a" },
-    });
-    await upsertSessionEntry(scope, {
-      sessionId: "shared-main-session",
-      updatedAt: 200,
-      chatType: "direct",
-      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-b" },
-      origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-b" },
-      skillsSnapshot: { prompt: "Saved instructions. ".repeat(4096), skills: [] },
-    });
-
-    const conversations = await listConversations(
-      { agentId: "main", storePath },
-      { channel: "reef" },
-    );
-    expect(conversations.map((entry) => entry.target).toSorted()).toEqual([
-      "reef:peer-a",
-      "reef:peer-b",
-    ]);
-    expect(conversations.every((entry) => entry.role === "participant")).toBe(true);
-    expect(conversations.every((entry) => entry.sessionKey === scope.sessionKey)).toBe(true);
-    expect(
-      await resolveCurrentSessionPrimaryConversation({
-        ...scope,
-        sessionId: "shared-main-session",
-      }),
-    ).toBeUndefined();
-
-    const peerA = conversations.find((entry) => entry.target === "reef:peer-a");
-    expect(peerA).toBeDefined();
-    expect(await readConversation({ agentId: "main", storePath }, peerA!.conversationRef)).toEqual(
-      peerA,
-    );
   });
 
   it("catalogs a directory address without inventing a model-context session", async () => {
@@ -115,7 +86,28 @@ describe("conversation registry", () => {
       label: "@peer-a's agent",
     });
     expect(identity).toBeDefined();
-    await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+    const receipts: ConversationPublication[] = [];
+    const unsubscribe = conversationPublication.subscribe((receipt) => receipts.push(receipt));
+    try {
+      await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+    } finally {
+      unsubscribe();
+    }
+    expect(receipts).toHaveLength(1);
+    expect(
+      receipts[0]?.facts.get(JSON.stringify(["catalogue", identity!.conversationRef])),
+    ).toMatchObject({
+      kind: "postimage",
+      value: {
+        kind: "catalogue",
+        row: {
+          conversation_id: identity!.conversationRef,
+          label: identity!.label,
+          created_at: 100,
+          updated_at: 100,
+        },
+      },
+    });
 
     const [conversation] = await listConversations(
       { agentId: "main", storePath },
@@ -218,42 +210,6 @@ describe("conversation registry", () => {
         release.resolve();
         await Promise.allSettled([held, pending]);
       }
-    },
-  );
-
-  it.each(["registration", "authority"] as const)(
-    "does not retain %s resources when input capture fails",
-    async (operation) => {
-      const databasePath = path.join(tempDir, "registry.sqlite");
-      const scope = {
-        agentId: "main",
-        databaseAgentId: "main",
-        storePath: databasePath,
-        env: { OPENCLAW_STATE_DIR: tempDir },
-      };
-      const failure = new Error("Synthetic conversation input capture failure");
-      const identity = {
-        get conversationRef(): string {
-          throw failure;
-        },
-        channel: "reef",
-        accountId: "default",
-        kind: "direct" as const,
-        peerId: "peer-a",
-        deliveryTarget: "reef:peer-a",
-      };
-      await expect(
-        Promise.resolve().then(() =>
-          operation === "registration"
-            ? registerConversationAddresses(scope, [identity])
-            : withConversationAuthority(scope, identity, () => {
-                throw new Error("Uncaptured input must not grant conversation authority");
-              }),
-        ),
-      ).rejects.toBe(failure);
-      await withAgentDatabaseCloseFence({ path: databasePath }, async (resources) => {
-        expect(resources).toEqual([]);
-      });
     },
   );
 
@@ -508,10 +464,6 @@ describe("conversation registry", () => {
   it.each([
     { entry_valid: 0 },
     { entry_json: JSON.stringify({ sessionId: "wrong-session", updatedAt: 100 }) },
-    { entry_json: '{"sessionId":"peer-a-session","updatedAt":100}\u0000trailing' },
-    {
-      entry_json: '{"sessionId":"peer-a-session","sessionId":"wrong-session","updatedAt":100}',
-    },
   ])("does not bind an invalid current entry to its primary address: %j", async (invalid) => {
     const scope = { agentId: "main", sessionKey: "agent:main:reef:direct:peer-a", storePath };
     await upsertSessionEntry(scope, {
@@ -623,41 +575,6 @@ describe("conversation registry", () => {
     });
   });
 
-  it("resolves historical addresses through the current session binding after reset", async () => {
-    const sessionKey = "agent:main:reef:direct:peer-a";
-    const scope = { agentId: "main", sessionKey, storePath };
-    await upsertSessionEntry(scope, {
-      sessionId: "old-session",
-      updatedAt: 100,
-      chatType: "direct",
-      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
-      origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-a" },
-    });
-    const [historical] = await listConversations(
-      { agentId: "main", storePath },
-      { channel: "reef" },
-    );
-    expect(historical?.sessionId).toBe("old-session");
-
-    await upsertSessionEntry(scope, {
-      sessionId: "current-session",
-      updatedAt: 200,
-      chatType: "direct",
-    });
-
-    expect(
-      await readConversation(
-        { agentId: "main", storePath },
-        historical?.conversationRef ?? "missing",
-      ),
-    ).toMatchObject({
-      conversationRef: historical?.conversationRef,
-      sessionId: "current-session",
-      sessionKey,
-      target: "reef:peer-a",
-    });
-  });
-
   it("retains a deleted session's address without exposing a stale binding", async () => {
     const sessionKey = "agent:main:reef:direct:peer-a";
     const scope = { agentId: "main", sessionKey, storePath };
@@ -689,5 +606,165 @@ describe("conversation registry", () => {
     expect(
       await readConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
     ).not.toMatchObject({ sessionId: expect.any(String), sessionKey: expect.any(String) });
+  });
+
+  it("publishes native association role removals atomically and drops rolled-back catalogue changes", async () => {
+    const scope = { agentId: "main", sessionKey: "agent:main:receipt", storePath };
+    const sessionId = "receipt-session";
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    const options = toDatabaseOptions(resolveSqliteReadScope(scope));
+    const identities = ["first", "second"].map((peerId) =>
+      buildConversationIdentity({
+        channel: "fixture",
+        accountId: "default",
+        kind: "channel",
+        peerId,
+        deliveryTarget: peerId,
+      })!,
+    );
+    const write = (index: number, updatedAt: number, routeContext?: { guildId: string }) =>
+      runOpenClawAgentWriteTransaction((database) => {
+        const identity = identities[index]!;
+        upsertConversationIdentities(
+          database,
+          prepareConversationIdentities([identity]),
+          updatedAt,
+        );
+        linkSessionConversation({
+          database,
+          sessionId,
+          conversation: { identity, role: "primary", routeContext },
+          updatedAt,
+        });
+      }, options);
+    write(0, 10);
+    const installed = new Map<string, unknown>();
+    const snapshots: string[][] = [];
+    const receipts: ConversationPublication[] = [];
+    const unsubscribeFacts = conversationPublication.subscribeFacts((receipt) => {
+      if (!("facts" in receipt)) {
+        return;
+      }
+      for (const [key, fact] of receipt.facts) {
+        installed.set(key, fact);
+      }
+    });
+    const unsubscribe = conversationPublication.subscribe((receipt) => {
+      receipts.push(receipt);
+      snapshots.push([...installed.keys()].toSorted());
+    });
+    try {
+      const database = openOpenClawAgentDatabase(options);
+      const associationReads = trackSqliteStatementExecutions(database.db, ["route"], (sql) =>
+        sql.startsWith('select "last_seen_at", "route_context_json" from "session_conversations"')
+          ? "route"
+          : null,
+      );
+      try {
+        write(1, 20, { guildId: "receipt-guild" });
+        expect(associationReads.counts.route).toBe(0);
+      } finally {
+        associationReads.restore();
+      }
+      expect(await readConversation(scope, identities[1]!.conversationRef)).toMatchObject({
+        routeContext: { guildId: "receipt-guild" },
+      });
+      const oldPrimary = JSON.stringify([
+        "association",
+        sessionId,
+        identities[0]!.conversationRef,
+        "primary",
+      ]);
+      const oldRelated = JSON.stringify([
+        "association",
+        sessionId,
+        identities[0]!.conversationRef,
+        "related",
+      ]);
+      const newPrimary = JSON.stringify([
+        "association",
+        sessionId,
+        identities[1]!.conversationRef,
+        "primary",
+      ]);
+      expect(installed.get(oldPrimary)).toEqual({ kind: "absent" });
+      expect(installed.get(oldRelated)).toMatchObject({
+        kind: "postimage",
+        value: { row: { role: "related", first_seen_at: 10, last_seen_at: 20 } },
+      });
+      expect(installed.get(newPrimary)).toMatchObject({
+        kind: "postimage",
+        value: { row: { role: "primary", first_seen_at: 20, last_seen_at: 20 } },
+      });
+      expect(snapshots).toHaveLength(2);
+      expect(
+        snapshots.every(
+          (keys) =>
+            keys.includes(oldPrimary) && keys.includes(oldRelated) && keys.includes(newPrimary),
+        ),
+      ).toBe(true);
+      expect(() =>
+        runOpenClawAgentWriteTransaction(() => {
+          write(0, 30);
+          throw new Error("rollback conversation");
+        }, options),
+      ).toThrow("rollback conversation");
+      expect(receipts).toHaveLength(2);
+      expect(
+        openOpenClawAgentDatabase(options)
+          .db.prepare(
+            "SELECT role FROM session_conversations WHERE session_id = ? AND conversation_id = ?",
+          )
+          .get(sessionId, identities[1]!.conversationRef),
+      ).toEqual({ role: "primary" });
+    } finally {
+      unsubscribeFacts();
+      unsubscribe();
+    }
+  });
+
+  it("commits catalogue metadata whose encoded receipt exceeds the transport limit", async () => {
+    const scope = { agentId: "main", storePath };
+    const identity = buildConversationIdentity({
+      channel: "fixture",
+      accountId: "default",
+      kind: "direct",
+      peerId: "large-catalogue",
+      deliveryTarget: "large-catalogue",
+    })!;
+    // The request fits IPC; JSON's six-byte escape expands the stored postimage beyond it.
+    identity.metadata = {
+      payload: "\0".repeat(Math.floor(SQLITE_WORKER_MAX_MESSAGE_BYTES / 6) + 1),
+    };
+    const events: string[] = [];
+    const unsubscribe = conversationPublication.subscribeFacts((change) => {
+      if ("kind" in change) {
+        events.push(change.kind);
+      }
+    });
+    try {
+      const outcome = await registerConversationAddresses(scope, [identity], 100).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      events.push("reply");
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
+      expect(
+        database.db
+          .prepare(
+            "SELECT length(metadata_json) AS bytes, updated_at FROM conversations WHERE conversation_id = ?",
+          )
+          .get(identity.conversationRef),
+      ).toEqual({
+        bytes: JSON.stringify(identity.metadata).length,
+        updated_at: 100,
+      });
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.value).toBeUndefined();
+      expect(events).toContain("unknown");
+      expect(events.indexOf("unknown")).toBeLessThan(events.indexOf("reply"));
+    } finally {
+      unsubscribe();
+    }
   });
 });

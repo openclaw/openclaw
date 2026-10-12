@@ -8,7 +8,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
+import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   iterateUnindexedActiveTranscriptNavigation,
   iterateUnindexedTranscriptNavigation,
@@ -35,6 +35,7 @@ import {
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
 } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 type VisibleMessagePositions = {
   boundaryActivePosition?: number;
@@ -100,7 +101,7 @@ export function readUnindexedHistoryControls(
       : snapshot.rows.filter((row) => row.event_seq <= coveredThrough);
   }
   const key = `${projection.database.path}\0${projection.resolved.sessionId}\0unindexed-controls`;
-  const cacheable = !hasSqlitePostCommitScope(projection.database.db);
+  const cacheable = !hasUncommittedSqliteWrites(projection.database.db);
   const cached = cacheable ? resetMessageWindowCache.get(key) : undefined;
   const reusable =
     cached?.database === projection.database.db &&
@@ -398,7 +399,7 @@ export function resolveTranscriptBoundaryWindow(
   beforeRawSeq?: number,
 ): ResetMessageWindow | null {
   // Current-turn bounds and uncommitted writes need their own window.
-  if (beforeRawSeq !== undefined || hasSqlitePostCommitScope(projection.database.db)) {
+  if (beforeRawSeq !== undefined || hasUncommittedSqliteWrites(projection.database.db)) {
     return findLatestResetMessageWindow(projection, scope, beforeRawSeq);
   }
   const key = `${projection.database.path}\0${projection.resolved.sessionId}\0${scope}`;
@@ -612,26 +613,20 @@ export function hasOversizedVisibleMessages(
   maxBytes: number,
   roles: readonly string[],
 ): boolean {
-  return selectVisibleMessageRanges(projection, start, endExclusive).some(
-    (range) =>
-      executeSqliteQueryTakeFirstSync(
-        projection.database.db,
-        selectMessageRows(projection.database, projection.resolved.sessionId, range)
-          .select("active.event_seq")
-          .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
-          .where((eb) =>
-            eb(
-              eb.fn<string>("json_extract", [
-                transcriptEventNavigationSql("event"),
-                eb.val("$.message.role"),
-              ]),
-              "in",
-              roles,
-            ),
-          )
-          .limit(1),
-      ) !== undefined,
-  );
+  return selectVisibleMessageRanges(projection, start, endExclusive).some((range) => {
+    const row = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      selectMessageRows(projection.database, projection.resolved.sessionId, range)
+        .select(["active.event_seq", "event.navigation_valid"])
+        .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
+        .where((eb) =>
+          eb.or([eb("event.message_role", "in", roles), eb("event.navigation_valid", "=", 0)]),
+        )
+        .limit(1),
+    );
+    assertTranscriptNavigationValid(row?.navigation_valid);
+    return row !== undefined;
+  });
 }
 
 /** Byte-bounded tails can stop sizing at their first excluded predecessor. */

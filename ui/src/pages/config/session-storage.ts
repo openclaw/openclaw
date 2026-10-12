@@ -39,6 +39,10 @@ function storageSize(bytes: number) {
   });
 }
 
+function externalizedTranscripts(count: number): string {
+  return count > 0 ? t("configView.sessionStorage.externalized", { count: String(count) }) : "";
+}
+
 class SessionStorageSettings extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true }) private context!: ApplicationContext;
   @property({ type: Boolean }) mutationDisabled = false;
@@ -161,11 +165,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
             t("configView.sessionStorage.runCompleted", {
               count: String(status.maintenance.archivedTranscripts),
             }),
-            status.maintenance.externalizedTranscripts > 0
-              ? t("configView.sessionStorage.externalized", {
-                  count: String(status.maintenance.externalizedTranscripts),
-                })
-              : "",
+            externalizedTranscripts(status.maintenance.externalizedTranscripts),
           ]
             .filter(Boolean)
             .join(" ");
@@ -289,12 +289,7 @@ class SessionStorageSettings extends OpenClawLightDomElement {
       }),
       { transcripts: 0, cold: 0, database: 0, wal: 0, archives: 0, embedded: 0 },
     );
-    const externalized =
-      status.maintenance.externalizedTranscripts > 0
-        ? t("configView.sessionStorage.externalized", {
-            count: String(status.maintenance.externalizedTranscripts),
-          })
-        : "";
+    const externalized = externalizedTranscripts(status.maintenance.externalizedTranscripts);
     return html`
       ${renderSettingsRow({
         title: t("configView.sessionStorage.transcripts"),

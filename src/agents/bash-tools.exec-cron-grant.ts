@@ -1,5 +1,3 @@
-import { CronReceiptAuthorityRefusal } from "../cron/store/receipt-authority-error.js";
-import type { CronReceiptAuthorityUse } from "../cron/store/receipt-authority-owner.js";
 import { buildCronExecOperationBinding } from "../gateway/operator-approval-standing-grants.js";
 import type {
   ConsumeCronStandingGrantResult,
@@ -10,10 +8,10 @@ import {
   validateCronStandingGrant,
 } from "../gateway/operator-approval-store.js";
 import { lookupCronRunExecSource, type CronRunExecSource } from "../infra/cron-run-exec-source.js";
-import { prepareCronExecHostPolicyUse } from "../infra/exec-approvals-store.js";
+import { prepareCronExecHostPolicyUse } from "../infra/exec-approvals-cron-policy.js";
 import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gateway.types.js";
 
-/** Consumption accounts once; the receipt owner retains authority through native initiation. */
+/** Consumption accounts once; live run and host-policy checks gate native initiation. */
 export async function prepareCronStandingGrantConsumption(
   params: Pick<
     ProcessGatewayAllowlistParams,
@@ -46,7 +44,7 @@ export async function prepareCronStandingGrantConsumption(
   });
   const assertOccurrence = () => {
     if (lookupCronRunExecSource(runId) !== source) {
-      throw new CronReceiptAuthorityRefusal("retired");
+      throw new Error("Cron run is no longer active");
     }
     authority.assertCurrent();
     policy.assertCurrent();
@@ -74,20 +72,24 @@ export async function prepareCronStandingGrantConsumption(
   };
   let consumed: CronStandingGrantRecord | undefined;
   let terminal = false;
-  let use: CronReceiptAuthorityUse | undefined;
+  let ready = false;
+  let launchSignal: AbortSignal | undefined;
   const releaseSpawn = (reason?: "retry") => {
-    use?.release();
-    use = undefined;
+    ready = false;
     if (reason !== "retry") {
       terminal = true;
       policy.release();
     }
   };
   const assertCurrent = () => {
-    if (terminal || !use) {
-      throw new Error("Cron standing-grant launch interval is no longer active");
+    if (terminal || !ready) {
+      throw new Error("Cron standing-grant launch is no longer active");
     }
-    use.assertCurrent();
+    assertOccurrence();
+    launchSignal?.throwIfAborted();
+    if (consumed?.expiresAtMs != null && consumed.expiresAtMs <= Date.now()) {
+      throw new Error("Cron standing grant expired before launch");
+    }
   };
   return {
     assertCurrent,
@@ -95,7 +97,8 @@ export async function prepareCronStandingGrantConsumption(
     initiateSpawn<T>(this: void, launch: () => T, settlement?: Promise<unknown>): T {
       assertCurrent();
       try {
-        return use!.initiate(() => policy.initiate(launch, settlement), settlement);
+        // Revocation can race a checked launch; committed uses are never replayed.
+        return policy.initiate(launch, settlement);
       } finally {
         releaseSpawn();
       }
@@ -105,6 +108,7 @@ export async function prepareCronStandingGrantConsumption(
         throw new Error("Cron standing-grant launch cannot be replayed");
       }
       releaseSpawn("retry");
+      launchSignal = signal;
       try {
         const assertAttempt = () => {
           assertOccurrence();
@@ -117,16 +121,13 @@ export async function prepareCronStandingGrantConsumption(
           context,
           { ...lookup, expectedGrant, recordUse: consumed === undefined },
           assertAttempt,
-          async (run) => {
-            use = await authority.acquireUse(assertAttempt, signal);
-            return use.mutate(run);
-          },
         );
         if (result.outcome !== "consumed") {
           releaseSpawn();
           return result;
         }
         consumed = result.grant;
+        ready = true;
         assertCurrent();
         return result;
       } catch (error) {

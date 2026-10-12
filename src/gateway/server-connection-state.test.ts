@@ -197,12 +197,9 @@ describe("gateway connection state", () => {
                 scope,
               );
             }
-            const frames = peer.send.mock.calls.map(([frame]): unknown => {
-              if (typeof frame !== "string") {
-                throw new Error("expected a serialized Gateway event");
-              }
-              return JSON.parse(frame);
-            });
+            const frames = peer.send.mock.calls.map(([frame]): unknown =>
+              JSON.parse(String(frame)),
+            );
             expect.soft(frames, stage).toEqual(
               visibleKeys.flatMap((sessionKey) => [
                 expect.objectContaining({
@@ -603,7 +600,6 @@ describe("gateway connection state", () => {
               ]);
               expect(peer.send).toHaveBeenCalledOnce();
               const frame = peer.send.mock.calls[0]?.[0];
-              expect(typeof frame).toBe("string");
               expect(JSON.parse(String(frame))).toMatchObject({
                 event: "presence",
                 payload: { presence: expected },

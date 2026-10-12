@@ -28,6 +28,7 @@ export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
   "user_profile_identities",
+  "user_background_images",
   "local_workspace_projections",
   "update_runs",
   "session_repository_workspaces",
@@ -43,6 +44,7 @@ export const FIRST_USE_STATE_TABLES = [
   "execution_identity_contexts",
   "mcp_oauth_pending_authorizations",
   "node_worker_launch_containers",
+  "node_worker_launch_boots",
   "node_worker_launch_cleanup",
   "node_worker_launch_process_scopes",
   "node_worker_launches",

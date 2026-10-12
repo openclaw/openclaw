@@ -99,6 +99,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | Metric                                                    | Type      | Labels                                                                                    |
 | --------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | `openclaw_gateway_build_info`                             | gauge     | `process_instance_id`, optional `build_id`                                                |
+| `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
 | `openclaw_gc_duration_seconds`                            | histogram | none                                                                                      |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
@@ -108,7 +109,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_handler_seconds`                    | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_admission_seconds`                  | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`                 | histogram | `method`                                                                                  |
-| `openclaw_chat_send_phase_seconds`                        | histogram | `phase`, `stage` (`request` or `startup`)                                                 |
+| `openclaw_chat_send_phase_seconds`                        | histogram | `phase`, `stage` (`request`, `startup`, `steer`, or `queued`)                             |
 | `openclaw_gateway_rpc_stage_seconds`                      | histogram | `method`, `phase`                                                                         |
 | `openclaw_gateway_rpc_stage_thread_cpu_seconds`           | histogram | `method`, `phase`                                                                         |
 | `openclaw_worktree_preparation_seconds`                   | histogram | `kind`, `template`, `outcome`, `phase`                                                    |
@@ -166,11 +167,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_payload_large_bytes`                            | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_memory_bytes`                                   | gauge     | `kind`                                                                                    |
 | `openclaw_heap_space_bytes`                               | gauge     | `space`, `stat`                                                                           |
-| `openclaw_worker_count`                                   | gauge     | none                                                                                      |
+| `openclaw_worker_count`                                   | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
 | `openclaw_worker_queue_wait_seconds`                      | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
-| `openclaw_worker_heap_sampled_count`                      | gauge     | none                                                                                      |
+| `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
 | `openclaw_worker_started_total`                           | counter   | `script`                                                                                  |
 | `openclaw_worker_retired_total`                           | counter   | `script`, `reason`                                                                        |
@@ -210,7 +211,7 @@ Catalog membership is checked at request receipt, so plugin registry replacement
 affects subsequent requests without a separate label cache.
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
-samples in the shared 2,048-sample cap. A duration histogram occupies one sample
+samples in the shared 2,048-sample cap. An RPC duration histogram occupies one sample
 but expands into 19 scrape series (buckets, sum, and count). The response-size
 and signed heap-delta histograms expand into 20 and 38 series respectively; see
 [RPC response size and heap changes](/gateway/diagnostics#rpc-response-size-and-heap-changes). Existing samples keep
@@ -219,6 +220,16 @@ and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
 coverage of every core method can fill the cap, so a zero value matters when
 interpreting totals or latency percentiles. Async diagnostic queue saturation can
 also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
+
+### HTTP cancellations
+
+`openclaw_gateway_http_cancelled_total` counts HTTP requests cancelled before
+completion, with `source="client"` for disconnected clients and
+`source="shutdown"` for Gateway shutdown. These expected cancellations do not
+produce unhandled-request error logs. The metric carries no request URLs, file
+paths, or client identifiers and follows the existing diagnostics enablement
+and asynchronous queue limits.
+Normal HTTP cancellations are not retained in the stability event buffer.
 
 ### Worktree preparation
 
@@ -440,11 +451,17 @@ most one outstanding request per Worker. Samples expire after 60 seconds and
 are removed when the Worker exits. Compare `openclaw_worker_heap_sampled_count`
 with `openclaw_worker_count`: startup, unavailable APIs, and stalled Workers can
 produce partial totals. No heap snapshot or extra sampling timer is created.
+Both count metrics also expose `script="..."` series: `openclaw_worker_count`
+counts all live Workers for that script, including those awaiting or missing a
+fresh sample, while `openclaw_worker_heap_sampled_count` counts its fresh samples.
+The original unlabeled series retain the aggregate totals. Select
+`{script!=""}` when summing script series to avoid counting the aggregate again.
 `openclaw_worker_heap_used_bytes{script="..."}` sums fresh heap samples for each
 Worker script. Labels use a fixed allowlist of runtime-entrypoint, pooled, and bundled plugin Worker basenames, normalized to
 `.js` in source and packaged runs; unknown, eval, and unwrapped third-party Workers
 use `other`. Full paths and eval source are never recorded. A script's series
-disappears when it has no live, fresh samples. Memory-pressure logs include the
+disappears when it has no live, fresh samples; its count series disappear when
+it has no live Workers. Memory-pressure logs include the
 same byte counts and Worker coverage counts, plus `workerHeaps`: the five largest
 individual fresh Worker heaps as `{script, heapUsed, heapTotal}` (bytes), using the same
 bounded script names.
@@ -599,6 +616,17 @@ increase(openclaw_gateway_event_loop_observed_seconds_total[5m])
 increase(openclaw_gc_duration_seconds_count[5m])
   - increase(openclaw_gc_duration_seconds_bucket{le="1"}[5m])
 ```
+
+Run, harness-run, model-call (including synthetic model turns), and message-dispatch
+duration histograms preserve the existing bounds through 600 seconds and add
+900, 1800, and 3600 seconds. Each label set expands into 22 scrape series.
+Other duration histograms keep their existing bounds.
+
+Percentiles remain bucket-based estimates; observations above one hour still
+fall only in `+Inf`. Upgrading cannot recover the distribution of historical
+overflow samples. During a rolling upgrade, avoid pooling instances with
+different bucket layouts, and use a query window containing only samples from
+the new layout when evaluating long-run percentiles.
 
 <Tip>
 Prefer `gen_ai_client_token_usage` for cross-provider dashboards: it follows the OpenTelemetry GenAI semantic conventions and is consistent with metrics from non-OpenClaw GenAI services.

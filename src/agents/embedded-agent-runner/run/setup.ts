@@ -8,6 +8,7 @@ import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-mod
 import type {
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
+  PluginHookBeforeModelResolveResult,
 } from "../../../plugins/types.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -86,7 +87,13 @@ export async function resolveHookModelSelection(params: {
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
-  const selection = { provider: params.provider, modelId: params.modelId };
+  const selection: { provider: string; modelId: string } & Pick<
+    PluginHookBeforeModelResolveResult,
+    "fallbacksOverride"
+  > = {
+    provider: params.provider,
+    modelId: params.modelId,
+  };
   if (params.modelSelectionLocked === true) {
     return selection;
   }
@@ -119,6 +126,9 @@ export async function resolveHookModelSelection(params: {
   if (modelResolveOverride?.modelOverride) {
     selection.modelId = modelResolveOverride.modelOverride;
     log.info(`[hooks] model overridden to ${selection.modelId}`);
+  }
+  if (modelResolveOverride?.fallbacksOverride !== undefined) {
+    selection.fallbacksOverride = modelResolveOverride.fallbacksOverride;
   }
 
   return selection;
@@ -154,6 +164,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
 }): {
   contextWindowInfo?: ContextWindowInfo;
   contextTokenBudget?: number;
+  contextTokensSource?: "resolved-v1";
   effectiveModel: ProviderRuntimeModel;
 } {
   if (params.nativeModelOwned) {
@@ -172,6 +183,9 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
     modelId: params.modelId,
     modelContextTokens: asFiniteNumber(params.runtimeModel.contextTokens),
     modelContextWindow: contextWindowProfile.contextTokens,
+    modelContextWindowSource: contextWindowProfile.contextWindow
+      ? undefined
+      : params.runtimeModel.contextWindowSource,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
   // resolveContextWindowInfo ranks the passed selection below both the
@@ -228,6 +242,14 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   return {
     contextWindowInfo,
     contextTokenBudget,
+    // Cold readers match only provider/model/harness, so removable caps and
+    // session-selectable windows cannot become persisted model facts.
+    contextTokensSource:
+      contextWindowInfo.source === "model" &&
+      contextWindowInfo.referenceTokens === undefined &&
+      !params.runtimeModel.contextWindows?.length
+        ? "resolved-v1"
+        : undefined,
     effectiveModel,
   };
 }

@@ -16,14 +16,8 @@ export function normalizeClawHubSha256Integrity(value: string): string | null {
     }
     return null;
   }
-  const prefixedHex = /^sha256:([A-Fa-f0-9]{64})$/.exec(trimmed);
-  if (prefixedHex?.[1]) {
-    return `sha256-${Buffer.from(prefixedHex[1], "hex").toString("base64")}`;
-  }
-  if (/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
-    return `sha256-${Buffer.from(trimmed, "hex").toString("base64")}`;
-  }
-  return null;
+  const hex = /^(?:sha256:)?([A-Fa-f0-9]{64})$/.exec(trimmed)?.[1];
+  return hex ? `sha256-${Buffer.from(hex, "hex").toString("base64")}` : null;
 }
 
 /** Normalizes ClawHub SHA-256 metadata into lowercase hex form. */

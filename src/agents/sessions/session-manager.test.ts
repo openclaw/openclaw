@@ -17,10 +17,10 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readTranscriptRawDelta,
-  replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";

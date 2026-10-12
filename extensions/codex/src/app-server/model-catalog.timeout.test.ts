@@ -3,12 +3,12 @@ import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
 
 const transport = vi.hoisted(() => ({ request: vi.fn(), release: vi.fn() }));
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   getLeasedSharedCodexAppServerClient: async () => ({ request: transport.request }),
   createIsolatedCodexAppServerClient: vi.fn(),
   captureSharedCodexAppServerCatalogLifetime: () => () => true,
   releaseLeasedSharedCodexAppServerClient: transport.release,
-  isCodexAppServerStartSelectionChangedError: () => false,
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
 }));
 
@@ -74,12 +74,16 @@ describe("Codex catalog refresh deadline", () => {
     await modelRequestStarted.promise;
     await vi.advanceTimersByTimeAsync(5_100);
     expect(await settled).toEqual({
-      value: [expect.objectContaining({ id: model.id, nativeRuntime: "codex" })],
+      value: {
+        entries: [expect.objectContaining({ id: model.id, nativeRuntime: "codex" })],
+        outcomes: [{ provider: "openai", status: "ready" }],
+      },
     });
     expect(owner.read({ ...params, provider: "openai", modelId: model.id }, pluginConfig)).toEqual({
       accountType: "chatgpt",
     });
     expect(transport.request.mock.calls.map(([method]) => method)).toEqual([
+      "account/read",
       "model/list",
       "account/read",
     ]);
@@ -110,7 +114,10 @@ describe("Codex catalog refresh deadline", () => {
     expect(
       owner.read({ ...params, provider: "openai", modelId: model.id }, configured),
     ).toBeUndefined();
-    expect(transport.request.mock.calls.map(([method]) => method)).toEqual(["model/list"]);
+    expect(transport.request.mock.calls.map(([method]) => method)).toEqual([
+      "account/read",
+      "model/list",
+    ]);
     expect(transport.release).toHaveBeenCalledOnce();
   });
 });

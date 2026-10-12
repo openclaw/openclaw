@@ -14,6 +14,7 @@ import {
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { definedFields } from "../record-fields.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -29,7 +30,6 @@ import type {
 } from "./persistence-types.js";
 import {
   blobToBase64,
-  definedFields,
   jsonValue,
   loadCardChildRows,
   numberValue,
@@ -58,9 +58,15 @@ type SyncStore<T> = {
 export type WorkboardSqliteKernel = {
   [K in keyof WorkboardPersistence]: SyncStore<WorkboardPersistence[K]>;
 } & {
-  dataVersion(this: void): number;
   close(this: void): void;
 };
+
+function keyedEntries<T>(rows: Iterable<Row>, read: (row: Row) => T) {
+  return Array.from(rows, (row) => ({
+    key: requiredString(row, "id"),
+    value: read(row),
+  }));
+}
 
 class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   constructor(private readonly db: DatabaseSync) {}
@@ -519,12 +525,9 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
   }
 
   entries(): Array<{ key: string; value: PersistedWorkboardBoard }> {
-    return Array.from(
+    return keyedEntries(
       iterateSqliteQuerySync(this.db, this.rowsQuery.orderBy("id", "asc")),
-      (row) => ({
-        key: requiredString(row, "id"),
-        value: readBoard(row),
-      }),
+      readBoard,
     );
   }
 }
@@ -611,12 +614,9 @@ class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptio
     if (options.cardId) {
       query = query.where("card_id", "=", options.cardId);
     }
-    return Array.from(
+    return keyedEntries(
       iterateSqliteQuerySync(this.db, query.orderBy("created_at", "asc").orderBy("id", "asc")),
-      (row) => ({
-        key: requiredString(row, "id"),
-        value: readSubscription(row),
-      }),
+      readSubscription,
     );
   }
 }
@@ -676,15 +676,12 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
 
   entries(): Array<{ key: string; value: PersistedWorkboardAttachment }> {
     // Decode each BLOB before advancing so the list never retains a second full raw payload copy.
-    return Array.from(
+    return keyedEntries(
       iterateSqliteQuerySync(
         this.db,
         this.rowsQuery.orderBy("a.created_at", "asc").orderBy("a.id", "asc"),
       ),
-      (row) => ({
-        key: requiredString(row, "id"),
-        value: readPersistedAttachment(row),
-      }),
+      readPersistedAttachment,
     );
   }
 }
@@ -701,10 +698,6 @@ export function createWorkboardSqliteKernel(
     sessionsBoard: new WorkboardSqliteSessionsBoardStore(db, boards),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
-    // This connection-local primitive changes only after another connection commits.
-    dataVersion: () =>
-      // SAFETY: PRAGMA data_version always returns one row on an open connection.
-      requiredNumber(db.prepare("PRAGMA data_version").get() as Row, "data_version"),
     close,
   };
 }

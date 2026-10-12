@@ -849,7 +849,6 @@ function mirrorLock(path: string, waitForAllocation = false) {
     if (released) {
       return;
     }
-    assertOwned();
     connection.exec("ROLLBACK");
     connection.close();
     released = true;
@@ -1080,7 +1079,6 @@ function claimIdleMirror(syncRoot: string, key: string, expectedId?: string) {
     return {
       release,
       removePayload() {
-        release.assertOwned();
         if (lstatSync(join(current.root, "recovery.lock"), { throwIfNoEntry: false })) {
           throw new Error(
             "Another or interrupted recovery owns this copy; its recovery lock must remain protected.",
@@ -1425,7 +1423,6 @@ export function createMirrorStaging(
       }
     };
     const ownedReceipt = () => {
-      unlock.assertOwned();
       const current = mirrorSlot(syncRoot, key);
       if (
         current.root !== root ||
@@ -2180,11 +2177,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", false);
         throw new Error("Durable recovery updates are unavailable; staging remains protected.");
       }
-      const installed = readReceipt(root);
-      if (receiptDigest(installed) !== createHash("sha256").update(bytes).digest("hex")) {
-        throw new Error("staging receipt changed while publishing recovery metadata");
-      }
-      receipt = installed;
+      receipt = readReceipt(root);
       currentSignature = receiptSignature(receipt);
     };
     if (confirmation && !options.dryRun) {
@@ -2273,8 +2266,6 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         });
       }
     }
-    const generations = recoveryMetadata(root, source, manifest.artifacts);
-    const footprint = validatePayload(root, receipt, manifest);
     const witness = await verifySourceWitness({
       source: manifest.source,
       witness: selectedWitness!,
@@ -2298,10 +2289,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
     options.signal?.throwIfAborted();
     // Both asynchronous readers have settled. Recheck all remaining bytes and
     // authority immediately before recording disposal and removing this payload.
-    assertCurrentReceipt();
-    if (validatePayload(root, receipt, manifest) !== footprint) {
-      throw new Error("staging changed during preservation verification");
-    }
+    validatePayload(root, receipt, manifest);
     if (manifest.artifacts) {
       verifyPreservedCrabboxArtifacts(
         source,
@@ -2310,12 +2298,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         receiptDeadline(receipt),
       );
     }
-    if (
-      JSON.stringify(recoveryMetadata(root, source, manifest.artifacts)) !==
-      JSON.stringify(generations)
-    ) {
-      throw new Error("staging metadata changed during preservation verification");
-    }
+    const generations = recoveryMetadata(root, source, manifest.artifacts);
     if (options.dryRun) {
       witness.revalidate();
       assertCurrentReceipt();

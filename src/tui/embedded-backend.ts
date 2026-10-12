@@ -82,8 +82,6 @@ import {
 } from "../gateway/session-row-projection.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
-import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
-import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
 import {
   getSessionDefaults,
   listAgentsForGateway,
@@ -108,7 +106,6 @@ import {
   setEmbeddedQuestionBroker,
 } from "../infra/embedded-question-broker.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { logInfo, logWarn } from "../logger.js";
 import {
   agentSessionKeysMatchByRequestKey,
   isIncognitoSessionKey,
@@ -135,9 +132,11 @@ import {
   type QueuedSessionRun,
 } from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
+import { embeddedSessionStartupMigrationLog, silentRuntime } from "./embedded-runtime.js";
 import {
   createEmbeddedSessionReader,
   readEmbeddedHistorySessionInfo,
+  readEmbeddedPrivateHistorySessionInfo,
 } from "./embedded-session-reader.js";
 import type {
   ChatSendOptions,
@@ -157,19 +156,6 @@ type LocalPendingMessage = {
   run: LocalRunState;
   messageIndex: number;
   message: string;
-};
-
-const silentRuntime = {
-  log: (..._args: unknown[]) => undefined,
-  error: (..._args: unknown[]) => undefined,
-  exit: (code: number): never => {
-    throw new Error(`embedded tui runtime exit ${String(code)}`);
-  },
-};
-
-const embeddedSessionStartupMigrationLog = {
-  info: (message: string) => logInfo(message, silentRuntime),
-  warn: (message: string) => logWarn(message, silentRuntime),
 };
 
 export class EmbeddedTuiBackend implements TuiBackend {
@@ -279,6 +265,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
         }
       }
     }
+    // Abort is a cancellation request, not settlement. Keep the runtime and
+    // session projection alive until every owned run finishes its cleanup.
+    await Promise.allSettled([...this.runs.values()].flatMap((run) => run.promise ?? []));
     this.unbindSessionProjection?.();
     this.unbindSessionProjection = undefined;
     const projection = this.sessionProjection;
@@ -305,6 +294,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
+    this.scheduler.signal.throwIfAborted();
     const runId = opts.runId ?? randomUUID();
     const sideCommand = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(opts.message.trim());
     const question = sideCommand?.[1]?.trim() || undefined;
@@ -340,6 +330,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         if (claimed) {
           return claimed;
         }
+        this.scheduler.signal.throwIfAborted();
       }
       let queueSettings = resolveQueueSettingsCore({
         cfg,
@@ -366,6 +357,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             return { runId: queuedAfter.runId };
           }
         }
+        this.scheduler.signal.throwIfAborted();
         queueSettings = { ...queueSettings, mode: "followup" };
       }
       if (queueSettings.mode === "interrupt") {
@@ -464,15 +456,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ...loadOptions,
       includeStoreChildEntries: true,
     });
-    const {
-      cfg,
-      agentId: sessionAgentId,
-      storePath,
-      store,
-      readSource,
-      entry,
-      canonicalKey,
-    } = selected;
+    const { cfg, agentId: sessionAgentId, storePath, readSource, entry, canonicalKey } = selected;
     const sessionId = entry?.sessionId;
     const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
       cfg,
@@ -550,25 +534,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       storePath: readSource?.path ?? storePath,
     };
     const privateEntry = entry && (entry.incognito || isIncognitoSessionKey(canonicalKey));
-    const [privateAcpMeta] = privateEntry
-      ? await readAcpSessionMetaForEntries({
-          cfg,
-          entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry }],
-        })
-      : [];
     const sessionInfo = privateEntry
-      ? buildGatewaySessionRow({
-          cfg,
-          storePath,
-          store,
-          key: canonicalKey,
-          entry,
-          preparedAcpMeta: privateAcpMeta ?? null,
-          agentId: sessionAgentId,
-          modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
-          lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
-        })
+      ? await readEmbeddedPrivateHistorySessionInfo(selected, entry)
       : entry && projection
         ? await readEmbeddedHistorySessionInfo(projection, target, {
             sessionId,
@@ -968,11 +935,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }): QueuedSessionRun | undefined {
     let queuedAfter: QueuedSessionRun | undefined;
     for (const [runId, run] of this.runs) {
-      if (this.isSameRunScope(run, params) && !run.question) {
-        const promise = run.promise;
-        if (promise) {
-          queuedAfter = { runId, run, promise };
-        }
+      if (this.isSameRunScope(run, params) && !run.question && run.promise) {
+        queuedAfter = { runId, run, promise: run.promise };
       }
     }
     return queuedAfter;

@@ -1,20 +1,22 @@
 /** Process-local registry for SecretRef owners isolated during cold startup. */
 import { formatCliCommand } from "../cli/command-format.js";
 import type { SecretRefSource } from "../config/types.secrets.js";
-import {
-  describeSecretResolutionError,
-  isSecretResolutionError,
-  type SecretResolutionFailureReason,
-} from "./resolve-errors.js";
+import { describeSecretResolutionError, isSecretResolutionError } from "./resolve-errors.js";
 
-export type SecretDegradationReason =
-  | SecretResolutionFailureReason
-  | "auth profile migration required"
-  | "secret provider is not configured"
-  | "resolved secret value was invalid"
-  | "secret reference is not allowed for this provider"
-  | "secret reference was not materialized by the active runtime"
-  | "secret resolution failed";
+const SECRET_DEGRADATION_REASONS = [
+  "auth profile migration required",
+  "secret provider failed",
+  "secret provider is not configured",
+  "secret provider policy denied resolution",
+  "secret provider response violated its contract",
+  "secret reference is not allowed for this provider",
+  "secret reference was not found",
+  "secret reference was not materialized by the active runtime",
+  "resolved secret value was invalid",
+  "resolved secret value is a redaction placeholder",
+  "secret resolution failed",
+] as const;
+export type SecretDegradationReason = (typeof SECRET_DEGRADATION_REASONS)[number];
 
 export type SecretOwnerKind =
   | "account"
@@ -117,22 +119,10 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
 
 /** Preserves known failure classes while dropping any embedded SecretRef identity. */
 export function redactSecretDegradationReason(reason: string): SecretDegradationReason {
-  switch (reason) {
-    case "auth profile migration required":
-    case "secret provider failed":
-    case "secret provider is not configured":
-    case "secret provider policy denied resolution":
-    case "secret provider response violated its contract":
-    case "secret reference is not allowed for this provider":
-    case "secret reference was not found":
-    case "secret reference was not materialized by the active runtime":
-    case "resolved secret value was invalid":
-    case "resolved secret value is a redaction placeholder":
-    case "secret resolution failed":
-      return reason;
-    default:
-      return "secret resolution failed";
-  }
+  return (
+    SECRET_DEGRADATION_REASONS.find((candidate) => candidate === reason) ??
+    "secret resolution failed"
+  );
 }
 
 const SECRET_SURFACE_UNAVAILABLE_ERROR_CODE = "SECRET_SURFACE_UNAVAILABLE";

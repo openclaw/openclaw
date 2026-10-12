@@ -9,6 +9,7 @@ import type {
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 import { getPluginRegistryState, getPluginRegistryVersion } from "./runtime-state.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
 export type {
   BundledProviderPolicySurface,
@@ -88,14 +89,18 @@ export function resolveDirectBundledProviderPolicySurface(
   }
   const registry = getPluginRegistryForContext();
   const version = getPluginRegistryVersion(registry);
-  // Registration and unpublished registries can still change their source owners.
+  // Private registries become immutable when their loader publishes its identity.
   const cacheable =
-    !getPluginRegistryState()?.registrationContext && (!registry || version !== undefined);
+    !getPluginRegistryState()?.registrationContext &&
+    (!registry ||
+      version !== undefined ||
+      getPluginRuntimeLoadContextState(registry)?.loaderCacheIdentity !== undefined);
   const metadata = getPluginCache().metadata;
   resolveBundledPluginsDir();
   const selection = metadata.bundledPluginsDir;
-  const cached = cacheable ? metadata.bundledProviderPolicySurfaces.get(pluginId) : undefined;
-  // Publication versions identify registries uniquely without retaining their runtime graphs.
+  const owner = registry ?? metadata;
+  let surfaces = metadata.bundledProviderPolicySurfaces.get(owner);
+  const cached = cacheable ? surfaces?.get(pluginId) : undefined;
   if (cached && cached.version === version && cached.selection === selection) {
     return cached.read();
   }
@@ -105,8 +110,12 @@ export function resolveDirectBundledProviderPolicySurface(
   });
   const surface = mod ? extractBundledProviderPolicySurface(mod) : null;
   if (cacheable) {
+    if (!surfaces) {
+      surfaces = new Map();
+      metadata.bundledProviderPolicySurfaces.set(owner, surfaces);
+    }
     const instance = mod ? getPluginValueInstance(mod) : undefined;
-    metadata.bundledProviderPolicySurfaces.set(pluginId, {
+    surfaces.set(pluginId, {
       version,
       selection,
       read: instance ? () => instance.run(() => surface) : () => surface,

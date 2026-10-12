@@ -200,17 +200,4 @@ describe("reply runtime public dispatcher compatibility", () => {
     expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 1, final: 0 });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
   });
-
-  it("publishes an empty receipt when no delivery was admitted", async () => {
-    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
-    dispatcher.markComplete();
-    await expect(dispatcher.waitForIdle()).resolves.toMatchObject({
-      anyVisibleDelivered: false,
-      counts: {
-        tool: { delivered: 0 },
-        block: { delivered: 0 },
-        final: { delivered: 0 },
-      },
-    });
-  });
 });

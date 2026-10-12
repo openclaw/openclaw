@@ -8,18 +8,15 @@ import {
   recomputeJobNextRunAtMs,
   resolveJobErrorBackoffUntilMs,
 } from "../service/jobs-scheduling.js";
-import { resolveCronNotificationQueueOwner } from "../service/notification-intents.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-runnable.js";
 import { findActiveCronRunReceiptInDatabase } from "./run-receipt-store.js";
-import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
-import {
-  createCronMutationLogger,
-  prepareCronRuntimeMutation,
-  retainCronRuntimeMutationOutcome,
-} from "./runtime-mutation.worker.js";
+import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
-import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
+import type {
+  CronRuntimeMutationContracts,
+  CronRuntimeWorkerOperations,
+} from "./runtime-worker.types.js";
 
 export function planCronStartupInWorker(
   database: OpenClawStateDatabase,
@@ -33,17 +30,7 @@ export function planCronStartupInWorker(
         storeKey: input.storeKey,
         jobIds: new Set(input.jobIds),
         mutate({ jobs }) {
-          const preparation = prepareCronRuntimeMutation("cron.planStartup", input.nonce, {
-            jobIds: [...jobs.keys()],
-            notificationNeedsDefault: [...jobs.values()].some(
-              (job) =>
-                isJobEnabled(job) &&
-                !skipped.has(job.id) &&
-                !hasActiveCronRun(job, false) &&
-                (job.schedule.kind === "cron" || job.schedule.kind === "every") &&
-                !resolveCronNotificationQueueOwner(job, "auto-disabled").agentId,
-            ),
-          });
+          const policy = input.snapshot;
           const outcome: CronRuntimeMutationContracts["cron.planStartup"]["outcome"] = {
             jobs: [],
             missed: [],
@@ -53,20 +40,17 @@ export function planCronStartupInWorker(
           };
           const state: CronJobPolicyContext = {
             deps: {
-              nowMs: () => preparation.nowMs,
+              nowMs: () => policy.nowMs,
               log: createCronMutationLogger(outcome.logs),
             },
           };
-          const ownership = new Map(preparation.ownership.map((owner) => [owner.jobId, owner]));
+          const ownership = new Map(policy.ownership.map((owner) => [owner.jobId, owner]));
           for (const job of jobs.values()) {
             const owner = ownership.get(job.id);
-            if (!owner) {
-              throw new Error("Cron startup planning has no prepared process ownership");
-            }
             if (
               !isJobEnabled(job) ||
               skipped.has(job.id) ||
-              hasActiveCronRun(job, owner.active) ||
+              hasActiveCronRun(job, owner?.active ?? false) ||
               findActiveCronRunReceiptInDatabase({
                 database: db,
                 storePath: input.storeKey,
@@ -81,8 +65,8 @@ export function planCronStartupInWorker(
                 : undefined;
             if (
               backoffUntilMs !== undefined &&
-              preparation.nowMs < backoffUntilMs &&
-              hasMissedCronSlotSinceLastRun(job, preparation.nowMs) &&
+              policy.nowMs < backoffUntilMs &&
+              hasMissedCronSlotSinceLastRun(job, policy.nowMs) &&
               job.state.nextRunAtMs !== backoffUntilMs
             ) {
               job.state.nextRunAtMs = backoffUntilMs;
@@ -92,23 +76,23 @@ export function planCronStartupInWorker(
             if (
               !isRunnableJob({
                 job,
-                nowMs: preparation.nowMs,
+                nowMs: policy.nowMs,
                 skipAtIfAlreadyRan: true,
                 allowCronMissedRunByLastRun: true,
-                activeInProcess: owner.active,
+                activeInProcess: owner?.active ?? false,
               })
             ) {
               continue;
             }
             if (
-              preparation.skipMissedJobs &&
+              policy.skipMissedJobs &&
               (job.schedule.kind === "cron" || job.schedule.kind === "every")
             ) {
               if (
                 recomputeJobNextRunAtMs({
                   state,
                   job,
-                  nowMs: preparation.nowMs,
+                  nowMs: policy.nowMs,
                   deferredNotifications: outcome.notifications,
                 })
               ) {
@@ -120,12 +104,12 @@ export function planCronStartupInWorker(
             }
           }
           for (const notification of outcome.notifications) {
-            notification.routing = preparation.notificationRouting;
+            notification.routing = policy.notificationRouting;
           }
           return { upsertJobIds: outcome.jobs.map((job) => job.id), value: outcome };
         },
       });
-      return retainCronRuntimeMutationOutcome("cron.planStartup", db, input.nonce, committed.value);
+      return { outcome: committed.value };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.startup-schedules" },

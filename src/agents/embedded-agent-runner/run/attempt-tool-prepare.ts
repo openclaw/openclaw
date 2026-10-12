@@ -29,7 +29,7 @@ import {
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
 } from "../../local-model-lean.js";
-import { resolveModelAuthMode } from "../../model-auth.js";
+import { resolveModelAuthModeAsync } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
@@ -102,6 +102,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   });
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
+    trigger: attempt.trigger,
     agentId: params.setup.sessionAgentId,
     sessionKey: params.setup.sandboxSessionKey,
     forceMessageTool: forceDirectMessageTool,
@@ -328,9 +329,14 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         },
         modelCompat: extractModelCompat(attempt.model),
         delegationCapability: attempt.delegationCapability,
-        modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
-          workspaceDir: params.setup.effectiveWorkspace,
-        }),
+        modelAuthMode: await resolveModelAuthModeAsync(
+          attempt.model.provider,
+          attempt.config,
+          attempt.authProfileStore,
+          {
+            workspaceDir: params.setup.effectiveWorkspace,
+          },
+        ),
         includeCoreTools: toolConstructionPlan.includeCoreTools,
         includeToolSearchControls: toolSearchControlsEnabledForRun,
         toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,

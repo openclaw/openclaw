@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import {
   adoptPreparedLocation,
   cleanupSnapshotOperations,
@@ -239,6 +240,64 @@ function assertFilesRetained() {
   exitCleanup?.();
   expect(mocks.removed).toEqual([]);
 }
+
+it.each([
+  { capable: false, failure: "busy", succeeds: true },
+  { capable: true, failure: "busy", succeeds: false },
+  { capable: false, failure: "permission", succeeds: false },
+  { capable: false, failure: "read", succeeds: false },
+  { capable: false, failure: "native close", succeeds: false },
+] as const)(
+  "settles discovery with $failure cleanup (native close capable: $capable)",
+  async ({ capable, failure, succeeds }) => {
+    const runtime = vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
+      ...sqliteRuntime.getSqliteRuntimeCapabilities(),
+      explicitSqliteCloseReleasesNativeResources: capable,
+    });
+    const busy = Object.assign(new Error("private SQLite file is still open"), {
+      code: failure === "permission" ? "EACCES" : "EBUSY",
+    });
+    mocks.prepare.mockImplementation(async () =>
+      adoptPreparedLocation(`${mocks.directory}/database.sqlite`, mocks.directory, true),
+    );
+    mocks.removeAsync.mockRejectedValue(busy);
+    if (failure === "native close") {
+      mocks.close.mockRejectedValue(new Error("native close failed"));
+    }
+    try {
+      const result = await captureOutcome(
+        withOpenClawStateDatabaseReadSnapshot(
+          async () => {
+            await executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" });
+            if (failure === "read") {
+              throw new Error("discovery read failed");
+            }
+            return "discovered";
+          },
+          { path: mocks.source },
+        ),
+      );
+      expect(mocks.removed).toEqual([]);
+      mocks.close.mockResolvedValue();
+      mocks.removeAsync.mockImplementation(async (file) => {
+        mocks.removed.push(file);
+      });
+      for (const resource of mocks.resources) {
+        await resource.close();
+      }
+      await cleanupSnapshotOperations();
+      expect(mocks.removed).toEqual([mocks.directory]);
+      expect(mocks.read).toHaveBeenCalledOnce();
+      if (succeeds) {
+        expect(result).toEqual({ value: "discovered" });
+      } else {
+        expect(result).toHaveProperty("error");
+      }
+    } finally {
+      runtime.mockRestore();
+    }
+  },
+);
 
 it.each(["direct", "snapshot"] as const)(
   "joins a pending %s preparation handoff before removing its directory",

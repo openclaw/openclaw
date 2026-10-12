@@ -77,12 +77,10 @@ export async function fetchProxiedIconBlobUrl(
 export function fetchPluginIconBlobUrl(
   params: FetchProxiedIconParams & { pluginId: string },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "pluginIcon",
-    params.resourceBasePath,
-    params.pluginId,
+  return fetchProxiedIconBlobUrl(
+    params,
+    buildControlUiResourcePath("pluginIcon", params.resourceBasePath, params.pluginId),
   );
-  return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 
 export function fetchPluginActivityIconBlobUrl(
@@ -100,23 +98,19 @@ export function fetchPluginActivityIconBlobUrl(
 export function fetchCatalogIconBlobUrl(
   params: FetchProxiedIconParams & { iconUrl: string },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "catalogIcon",
-    params.resourceBasePath,
-    params.iconUrl,
+  return fetchProxiedIconBlobUrl(
+    params,
+    buildControlUiResourcePath("catalogIcon", params.resourceBasePath, params.iconUrl),
   );
-  return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 
 export function fetchLinkFaviconBlobUrl(
   params: FetchProxiedIconParams & { hostname: string },
 ): Promise<string | null> {
-  const routeUrl = buildControlUiResourcePath(
-    "linkFavicon",
-    params.resourceBasePath,
-    params.hostname,
+  return fetchProxiedIconBlobUrl(
+    params,
+    buildControlUiResourcePath("linkFavicon", params.resourceBasePath, params.hostname),
   );
-  return fetchProxiedIconBlobUrl(params, routeUrl);
 }
 
 export type PluginThemeArtworkFetchParams = { url: string } & Partial<FetchProxiedIconParams>;

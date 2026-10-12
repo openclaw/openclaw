@@ -91,13 +91,13 @@ function initSelfPresence() {
   setPresence(SELF_KEY, selfEntry);
 }
 
-function touchSelfPresence() {
-  const existing = entries.get(SELF_KEY)?.presence;
-  if (existing) {
-    setPresence(SELF_KEY, { ...existing, ts: Date.now() });
-  } else {
-    initSelfPresence();
+function touchStoredPresence(key: string | symbol): boolean {
+  const existing = entries.get(key)?.presence;
+  if (!existing) {
+    return false;
   }
+  setPresence(key, { ...existing, ts: Date.now() });
+  return true;
 }
 
 initSelfPresence();
@@ -243,16 +243,13 @@ export function touchPresence(key: string): boolean {
   if (!normalizedKey) {
     return false;
   }
-  const existing = entries.get(normalizedKey)?.presence;
-  if (!existing) {
-    return false;
-  }
-  setPresence(normalizedKey, { ...existing, ts: Date.now() });
-  return true;
+  return touchStoredPresence(normalizedKey);
 }
 
 export function listSystemPresence(options?: { includeConnectionId?: string }): SystemPresence[] {
-  touchSelfPresence();
+  if (!touchStoredPresence(SELF_KEY)) {
+    initSelfPresence();
+  }
   const now = freshnessNow();
   for (const [key, entry] of entries) {
     if (key !== SELF_KEY && now - entry.freshness > TTL_MS) {

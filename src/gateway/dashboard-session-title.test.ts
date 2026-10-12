@@ -17,7 +17,11 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: updateSessionEntry,
   loadSessionEntry,
 }));
-vi.mock("./session-transcript-title-reader.js", () => ({ readSessionTitleFieldsFromTranscript }));
+// mock-isolation: Title orchestration tests supply transcript reads without starting workers.
+vi.mock("./session-transcript-title-reader.js", () => ({
+  readSessionTitleFieldsFromTranscript,
+  readSessionTitleFieldsFromTranscriptAsync: readSessionTitleFieldsFromTranscript,
+}));
 
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -280,19 +284,24 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
   it("retries a historical session from the transcript's first user message", async () => {
     const entry = { ...baseEntry, systemSent: true };
-    readSessionTitleFieldsFromTranscript.mockReturnValue({
+    const transcript = createDeferredCore<{
+      firstUserMessage: string;
+      lastMessagePreview: string;
+    }>();
+    readSessionTitleFieldsFromTranscript.mockReturnValue(transcript.promise);
+    mockSessionUpdate(entry);
+
+    const naming = maybeGenerateDashboardSessionTitle({
+      ...titleParams(entry),
+      currentUserMessage: "Latest follow-up",
+      userMessage: "Latest follow-up",
+    });
+    expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+    transcript.resolve({
       firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Original release plan",
       lastMessagePreview: "Latest follow-up",
     });
-    mockSessionUpdate(entry);
-
-    await expect(
-      maybeGenerateDashboardSessionTitle({
-        ...titleParams(entry),
-        currentUserMessage: "Latest follow-up",
-        userMessage: "Latest follow-up",
-      }),
-    ).resolves.toBe(true);
+    await expect(naming).resolves.toBe(true);
 
     expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
       "Original release plan",
@@ -503,7 +512,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       const patch = await update({ ...baseEntry });
       writePrepared.resolve();
       await releaseWrite.promise;
-      options.assertCommitAllowed?.();
+      options.workerGuard?.source?.();
       loadSessionEntry.mockReturnValue({ ...baseEntry, ...patch });
       return loadSessionEntry();
     });
@@ -726,7 +735,7 @@ describe("worktree title source lifecycle", () => {
     mocks.load.mockReset().mockImplementation(() => ({ ...current }));
     mocks.patch.mockReset().mockImplementation(async (_scope, update, options) => {
       const patch = await update({ ...current });
-      options.assertCommitAllowed?.();
+      options.workerGuard?.source?.();
       if (patch) {
         current = { ...current, ...patch };
       }
@@ -768,7 +777,7 @@ describe("worktree title source lifecycle", () => {
         await Promise.resolve();
         writeContext = context.getStore();
         const before = source.asserted.length;
-        options.assertCommitAllowed?.();
+        options.workerGuard?.source?.();
         writeAssertions = source.asserted.slice(before);
         current = { ...current, ...patch };
         return { ...current };

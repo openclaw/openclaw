@@ -30,6 +30,14 @@ import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  deliveryQueueEntriesQuery,
+  inflateDeliveryQueueRow,
+} from "../../../../src/infra/delivery-queue-sqlite-bound.js";
+import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
+import { OUTBOUND_EXECUTABLE_QUEUE_NAMES } from "../../../../src/infra/outbound/delivery-queue-namespaces.js";
+import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
+import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 
@@ -717,7 +725,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       headers: inbound.providerHeaders,
       body: JSON.stringify(inbound.providerBody),
     });
-    expect(injected.ok).toBe(true);
+    expect(injected.ok, await injected.clone().text()).toBe(true);
     if (adapter.manifest.provider !== "slack") {
       throw new Error("expected Slack fixture");
     }
@@ -755,11 +763,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const remainingMessages = [...api.messages.values()].map((message) => message.text);
     expect(remainingMessages).toEqual([finalText]);
     const modelRequests = (await fs.readFile(requestLog, "utf8")).trim().split("\n").map(parseBody);
-    const toolResultCounts = modelRequests.map(
-      (request) =>
-        (Array.isArray(request.messages) ? request.messages : [])
-          .map(asRecord)
-          .filter((message) => message.role === "tool").length,
+    // The shared provider log also records requests outside Chat Completions.
+    const toolResultCounts = modelRequests.flatMap((request) =>
+      Array.isArray(request.messages)
+        ? [request.messages.map(asRecord).filter((message) => message.role === "tool").length]
+        : [],
     );
     expect(toolResultCounts).toEqual([0, 1, 2]);
     const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
@@ -1476,8 +1484,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
       body: JSON.stringify(inbound.providerBody),
     });
     expect(injected.ok, await injected.text()).toBe(true);
-    const { loadUnfinishedDeliveries } =
-      await import("../../../../src/infra/outbound/delivery-queue-storage.js");
     const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("isolated Gateway state directory missing");
@@ -1504,7 +1510,22 @@ describe("channel progress presentation through an isolated Gateway", () => {
               lastError: run.delivery.lastError,
             }
           : undefined;
-      const pendingRows = await loadUnfinishedDeliveries(stateDir);
+      // The child Gateway cannot invalidate this process's physical-database queue cache.
+      // Read committed rows directly, retaining the canonical filters and projection.
+      const pendingRows = withOpenClawStateDatabaseReadOnly(
+        (database) =>
+          executeSqliteQuerySync(
+            database.db,
+            deliveryQueueEntriesQuery(database, OUTBOUND_EXECUTABLE_QUEUE_NAMES, "unfinished")
+              .select("queue_name")
+              .orderBy("enqueued_at", "asc")
+              .orderBy("id", "asc"),
+          ).rows.flatMap((row) => {
+            const entry = inflateDeliveryQueueRow(row);
+            return entry ? [projectOutboundDelivery(row.queue_name, entry)] : [];
+          }),
+        { env: gateway.runtimeEnv },
+      );
       queueRows = pendingRows.map(({ id, channel, to, recoveryState, lastError }) => ({
         id,
         channel,

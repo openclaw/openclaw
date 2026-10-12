@@ -144,9 +144,10 @@ function ownsStream(item: ChatRenderItem, stream: LiveStream): item is StreamOwn
 }
 
 function sameStreamStructure(previous: LiveStream, next: LiveStream): boolean {
-  const fields = Reflect.ownKeys(previous).filter((field) => field !== "text");
+  const structural = (field: PropertyKey) => field !== "text" && field !== "thinking";
+  const fields = Reflect.ownKeys(previous).filter(structural);
   return (
-    fields.length === Reflect.ownKeys(next).filter((field) => field !== "text").length &&
+    fields.length === Reflect.ownKeys(next).filter(structural).length &&
     fields.every(
       (field) =>
         Object.hasOwn(next, field) &&
@@ -180,6 +181,7 @@ export function projectTranscriptChain(
     sessionKey: string;
     runWorking: boolean;
     searchActive: boolean;
+    bubbleMode?: boolean;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
@@ -189,6 +191,7 @@ export function projectTranscriptChain(
     options.sessionKey,
     options.runWorking,
     options.searchActive,
+    options.bubbleMode,
     session?.key,
     session?.lastRunId,
     session?.status,

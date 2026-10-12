@@ -1,7 +1,31 @@
-export type TabIconPreference = "default" | "agent" | `lobster:${string}`;
+export type AgentTabIconShape = "square" | "rounded" | "circle";
+export type TabIconPreference =
+  | "default"
+  | "agent"
+  | "agent:rounded"
+  | "agent:circle"
+  | `lobster:${string}`;
+
+export function agentTabIconShape(value: TabIconPreference | undefined): AgentTabIconShape | null {
+  if (value === "agent") {
+    return "square";
+  }
+  if (value === "agent:rounded") {
+    return "rounded";
+  }
+  if (value === "agent:circle") {
+    return "circle";
+  }
+  return null;
+}
 
 export function normalizeTabIconPreference(value: unknown): TabIconPreference | undefined {
-  if (value === "default" || value === "agent") {
+  if (
+    value === "default" ||
+    value === "agent" ||
+    value === "agent:rounded" ||
+    value === "agent:circle"
+  ) {
     return value;
   }
   // The browser owns the catalog and local unlocks; the profile stores only a

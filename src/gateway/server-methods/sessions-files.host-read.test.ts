@@ -40,6 +40,12 @@ vi.mock("../session-utils.js", async (original) => ({
   loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
+}));
+
 // mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
 vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
   withSessionTranscriptDeltaReader: ((scope, consume) =>

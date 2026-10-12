@@ -12,7 +12,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramApprovalCallback } from "./approval-callback-data.js";
 import {
@@ -31,7 +31,6 @@ import {
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
-  type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import { withResolvedTelegramForumFlag } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -49,7 +48,7 @@ import { buildInlineKeyboard } from "./send.js";
 
 export type TelegramCallbackMessageRuntime = Pick<
   TelegramMessagePipeline,
-  "buildFailedProcessingResult" | "processMessageWithReplyChain" | "resolveTelegramSessionState"
+  "processMessageWithReplyChain" | "resolveTelegramSessionState"
 >;
 
 export class TelegramRetryableCallbackError extends Error {
@@ -297,8 +296,6 @@ const MULTI_SELECT_PREFIX = "OC_MULTI|";
 const MULTI_SELECT_TOGGLE_PREFIX = `${MULTI_SELECT_PREFIX}toggle|`;
 const SELECT_PREFIX = "OC_SELECT|";
 const SELECTED_PREFIX = "✅ ";
-const TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS = [250, 1000, 2500] as const;
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
 type TelegramManagedSelectCallback =
   | { type: "multi-toggle"; value: string }
@@ -343,11 +340,6 @@ const isSelectedMultiButton = (button: TelegramCallbackButton): boolean =>
   /^✅\s*/.test(button.text);
 const isMultiToggleButton = (button: TelegramCallbackButton): boolean =>
   button.callback_data.startsWith(MULTI_SELECT_TOGGLE_PREFIX);
-const isReplySessionInitConflictError = (err: unknown): boolean =>
-  REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(String(err instanceof Error ? err.message : err));
-
-const isReplySessionInitConflictResult = (result: TelegramMessageProcessingResult): boolean =>
-  result.kind === "failed-retryable" && isReplySessionInitConflictError(result.error);
 
 export async function handleTelegramInteractiveCallback(params: {
   accountId: RegisterTelegramHandlerParams["accountId"];
@@ -385,7 +377,7 @@ export async function handleTelegramInteractiveCallback(params: {
     messageRuntime,
     authorizeCallback,
   } = params;
-  const { buildFailedProcessingResult, processMessageWithReplyChain } = messageRuntime;
+  const { processMessageWithReplyChain } = messageRuntime;
   const {
     clearCallbackButtons,
     editCallbackButtons,
@@ -408,48 +400,29 @@ export async function handleTelegramInteractiveCallback(params: {
         createTelegramSpooledReplayDeferredParticipant(`plugin-callback-submit:${callback.id}`) ??
         undefined)
       : undefined;
-    const settle = (result: TelegramMessageProcessingResult) => {
-      participant?.settle(result);
-      return result.kind;
-    };
-    const waitForRetry = (delayMs: number) => {
-      logVerbose(
-        `telegram plugin callback submitText hit active reply session; retrying in ${delayMs}ms`,
-      );
-      return sleepWithAbort(delayMs, participant?.abortSignal);
-    };
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const result = await processMessageWithReplyChain({
-          ctx: synthetic.ctx,
-          msg: synthetic.message,
-          allMedia: [],
-          storeAllowFrom,
-          options: {
-            spooledReplay: true,
-            isolateSpooledReplaySettlement: true,
-            forceWasMentioned: true,
-            messageIdOverride: callback.id,
-          },
-          spooledReplayAbortSignal: participant?.abortSignal,
-        });
-        if (result.kind === "completed" || result.kind === "skipped") {
-          settle(result);
-          return result.kind;
-        }
-        const retryDelayMs = TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS[attempt];
-        if (!isReplySessionInitConflictResult(result) || retryDelayMs === undefined) {
-          throw new TelegramRetryableCallbackError(result.error);
-        }
-        await waitForRetry(retryDelayMs);
-      } catch (err) {
-        const retryDelayMs = TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS[attempt];
-        if (!isReplySessionInitConflictError(err) || retryDelayMs === undefined) {
-          settle(buildFailedProcessingResult(err));
-          throw err;
-        }
-        await waitForRetry(retryDelayMs);
+    try {
+      const result = await processMessageWithReplyChain({
+        ctx: synthetic.ctx,
+        msg: synthetic.message,
+        allMedia: [],
+        storeAllowFrom,
+        options: {
+          spooledReplay: true,
+          isolateSpooledReplaySettlement: true,
+          forceWasMentioned: true,
+          messageIdOverride: callback.id,
+        },
+        spooledReplayAbortSignal: participant?.abortSignal,
+      });
+      if (result.kind === "completed" || result.kind === "skipped") {
+        participant?.settle(result);
+        return result.kind;
       }
+      // The core session initializer owns conflict retries for this inbound path.
+      throw new TelegramRetryableCallbackError(result.error);
+    } catch (err) {
+      participant?.settle({ kind: "failed-retryable", error: err });
+      throw err;
     }
   };
 

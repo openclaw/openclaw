@@ -204,7 +204,7 @@ export type PreparedMutationSharing = {
   selection?: GatewaySessionStoreSelection;
   target: SessionSharingTarget | null;
   storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
-  members: readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[];
+  members: readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[];
   isMember?: (identityId: string) => boolean;
   assertCurrent: () => void;
 };

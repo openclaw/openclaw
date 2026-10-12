@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -627,24 +628,18 @@ describe("typed Goal operation persistence", () => {
           clock.mockReturnValue(operation.issuedAtMs + 24 * 60 * 60 * 1000);
         }
       };
-      const create = workerAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            if (
-              request.stage === stage &&
-              isRecord(request.facts) &&
-              isRecord(request.facts.publication) &&
-              request.facts.publication.kind ===
-                (stage === "commit"
-                  ? "session-entry-patch-committed"
-                  : "session-entry-patch-transfer")
-            ) {
-              admitted = true;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, callback) => {
+        if (
+          request.stage === stage &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind ===
+            (stage === "commit" ? "session-entry-patch-committed" : "session-entry-patch-transfer")
+        ) {
+          admitted = true;
+        }
+        callback(request, grant);
+      });
       try {
         const mutation = mutateSessionGoal({
           ...scope(),

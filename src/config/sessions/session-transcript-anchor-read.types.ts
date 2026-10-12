@@ -2,22 +2,21 @@ import type { SessionTranscriptWatermark } from "./session-transcript-context-ve
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry } from "./types.js";
 
+export type SessionTranscriptAnchorEntry = Pick<
+  InternalSessionEntry,
+  "sessionId" | "lifecycleRevision" | "activeWriterRunId" | "cliHistoryBoundary" | "permissionMode"
+>;
+
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
   session?: { sessionId: string; lifecycleRevision?: string };
   header?: unknown;
   watermark?: SessionTranscriptWatermark;
   messagePresence?: boolean;
+  metadata?: { present: boolean; observedAt: number | null; updatedAt: number | null };
   contextValidated?: true;
   contextAuthority?: {
-    entry?: Pick<
-      InternalSessionEntry,
-      | "sessionId"
-      | "lifecycleRevision"
-      | "activeWriterRunId"
-      | "cliHistoryBoundary"
-      | "permissionMode"
-    >;
+    entry?: SessionTranscriptAnchorEntry;
     watermark: SessionTranscriptWatermark;
   };
   replayValidated?: "current" | "initial";

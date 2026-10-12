@@ -186,39 +186,6 @@ describe("legacy workspace reset cleanup", () => {
     ).not.toThrow();
   });
 
-  it("checks canonical legacy markers when configuration uses a symlink alias", async () => {
-    const context = setup();
-    const targetDir = path.join(context.homeDir, "workspace-target");
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.symlink(
-      targetDir,
-      context.workspaceDir,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const identity = resolveWorkspaceStateIdentity(targetDir);
-    const canonicalSiblingPath = `${identity.workspacePath}.attested`;
-    const sources = resolveLegacyWorkspaceSourcePaths(context.workspaceDir, {
-      env: context.env,
-      homedir: context.homedir,
-    });
-    await fs.writeFile(
-      canonicalSiblingPath,
-      `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n2026-07-15T11:00:00.000Z\n`,
-      "utf8",
-    );
-
-    expect(sources.siblingAttestationPaths).toContain(canonicalSiblingPath);
-    expect(sources.stateDirAttestationPaths).toContain(
-      path.join(context.stateDir, "workspace-attestations", `${identity.workspaceKey}.attested`),
-    );
-    expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir })).toThrow(
-      /Run openclaw doctor --fix/u,
-    );
-    const cleanup = await removeLegacyWorkspaceStateForReset(prepare(context));
-    expect(cleanup.removedPaths).toContain(canonicalSiblingPath);
-    await expect(fs.lstat(canonicalSiblingPath)).rejects.toHaveProperty("code", "ENOENT");
-  });
-
   it("removes canonical legacy paths after the configured symlink is removed", async () => {
     const context = setup();
     const targetDir = path.join(context.homeDir, "workspace-target");

@@ -9,7 +9,8 @@ import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/sessio
 import { resolveSessionTranscriptDatabasePath } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -64,12 +65,12 @@ it.each(["release", "replacement"] as const)(
           }
         },
       );
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
+      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
       const reading = createDeferred();
       const resume = createDeferred();
       let hold = false;
       let inventories = 0;
-      const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+      const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&
@@ -89,20 +90,7 @@ it.each(["release", "replacement"] as const)(
       });
       try {
         for (const updatedAt of [2, 3]) {
-          if (updatedAt === 2) {
-            replaceSessionEntrySync(scope, { sessionId: "reply-session", updatedAt });
-          } else {
-            const foreign = new DatabaseSync(loaded.capturedReadSource!.path);
-            try {
-              foreign
-                .prepare(
-                  "UPDATE session_nodes SET updated_at = ?, entry_json = json_set(entry_json, '$.updatedAt', ?) WHERE session_key = ?",
-                )
-                .run(updatedAt, updatedAt, scope.sessionKey);
-            } finally {
-              foreign.close();
-            }
-          }
+          replaceSessionEntrySync(scope, { sessionId: "reply-session", updatedAt });
           const host = observeHostDataSql();
           try {
             expect((await reader.readCurrentSession()).entry?.updatedAt).toBe(updatedAt);
@@ -121,6 +109,11 @@ it.each(["release", "replacement"] as const)(
           return;
         }
         hold = true;
+        sessionChanges.invalidate({
+          ...scope,
+          storePath: loaded.capturedReadSource!.path,
+          factsInvalidated: true,
+        });
         const pending = reader.readCurrentSession();
         void pending.catch(() => {});
         await awaitGateBeforeSettlement(
@@ -192,10 +185,10 @@ it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
                 );
                 return facts;
               });
-            const run = projectionLane.pool.run.bind(projectionLane.pool);
+            const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
             let entries = 0;
             const requests = vi
-              .spyOn(projectionLane.pool, "run")
+              .spyOn(targetDiscoveryLane.pool, "run")
               .mockImplementation(async (...args) => {
                 const reply = await run(...args);
                 if (

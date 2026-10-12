@@ -3,6 +3,7 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   openSqliteWorkerStore,
+  readSqliteDatabaseWriteTokenForPath,
   runSqliteWorkerStoreOperation,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -14,8 +15,8 @@ import type {
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
 
 type WorkboardSqliteStores = WorkboardPersistence & {
-  ready: Promise<number>;
-  dataVersion(this: void): Promise<number>;
+  ready: Promise<void>;
+  readWriteToken(this: void): string | undefined;
   close(this: void): Promise<void>;
   runWithWriteAuthority: WorkboardWriteAuthority;
 };
@@ -93,7 +94,7 @@ export function createWorkboardSqliteStores(options: {
       }
       throw error;
     });
-  const ready = opened.then((value) => value.dataVersion);
+  const ready = opened.then(() => undefined);
   void ready.catch(() => {});
   async function execute<K extends keyof WorkboardSqliteOperations>(
     type: K,
@@ -162,7 +163,7 @@ export function createWorkboardSqliteStores(options: {
       }
     },
     ready,
-    dataVersion: () => run(undefined, (connection) => execute("dataVersion", { connection })),
+    readWriteToken: () => readSqliteDatabaseWriteTokenForPath(databasePath),
     cards: {
       register: bindOperation((input) => execute("cards.register", input, true)),
       registerIfAbsent: bindOperation((input) => execute("cards.registerIfAbsent", input, true)),

@@ -1,11 +1,8 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
-import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-registry-listing.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
@@ -13,16 +10,22 @@ import { resolveStateDir } from "../state-dir.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
 import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
+import { loadSessionEntryByIdReadOnly } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteAgentId, resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type {
   SessionAccessScope,
   SessionEntryReadScope,
   SessionEntryReadOnlyWorkerScope,
+  SessionEntrySummary,
 } from "./session-accessor.types.js";
 import {
   captureCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import {
+  readSessionEntriesWithRetainedFacts,
+  readSessionEntryWithRetainedFacts,
+} from "./session-entry-read-facts.js";
 import {
   readAdmittedSessionEntry,
   withOrderedSessionEntriesInWorker,
@@ -40,9 +43,15 @@ import type {
   SessionEntryReadSourcePreparation,
   SessionEntryCohortReader,
 } from "./session-entry-read-runtime.types.js";
-import type { SessionEntryListWorkerInput } from "./session-entry-read.types.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
+import type {
+  SessionEntryListWorkerInput,
+  SessionEntryListWorkerResult,
+  SessionEntryReadWorkerResult,
+} from "./session-entry-read.types.js";
 import {
   captureIncognitoSessionBinding,
+  captureIncognitoSessionSource,
   withIncognitoSessionEntry,
   withIncognitoSessionEntrySummaries,
   type IncognitoSessionBinding,
@@ -51,15 +60,13 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sql
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
-  isSessionStoreReadCandidateCurrent,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
-import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
-  maintenanceLane,
   projectionLane,
+  targetDiscoveryLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -71,6 +78,7 @@ export type SessionEntryReadWorkerOwner = {
   incognito?: IncognitoSessionBinding;
   assertCurrent: () => void;
   scope?: SessionEntryReadOnlyWorkerScope;
+  source?: SessionEntryReadWorkerResult["source"];
   selectedStore?: Readonly<Pick<SessionStoreReadCandidate, "path" | "physicalPath">>;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   refreshBeforeDispatch?: (assertRetainedTarget: () => void) => Promise<void>;
@@ -86,7 +94,17 @@ export async function withSessionEntryReadOnlyInWorker<T>(
     owner: SessionEntryReadWorkerOwner,
   ) => Promise<T>,
   prepareSource?: SessionEntryReadSourcePreparation,
+  lane?: SessionHistoryWorkerLane,
 ): Promise<T> {
+  const source = captureIncognitoSessionSource(input);
+  if (source && "kind" in source) {
+    return withIncognitoSessionEntry(
+      source,
+      input.sessionKey,
+      assertCallerCurrent,
+      (entry, assertCurrent) => consume(ok(entry), { kind: "incognito", assertCurrent }),
+    );
+  }
   const { scope, agentId } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
   const binding = captureIncognitoSessionBinding(scope);
@@ -139,15 +157,22 @@ export async function withSessionEntryReadOnlyInWorker<T>(
         readConsistency: scope.readConsistency,
         projection: scope.projection,
       };
-      const read = await reader.readEntryResult({ scope: readScope, continuation });
+      const read = await readSessionEntryWithRetainedFacts(database, readScope, () =>
+        reader.readEntryResult({ scope: readScope, continuation }),
+      );
       owner.assertCurrent();
-      const value = await consumeRead(read, { ...owner, kind: "file", scope: readScope });
+      const value = await consumeRead(read, {
+        ...owner,
+        kind: "file",
+        scope: readScope,
+        source: read.source,
+      });
       owner.assertCurrent();
       return value;
     },
     {
       backing: true,
-      lane: projectionLane,
+      lane: lane ?? projectionLane,
       dataOnly: true,
       logical: { assertCurrent: assertCallerCurrent, onReadError },
       prepareSource,
@@ -160,16 +185,84 @@ export function readSessionEntryReadOnlyInWorker(
   input: SessionEntryReadScope,
   assertCallerCurrent: () => void = () => {},
   reader?: SessionEntryCohortReader,
+  lane?: SessionHistoryWorkerLane,
 ): Promise<SessionEntry | undefined> {
   if (reader) {
     return readAdmittedSessionEntry(reader, input, assertCallerCurrent);
   }
-  return withSessionEntryReadOnlyInWorker(input, assertCallerCurrent, async (read) => {
-    if (!read.ok) {
-      throw read.error;
-    }
-    return read.value;
-  });
+  return withSessionEntryReadOnlyInWorker(
+    input,
+    assertCallerCurrent,
+    async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return read.value;
+    },
+    undefined,
+    lane,
+  );
+}
+
+/** Resolve a current transcript identity in the selected store without loading its siblings. */
+export async function readSessionEntryByIdReadOnlyInWorker(
+  input: Omit<SessionEntryReadScope, "sessionKey"> & {
+    sessionId: string;
+    orderBy?: "updatedAt";
+  },
+): Promise<SessionEntrySummary | undefined> {
+  const sessionId = input.sessionId;
+  const ambient = input.storePath ? undefined : captureIncognitoSessionSource();
+  const source = captureIncognitoSessionSource(
+    ambient
+      ? { ...input, storePath: "kind" in ambient ? ambient.path : ambient.actor.path }
+      : input,
+  );
+  if (source && "kind" in source) {
+    return withIncognitoSessionEntry(
+      source,
+      "",
+      () => {},
+      async () => undefined,
+    );
+  }
+  if (source) {
+    const assertCurrent = () => {
+      source.admissionSignal?.throwIfAborted();
+      source.actor.assertReadable();
+    };
+    return source.actor.sessions.withSharedState(async () => {
+      const read = await source.actor.sessions.readById(
+        { assertCurrent },
+        { sessionId, orderBy: input.orderBy },
+        source.admissionSignal,
+      );
+      return read.selected;
+    });
+  }
+  const { scope, agentId } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
+  if (isNativeSessionEntryRead(scope, agentId)) {
+    return loadSessionEntryByIdReadOnly({ ...scope, sessionId, orderBy: input.orderBy });
+  }
+  const storePath =
+    scope.storePath || (agentId && resolveOpenClawAgentSqlitePath({ agentId, env: scope.env }));
+  if (!storePath) {
+    throw new Error("Cannot resolve SQLite session scope without an agent id");
+  }
+  return withSessionStoreReaderInWorker(
+    { ...scope, agentId, storePath },
+    async ({ reader, database, continuation, assertCurrent }) => {
+      const read = await reader.readExactEntries({
+        selection: { kind: "session-id", sessionId, orderBy: input.orderBy },
+        projection: "full",
+        env: database.env,
+        continuation,
+      });
+      assertCurrent();
+      return read.entries[0];
+    },
+    { backing: true, dataOnly: true },
+  );
 }
 
 /** Envelope timestamps are descriptive reads; missing stores remain absent. */
@@ -178,44 +271,62 @@ export async function readSessionUpdatedAtInWorker(input: SessionAccessScope) {
   return entry?.updatedAt;
 }
 
-/** Diagnostic identities name the default agent store, not a logical store locator. */
-export async function withSessionDiagnosticTextInWorker(
-  input: { agentId: string; sessionKey: string; sessionId: string },
-  assertCurrent: () => void,
-  consume: (text: string | undefined) => void,
-): Promise<void> {
-  const { scope, env } = captureSessionEntryReadScope(input);
-  const agentId = normalizeAgentId(input.agentId);
-  assertCurrent();
-  if (isIncognitoSessionKey(scope.sessionKey)) {
-    consume(undefined);
-    return;
-  }
-  const storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
-  const admission = resolveSessionTranscriptReadFence(input);
-  await withSessionHistoryWorkerDatabase(
-    { agentId, path: storePath, env },
-    async (owner) => {
-      assertCurrent();
-      const text = await owner.readDiagnosticText({
-        scope: {
-          ...scope,
-          agentId,
-          databaseAgentId: agentId,
-          storePath,
-          sessionId: input.sessionId,
-        },
-        admission,
-      });
-      owner.assertCurrent();
-      assertCurrent();
-      consume(text);
-    },
-    maintenanceLane,
-  );
-}
-
 export { readSessionEntryInWorker } from "./session-entry-read-writable.js";
+
+/** Retain one metadata inventory; the worker checks its native revision before reusing it. */
+export function createSessionEntryListReader(
+  input: Pick<SessionStoreWorkerReadScope, "agentId" | "storePath" | "env">,
+) {
+  const scope = { ...input, env: cloneEnvWithPlatformSemantics(input.env ?? process.env) };
+  let snapshot: SessionEntryListWorkerResult = { kind: "session-entry-list", entries: [] };
+  let pending:
+    | Promise<{
+        entries: SessionEntryListWorkerResult["entries"];
+        assertCurrent: () => void;
+      }>
+    | undefined;
+  return () => {
+    if (pending) {
+      return pending;
+    }
+    pending = withSessionStoreReaderInWorker(
+      scope,
+      async ({ reader, database, continuation, assertCurrent }) => {
+        const result = await reader.readEntries(
+          {
+            agentId: database.agentId,
+            storePath: database.path,
+            env: database.env,
+            projection: "list",
+            includeParticipants: false,
+            hydrateSkillPromptRefs: false,
+          },
+          continuation,
+          undefined,
+          snapshot.revision,
+        );
+        assertCurrent();
+        if (!result.unchanged) {
+          snapshot = result;
+        }
+        const source = result.source;
+        return {
+          entries: snapshot.entries,
+          // The worker lifetime ends on return. Retain only the physical source fence.
+          assertCurrent: () => {
+            if (source) {
+              assertCapturedSessionEntryReadSource(source);
+            }
+          },
+        };
+      },
+      { backing: true, dataOnly: true, capturePhysicalSource: true, lane: projectionLane },
+    ).finally(() => {
+      pending = undefined;
+    });
+    return pending;
+  };
+}
 
 /** Read descriptive summaries through the original store selection and reader lifetime. */
 export async function readSessionEntrySummariesInWorker(
@@ -248,7 +359,7 @@ export async function readSessionEntrySummariesInWorker(
     { ...input, env: scope.env, storePath: scope.storePath ?? input.storePath },
     async ({ reader, database, continuation, assertCurrent }) => {
       assertCurrent();
-      const entries = await reader.readEntries(
+      const { entries } = await reader.readEntries(
         {
           agentId: database.agentId,
           storePath: database.path,
@@ -286,15 +397,19 @@ export async function withSessionEntriesFromStoresInWorker<T>(
       snapshotFields: input.snapshotFields?.slice(),
       preparedSource: input.preparedSource && { ...input.preparedSource },
     };
-    return input.selection
-      ? { ...input, ...captured, selection: { ...input.selection } }
-      : { ...input, ...captured, sessionKeys: [...input.sessionKeys] };
+    if (!input.selection) {
+      return { ...input, ...captured, sessionKeys: [...input.sessionKeys] };
+    }
+    if (input.projection === "list") {
+      return { ...input, ...captured, selection: { ...input.selection } };
+    }
+    return { ...input, ...captured, selection: { ...input.selection } };
   });
   if (options?.ordered) {
     return withOrderedSessionEntriesInWorker(capturedInputs, consume, {
       readStore: (input, read) =>
         withSessionStoreReaderInWorker(input, read, {
-          lane: projectionLane,
+          lane: targetDiscoveryLane,
           prepareSource: options.prepareSource?.bind(
             options,
             originalInputs[capturedInputs.indexOf(input)]!,
@@ -325,28 +440,12 @@ export async function withSessionEntriesFromStoresInWorker<T>(
     for (const read of reads) {
       read.assertCurrent();
     }
-    let active = true;
-    try {
-      const result = consume(
-        reads.map((read) => ({
-          result: read.result,
-          database: read.database,
-          assertCurrent: () => {
-            if (!active) {
-              throw new Error("Session entry read consumer is no longer active");
-            }
-            read.assertCurrent();
-          },
-        })),
-      );
-      if (isPromiseLike(result)) {
-        void Promise.resolve(result).catch(() => {});
-        throw new Error("Session entry read consumers must remain synchronous");
-      }
-      return Promise.resolve(result);
-    } finally {
-      active = false;
+    const result = consume(reads);
+    if (isPromiseLike(result)) {
+      void Promise.resolve(result).catch(() => {});
+      throw new Error("Session entry read consumers must remain synchronous");
     }
+    return Promise.resolve(result);
   };
   return enter(0);
 }
@@ -376,7 +475,9 @@ export async function withSessionEntriesFromStoreInWorker<T>(
     input,
     async ({ reader, database, continuation, assertCurrent }) => {
       assertCurrent();
-      const result = await reader.readExactEntries({ ...request, env: database.env, continuation });
+      const result = await readSessionEntriesWithRetainedFacts(database, request, () =>
+        reader.readExactEntries({ ...request, env: database.env, continuation }),
+      );
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
@@ -454,18 +555,9 @@ export async function withSessionStoreReaderInWorker<T>(
     path: string;
     owner: NonNullable<ReturnType<typeof captureCanonicalSessionReaderContinuation>>;
   }> = [];
-  let sourceActive = true;
   const assertSourcesCurrent = () => {
-    if (!sourceActive) {
-      throw new Error("Session entry read source is no longer active");
-    }
     logical?.assertCurrent?.();
     if (logical || preparedSource) {
-      for (const candidate of candidates) {
-        if (!isSessionStoreReadCandidateCurrent(candidate)) {
-          throw new Error("Session store alias changed during discovery; retry the read.");
-        }
-      }
       for (const { owner } of continuations) {
         owner.assertCurrent();
       }
@@ -503,47 +595,29 @@ export async function withSessionStoreReaderInWorker<T>(
             prepareSource || capturePhysicalSource
               ? readDatabasePathIdentitySync(database.path)
               : undefined;
-          let active = true;
           const assertCapturedCurrent = () => {
             assertSourcesCurrent();
             reader.assertCurrent();
             continuation?.assertCurrent();
             route.assertCurrent();
-            if (sourceIdentity?.key.startsWith("file:")) {
-              assertExistingDatabaseIdentity(
-                database.path,
-                sourceIdentity.key,
-                sourceIdentity.birthtime,
-              );
-            }
           };
-          if (dataOnly) {
+          if (dataOnly && (logical?.assertCurrent || preparedSource)) {
             assertFinalCurrent = assertCapturedCurrent;
           }
-          const assertCurrent = () => {
-            if (!active) {
-              throw new Error("Session entry read consumer is no longer active");
-            }
-            assertCapturedCurrent();
-          };
-          try {
-            assertCurrent();
-            const preparedDatabase = { ...database, env: { ...env } };
-            if (sourceIdentity) {
-              prepareSource?.(preparedDatabase, sourceIdentity);
-            }
-            return await read({
-              ...route,
-              reader,
-              database: preparedDatabase,
-              logicalAgentId,
-              selectedStore: Object.freeze({ path: sourcePath, physicalPath: database.path }),
-              continuation: continuation?.receipt,
-              assertCurrent,
-            });
-          } finally {
-            active = false;
+          assertCapturedCurrent();
+          const preparedDatabase = { ...database, env: { ...env } };
+          if (sourceIdentity) {
+            prepareSource?.(preparedDatabase, sourceIdentity);
           }
+          return await read({
+            ...route,
+            reader,
+            database: preparedDatabase,
+            logicalAgentId,
+            selectedStore: Object.freeze({ path: sourcePath, physicalPath: database.path }),
+            continuation: continuation?.receipt,
+            assertCurrent: assertCapturedCurrent,
+          });
         },
         readLane,
       );
@@ -553,11 +627,6 @@ export async function withSessionStoreReaderInWorker<T>(
       const assertPreparedCurrent = () => {
         preparedSource.assertCurrent();
         assertSessionStoreReadCandidate(preparedSource.path, candidates);
-        assertExistingDatabaseIdentity(
-          preparedSource.path,
-          `file:${preparedSource.databaseIdentity}`,
-          preparedSource.databaseBirthtime,
-        );
       };
       assertPreparedCurrent();
       result = await readDatabase(
@@ -598,14 +667,12 @@ export async function withSessionStoreReaderInWorker<T>(
             assertFinalCurrent();
             return value;
           }),
-        { lane: readLane },
       );
     }
     // Only returned data may be refused after cleanup; synchronous consumers can already publish.
     assertFinalCurrent?.();
     return result;
   } finally {
-    sourceActive = false;
     for (const { owner } of continuations.toReversed()) {
       owner.release();
     }

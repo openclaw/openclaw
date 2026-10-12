@@ -187,6 +187,12 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       state.usedBlockReplyThreadTs = deliveredThreadTs;
     }
   };
+  const stopStream = (session: SlackStreamSession, chunks?: AnyChunk[]) =>
+    stopSlackStream({
+      session,
+      ...(chunks?.length ? { chunks } : {}),
+      ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+    });
   const deliverPendingStreamFallback = async (
     session: SlackStreamSession,
     err: SlackStreamNotDeliveredError,
@@ -197,10 +203,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     let fallbackError = err;
     if (!session.stopped) {
       try {
-        const stopResult = await stopSlackStream({
-          session,
-          ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-        });
+        const stopResult = await stopStream(session);
         if (session.stoppedBySlack) {
           return undefined;
         }
@@ -236,10 +239,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     markSlackStreamFallbackDelivered(session);
     if (!session.stopped) {
       try {
-        await stopSlackStream({
-          session,
-          ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-        });
+        await stopStream(session);
       } catch (finalizeErr) {
         runtime.error?.(
           danger(
@@ -268,11 +268,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     if (session && !session.stopped) {
       try {
         try {
-          await stopSlackStream({
-            session,
-            ...(chunks?.length ? { chunks } : {}),
-            ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-          });
+          await stopStream(session, chunks);
           state.observedReplyDelivery ||= session.delivered;
         } catch (error) {
           if (!(error instanceof SlackStreamNotDeliveredError)) {

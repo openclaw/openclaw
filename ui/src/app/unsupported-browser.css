@@ -1,0 +1,61 @@
+.unsupported-browser {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 48px 24px;
+  background: Canvas;
+  color: CanvasText;
+  color-scheme: light dark;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.unsupported-browser__panel {
+  max-width: 560px;
+  margin: 10vh auto 0;
+}
+
+.unsupported-browser__brand {
+  margin: 0 0 24px;
+  font-weight: 700;
+}
+
+.unsupported-browser h1 {
+  margin: 0 0 24px;
+  font-size: 32px;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.unsupported-browser ul {
+  padding-inline-start: 24px;
+  margin-block: 24px;
+}
+
+.unsupported-browser li + li {
+  margin-block-start: 12px;
+}
+
+.unsupported-browser button[data-new-tab-action] {
+  padding: 10px 20px;
+  border: 1px solid ButtonText;
+  border-radius: 8px;
+  background: ButtonFace;
+  color: ButtonText;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.unsupported-browser button:focus-visible {
+  outline: 3px solid Highlight;
+  outline-offset: 3px;
+}

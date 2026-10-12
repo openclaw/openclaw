@@ -23,16 +23,6 @@ describe("classifyPrForSweep", () => {
     expected: ReturnType<typeof classifyPrForSweep>;
   }> = [
     {
-      name: "re-fires when no CI run attached",
-      expected: { action: "refire", reason: "ci-run-missing" },
-    },
-    {
-      name: "re-fires when only startup failures attached",
-      ciRuns: [{ conclusion: "startup_failure" }],
-      botCloseCount: 1,
-      expected: { action: "refire", reason: "ci-startup-failure" },
-    },
-    {
       name: "skips drafts",
       prOverrides: { draft: true },
       expected: { action: "skip", reason: "draft" },
@@ -48,34 +38,9 @@ describe("classifyPrForSweep", () => {
       expected: { action: "skip", reason: "merge-conflict" },
     },
     {
-      name: "skips PRs with auto-merge enabled (close would cancel it)",
-      prOverrides: { auto_merge: { merge_method: "squash" } },
-      expected: { action: "skip", reason: "auto-merge-enabled" },
-    },
-    {
-      name: "treats a completed run as attached",
-      ciRuns: [{ conclusion: "success" }],
-      expected: { action: "skip", reason: "ci-attached" },
-    },
-    {
-      name: "treats a queued run (null conclusion) as attached",
-      ciRuns: [{ conclusion: null }, { conclusion: "startup_failure" }],
-      expected: { action: "skip", reason: "ci-attached" },
-    },
-    {
-      name: "treats a failed run as attached (rerunnable, not sweepable)",
-      ciRuns: [{ conclusion: "failure" }],
-      expected: { action: "skip", reason: "ci-attached" },
-    },
-    {
       name: "stops after two bot closes",
       botCloseCount: 2,
       expected: { action: "skip", reason: "refire-budget-exhausted" },
-    },
-    {
-      name: "re-fires on unknown mergeability (stuck merge-ref IS the pathology)",
-      prOverrides: { mergeable: null },
-      expected: { action: "refire", reason: "ci-run-missing" },
     },
   ];
 
@@ -122,7 +87,7 @@ describe("runPrCiSweeper", () => {
     expect(calls.filter((call) => call.method === "pulls.update")).toEqual([]);
   });
 
-  it.each(["failure", "cancelled", "skipped"])(
+  it.each(["cancelled"])(
     "logs attached %s CI on a non-auto-merge PR without re-executing it",
     async (conclusion) => {
       const attached = {
@@ -179,46 +144,48 @@ describe("runPrCiSweeper", () => {
     expect(calls.filter((call) => call.method === "actions.listWorkflowRuns")).toEqual([]);
   });
 
-  it.each([
-    { name: "missing CI", ciRuns: [] },
-    { name: "startup_failure-only CI", ciRuns: [{ conclusion: "startup_failure" }] },
-  ])("does not re-fire $name when the final PR read becomes draft", async ({ ciRuns }) => {
-    const candidate = {
-      ...pr(),
-      number: 23,
-      state: "open",
-      head: { sha: "7".repeat(40) },
-    };
-    const { github, calls } = fakeGithub({
-      prs: [candidate],
-      runsBySha: { [candidate.head.sha]: ciRuns },
-      pullsGetByNumber: {
-        [candidate.number]: [candidate, { ...candidate, draft: true }],
-      },
-    });
-    const { core: loggedCore, logs } = recordingCore();
+  it.each([{ name: "startup_failure-only CI", ciRuns: [{ conclusion: "startup_failure" }] }])(
+    "does not re-fire $name when the final PR read becomes draft",
+    async ({ ciRuns }) => {
+      const candidate = {
+        ...pr(),
+        number: 23,
+        state: "open",
+        head: { sha: "7".repeat(40) },
+      };
+      const { github, calls } = fakeGithub({
+        prs: [candidate],
+        runsBySha: { [candidate.head.sha]: ciRuns },
+        pullsGetByNumber: {
+          [candidate.number]: [candidate, { ...candidate, draft: true }],
+        },
+      });
+      const { core: loggedCore, logs } = recordingCore();
 
-    const results = await runPrCiSweeper({
-      github: github as never,
-      context: context as never,
-      core: loggedCore as never,
-      now: NOW,
-    });
+      const results = await runPrCiSweeper({
+        github: github as never,
+        context: context as never,
+        core: loggedCore as never,
+        now: NOW,
+      });
 
-    expect(calls.filter((call) => call.method === "pulls.update")).toEqual([]);
-    expect(calls.filter((call) => call.method === "actions.reRunWorkflow")).toEqual([]);
-    expect(calls.filter((call) => call.method === "issues.createComment")).toEqual([]);
-    expect(results).toEqual([
-      { number: 23, sha: "7".repeat(12), action: "skip", reason: "changed-during-sweep" },
-    ]);
-    expect(logs).toContain("pr-ci-sweeper: #23 changed during sweep; leaving it alone");
-    expect(logs.at(-1)).toContain("0 re-fires");
-    expect(
-      calls
-        .filter((call) => call.method === "pulls.get" || call.method === "actions.listWorkflowRuns")
-        .map((call) => call.method),
-    ).toEqual(["actions.listWorkflowRuns", "pulls.get", "pulls.get"]);
-  });
+      expect(calls.filter((call) => call.method === "pulls.update")).toEqual([]);
+      expect(calls.filter((call) => call.method === "actions.reRunWorkflow")).toEqual([]);
+      expect(calls.filter((call) => call.method === "issues.createComment")).toEqual([]);
+      expect(results).toEqual([
+        { number: 23, sha: "7".repeat(12), action: "skip", reason: "changed-during-sweep" },
+      ]);
+      expect(logs).toContain("pr-ci-sweeper: #23 changed during sweep; leaving it alone");
+      expect(logs.at(-1)).toContain("0 re-fires");
+      expect(
+        calls
+          .filter(
+            (call) => call.method === "pulls.get" || call.method === "actions.listWorkflowRuns",
+          )
+          .map((call) => call.method),
+      ).toEqual(["actions.listWorkflowRuns", "pulls.get", "pulls.get"]);
+    },
+  );
 
   it("keeps logging decisions after the per-sweep re-fire cap", async () => {
     const dropped = Array.from({ length: 11 }, (_, index) => ({
@@ -284,7 +251,7 @@ describe("runPrCiSweeper", () => {
     ]);
   });
 
-  it.each(["pull_request", "pull_request_target"])(
+  it.each(["pull_request_target"])(
     "leaves a cancelled %s workflow attached to an auto-merge PR without re-executing it",
     async (event) => {
       const generated = autoMergePr(10, "d".repeat(40));

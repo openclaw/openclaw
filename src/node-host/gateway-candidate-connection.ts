@@ -10,6 +10,7 @@ import {
   type GatewayReconnectPausedInfo,
 } from "../gateway/client.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import type { NodeHostGatewayConfig } from "./config.js";
 
 type GatewayCandidateEvent = Parameters<NonNullable<GatewayClientOptions["onEvent"]>>[0];
@@ -164,12 +165,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "node host gateway cleanup failed");
-        }
+        throwNodeHostCleanupErrors(failures, "node host gateway cleanup failed");
       });
       return stopPromise;
     },

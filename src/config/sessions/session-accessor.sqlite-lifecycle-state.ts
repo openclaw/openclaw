@@ -7,6 +7,10 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -135,13 +139,7 @@ export function readReferencedSessionIds(
               /* kysely-allow-raw: substring narrowing retains trimmed current IDs. */ sql<boolean>`instr(current_session_id, ${candidate}) > 0`,
           ),
         ),
-        /* kysely-allow-raw: malformed TEXT and optional fields retain their original reference semantics. */ sql<boolean>`CASE
-          WHEN NOT json_valid(entry_json) THEN 1
-          WHEN length(CAST(entry_json AS BLOB)) != length(CAST(printf('%s', entry_json) AS BLOB)) THEN 1
-          ELSE json_type(entry_json, '$.previousSessionId') IS NOT NULL
-            OR json_type(entry_json, '$.usageFamilySessionIds') IS NOT NULL
-            OR json_type(entry_json, '$.compactionCheckpoints') IS NOT NULL
-        END`,
+        eb("has_optional_references", "=", 1),
       ]),
     );
   }
@@ -594,9 +592,11 @@ function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId
   // The window row cascades canonical transcript tables, but FTS is virtual;
   // clear its projection before dropping the owner row.
   deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
-  executeSqliteQuerySync(
-    database.db,
-    db.deleteFrom("session_windows").where("session_id", "=", sessionId),
+  withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () =>
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_windows").where("session_id", "=", sessionId),
+    ),
   );
 }
 
@@ -604,7 +604,6 @@ export function deletePlannedLifecycleArtifactEntries(
   database: OpenClawAgentDatabase,
   entries: readonly SessionEntryRemovalPlan[],
 ): number {
-  assertPlannedLifecycleArtifactEntriesUnchanged(database, entries);
   for (const planned of entries) {
     deleteSessionEntryRows(database, planned.sessionKey);
   }
@@ -621,18 +620,4 @@ export function assertPlannedLifecycleArtifactEntriesUnchanged(
       throw new Error(`SQLite lifecycle cleanup entry changed for ${planned.sessionKey}`);
     }
   }
-}
-
-/** Partition only optimistic entry conflicts; database and parse failures stay fatal. */
-export function partitionUnchangedPlannedLifecycleArtifactEntries(
-  database: OpenClawAgentDatabase,
-  entries: readonly SessionEntryRemovalPlan[],
-): { changed: SessionEntryRemovalPlan[]; unchanged: SessionEntryRemovalPlan[] } {
-  const changed: SessionEntryRemovalPlan[] = [];
-  const unchanged: SessionEntryRemovalPlan[] = [];
-  for (const planned of entries) {
-    const current = readExactSessionEntryRow(database, planned.sessionKey)?.entry;
-    (sqliteSessionEntriesEqual(current, planned.expectedEntry) ? unchanged : changed).push(planned);
-  }
-  return { changed, unchanged };
 }

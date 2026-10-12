@@ -4,6 +4,7 @@ packages:
   - packages/*
   - extensions/*
   - examples/*
+  - tools/solid-lint
 
 minimumReleaseAge: 10080
 minimumReleaseAgeStrict: true
@@ -12,15 +13,42 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.25.0 release and native helpers; remove after 2026-10-15T21:23:59.079Z.
-  - "@openclaw/fs-safe@0.25.0"
-  - "@openclaw/fs-safe-darwin-arm64@0.25.0"
-  - "@openclaw/fs-safe-darwin-x64@0.25.0"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.25.0"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.25.0"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.25.0"
-  - "@openclaw/fs-safe-linux-x64-musl@0.25.0"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.25.0"
+  # Peter-approved one-time exception: Solid 2.0.0-rc.14; remove after 2026-10-15T02:13:16Z.
+  - "solid-js@2.0.0-rc.14"
+  - "@solidjs/signals@2.0.0-rc.14"
+  - "@solidjs/web@2.0.0-rc.14"
+  - "@solidjs/compiler@2.0.0-rc.14"
+  - "@solidjs/compiler-darwin-arm64@2.0.0-rc.14"
+  - "@solidjs/compiler-darwin-x64@2.0.0-rc.14"
+  - "@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14"
+  - "@solidjs/compiler-linux-x64-gnu@2.0.0-rc.14"
+  - "@solidjs/compiler-wasm32-wasi@2.0.0-rc.14"
+  - "@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14"
+  - "@solidjs/babel-plugin@2.0.0-rc.14"
+  # Reviewed fs-safe 0.26.0 release and native helpers; remove after 2026-10-17T20:00:18.006Z.
+  - "@openclaw/fs-safe@0.26.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.26.0"
+  - "@openclaw/fs-safe-darwin-x64@0.26.0"
+  - "@openclaw/fs-safe-freebsd-arm64@0.26.0"
+  - "@openclaw/fs-safe-freebsd-x64@0.26.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.26.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.26.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.26.0"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.26.0"
+  # Reviewed proc-safe 0.2.0 release and native helpers; remove after 2026-10-18T04:40:03.765Z.
+  - "@openclaw/proc-safe@0.2.0"
+  - "@openclaw/proc-safe-darwin-arm64@0.2.0"
+  - "@openclaw/proc-safe-darwin-x64@0.2.0"
+  - "@openclaw/proc-safe-freebsd-arm64@0.2.0"
+  - "@openclaw/proc-safe-freebsd-x64@0.2.0"
+  - "@openclaw/proc-safe-linux-arm64-gnu@0.2.0"
+  - "@openclaw/proc-safe-linux-arm64-musl@0.2.0"
+  - "@openclaw/proc-safe-linux-x64-gnu@0.2.0"
+  - "@openclaw/proc-safe-linux-x64-musl@0.2.0"
+  - "@openclaw/proc-safe-win32-arm64-msvc@0.2.0"
+  - "@openclaw/proc-safe-win32-x64-msvc@0.2.0"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
@@ -31,6 +59,7 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
+  "@solidjs/vite-plugin@3.0.0-next.47>@solidjs/babel-plugin": 2.0.0-rc.14
   # Memory LanceDB supplies vectors; WhatsApp prepares thumbnails with Rastermill.
   "@lancedb/lancedb>@huggingface/transformers": "-"
   "baileys>sharp": "-"
@@ -62,8 +91,8 @@ overrides:
   source-map-js: 1.2.2
   file-type: 22.1.1
   form-data: 4.0.6
-  ip-address: 10.7.2
-  "mailauth@7.1.0>nodemailer": 10.0.13
+  ip-address: 10.7.3
+  "mailauth@7.1.0>nodemailer": 10.0.14
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8

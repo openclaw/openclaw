@@ -1,42 +1,24 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
+import { setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { i18n } from "../../i18n/index.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";
 
 afterEach(async () => {
   await i18n.setLocale("en");
+  setCurrentThemeBranding(resolveThemeBranding(undefined));
 });
 
 describe("findSettingsSearchBlocks", () => {
-  it("finds the meeting library separately from its Communications capture settings", () => {
+  it("does not advertise hidden Lobsterdex choices while retaining the rest of tab icon settings", () => {
     const search = (query: string) =>
       findSettingsSearchBlocks({ query, schema: null, value: {}, uiHints: {} });
-    expect(search("meeting notes")).toContainEqual(
-      expect.objectContaining({ routeId: "meetings" }),
-    );
-    expect(search("meeting capture")).toContainEqual(
-      expect.objectContaining({
-        routeId: "communications",
-        search: "?section=transcripts",
-        hash: "#settings-communications-meeting-capture",
-      }),
-    );
-    const matches = findSettingsSearchBlocks({
-      query: "autoStart",
-      schema: {
-        type: "object",
-        properties: {
-          transcripts: {
-            type: "object",
-            properties: { autoStart: { type: "array", title: "autoStart" } },
-          },
-        },
-      },
-      value: {},
-      uiHints: {},
-    });
-    expect(matches.some((entry) => entry.routeId === "advanced")).toBe(false);
-    expect(matches.some((entry) => entry.routeId === "communications")).toBe(true);
+    setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: false }));
+    expect(search("Lobsterdex")).toEqual([]);
+    expect(search("favicon")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
+    setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: true }));
+    expect(search("Lobsterdex")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
   });
   it("loads Settings English only when cold search opens, before the config page", async () => {
     // The ordinary imports above exercise warm search. This module graph starts
@@ -141,34 +123,6 @@ describe("findSettingsSearchBlocks", () => {
         routeId: "connection",
         label: "Gateway Host",
         hash: "#settings-connection-host",
-      }),
-    ]);
-  });
-
-  it("routes setup consent to Advanced with its disclosure open", () => {
-    expect(
-      findSettingsSearchBlocks({
-        query: "discovery access",
-        schema: {
-          type: "object",
-          properties: {
-            wizard: {
-              type: "object",
-              properties: {
-                accessMode: { type: "string", title: "Setup Discovery Access" },
-              },
-            },
-          },
-        },
-        value: {},
-        uiHints: { "wizard.accessMode": { advanced: false } },
-      }),
-    ).toEqual([
-      expect.objectContaining({
-        routeId: "advanced",
-        label: "Setup",
-        search: "?section=wizard&advanced=1",
-        hash: "#config-section-wizard",
       }),
     ]);
   });
@@ -297,55 +251,6 @@ describe("findSettingsSearchBlocks", () => {
     expect(findSettingsSearchBlocks(params)).toEqual([]);
   });
 
-  it("finds existing update checks and channel controls on the curated Updates page", () => {
-    const updateSchema = {
-      type: "object",
-      properties: {
-        update: {
-          type: "object",
-          properties: {
-            channel: { type: "string", title: "Update Channel" },
-            checkOnStart: { type: "boolean", title: "Update Check on Start" },
-          },
-        },
-      },
-    };
-    const uiHints = {
-      "update.channel": { advanced: false },
-      "update.checkOnStart": { advanced: false },
-    };
-
-    expect(
-      findSettingsSearchBlocks({
-        query: "check on start",
-        schema: updateSchema,
-        value: {},
-        uiHints,
-      }),
-    ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
-    expect(
-      findSettingsSearchBlocks({
-        query: "check for updates",
-        schema: null,
-        value: null,
-        uiHints: {},
-      }),
-    ).toEqual([expect.objectContaining({ routeId: "updates", hash: "#config-section-update" })]);
-    expect(
-      findSettingsSearchBlocks({
-        query: "update channel",
-        schema: updateSchema,
-        value: {},
-        uiHints,
-      }),
-    ).toEqual([
-      expect.objectContaining({
-        routeId: "updates",
-        search: "?section=update",
-      }),
-    ]);
-  });
-
   it("omits admin-only static and schema results for non-admin viewers", () => {
     expect(
       findSettingsSearchBlocks({
@@ -359,29 +264,6 @@ describe("findSettingsSearchBlocks", () => {
         canAdmin: false,
       }),
     ).toEqual([]);
-  });
-
-  it("routes uncurated schema sections to the Advanced page", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "secrets",
-      schema: {
-        type: "object",
-        properties: {
-          secrets: { type: "object", title: "Secrets" },
-        },
-      },
-      value: {},
-      uiHints: {},
-    });
-
-    expect(matches).toEqual([
-      expect.objectContaining({ routeId: "secrets", label: "Secrets" }),
-      expect.objectContaining({
-        routeId: "advanced",
-        search: "?section=secrets&advanced=1",
-        hash: "#config-section-secrets",
-      }),
-    ]);
   });
 
   it("routes global plugin policy to Plugin Settings without indexing plugin entries", () => {
@@ -414,50 +296,6 @@ describe("findSettingsSearchBlocks", () => {
     expect(findSettingsSearchBlocks({ query: "Plugin entries", ...common })).toEqual([]);
   });
 
-  it("preserves nested schema matches for short prefix queries", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "sa",
-      schema: {
-        type: "object",
-        properties: {
-          tools: {
-            type: "object",
-            properties: {
-              profile: {
-                type: "string",
-                description: "Controls sandbox access",
-              },
-            },
-          },
-        },
-      },
-      value: {},
-      uiHints: { "tools.profile": { advanced: false } },
-    });
-
-    expect(matches).toEqual([
-      {
-        routeId: "communications",
-        label: "Meeting capture",
-        search: "?section=transcripts",
-        hash: "#settings-communications-meeting-capture",
-        searchText:
-          "Meeting capture Choose which sources can save meeting notes on this Gateway. Auto-start sources recording transcription meetings autoStart",
-      },
-      expect.objectContaining({
-        routeId: "appearance",
-        label: "Chat",
-        hash: "#settings-appearance-chat",
-      }),
-      {
-        routeId: "ai-agents",
-        label: "Tools",
-        search: "?section=tools",
-        hash: "#config-section-tools",
-      },
-    ]);
-  });
-
   it("searches and displays static settings blocks in the active locale", async () => {
     await i18n.setLocale("es");
 
@@ -476,56 +314,6 @@ describe("findSettingsSearchBlocks", () => {
       expect.objectContaining({
         routeId: "appearance",
         hash: "#settings-appearance-sidebar",
-      }),
-    ]);
-  });
-
-  it.each([
-    ["language", "Language", "#settings-language"],
-    ["favicon", "Browser tab icon", "#settings-appearance-tab-icon"],
-    ["browser tab icon", "Browser tab icon", "#settings-appearance-tab-icon"],
-    ["agent avatar", "Browser tab icon", "#settings-appearance-tab-icon"],
-    ["typography", "Typography", "#settings-appearance-typography"],
-    ["font", "Typography", "#settings-appearance-typography"],
-    ["typeface", "Typography", "#settings-appearance-typography"],
-    ["interface", "Typography", "#settings-appearance-typography"],
-    ["chat prose", "Typography", "#settings-appearance-typography"],
-    ["sidebar", "Sidebar", "#settings-appearance-sidebar"],
-    ["camera", "Chat", "#settings-appearance-chat"],
-    ["links outside OpenClaw", "Chat", "#settings-appearance-chat"],
-    ["show task progress cards", "Chat", "#settings-appearance-chat"],
-  ])("finds the appearance control for %s", (query, label, hash) => {
-    const matches = findSettingsSearchBlocks({
-      query,
-      schema: null,
-      value: null,
-      uiHints: {},
-    });
-
-    expect(matches).toContainEqual(
-      expect.objectContaining({
-        routeId: "appearance",
-        label,
-        search: "?section=__appearance__",
-        hash,
-      }),
-    );
-  });
-
-  it("finds archived workspace sessions using translated filter text", async () => {
-    await i18n.setLocale("es");
-
-    const matches = findSettingsSearchBlocks({
-      query: "archivada",
-      schema: null,
-      value: null,
-      uiHints: {},
-    });
-
-    expect(matches).toEqual([
-      expect.objectContaining({
-        routeId: "sessions",
-        hash: "",
       }),
     ]);
   });

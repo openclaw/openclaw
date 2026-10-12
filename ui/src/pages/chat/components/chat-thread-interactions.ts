@@ -22,8 +22,8 @@ import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import "../../../components/tooltip.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
+import "../../../components/tooltip.ts";
 import type {
   ChatAttachment,
   ChatGuardianNotice,
@@ -40,6 +40,7 @@ import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
+import type { ChatTranscriptMetadata } from "../session-message-cache.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -50,7 +51,7 @@ import {
   isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
 } from "./chat-message-confirmation.ts";
-import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.ts";
+import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
@@ -121,6 +122,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     transcriptVisible?: PresentationValue;
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
+    transcriptMetadata?: ChatTranscriptMetadata;
     boardProvider?: BoardProvider;
     announceTranscript?: boolean;
     loading: boolean;
@@ -132,6 +134,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
+    reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
     stream: string | null;
     streamStartedAt: number | null;
     /** Browser-local active run identity, retained across transient disconnects. */
@@ -140,6 +143,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     queue: ChatQueueItem[];
     initialTurnId?: string;
     pendingInputs?: ChatPendingInputsPage["items"];
+    chatBubbleMode?: boolean;
     showThinking: boolean;
     showToolCalls: boolean;
     persistCommentary?: boolean;
@@ -227,6 +231,13 @@ type TranscriptInteractionProps = Pick<
 >;
 
 const transcriptStates = new Map<string, ChatThreadState>();
+const transcriptSearchDefaults = {
+  searchOpen: false,
+  searchQuery: "",
+  searchFocusPending: false,
+  searchReturnFocusTarget: null,
+  searchReturnFocusOwner: null,
+};
 
 export function getTranscriptState(paneId: string): ChatThreadState {
   const existing = transcriptStates.get(paneId);
@@ -237,11 +248,7 @@ export function getTranscriptState(paneId: string): ChatThreadState {
     asyncQuestionDrafts: new Map(),
     asyncQuestionRevision: 0,
     turnRecapWatch: null,
-    searchOpen: false,
-    searchQuery: "",
-    searchFocusPending: false,
-    searchReturnFocusTarget: null,
-    searchReturnFocusOwner: null,
+    ...transcriptSearchDefaults,
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
   };
@@ -281,11 +288,7 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
     // Parked rows must commit fresh bindings on return even when visible props match.
     state.transcriptRenderDependencies = [];
     // Search input belongs to the outgoing transcript; pane preferences survive.
-    state.searchOpen = false;
-    state.searchQuery = "";
-    state.searchFocusPending = false;
-    state.searchReturnFocusTarget = null;
-    state.searchReturnFocusOwner = null;
+    Object.assign(state, transcriptSearchDefaults);
   }
 }
 
@@ -302,11 +305,10 @@ export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
   }
   if (paneId) {
     transcriptStates.delete(paneId);
-    resetChatThreadState(paneId);
   } else {
     transcriptStates.clear();
-    resetChatThreadState();
   }
+  resetChatThreadState(paneId);
 }
 
 export function renderTranscriptSearch(
@@ -375,11 +377,7 @@ export function renderTranscriptSearch(
 export function closeTranscriptSearch(state: ChatThreadState, requestUpdate: () => void): void {
   const returnFocusTarget = state.searchReturnFocusTarget;
   const returnFocusOwner = state.searchReturnFocusOwner;
-  state.searchOpen = false;
-  state.searchQuery = "";
-  state.searchFocusPending = false;
-  state.searchReturnFocusTarget = null;
-  state.searchReturnFocusOwner = null;
+  Object.assign(state, transcriptSearchDefaults);
   requestUpdate();
   queueMicrotask(() => {
     const target = returnFocusTarget?.isConnected
@@ -407,14 +405,10 @@ export function toggleTranscriptSearch(
   state.searchFocusPending = true;
   const returnFocusTarget = triggerEvent?.target;
   const returnFocusOwner = triggerEvent?.currentTarget;
-  state.searchReturnFocusTarget =
-    returnFocusTarget instanceof HTMLElement && returnFocusTarget.isConnected
-      ? returnFocusTarget
-      : null;
-  state.searchReturnFocusOwner =
-    returnFocusOwner instanceof HTMLElement && returnFocusOwner.isConnected
-      ? returnFocusOwner
-      : null;
+  const connectedElement = (target: EventTarget | null | undefined) =>
+    target instanceof HTMLElement && target.isConnected ? target : null;
+  state.searchReturnFocusTarget = connectedElement(returnFocusTarget);
+  state.searchReturnFocusOwner = connectedElement(returnFocusOwner);
   requestUpdate();
 }
 

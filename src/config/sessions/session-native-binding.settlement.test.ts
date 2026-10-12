@@ -9,6 +9,7 @@ import {
 } from "../../agents/harness/native-session/deletion-participant.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 
 const delivery = vi.hoisted(() => ({
@@ -67,17 +68,13 @@ it("releases a binding after refusal before worker dispatch and permits a fresh 
     const binding = fixture.readBinding();
     const refused = new Error("synthetic refusal before native binding dispatch");
     let readiness = 0;
-    const create = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        create((request, grant) => {
-          const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-          if (isRecord(facts) && facts.kind === "native-binding-ready") {
-            readiness++;
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      if (isRecord(facts) && facts.kind === "native-binding-ready") {
+        readiness++;
+      }
+      callback(request, grant);
+    });
     const rejectDispatch = vi.fn(() => {
       const held = fixture.readBinding();
       expect(held).toMatchObject({
@@ -167,30 +164,26 @@ it("joins a real pending heartbeat after readiness refusal and enters A and S on
     let ready = 0;
     let sharedDelete = 0;
     let agentCommit = 0;
-    const create = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        create((request, grant) => {
-          const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-          if (isRecord(facts)) {
-            if (facts.kind === "native-binding-ready" && ++ready === 1) {
-              // Accept the actual heartbeat immediately before the synchronous readiness decision.
-              vi.advanceTimersByTime(21_000);
-            }
-            if (
-              facts.kind === "native-binding-storage" &&
-              facts.phase === "delete" &&
-              facts.stage === "transaction"
-            ) {
-              sharedDelete++;
-            }
-            if (request.stage === "commit" && facts.kind === "session-native-binding") {
-              agentCommit++;
-            }
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(admission, (request, grant, callback) => {
+      const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      if (isRecord(facts)) {
+        if (facts.kind === "native-binding-ready" && ++ready === 1) {
+          // Accept the actual heartbeat immediately before the synchronous readiness decision.
+          vi.advanceTimersByTime(21_000);
+        }
+        if (
+          facts.kind === "native-binding-storage" &&
+          facts.phase === "delete" &&
+          facts.stage === "transaction"
+        ) {
+          sharedDelete++;
+        }
+        if (request.stage === "commit" && facts.kind === "session-native-binding") {
+          agentCommit++;
+        }
+      }
+      callback(request, grant);
+    });
     try {
       await expect(fixture.remove()).resolves.toMatchObject({ deleted: true });
       expect(ready).toBe(2);
@@ -243,26 +236,22 @@ it.each([
         }
         return Reflect.apply(posted, this, args);
       });
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-            const atCheckpoint =
-              isRecord(facts) &&
-              (checkpoint === "S commit"
-                ? facts.kind === "native-binding-storage" &&
-                  facts.phase === "delete" &&
-                  facts.stage === "commit"
-                : request.stage === "commit" && facts.kind === "session-native-binding");
-            if (atCheckpoint && !stopped) {
-              assert(terminateWorker, "native deletion must dispatch before its commit grant");
-              stopped = terminateWorker();
-              throw new Error("synthetic native worker termination");
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+        const atCheckpoint =
+          isRecord(facts) &&
+          (checkpoint === "S commit"
+            ? facts.kind === "native-binding-storage" &&
+              facts.phase === "delete" &&
+              facts.stage === "commit"
+            : request.stage === "commit" && facts.kind === "session-native-binding");
+        if (atCheckpoint && !stopped) {
+          assert(terminateWorker, "native deletion must dispatch before its commit grant");
+          stopped = terminateWorker();
+          throw new Error("synthetic native worker termination");
+        }
+        callback(request, grant);
+      });
       try {
         const deletion = fixture.remove();
         await expect(deletion).rejects.toBeInstanceOf(SqliteWorkerError);

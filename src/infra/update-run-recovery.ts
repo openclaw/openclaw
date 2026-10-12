@@ -1,4 +1,5 @@
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   isUpdateRecoveryPending,
@@ -6,7 +7,7 @@ import {
   UpdateRecoveryRequiredError,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
-import { inspectUpdateRecoveries, readRecovery } from "./update-run-recovery-store.js";
+import { inspectRecoveryRows, readRecovery } from "./update-run-recovery-store.js";
 export type { UpdateRecoveryFence, UpdateRecoveryHandoff } from "./update-run-recovery-types.js";
 export { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
 export type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
@@ -22,8 +23,11 @@ export function loadUpdateRecovery(
 }
 /** Detection only. This delivery never claims, rewrites, or retires retained recovery. */
 export function assertNoPendingUpdateRecovery(options: OpenClawStateDatabaseOptions = {}): void {
-  const pending = inspectUpdateRecoveries(options).find((entry) =>
-    isUpdateRecoveryPending(entry.record),
+  // Candidate children can migrate the ledger after this updater admitted its original format.
+  const pending = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    ({ db }) => inspectRecoveryRows(db).find((entry) => isUpdateRecoveryPending(entry.record)),
+    options,
+    openDoctorStateSchemaReadAdmission,
   );
   if (pending) {
     // Historical completion does not grant current execution authority. An

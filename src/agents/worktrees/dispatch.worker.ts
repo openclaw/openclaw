@@ -10,6 +10,7 @@ import {
   readWorktreeSlotCountInDatabase,
 } from "./pending-slots.worker.js";
 import { writeProvisionedSnapshotInDatabase } from "./provisioned-snapshot.worker.js";
+import { withWorktreeRegistryWorkerReceipt } from "./registry-publication.js";
 import {
   findLiveRegistryWorktreeByOwnerInDatabase,
   findLiveRegistryWorktreeByPathInDatabase,
@@ -119,20 +120,34 @@ export const worktreeOperations = {
     { open, stateOptions },
   ) => deferWorktreeCleanupInWorker(input, { ...stateOptions(), database: open() }),
   "worktrees.admitRunLease": (input: WorktreeRunLeaseRowInput, { writeAdmitted }) =>
-    writeAdmitted(({ db }) => admitWorktreeRunLeaseInDatabase(db, input), {
-      operationLabel: "worktrees.admitRunLease",
-    }),
+    writeAdmitted(
+      ({ db }) =>
+        withWorktreeRegistryWorkerReceipt(db, () => admitWorktreeRunLeaseInDatabase(db, input)),
+      {
+        operationLabel: "worktrees.admitRunLease",
+      },
+    ),
   "worktrees.releaseRunLease": (
     { worktreeId, token }: { worktreeId: string; token: string },
     { writeAdmitted },
   ) =>
-    writeAdmitted(({ db }) => releaseWorktreeRunLeaseInDatabase(db, worktreeId, token), {
-      operationLabel: "worktrees.releaseRunLease",
-    }),
+    writeAdmitted(
+      ({ db }) =>
+        withWorktreeRegistryWorkerReceipt(db, () =>
+          releaseWorktreeRunLeaseInDatabase(db, worktreeId, token),
+        ),
+      {
+        operationLabel: "worktrees.releaseRunLease",
+      },
+    ),
   "worktrees.reapRunLeases": ({ scopes }: { scopes: string[] }, { writeAdmitted }) =>
-    writeAdmitted(({ db }) => reapWorktreeRunLeasesInDatabase(db, scopes), {
-      operationLabel: "worktrees.reapRunLeases",
-    }),
+    writeAdmitted(
+      ({ db }) =>
+        withWorktreeRegistryWorkerReceipt(db, () => reapWorktreeRunLeasesInDatabase(db, scopes)),
+      {
+        operationLabel: "worktrees.reapRunLeases",
+      },
+    ),
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
 export type WorktreeWorkerOperations = WorkerOperations<typeof worktreeOperations>;

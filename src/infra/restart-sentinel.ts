@@ -353,16 +353,7 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
   runningRoot?: string | null,
 ): Promise<RestartSentinel | null> {
   const context = captureOpenClawStateWorkerContext({ env });
-  let snapshot: RestartSentinel | null;
-  try {
-    const reply = await readSentinelState("restartSentinel.current", context);
-    snapshot = currentSentinel(
-      reply?.ok && reply.type === "restartSentinel.current" ? reply.state : undefined,
-    );
-  } catch (err) {
-    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
-    return null;
-  }
+  const snapshot = await readCurrentRestartSentinel(() => context, false);
   if (!snapshot || snapshot.payload.kind !== "update") {
     return null;
   }
@@ -435,20 +426,21 @@ function currentSentinel(current: RestartSentinelRowState | undefined): RestartS
 }
 
 async function readCurrentRestartSentinel(
-  env: NodeJS.ProcessEnv,
+  resolveContext: () => OpenClawStateWorkerContext,
   existingOnly: boolean,
+  action: "read" | "check" = "read",
 ): Promise<RestartSentinel | null> {
   try {
     const reply = await readSentinelState(
       "restartSentinel.current",
-      captureOpenClawStateWorkerContext({ env }),
+      resolveContext(),
       existingOnly,
     );
     return currentSentinel(
       reply?.ok && reply.type === "restartSentinel.current" ? reply.state : undefined,
     );
   } catch (err) {
-    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
+    sentinelLog.warn(`Failed to ${action} restart sentinel: ${formatErrorMessage(err)}`);
     return null;
   }
 }
@@ -456,14 +448,14 @@ async function readCurrentRestartSentinel(
 export function readRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  return readCurrentRestartSentinel(env, false);
+  return readCurrentRestartSentinel(() => captureOpenClawStateWorkerContext({ env }), false);
 }
 
 /** Read the restart sentinel without creating or mutating shared state. */
 export function readRestartSentinelReadOnly(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  return readCurrentRestartSentinel(env, true);
+  return readCurrentRestartSentinel(() => captureOpenClawStateWorkerContext({ env }), true);
 }
 
 async function readUpdateInstallReceiptPayload(
@@ -510,20 +502,13 @@ export async function readVerifiedGitUpdateReceipt(
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  try {
-    const reply = await readSentinelState(
-      "restartSentinel.current",
-      captureOpenClawStateWorkerContext({ env }),
-    );
-    return (
-      currentSentinel(
-        reply?.ok && reply.type === "restartSentinel.current" ? reply.state : undefined,
-      ) !== null
-    );
-  } catch (err) {
-    sentinelLog.warn(`Failed to check restart sentinel: ${formatErrorMessage(err)}`);
-    return false;
-  }
+  return (
+    (await readCurrentRestartSentinel(
+      () => captureOpenClawStateWorkerContext({ env }),
+      false,
+      "check",
+    )) !== null
+  );
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {

@@ -17,9 +17,10 @@ import {
   reserveDiscussionBindingGeneration,
   type PendingDiscussionOpen,
 } from "./binding-generation.js";
-import type {
-  ClickClackDiscussionBinding,
-  ClickClackDiscussionBindingStore,
+import {
+  readDiscussionSessionEntry,
+  type ClickClackDiscussionBinding,
+  type ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
 import { controlSessionUrl } from "./control-session-url.js";
 import { discussionAccounts, normalizedServerBaseUrl } from "./eligibility.js";
@@ -46,7 +47,7 @@ type OpenDiscussionParams = {
   ensureTimer: () => Promise<void>;
   reconcilePendingOpen: (pending: PendingDiscussionOpen) => Promise<void>;
   withChannelMutationLock: <T>(run: () => Promise<T>) => Promise<T>;
-  ensureBindingCapacity: (sessionKey: string) => void;
+  ensureBindingCapacity: (sessionKey: string) => Promise<void>;
   finalizePendingBinding: (
     sessionKey: string,
     binding: ClickClackDiscussionBinding,
@@ -214,7 +215,7 @@ export async function openClickClackDiscussionBinding(
   params: OpenDiscussionParams,
 ): Promise<ClickClackDiscussionBinding | undefined> {
   const { account, runtime, sessionKey, store } = params;
-  const entry = runtime.agent.session.getSessionEntry({ sessionKey, readConsistency: "latest" });
+  const entry = await readDiscussionSessionEntry(runtime, sessionKey);
   if (!entry || entry.archivedAt !== undefined) {
     return undefined;
   }
@@ -302,9 +303,10 @@ export async function openClickClackDiscussionBinding(
     ) {
       throw new Error("ClickClack discussion authority changed while opening the channel");
     }
+    return currentEntry;
   };
   return await params.withChannelMutationLock(async () => {
-    params.ensureBindingCapacity(sessionKey);
+    await params.ensureBindingCapacity(sessionKey);
     let channels = await client.channels(workspace.id);
     assertManagedChannelListContract(channels);
     const destinationIdentity = [serverBaseUrl, workspace.id].join("\0");
@@ -374,11 +376,12 @@ export async function openClickClackDiscussionBinding(
       assertCurrentAuthority();
       try {
         if (adopted) {
-          revokeChannel(adopted.id);
+          await revokeChannel(adopted.id);
+          assertCurrentAuthority();
           resolved = await client.updateChannel(adopted.id, managedFields);
         } else {
           resolved = await client.createChannel(workspace.id, { ...managedFields, kind: "public" });
-          revokeChannel(resolved.id);
+          await revokeChannel(resolved.id);
         }
         break;
       } catch (error) {
@@ -399,7 +402,7 @@ export async function openClickClackDiscussionBinding(
           );
           if (recovered) {
             adopted = recovered;
-            revokeChannel(recovered.id);
+            await revokeChannel(recovered.id);
             assertCurrentAuthority();
             resolved = await client.updateChannel(recovered.id, managedFields);
             break;
@@ -441,10 +444,7 @@ export async function openClickClackDiscussionBinding(
       throw new Error("ClickClack discussion channel is missing its route id");
     }
     const channel = resolved;
-    const currentEntry = runtime.agent.session.getSessionEntry({
-      sessionKey,
-      readConsistency: "latest",
-    });
+    const currentEntry = await readDiscussionSessionEntry(runtime, sessionKey);
     if (!currentEntry?.sessionId || currentEntry.archivedAt !== undefined) {
       await clearPendingDiscussionOpen(generationScope);
       params.warn(`unattached discussion channel remains quarantined: ${channel.id}`);
@@ -508,8 +508,19 @@ export async function openClickClackDiscussionBinding(
         : {}),
     };
     try {
-      assertCurrentAuthority();
-      store.set(sessionKey, nextBinding);
+      nextBinding.sessionId = assertCurrentAuthority().sessionId;
+      const applied = await store.setIfCurrent(sessionKey, undefined, nextBinding, {
+        assertCurrent: () => {
+          if (assertCurrentAuthority().sessionId !== nextBinding.sessionId) {
+            throw new Error("ClickClack discussion session changed before binding committed");
+          }
+        },
+      });
+      if (!applied) {
+        await clearPendingDiscussionOpen(generationScope);
+        params.warn(`superseded discussion channel remains quarantined: ${channel.id}`);
+        return undefined;
+      }
     } catch (error) {
       await clearPendingDiscussionOpen(generationScope);
       params.warn(`unbound discussion channel remains quarantined: ${channel.id}`);
@@ -533,7 +544,7 @@ export async function reconcilePendingDiscussionOpen(params: {
   open: (sessionKey: string) => Promise<SessionDiscussionInfo>;
 }): Promise<void> {
   const { pending } = params;
-  const currentBinding = params.store.get(pending.sessionKey);
+  const currentBinding = await params.store.getAsync(pending.sessionKey);
   if (currentBinding?.externalRef === pending.externalRef) {
     await params.finalizePendingBinding(pending.sessionKey, currentBinding);
     return;
@@ -554,10 +565,7 @@ export async function reconcilePendingDiscussionOpen(params: {
     return;
   }
   const client = params.clientFactory(account);
-  const entry = params.runtime.agent.session.getSessionEntry({
-    sessionKey: pending.sessionKey,
-    readConsistency: "latest",
-  });
+  const entry = await readDiscussionSessionEntry(params.runtime, pending.sessionKey);
   const activeAccounts = discussionAccounts(cfg);
   const retryAccount = activeAccounts.length === 1 ? activeAccounts[0] : undefined;
   if (
@@ -586,7 +594,7 @@ export async function reconcilePendingDiscussionOpen(params: {
       candidate.external_managed === true && candidate.external_ref === pending.externalRef,
   );
   if (channel) {
-    markClickClackDiscussionChannelIdentityRevoked({
+    await markClickClackDiscussionChannelIdentityRevoked({
       runtime: params.runtime,
       accountId: pending.accountId,
       serverBaseUrl: pending.serverBaseUrl,

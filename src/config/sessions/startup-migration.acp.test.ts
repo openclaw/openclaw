@@ -6,6 +6,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../../acp/runtime/session-meta.js";
 import { noteSessionTranscriptHealth } from "../../commands/doctor-session-transcripts.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   createAgentDatabaseInspectionRefusal,
   preparePendingAgentDatabase,
@@ -21,6 +22,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
+import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
 
 it.each(["recorded", "ownerless", "literal"] as const)(
@@ -191,12 +193,13 @@ it("startup requires offline ACP repair before handing restored stores to runtim
         sourceKey === undefined ? { ...currentEntry, acp: meta } : currentEntry,
       );
       if (shape === "unsettled-embedded") {
-        const { db } = openOpenClawAgentDatabase({ agentId, env });
+        const database = openOpenClawAgentDatabase({ agentId, env });
+        const { db } = database;
+        runSqliteImmediateTransactionSync(db, () => seedCanonicalSessionValidation(database));
         const raw = `${JSON.stringify(currentEntry).slice(0, -1)},"acp":null,"acp":${JSON.stringify(meta)}}`;
-        db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-          raw,
-          sessionKey,
-        );
+        db.prepare(
+          "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
+        ).run(raw, sessionKey);
         expect(
           db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(sessionKey),
         ).toEqual({ entry_valid: 0 });

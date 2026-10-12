@@ -15,7 +15,7 @@ becomes `/openclaw/chat/main` when the base path is `/openclaw`.
 
 ## Session and dashboard URLs
 
-**Copy → Session link** uses the connected Gateway's public Control UI address
+**Copy link** in the session menu uses the connected Gateway's public Control UI address
 when `gateway.publicOrigin` is configured, including its
 `gateway.controlUi.basePath`. This keeps links shareable when the desktop app
 connects through a local SSH tunnel. Without a public origin, copied links use
@@ -81,8 +81,9 @@ Incognito sessions always use the literal-key form, even when their keys end
 in a UUID. For example, an Incognito link looks like
 `/chat/main/dashboard/incognito-12345678-90ab-cdef-1234-567890abcdef`.
 Incognito sessions are excluded from short-id and display-name discovery;
-their exact links still require administrator access and work only while the
-session exists. Reopen an existing session from the sidebar to replace an old
+their exact links still require administrator access and can be reloaded while the
+session exists in the running Gateway. Reloading the browser does not end the
+session; restarting the Gateway does. Reopen an existing session from the sidebar to replace an old
 short-id link that reports **Session not found**.
 
 Literal rest segments exactly equal to `.` or `..` use `~dot` and `~dotdot` so
@@ -189,10 +190,10 @@ also works under `/dashboard/<agentId>`.
 
 ## Social previews
 
-Use **Copy → Preview link** in a session's menu to share a link with an OpenClaw
+Use **Advanced → Copy details → Preview link** in a session's menu to share a link with an OpenClaw
 social card. It opens a small public landing page; **Open dashboard** or
 **Open session** then takes the recipient to the normal authenticated view.
-**Copy → Session link** still copies the direct link.
+**Copy link** in the root menu still copies the direct link.
 
 For example, `/share/dashboard/main/deploy-monitor-6db92d48` previews
 `/dashboard/main/deploy-monitor-6db92d48`. A configured Control UI base path
@@ -250,9 +251,17 @@ was denied. Without JavaScript, the generic unavailable page remains readable.
 Token/password operators with a saved credential for this Gateway automatically
 continue into the Control UI when reopening, reloading, or following a chat link.
 The browser uses its session token or paired-device credential; passwords remain
-in memory only. This also works on loopback HTTP, which permits public readers.
-The anonymous private-thread document initially returns `404`, then the browser
-opens the app through the session-entry handoff with a `200` response. No extra
+in memory only. This also works on loopback HTTP, which permits public readers. Chat links remain
+reloadable during Gateway updates; the temporary recovery marker is removed when
+the app starts.
+In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
+protected session-entry app document directly when reopening a chat deep link,
+without first loading the public reader or probing access. Registration is only
+a navigation hint: the protected handoff still checks current permissions.
+Denied access or a login redirect falls back to the public reader. Browsers
+without the worker retain the public document and protected access probe.
+The anonymous private-thread document initially returns `404`, then an admitted
+browser opens the app through the session-entry handoff with a `200` response. No extra
 **Log in** click is needed. Without a saved credential, **Log in** opens the normal
 login gate. On non-secure ingress where public transcripts are unavailable,
 token/password deployments serve the app shell directly.
@@ -265,7 +274,9 @@ and you are its creator or a Gateway admin. See
 Public access is separate from teammate visibility and editing permissions.
 The public reader does not open a Gateway WebSocket, subscribe to the session
 roster, send messages, invoke tools, or open private dashboards. It shows user
-messages and assistant final answers with Markdown formatting. Tool output,
+messages and assistant final answers with Markdown formatting in the Control UI's
+chat layout and typeface, offers a copy control on code blocks, and closes with a
+short OpenClaw introduction for readers who are new to it. Tool output,
 reasoning, files, images, executable widgets, internal metadata, and hidden
 messages are omitted. Credential-pattern redaction is best effort, not a
 guarantee that sensitive prose is detected. Review the conversation before
@@ -573,7 +584,10 @@ The retired General route and its `/config` alias are replaced once with
 Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
 with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
 `?section=memory` are replaced once with the corresponding path while keeping
-any setting anchor.
+any setting anchor and other query parameters. Memory settings search adds
+`?advanced=1` when a matching field is advanced, opening the advanced group without changing
+the browser's saved advanced-settings preference. The same reveal survives a
+reload or an older Memory link that includes `advanced=1`.
 
 Plugin catalog tabs also use paths instead of `?tab=`. Older links with
 `?tab=discover|installed` are replaced once with the corresponding path while

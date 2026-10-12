@@ -115,13 +115,9 @@ export function createNativeBootstrapController({ chromeApi = chrome, getPairing
     disabledNow ||= stored[DISABLED_KEY] === true;
     return {
       disabled: disabledNow,
-      state:
-        stored[STATE_KEY] === "ready" ||
-        stored[STATE_KEY] === "retrying" ||
-        stored[STATE_KEY] === "manual_required" ||
-        stored[STATE_KEY] === "disabled"
-          ? stored[STATE_KEY]
-          : "waiting",
+      state: ["ready", "retrying", "manual_required", "disabled"].includes(stored[STATE_KEY])
+        ? stored[STATE_KEY]
+        : "waiting",
       failureCode: typeof stored[FAILURE_KEY] === "string" ? stored[FAILURE_KEY] : "",
     };
   }

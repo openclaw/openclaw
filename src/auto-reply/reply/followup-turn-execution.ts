@@ -1,14 +1,5 @@
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { withOrderedSessionEntriesInWorker } from "../../config/sessions/session-entry-read-ordered.js";
-import {
-  captureSessionEntryReadScope,
-  isNativeSessionEntryRead,
-} from "../../config/sessions/session-entry-read-request.js";
-import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
@@ -29,7 +20,8 @@ import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
 import { captureReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import { prepareSessionVerboseLevelReader } from "./session-verbose-level.js";
+import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
@@ -87,15 +79,7 @@ export async function executeFollowupTurn(params: {
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
-  const terminalReplyExpectation =
-    turn.queued.run.terminalReplyExpectation ??
-    resolveSourceReplyExpectation({
-      ctx: {
-        InboundEventKind: turn.queued.currentInboundEventKind,
-        InputProvenance: turn.queued.run.inputProvenance,
-      },
-      cfg: turn.config,
-    });
+  const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
   // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
   const isHeartbeat = false;
@@ -104,45 +88,35 @@ export async function executeFollowupTurn(params: {
   const progressAllowed = () =>
     deliveryAllowed() &&
     (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
-  const verboseRead =
-    turn.session.kind === "session" && turn.session.storePath
-      ? captureSessionEntryReadScope({
-          storePath: turn.session.storePath,
-          sessionKey: turn.session.key,
-        })
-      : undefined;
-  const verboseReadScope = verboseRead?.scope;
-  const currentVerboseLevel = (prepared?: { entry: SessionEntry | undefined }): VerboseLevel => {
-    if (turn.queued.run.verboseLevelOverride !== undefined) {
-      return turn.queued.run.verboseLevelOverride;
+  const assertProgressCurrent = () => {
+    turn.operation.abortSignal.throwIfAborted();
+    turn.queued.operatorAuthority?.assertCurrent();
+    if (turn.operation.result) {
+      throw new Error("Follow-up progress owner has settled");
     }
-    const session = turn.session;
-    if (session.kind === "session" && session.storePath) {
-      try {
-        const loadedEntry = prepared
-          ? prepared.entry
-          : loadSessionEntryReadOnly({
-              storePath: session.storePath,
-              sessionKey: session.key,
-            });
-        const ownedEntry = session.current();
-        const loadedGenerationMatches =
-          loadedEntry !== undefined &&
-          ownedEntry !== undefined &&
-          loadedEntry.sessionId === ownedEntry.sessionId &&
-          loadedEntry.lifecycleRevision === ownedEntry.lifecycleRevision &&
-          loadedEntry.updatedAt >= ownedEntry.updatedAt;
-        if (loadedGenerationMatches) {
-          const level = loadedEntry.verboseLevel;
-          if (level === "off" || level === "on" || level === "full") {
-            return level;
+  };
+  const readVerboseLevel = await prepareSessionVerboseLevelReader({
+    scope:
+      turn.session.kind === "session" &&
+      turn.session.storePath &&
+      turn.queued.run.verboseLevelOverride === undefined
+        ? {
+            storePath: turn.session.storePath,
+            sessionKey: turn.session.key,
           }
-        }
-      } catch {
-        // A queued turn keeps its admitted snapshot when a read races store maintenance.
-      }
-    }
-    const level = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
+        : undefined,
+    initialLevel:
+      turn.session.kind === "session" && turn.session.storePath
+        ? turn.session.current()?.verboseLevel
+        : undefined,
+    assertCurrent: assertProgressCurrent,
+  });
+  const currentVerboseLevel = (): VerboseLevel => {
+    const level =
+      turn.queued.run.verboseLevelOverride ??
+      readVerboseLevel() ??
+      turn.session.current()?.verboseLevel ??
+      turn.queued.run.verboseLevel;
     return level === "on" || level === "full" ? level : "off";
   };
   const forceToolResultProgress = sourceOpts?.forceToolResultProgress === true;
@@ -167,59 +141,8 @@ export async function executeFollowupTurn(params: {
       options: sourceOpts,
       resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
       resolveVerboseProgressVisibilityAsync: async () => {
-        const assertCurrent = () => {
-          turn.operation.abortSignal.throwIfAborted();
-          turn.queued.operatorAuthority?.assertCurrent();
-          if (turn.operation.result) {
-            throw new Error("Follow-up progress owner has settled");
-          }
-        };
-        assertCurrent();
-        if (verboseReadScope?.storePath && turn.queued.run.verboseLevelOverride === undefined) {
-          if (isNativeSessionEntryRead(verboseReadScope, verboseRead?.agentId)) {
-            const visible = progressAllowed() && shouldEmitVerboseToolResult();
-            assertCurrent();
-            return visible;
-          }
-          try {
-            const visible = await withSessionStoreReaderInWorker(
-              { ...verboseReadScope, storePath: verboseReadScope.storePath },
-              (source) => {
-                const sessionKey = resolveSqliteSessionKey(
-                  verboseReadScope.sessionKey,
-                  source.logicalAgentId,
-                );
-                return withOrderedSessionEntriesInWorker(
-                  [
-                    {
-                      agentId: source.database.agentId,
-                      storePath: source.database.path,
-                      sessionKeys: [sessionKey],
-                      projection: "exact",
-                      env: source.database.env,
-                    },
-                  ],
-                  ([read]) => {
-                    read!.assertCurrent();
-                    assertCurrent();
-                    const entry = read!.result.entries.find(
-                      (item) => item.sessionKey === sessionKey,
-                    )?.entry;
-                    return progressAllowed() && currentVerboseLevel({ entry }) !== "off";
-                  },
-                  { readStore: (_input, consume) => consume(source) },
-                );
-              },
-              { backing: true, logical: { assertCurrent } },
-            );
-            assertCurrent();
-            return visible;
-          } catch {
-            // Match the existing maintenance fallback, but never swallow lost authority.
-          }
-        }
-        assertCurrent();
-        return progressAllowed() && currentVerboseLevel({ entry: undefined }) !== "off";
+        assertProgressCurrent();
+        return progressAllowed() && shouldEmitVerboseToolResult();
       },
     });
   turn.operation.abortSignal.throwIfAborted();
@@ -341,9 +264,14 @@ export async function executeFollowupTurn(params: {
         if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
           return false;
         }
-        const fastModeAutoProgress = isFastModeAutoProgressPayload(payload);
-        if (fastModeAutoProgress && !requiresDurableToolResult) {
-          const verboseToolResult = shouldEmitVerboseToolResult();
+        const fastModeAutoProgress =
+          isFastModeAutoProgressPayload(payload) && !requiresDurableToolResult;
+        const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
+        const transientToolResultProgress = requiresDurableToolResult
+          ? undefined
+          : channelToolResultProgress;
+        let callback = verboseToolResult ? undefined : transientToolResultProgress;
+        if (fastModeAutoProgress) {
           const lifecycleToolResult = sourceOpts?.allowToolLifecycleWhenProgressHidden === true;
           const sourceDeliverySuppressed =
             turn.queued.run.sourceReplyDeliveryMode === "message_tool_only";
@@ -353,36 +281,27 @@ export async function executeFollowupTurn(params: {
           const callbackAllowed =
             callbackAllowedBySource &&
             (forceToolResultProgress || verboseToolResult || lifecycleToolResult);
-          const callback = callbackAllowed ? sourceOpts?.onToolResult : undefined;
-          if (callback) {
-            const visible = (await settleProgressVisibilityCallbackResult(callback(payload)))
-              .visible;
-            if (visible) {
-              return true;
-            }
-          }
-          if (!forceToolResultProgress && !verboseToolResult) {
-            return false;
-          }
-          await params.onToolResult(payload);
-          return true;
-        }
-        const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
-        const transientToolResultProgress = requiresDurableToolResult
-          ? undefined
-          : channelToolResultProgress;
-        const toolResultDeliveryAvailable =
-          Boolean(transientToolResultProgress) || verboseToolResult || requiresDurableToolResult;
-        if (
+          callback = callbackAllowed ? sourceOpts?.onToolResult : undefined;
+        } else if (
           turn.queued.run.sourceReplyDeliveryMode === "message_tool_only" &&
-          !toolResultDeliveryAvailable
+          !transientToolResultProgress &&
+          !verboseToolResult &&
+          !requiresDurableToolResult
         ) {
           return false;
         }
-        return transientToolResultProgress && !verboseToolResult
-          ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
-              .visible
-          : await params.onToolResult(payload).then(() => true);
+        if (callback) {
+          const visible = (await settleProgressVisibilityCallbackResult(callback(payload))).visible;
+          // Ordinary progress delegates completely; fast-mode hints retain a durable fallback.
+          if (visible || !fastModeAutoProgress) {
+            return visible;
+          }
+        }
+        if (fastModeAutoProgress && !forceToolResultProgress && !verboseToolResult) {
+          return false;
+        }
+        await params.onToolResult(payload);
+        return true;
       });
     },
   };

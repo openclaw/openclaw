@@ -19,6 +19,14 @@ export function resolveCronJobsStorePath(
   stateEnv: NodeJS.ProcessEnv = env,
 ) {
   const selected = storePath?.trim() || readCronStoreStatePath(stateEnv);
+  return resolveSelectedCronJobsStorePath(selected, env);
+}
+
+/** Expand an already-selected partition without reading machine state. */
+export function resolveSelectedCronJobsStorePath(
+  selected: string | undefined,
+  env: NodeJS.ProcessEnv,
+) {
   if (selected) {
     const raw = selected.trim();
     if (raw.startsWith("~")) {

@@ -9,7 +9,6 @@ import { findOpenClawStateDatabaseFailure } from "./openclaw-state-db-failure.js
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type {
   OpenClawStateWorkerOperations,
-  OpenClawStateWorkerInspectionOperations,
   OpenClawStateWorkerOperationOptions as OperationOptions,
 } from "./openclaw-state-worker-contract.js";
 import { hydrateOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
@@ -83,17 +82,19 @@ export async function runOpenClawStateWorkerOperation<T>(
 ): Promise<T | undefined> {
   return runWithCapturedWorkerContext(context, async () => {
     try {
+      options?.signal?.throwIfAborted();
       context.admission.assertCurrent();
       options?.assertCurrent?.();
-      const failure = await getOpenClawStateDatabaseTerminalFailureAsync(context);
+      const failure = await getOpenClawStateDatabaseTerminalFailureAsync(context, options?.signal);
       if (failure) {
         throw failure;
       }
       context.admission.assertCurrent();
       options?.assertCurrent?.();
       const store = await owner().open(context, options);
-      context.admission.assertCurrent();
       if (!store) {
+        options?.signal?.throwIfAborted();
+        context.admission.assertCurrent();
         if (options?.existingOnly) {
           return undefined;
         }
@@ -101,6 +102,7 @@ export async function runOpenClawStateWorkerOperation<T>(
       }
       const releaseOperation = owner().retainOperation(store);
       try {
+        options?.signal?.throwIfAborted();
         context.admission.assertCurrent();
         options?.assertCurrent?.();
         return await runWithOpenClawStateWorkerStore(
@@ -109,6 +111,7 @@ export async function runOpenClawStateWorkerOperation<T>(
           operation,
           options?.assertCurrent,
           options?.createAdmission,
+          options?.signal,
         );
       } finally {
         // The owner observes retirement; other clients may await this operation's result.
@@ -132,36 +135,6 @@ export async function runOpenClawStateWorkerOperation<T>(
         recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
       }
       throw hydrated;
-    }
-  });
-}
-
-/** Inspect the existing file without recursively admitting a domain operation. */
-export async function inspectOpenClawStateDatabase(
-  context: OpenClawStateWorkerContext,
-  command: {
-    type: "database.generationMatches";
-    input: OpenClawStateWorkerInspectionOperations["database.generationMatches"]["input"];
-  },
-): Promise<boolean | undefined> {
-  return runWithCapturedWorkerContext(context, async () => {
-    try {
-      const store = await owner().open(context, { existingOnly: true });
-      context.admission.assertCurrent();
-      if (!store) {
-        return undefined;
-      }
-      const releaseOperation = owner().retainOperation(store);
-      try {
-        context.admission.assertCurrent();
-        return await runWithOpenClawStateWorkerStore(store, context, (scope) =>
-          scope.execute(command),
-        );
-      } finally {
-        void releaseOperation();
-      }
-    } catch (error) {
-      throw hydrateOpenClawStateWorkerError(error);
     }
   });
 }

@@ -1,8 +1,15 @@
 import { GitCommandTimeoutError } from "../../infra/git-exec.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { WorktreeWorkerOperations } from "./dispatch.worker.js";
+import {
+  readWorktreeRegistryWorkerReceipt,
+  withWorktreeRegistryPublication,
+} from "./registry-publication.js";
 import { readRegistryWorktreeForMutation } from "./registry-read.js";
 import { createWorktreeRemovalClaimsGuard } from "./registry.js";
 import {
@@ -115,24 +122,25 @@ async function mutateCleanupRecord<Key extends keyof WorktreeRetirementOperation
   ]);
   return await withWorktreeRunEnd(env, async () => {
     let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
+    let admission: SqliteWorkerOperationAdmission | undefined;
     const execute = async () => {
       const { runOpenClawStateWorkerOperation } =
         await import("../../state/openclaw-state-worker-store.js");
       return await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(captured), {
-        createAdmission: (operation) => {
+        createAdmission: withWorktreeRegistryPublication((operation) => {
           settled = operation.settled;
           return {
             nativeLocations: [context.admission.databasePath],
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            admission: (admission = createSqliteWorkerOperationAdmission((request, grant) => {
               if (request.stage === "transaction") {
                 mutation.observeTransaction();
               }
               context.admission.assertCurrent();
               mutation.assertAuthority(() => assertCurrent?.());
               grant();
-            }),
+            })),
           };
-        },
+        }, context),
       });
     };
     const result = await execute().then(
@@ -150,6 +158,17 @@ async function mutateCleanupRecord<Key extends keyof WorktreeRetirementOperation
       throw error;
     }
     if (!result.ok) {
+      const committed = readWorktreeRegistryWorkerReceipt(admission?.committed?.facts);
+      if (outcome?.kind === "completed" && committed) {
+        if (committed.result.kind === "unknown") {
+          throw new SqliteWorkerError(
+            "Worktree retirement committed but its result is unavailable; reread the registry",
+            "unavailable",
+          );
+        }
+        // SAFETY: This retained admission belongs to the exact typed command above; its private worker captures that command's result.
+        return committed.result.value as WorktreeRetirementOperations[Key]["output"];
+      }
       retainWorktreeRunEndFailure(result.error);
       throw result.error;
     }

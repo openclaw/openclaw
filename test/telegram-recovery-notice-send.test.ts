@@ -6,7 +6,7 @@ import { telegramOutbound, telegramPlugin } from "../extensions/telegram/api.js"
 import { getOrCreateAccountThrottler } from "../extensions/telegram/test-api.js";
 import {
   announceRestartRecoveryResumption,
-  isRestartRecoveryDeliveryCurrent,
+  captureRestartRecoveryDeliveryCurrent,
 } from "../src/agents/main-session-recovery/main-session-restart-recovery-delivery.js";
 import type { ChannelHeartbeatAdapter } from "../src/channels/plugins/types.adapters.js";
 import { replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
@@ -386,7 +386,7 @@ describe("recovery typing final transport fence", () => {
         stop = runtime.recovery.startRecoveryTyping?.({
           ...scope.deliveryContext,
           runId: scope.recoveryRunId,
-          isCurrent: (latest) => isRestartRecoveryDeliveryCurrent({ ...scope, cfg: latest }),
+          isCurrent: captureRestartRecoveryDeliveryCurrent(scope),
         });
         await started.promise;
         await new Promise<void>((resolve) => {

@@ -44,6 +44,7 @@ import {
   registerIncognitoHistoryVisibilityTests,
   type HistoryWiringFixture,
 } from "./openclaw-agent-execution-incognito.history-visibility.test-support.js";
+import { registerIncognitoSdkHistoryTests } from "./openclaw-agent-execution-incognito.sdk-history.test-support.js";
 import type { IncognitoActorProbe } from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 
@@ -52,6 +53,7 @@ export function registerIncognitoHistoryWiringTests(
   probe: IncognitoActorProbe,
 ) {
   const { authority, create, append, targetInput } = fixture;
+  registerIncognitoSdkHistoryTests(fixture);
 
   it("keeps a multi-page history read current across an unrelated session write", async () => {
     const { actor } = fixture;
@@ -578,7 +580,7 @@ export function registerIncognitoHistoryWiringTests(
   });
 
   it.each(["unchanged", "revoke", "abort", "append", "release"] as const)(
-    "revalidates async model context consumers after %s and joins their lifetime",
+    "settles async model context consumers after %s and joins their lifetime",
     async (mode) => {
       const { actor, env } = fixture;
       const session = await create(`async-model-context-${mode}`);

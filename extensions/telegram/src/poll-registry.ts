@@ -32,13 +32,7 @@ function pollRegistryStoreOptions(env?: NodeJS.ProcessEnv) {
 }
 
 function openPollRegistryStore(env?: NodeJS.ProcessEnv) {
-  return getTelegramRuntime().state.openKeyedStore<TelegramPollRegistryEntry>(
-    pollRegistryStoreOptions(env),
-  );
-}
-
-function openPollRegistrySyncStore(env?: NodeJS.ProcessEnv) {
-  return getTelegramRuntime().state.openSyncKeyedStore<TelegramPollRegistryEntry>(
+  return getTelegramRuntime().state.openKeyedStoreV2<TelegramPollRegistryEntry>(
     pollRegistryStoreOptions(env),
   );
 }
@@ -161,18 +155,6 @@ export async function findTelegramPollRegistryEntry(params: {
   // Missing entries resolve to `undefined`; real store failures must propagate so
   // durable Telegram ingress can release the claim and retry the poll_answer.
   const stored = await openPollRegistryStore(params.env).lookup(
-    telegramPollRegistryKey(params.accountId, params.pollId),
-  );
-  return normalizePollRegistryEntry(stored);
-}
-
-/** Retained for hosts whose ingress monitor does not support inspectAsync. */
-export function findTelegramPollRegistryEntrySync(params: {
-  accountId?: string;
-  pollId: string;
-  env?: NodeJS.ProcessEnv;
-}): TelegramPollRegistryEntry | null {
-  const stored = openPollRegistrySyncStore(params.env).lookup(
     telegramPollRegistryKey(params.accountId, params.pollId),
   );
   return normalizePollRegistryEntry(stored);

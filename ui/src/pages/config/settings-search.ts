@@ -9,6 +9,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
@@ -50,7 +51,12 @@ function resolveStaticSettingsBlock(
     label,
     searchText: [
       label,
-      ...[...block.searchKeys, ...nativeKeys].map((key) => t(key)),
+      ...[...block.searchKeys, ...nativeKeys]
+        .filter(
+          (key) =>
+            currentThemeBranding().lobsterdex || key !== "configView.appearance.tabIcon.lobsterdex",
+        )
+        .map((key) => t(key)),
       block.aliases ?? "",
     ].join(" "),
   };
@@ -192,6 +198,7 @@ export function findSettingsSearchBlocks(params: {
       ...(routeId === "memory"
         ? {
             pathname: pathForMemoryTab("settings", params.basePath),
+            ...(matchesAdvanced ? { search: "?advanced=1" } : {}),
             hash: editorHash,
           }
         : routeId === "plugin-settings"

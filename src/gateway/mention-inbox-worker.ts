@@ -10,13 +10,20 @@ import {
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import type { MentionStoreSnapshot } from "./mention-inbox-store.js";
+import { getMentionStoreHeadAdmission, type MentionStoreSnapshot } from "./mention-inbox-store.js";
 import type { MentionMutation, MentionMutationResult } from "./mention-inbox.worker-contract.js";
 
 export async function readMentionSnapshot(
   context: OpenClawStateWorkerContext,
   revision: number,
 ): Promise<MentionStoreSnapshot | undefined> {
+  context.admission.assertCurrent();
+  if (
+    revision >= 0 &&
+    getMentionStoreHeadAdmission(context.admission.databasePath)?.revision === revision
+  ) {
+    return undefined;
+  }
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "mentions.snapshot", input: revision },

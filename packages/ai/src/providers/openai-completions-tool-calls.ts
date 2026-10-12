@@ -261,10 +261,7 @@ export function finalizeOpenAICompletionsToolCalls(
     return;
   }
 
-  type FinalToolCall = ToolCall & {
-    partialArgs?: unknown;
-  };
-  const toolCalls = output.content.filter(isToolCall) as FinalToolCall[];
+  const toolCalls = output.content.filter(isToolCall);
   const rejectToolCalls = () => {
     output.stopReason = "error";
     output.errorMessage = "Provider returned an incomplete or malformed tool call";
@@ -275,15 +272,15 @@ export function finalizeOpenAICompletionsToolCalls(
       (call) =>
         typeof call.name !== "string" ||
         call.name.trim().length === 0 ||
-        typeof call.partialArgs !== "string" ||
-        call.partialArgs.trim().length === 0,
+        typeof call.partialJson !== "string" ||
+        call.partialJson.trim().length === 0,
     )
   ) {
     rejectToolCalls();
     return;
   }
   try {
-    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);
+    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialJson);
   } catch {
     rejectToolCalls();
     return;
@@ -294,7 +291,7 @@ export function finalizeOpenAICompletionsToolCalls(
     if (!block || !isToolCall(block)) {
       continue;
     }
-    delete (block as { partialArgs?: string }).partialArgs;
+    delete block.partialJson;
     delete (block as { streamIndex?: number }).streamIndex;
     options.onConfirmedToolCall?.(block, contentIndex);
   }

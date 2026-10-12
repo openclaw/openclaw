@@ -43,7 +43,6 @@ const SESSION_FACTS_LIMIT = 40;
 const selectedPrFacts = new WeakMap<SessionRowProjection, Map<string, SelectedPrFacts>>();
 type SelectedRoster = {
   revision: object;
-  at: number;
   selected: SessionEntrySelection;
   targets: Map<string, SelectionRow>;
   bySessionId: Map<string, Set<string>>;
@@ -53,12 +52,21 @@ type ReadScope = {
   visibility: WeakMap<object, boolean>;
   snapshot?: RuntimeSessionFactsSelectionResult;
   roster?: SelectedRoster;
-  facts: Map<string, { entry: SelectionRow["entry"]; facts: SelectedFacts }>;
+  facts: Map<string, SelectedFacts>;
   dirty: Map<string, object>;
   transient: Set<string>;
-  reset: object;
-  completedReset?: object;
 };
+
+function createReadScope(token: string): ReadScope {
+  return {
+    token,
+    visibility: new WeakMap(),
+    facts: new Map(),
+    dirty: new Map(),
+    transient: new Set(),
+  };
+}
+
 const readScopes = new WeakMap<
   object,
   {
@@ -188,7 +196,7 @@ export async function withTrustedPluginSessionFacts<T>(
           projection.onFactsChange((change) => {
             for (const scope of readScopes.get(projection)?.scopes.values() ?? []) {
               if (change.kind === "reset" || !scope.roster) {
-                scope.reset = {};
+                scope.snapshot = undefined;
                 scope.dirty.clear();
               } else if (scope.roster.targets.has(change.key)) {
                 scope.dirty.set(change.key, {});
@@ -221,14 +229,7 @@ export async function withTrustedPluginSessionFacts<T>(
           if (entry.scopes.size >= 64) {
             entry.scopes.delete(entry.scopes.keys().next().value!);
           }
-          authority = {
-            token: randomUUID(),
-            visibility: new WeakMap(),
-            facts: new Map(),
-            dirty: new Map(),
-            transient: new Set(),
-            reset: {},
-          };
+          authority = createReadScope(randomUUID());
           entry.scopes.set(scopeKey, authority);
         }
       }
@@ -244,14 +245,7 @@ export async function withTrustedPluginSessionFacts<T>(
         });
       }
       const currentPrFacts = prFacts;
-      const cache: ReadScope = authority ?? {
-        token: "",
-        visibility: new WeakMap<object, boolean>(),
-        facts: new Map(),
-        dirty: new Map<string, object>(),
-        transient: new Set<string>(),
-        reset: {},
-      };
+      const cache = authority ?? createReadScope("");
       const snapshot = await projection.withSelectionPreparation(async () => {
         do {
           await projection.prepareSelection(true);
@@ -262,16 +256,14 @@ export async function withTrustedPluginSessionFacts<T>(
         const previousRoster = cache.roster;
         const previousFacts = cache.facts;
         const previousTransient = cache.transient;
-        const reset = cache.reset;
         const at = Date.now();
         const projectionState = projection.state;
-        const full = !previous || cache.completedReset !== reset;
+        const full = !previous;
         let roster = previousRoster;
         if (
           full ||
           !roster ||
           roster.revision !== projectionState.revision ||
-          at < roster.at ||
           at > (roster.selected.activityExpiresAt ?? Infinity)
         ) {
           const opts = { ...select, limit: Number.MAX_SAFE_INTEGER };
@@ -301,7 +293,7 @@ export async function withTrustedPluginSessionFacts<T>(
             aliases.add(key);
             bySessionId.set(target.entry.sessionId, aliases);
           }
-          roster = { revision: projectionState.revision, at, selected, targets, bySessionId };
+          roster = { revision: projectionState.revision, selected, targets, bySessionId };
         }
         const currentRoster = roster;
         const transient = transientSessionKeys(context, projectionState.rowContext, currentRoster);
@@ -313,7 +305,7 @@ export async function withTrustedPluginSessionFacts<T>(
         }
         if (full || currentRoster !== previousRoster) {
           for (const [key, target] of currentRoster.targets) {
-            if (full || previousFacts.get(key)?.entry !== target.entry) {
+            if (full || previousRoster?.targets.get(key)?.entry !== target.entry) {
               wanted.add(key);
             }
           }
@@ -420,7 +412,7 @@ export async function withTrustedPluginSessionFacts<T>(
         const sameRows =
           previous &&
           currentRoster === previousRoster &&
-          [...updates].every(([key, row]) => row === previousFacts.get(key)?.facts);
+          [...updates].every(([key, row]) => row === previousFacts.get(key));
         let result = previous;
         let nextFacts = previousFacts;
         if (
@@ -430,12 +422,12 @@ export async function withTrustedPluginSessionFacts<T>(
         ) {
           nextFacts = new Map();
           const sessions: SelectedFacts[] = [];
-          for (const [key, target] of currentRoster.targets) {
-            const facts = updates.has(key) ? updates.get(key) : previousFacts.get(key)?.facts;
+          for (const [key] of currentRoster.targets) {
+            const facts = updates.has(key) ? updates.get(key) : previousFacts.get(key);
             if (!facts) {
               continue;
             }
-            nextFacts.set(key, { entry: target.entry, facts });
+            nextFacts.set(key, facts);
             sessions.push(facts);
           }
           Object.freeze(sessions);
@@ -455,34 +447,17 @@ export async function withTrustedPluginSessionFacts<T>(
             ...(missingSessionKeys.length ? { missingSessionKeys } : {}),
           });
         }
-        const installed = cache.snapshot;
-        if (
-          complete &&
-          installed &&
-          installed !== previous &&
-          result &&
-          cache.completedReset === reset &&
-          cache.reset === reset &&
-          cache.roster?.selected === currentRoster.selected &&
-          installed.retryAt === result.retryAt &&
-          installed.sessions.length === result.sessions.length &&
-          installed.sessions.every((row, index) => row === result.sessions[index])
-        ) {
-          return installed;
-        }
-        // A later read or broad reset owns installation; keyed publications remain pending until observed.
+        // Publications during acquisition remain pending for the next read.
         if (
           complete &&
           authority &&
           cache.snapshot === previous &&
-          cache.reset === reset &&
           currentRoster.revision === projection.state.revision
         ) {
           cache.snapshot = result;
           cache.roster = currentRoster;
           cache.facts = nextFacts;
           cache.transient = transient;
-          cache.completedReset = reset;
           for (const [key, token] of observed) {
             if (cache.dirty.get(key) === token) {
               cache.dirty.delete(key);

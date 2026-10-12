@@ -140,15 +140,14 @@ export function buildDiscordCommandOptions(params: {
           await interaction.respond(buildDiscordChoiceOptions(filtered));
         }
       : undefined;
-    return autocomplete
-      ? Object.assign(base, {
-          type: ApplicationCommandOptionType.String as const,
-          autocomplete,
-        })
-      : Object.assign(base, {
-          type: ApplicationCommandOptionType.String as const,
-          choices:
-            resolvedChoices.length > 0 ? buildDiscordChoiceOptions(resolvedChoices) : undefined,
-        });
+    return Object.assign(base, {
+      type: ApplicationCommandOptionType.String as const,
+      ...(autocomplete
+        ? { autocomplete }
+        : {
+            choices:
+              resolvedChoices.length > 0 ? buildDiscordChoiceOptions(resolvedChoices) : undefined,
+          }),
+    });
   }) satisfies CommandOptions;
 }

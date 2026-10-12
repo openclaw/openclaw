@@ -56,6 +56,18 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases:
       "web internet native hosted automatic provider brave parallel google gemini searxng codex openai api key endpoint",
   },
+  appearanceBackground: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.background.title",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.background}`,
+    searchKeys: [
+      "configView.appearance.background.custom",
+      "configView.appearance.background.newSession",
+      "configView.appearance.background.sessions",
+      "configView.appearance.background.visibility",
+    ],
+    aliases: "wallpaper photo picture image backdrop hide disable opt out",
+  },
   sessionStorage: {
     routeId: "ai-agents",
     labelKey: "configView.sessionStorage.title",
@@ -315,6 +327,10 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.appearance.tabIcon.source",
       "configView.appearance.tabIcon.agent",
+      "configView.appearance.tabIcon.shape",
+      "configView.appearance.tabIcon.square",
+      "configView.appearance.tabIcon.rounded",
+      "configView.appearance.tabIcon.circle",
       "configView.appearance.tabIcon.lobsterdex",
     ],
     aliases: "favicon browser tab icon agent avatar image",

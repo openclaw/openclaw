@@ -31,6 +31,8 @@ Internal updates, including subagent completion reports, also use this steering 
 
 In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
 
+Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
+
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
 pending questions use the literal incoming text. Text-only transcript entries
@@ -68,12 +70,14 @@ Stopping already-running work is a different intent from redirecting future work
 | `collect`   | Does not steer.                                        | Coalesces compatible queued messages into one later turn after the debounce window. |
 | `interrupt` | Aborts the active run instead of steering it.          | Starts the newest message after aborting.                                           |
 
+Messages with separate durable ingress admission, including Discord and Telegram messages, are not compatible for batching: `collect` keeps them as separate followup turns. Compatible Gateway `chat.send` inputs can still combine. See [Queue modes](/concepts/queue#queue-modes).
+
 ## Burst example
 
 If four users send messages while the agent is executing a tool call:
 
 - OpenClaw preserves the runtime's configured steering drain mode and FIFO order. One-at-a-time consumers keep later messages for later boundaries; `all` consumers inject the queued FIFO batch together. Codex receives messages collected during its quiet window as one batched `turn/steer`.
-- With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates a followup turn with compatible queued messages after the debounce window.
+- With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates followup turns after the debounce window, combining only compatible queued messages.
 - With `/queue interrupt`, OpenClaw aborts the active run and starts the newest message instead of steering.
 
 ## Scope
@@ -83,6 +87,9 @@ Steering always targets the current active session run. It does not create a new
 Visible user turns started through the `agent` RPC can also receive compatible
 steering. Direct background turns with optional replies leave new human messages
 queued for a followup turn that can provide the required answer.
+This includes subagent completion and command announcements: when steering is
+rejected, the message runs automatically after the announcement and its cleanup
+finish. The input remains queued and can still be canceled while it waits.
 
 Different signed-in people with the same permissions can steer each other's
 active turn, including from different browsers or after reconnecting. The turn

@@ -1,15 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
 import { deleteSessionTranscriptFtsRowsInTransaction } from "../config/sessions/session-transcript-fts.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import {
+  CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "../state/openclaw-agent-db-contract.js";
 import {
   assertAgentDatabaseMaintenanceAuthority,
   invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
 } from "../state/openclaw-agent-db-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
+import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import {
-  assertOpenClawAgentDatabaseForMaintenance,
-  assertOpenClawAgentDatabaseOwner,
-} from "../state/openclaw-agent-db-maintenance.js";
+  assertOpenClawAgentSchemaContains,
+  getOpenClawAgentMigrationSchema,
+  readExistingAgentSchemaMeta,
+} from "../state/openclaw-agent-db-schema-helpers.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   executeSqliteQuerySync,
@@ -20,6 +25,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupDoctorSqliteRepair } from "./sqlite-index-recovery.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { SqliteSchemaMismatchError } from "./sqlite-schema-issues.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import type { AgentDatabaseMigrationTarget } from "./state-migrations.media-persistence-targets.js";
@@ -31,6 +37,26 @@ export function repairDoctorSessionWindowOrphans(
   assertCurrent: () => void,
 ): string[] {
   assertCurrent();
+  const schemaVersion = readSqliteUserVersion(database);
+  if (
+    schemaVersion > OPENCLAW_AGENT_SCHEMA_VERSION ||
+    schemaVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION - 1
+  ) {
+    return [];
+  }
+  if (readExistingAgentSchemaMeta(database)?.schemaVersion !== schemaVersion) {
+    throw new SqliteSchemaMismatchError(
+      `Agent schema markers disagree for ${pathname}; repair ownership metadata before orphan-window repair.`,
+    );
+  }
+  // Preserve schema-24 repair before its schema-25 migration or backup.
+  assertOpenClawAgentSchemaContains(
+    database,
+    pathname,
+    getOpenClawAgentMigrationSchema(schemaVersion),
+    "current",
+    true,
+  );
   database.exec("PRAGMA foreign_keys = ON;");
   return runSqliteImmediateTransactionSync(
     database,
@@ -100,7 +126,7 @@ export function repairDoctorSessionWindowOrphans(
   );
 }
 
-/** Repair current agent schemas before the full migration backup can admit their rows. */
+/** Repair supported session-window shapes before the full migration backup admits their rows. */
 export async function repairDoctorSessionWindowsBeforeMigration(params: {
   env: NodeJS.ProcessEnv;
   targets: readonly AgentDatabaseMigrationTarget[];
@@ -114,18 +140,10 @@ export async function repairDoctorSessionWindowsBeforeMigration(params: {
         const pathname = target.path;
         const database = openNodeSqliteDatabase(pathname);
         try {
-          if (readSqliteUserVersion(database) !== OPENCLAW_AGENT_SCHEMA_VERSION) {
-            continue;
-          }
           const assertCurrent = () => {
             assertAgentDatabaseMaintenanceAuthority(maintenance);
             assertOpenClawAgentDatabaseOwner(database, { agentId: target.agentId, pathname });
           };
-          assertOpenClawAgentDatabaseForMaintenance(database, {
-            agentId: target.agentId,
-            pathname,
-            allowStartupIndexRepair: true,
-          });
           changes.push(...repairDoctorSessionWindowOrphans(database, pathname, assertCurrent));
         } finally {
           database.close();

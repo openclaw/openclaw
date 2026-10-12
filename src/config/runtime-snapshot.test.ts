@@ -34,6 +34,7 @@ import {
   registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
+  resolveRuntimeModelConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSourceSnapshotIfCurrent,
@@ -154,6 +155,43 @@ describe("runtime snapshot state", () => {
     expect(resolveRuntimeConfigCacheKey(secondConfig)).toBe(
       `runtime:${secondMetadata?.revision}:${secondMetadata?.fingerprint}`,
     );
+  });
+
+  it("keeps model projections across display writes but invalidates source and resolution changes", () => {
+    const initial: OpenClawConfig = {
+      agents: { entries: { main: {} }, defaults: { model: "test/first" } },
+    };
+    setRuntimeConfigSnapshot(initial, initial);
+    const modelKey = resolveRuntimeModelConfigCacheKey(initial);
+    const configKey = resolveRuntimeConfigCacheKey(initial);
+    const display: OpenClawConfig = {
+      ...initial,
+      ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
+      meta: { lastTouchedVersion: "2026.10.11" },
+    };
+    setRuntimeConfigSnapshot(display, display);
+    expect(resolveRuntimeConfigCacheKey(display)).not.toBe(configKey);
+    expect(resolveRuntimeModelConfigCacheKey(display)).toBe(modelKey);
+
+    const source = {
+      ...display,
+      agents: { ...display.agents, defaults: { model: "test/second" } },
+    };
+    expect(
+      setRuntimeConfigSourceSnapshotIfCurrent({
+        expectedRevision: getRuntimeConfigSnapshotMetadata()!.revision,
+        sourceConfig: source,
+      }),
+    ).toBe(true);
+    const sourceKey = resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!);
+    expect(sourceKey).not.toBe(modelKey);
+
+    const resolved = { ...display };
+    setConfigResolutionFacts(resolved, new Set());
+    setRuntimeConfigSnapshot(resolved, display);
+    expect(resolveRuntimeModelConfigCacheKey(resolved)).not.toBe(modelKey);
+    setRuntimeConfigSnapshot(source, source);
+    expect(resolveRuntimeModelConfigCacheKey(source)).not.toBe(modelKey);
   });
 
   it("hashes one captured immutable fleet only once", () => {

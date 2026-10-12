@@ -18,3 +18,50 @@ openclaw_release_scenario_logs() {
     shift 2
   done
 }
+
+openclaw_release_onboard() {
+  local port="$1"
+  shift
+  set -- "$@" onboard \
+    --non-interactive \
+    --accept-risk \
+    --flow quickstart \
+    --mode local \
+    --auth-choice skip
+  if [ -n "$port" ]; then
+    set -- "$@" --gateway-port "$port" --gateway-bind loopback
+  fi
+  "$@" \
+    --skip-daemon \
+    --skip-ui \
+    --skip-channels \
+    --skip-skills \
+    --skip-health
+}
+
+start_gateway() {
+  local log_path="$1"
+  gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$log_path")"
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_path" 300 "$PORT"
+}
+
+stop_gateway() {
+  openclaw_e2e_terminate_gateways "${gateway_pid:-}"
+  gateway_pid=""
+}
+
+start_clickclack_fixture() {
+  local token="$1"
+  CLICKCLACK_FIXTURE_PORT="$CLICKCLACK_PORT" \
+  CLICKCLACK_FIXTURE_TOKEN="$token" \
+  CLICKCLACK_FIXTURE_STATE="$CLICKCLACK_STATE" \
+    node scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs >"$CLICKCLACK_SERVER_LOG" 2>&1 &
+  clickclack_pid="$!"
+  for _ in $(seq 1 100); do
+    if openclaw_e2e_probe_http_status "http://127.0.0.1:$CLICKCLACK_PORT/health" 200 >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+  openclaw_e2e_probe_http_status "http://127.0.0.1:$CLICKCLACK_PORT/health" 200
+}

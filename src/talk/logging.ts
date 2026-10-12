@@ -52,11 +52,7 @@ export function recordTalkLogEvent(event: TalkEvent): void {
   const message = `talk event ${event.type}`;
   try {
     const logger = getChildLogger(TALK_LOGGER_BINDINGS);
-    if (level === "warn") {
-      logger.warn(attributes, message);
-      return;
-    }
-    logger.info(attributes, message);
+    logger[level](attributes, message);
   } catch {
     // logging must never block the realtime Talk path
   }

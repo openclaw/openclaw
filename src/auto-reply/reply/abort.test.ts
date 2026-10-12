@@ -17,6 +17,7 @@ import {
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { stopSubagentsForRequester } from "./abort-operation.js";
@@ -767,33 +768,19 @@ describe("abort detection", () => {
       await addSubagentFixture(fixture);
     }
     let failedTombstone = false;
-    const execute = stateWorker.runOpenClawStateWorkerOperation;
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, options) =>
-        execute(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (isSubagentRegistryWriteCommand(command) && !failedTombstone) {
-                  const firstRow = command.input.values.find(
-                    (row) => row.run_id === "run-persistence-failure-first",
-                  );
-                  const first = firstRow && rowToSubagentRunRecord(firstRow);
-                  if (
-                    first?.execution.status === "terminal" &&
-                    first.endedReason === "subagent-killed"
-                  ) {
-                    failedTombstone = true;
-                    throw new Error("sqlite busy");
-                  }
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-    );
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (isSubagentRegistryWriteCommand(command) && !failedTombstone) {
+        const firstRow = command.input.values.find(
+          (row) => row.run_id === "run-persistence-failure-first",
+        );
+        const first = firstRow && rowToSubagentRunRecord(firstRow);
+        if (first?.execution.status === "terminal" && first.endedReason === "subagent-killed") {
+          failedTombstone = true;
+          throw new Error("sqlite busy");
+        }
+      }
+      return scope.execute(command, executeOptions);
+    });
 
     await expect(
       stopSubagentsForRequester({

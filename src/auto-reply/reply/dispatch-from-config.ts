@@ -109,7 +109,7 @@ async function dispatchReplyFromConfigInner(
   const execute = async () => {
     const delivery = await prepareDispatchDelivery(gathered.state);
 
-    const context = await prepareDispatchOperationContext(delivery.state);
+    const context = await prepareDispatchOperationContext(delivery);
     if (context.status === "complete") {
       return context.result;
     }
@@ -128,13 +128,12 @@ async function dispatchReplyFromConfigInner(
 
       const execution = await prepareDispatchExecution(route.state);
 
-      const executed = await executeDispatch(execution.state);
+      const executed = await executeDispatch(execution);
       if (executed.status === "complete") {
         return executed.result;
       }
 
-      const finalized = await finalizeDispatchAndAudit(executed.state);
-      return finalized.result;
+      return await finalizeDispatchAndAudit(executed.state);
     } catch (err) {
       const {
         failDispatchReplyOperation,
