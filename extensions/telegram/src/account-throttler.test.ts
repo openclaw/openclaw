@@ -2,7 +2,11 @@
 import { createRequire } from "node:module";
 import { Api } from "grammy";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { getOrCreateAccountThrottler, runReplaceableTelegramRequest } from "./account-throttler.js";
+import {
+  getOrCreateAccountThrottler,
+  releaseAccountThrottler,
+  runReplaceableTelegramRequest,
+} from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
 
@@ -695,5 +699,105 @@ describe("getOrCreateAccountThrottler", () => {
     await Promise.all([first, sameTopic, otherTopic]);
 
     expect(entered).toEqual(["+10:first", "0x20:hex", "+10:second"]);
+  });
+});
+
+describe("releaseAccountThrottler", () => {
+  beforeEach(() => {
+    resetTelegramAccountThrottlersForTest();
+  });
+
+  const ownedFactory =
+    (dispose: () => Promise<void>) =>
+    (): { transformer: TelegramTransform; dispose: () => Promise<void> } => ({
+      transformer: (async (prev, method, payload, signal) =>
+        prev(method, payload, signal)) as TelegramTransform,
+      dispose,
+    });
+
+  it("returns false when the token has no cached throttler", async () => {
+    await expect(releaseAccountThrottler("never-created")).resolves.toBe(false);
+  });
+
+  it("drops the cache entry so the next lookup creates a fresh throttler", async () => {
+    const dispose = vi.fn(async () => {});
+    const first = getOrCreateAccountThrottler("released-token", ownedFactory(dispose));
+
+    expect(getOrCreateAccountThrottler("released-token", ownedFactory(dispose))).toBe(first);
+
+    await expect(releaseAccountThrottler("released-token")).resolves.toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+
+    const recreated = getOrCreateAccountThrottler("released-token", ownedFactory(dispose));
+    expect(recreated).not.toBe(first);
+  });
+
+  it("stops timers and settles queued sends on release", async () => {
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    const live = new Set<ReturnType<typeof setInterval>>();
+    globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+      const handle = realSetInterval(...args);
+      live.add(handle);
+      return handle;
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((handle?: ReturnType<typeof setInterval>) => {
+      if (handle !== undefined) {
+        live.delete(handle);
+      }
+      return realClearInterval(handle);
+    }) as typeof clearInterval;
+
+    try {
+      const account = getOrCreateAccountThrottler("settle-release");
+      const entered: string[] = [];
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const prev = vi.fn(async (_method: string, payload: unknown) => {
+        const request = payload as { text?: string };
+        entered.push(request.text ?? "");
+        if (entered.length === 1) {
+          await firstGate;
+        }
+        return { ok: true, result: request.text ?? "" };
+      }) as unknown as TelegramPreviousCall;
+
+      const send = (text: string) =>
+        account.transformer(prev, "sendMessage", { chat_id: 42, text }, undefined);
+
+      const first = send("first");
+      await vi.waitFor(() => expect(entered).toEqual(["first"]));
+      const queued = send("queued");
+      // Attach the rejection handler before releasing so the drop never lands
+      // as an unhandled rejection.
+      const queuedRejection = expect(queued).rejects.toThrow(/stopped/i);
+      releaseFirst();
+      await first;
+
+      expect(live.size).toBeGreaterThan(0);
+      await releaseAccountThrottler("settle-release");
+      await queuedRejection;
+      expect(live.size).toBe(0);
+      await expect(send("after-release")).rejects.toThrow(/released/i);
+      expect(getOrCreateAccountThrottler("settle-release")).not.toBe(account);
+    } finally {
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+    }
+  });
+
+  it("keeps releasing other tokens independent", async () => {
+    const disposeA = vi.fn(async () => {});
+    const disposeB = vi.fn(async () => {});
+    getOrCreateAccountThrottler("token-a", ownedFactory(disposeA));
+    getOrCreateAccountThrottler("token-b", ownedFactory(disposeB));
+
+    await expect(releaseAccountThrottler("token-a")).resolves.toBe(true);
+
+    expect(disposeA).toHaveBeenCalledOnce();
+    expect(disposeB).not.toHaveBeenCalled();
+    expect(getOrCreateAccountThrottler("token-b", ownedFactory(disposeB))).toBeDefined();
   });
 });

@@ -95,7 +95,14 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
   behavior directly. Avoid custom Bot API wrappers for behavior grammY already
   owns.
 - Throttling is bot-token scoped. All Telegram API clients for the same token
-  share one grammY `apiThrottler()` instance.
+  share one limiter owned by `account-throttler.ts`. The limiter mirrors
+  grammY `apiThrottler()` defaults (upstream does not expose its Bottleneck
+  instances for disposal). Retirement runs in the Gateway process: the
+  account `stopAccount` hook releases the throttler once its token is no
+  longer configured (token rotation or removal), disconnecting limiters only
+  after queued sends settle; a token still configured (unchanged reloads,
+  manual stops) keeps its limiter. The CLI lifecycle hooks release in the
+  mutating process as well.
 - Do not silently retry failed topic sends without topic metadata. A
   wrong-surface success is worse than a loud Telegram error.
 - DM topics and forum topics are distinct. `direct_messages_topic_id` and

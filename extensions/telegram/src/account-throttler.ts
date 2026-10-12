@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ApiError } from "grammy/types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -11,6 +12,10 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { apiThrottler } from "./bot.runtime.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
+import {
+  createOwnedGrammyApiThrottler,
+  type OwnedGrammyApiThrottler,
+} from "./grammy-api-throttler.js";
 import { isTelegramRateLimitError, readTelegramRetryAfterMs } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
@@ -198,6 +203,8 @@ function callThroughFloodGate(
 type TelegramAccountThrottler = {
   transformer: ApiThrottlerTransformer;
   chatActions: ReturnType<typeof createTelegramSendChatActionHandler>;
+  /** Disconnects the token's Bottleneck limiters; the cache entry must already be dropped. */
+  dispose: () => Promise<void>;
 };
 type TelegramApiPayload = {
   chat_id?: unknown;
@@ -359,10 +366,16 @@ function resolveForumLaneKey(payload: TelegramApiPayload): string {
   return "main";
 }
 
+// Test call sites inject a bare transformer; the production default returns an
+// owned throttler that can disconnect its Bottleneck timers for retired tokens.
+type CreatedAccountThrottler = ApiThrottlerTransformer | OwnedGrammyApiThrottler;
+
 function createTelegramAccountThrottler(
-  createThrottler: () => ApiThrottlerTransformer = apiThrottler,
+  createThrottler: () => CreatedAccountThrottler = createOwnedGrammyApiThrottler,
 ): TelegramAccountThrottler {
-  const baseThrottler = createThrottler();
+  const created = createThrottler();
+  const baseThrottler = typeof created === "function" ? created : created.transformer;
+  const dispose = typeof created === "function" ? async () => {} : () => created.dispose();
   const chatActions = createTelegramSendChatActionHandler({
     logger: (message) => logVerbose(`telegram: ${message}`),
     minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
@@ -431,12 +444,12 @@ function createTelegramAccountThrottler(
       ? send(method, payload, signal)
       : getScheduler(groupChatKey).withPriority(() => send(method, payload, signal));
   };
-  return { transformer, chatActions };
+  return { transformer, chatActions, dispose };
 }
 
 export function getOrCreateAccountThrottler(
   token: string,
-  createThrottler: () => ApiThrottlerTransformer = apiThrottler,
+  createThrottler: () => CreatedAccountThrottler = createOwnedGrammyApiThrottler,
 ): TelegramAccountThrottler {
   const throttlerByToken = resolveGlobalMap<string, TelegramAccountThrottler>(
     TELEGRAM_ACCOUNT_THROTTLERS_KEY,
@@ -447,4 +460,29 @@ export function getOrCreateAccountThrottler(
     throttlerByToken.set(token, throttler);
   }
   return throttler;
+}
+
+/**
+ * Releases the throttler of a retired bot token: drops the cache entry and
+ * disconnects its Bottleneck limiters, stopping their heartbeat timers. The
+ * caller must ensure no other configured account still uses the token.
+ * Returns false when the token has no cached throttler.
+ */
+export async function releaseAccountThrottler(token: string): Promise<boolean> {
+  const throttlerByToken = resolveGlobalMap<string, TelegramAccountThrottler>(
+    TELEGRAM_ACCOUNT_THROTTLERS_KEY,
+  );
+  const throttler = throttlerByToken.get(token);
+  if (!throttler) {
+    return false;
+  }
+  // Delete before disposing so a concurrent get-or-create never schedules work
+  // onto the limiters being disconnected.
+  throttlerByToken.delete(token);
+  try {
+    await throttler.dispose();
+  } catch (error) {
+    floodLog.warn(`failed to dispose Telegram account throttler: ${formatErrorMessage(error)}`);
+  }
+  return true;
 }
