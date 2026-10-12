@@ -3,62 +3,73 @@ import type {
   SkillWorkshopChange,
   SkillWorkshopSkillSummary,
 } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { icons } from "../../components/icons.ts";
-import { t } from "../../i18n/index.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SkillWorkshopAccess } from "./access.ts";
 import type { WorkshopMutation, WorkshopSnapshot } from "./api.ts";
 import type { SkillWorkshopMode } from "./mode.ts";
 
-export function renderWorkshopChangeText(change: SkillWorkshopChange, prefix: string) {
-  return html`<span class=${`${prefix}who`}
-      >${t(`skillWorkshop.changes.actors.${change.actor}`)}
-      ${t(`skillWorkshop.changes.actions.${change.action}`)}</span
-    >
-    ${change.summary ? html`<span class=${`${prefix}why`}>${change.summary}</span>` : nothing}
-    <span class=${`${prefix}when`}>${formatRelativeTimestamp(change.createdAtMs)}</span>`;
+export type WorkshopView = () => SkillWorkshopViewProps;
+
+export function WorkshopChangeText(props: { change: SkillWorkshopChange; prefix: string }) {
+  return (
+    <>
+      <span class={`${props.prefix}who`}>
+        {t(`skillWorkshop.changes.actors.${props.change.actor}`)}{" "}
+        {t(`skillWorkshop.changes.actions.${props.change.action}`)}
+      </span>
+      {props.change.summary && <span class={`${props.prefix}why`}>{props.change.summary}</span>}
+      <span class={`${props.prefix}when`}>{formatRelativeTimestamp(props.change.createdAtMs)}</span>
+    </>
+  );
 }
 
-export function renderMutationButton(
-  props: SkillWorkshopViewProps,
-  params: {
-    label: string;
-    title?: string;
-    mutation: WorkshopMutation;
-    key: string;
-    variant?: "default" | "danger" | "link";
-  },
-) {
-  const allowed =
-    params.mutation.method === "skills.workshop.archive"
-      ? props.access.canArchive
-      : props.access.canRestore;
-  if (!allowed) {
-    return nothing;
-  }
-  const variant = params.variant ?? "default";
-  const className =
-    variant === "link"
-      ? "sw-link-button"
-      : variant === "danger"
-        ? "btn btn--sm danger"
-        : "btn btn--sm oc-action";
-  return html`<button
-    type="button"
-    class=${className}
-    title=${params.title ?? nothing}
-    ?disabled=${props.pendingAction !== null}
-    @click=${(event: Event) => {
-      event.stopPropagation();
-      props.onMutate(params.mutation, params.key);
-    }}
-  >
-    ${variant === "danger" ? html`<span aria-hidden="true">${icons.archive}</span>` : nothing}
-    ${props.pendingAction === params.key ? t("skillWorkshop.viewer.loading") : params.label}
-  </button>`;
+export function MutationButton(props: {
+  view: WorkshopView;
+  label: string;
+  title?: string;
+  mutation: WorkshopMutation;
+  actionKey: string;
+  variant?: "default" | "danger" | "link";
+}) {
+  const allowed = () =>
+    props.mutation.method === "skills.workshop.archive"
+      ? props.view().access.canArchive
+      : props.view().access.canRestore;
+  return (
+    <>
+      {allowed() && (
+        <button
+          type="button"
+          class={
+            props.variant === "link"
+              ? "sw-link-button"
+              : props.variant === "danger"
+                ? "btn btn--sm danger"
+                : "btn btn--sm oc-action"
+          }
+          title={props.title}
+          disabled={props.view().pendingAction !== null}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.view().onMutate(props.mutation, props.actionKey);
+          }}
+        >
+          {props.variant === "danger" && (
+            <span aria-hidden="true">
+              <Icon name="archive" />
+            </span>
+          )}
+          {props.view().pendingAction === props.actionKey
+            ? t("skillWorkshop.viewer.loading")
+            : props.label}
+        </button>
+      )}
+    </>
+  );
 }
 
 export function unusedDays(

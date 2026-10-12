@@ -32,8 +32,8 @@ async function seedPersonalSessionPins(page: Page, keys: string[]) {
   await page.addInitScript(
     ({ storageKey, entries }) => {
       const stored = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
-      if (!Array.isArray(stored.sidebarEntries)) {
-        localStorage.setItem(storageKey, JSON.stringify({ ...stored, sidebarEntries: entries }));
+      if (!Array.isArray(stored.railShortcuts)) {
+        localStorage.setItem(storageKey, JSON.stringify({ ...stored, railShortcuts: entries }));
       }
     },
     {

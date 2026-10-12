@@ -19,6 +19,7 @@ import {
   boundSessionEntryReplacementPublication,
   prepareSessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionActorEntryPatch } from "./session-actor-entry-publication.worker.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
@@ -138,6 +139,7 @@ export function commitSessionEntryPatch(
           });
         },
       };
+      const publishActor = prepareSessionActorEntryPatch(database, input.sessionKey);
       let mutation;
       if ("operation" in input) {
         if (input.validateCanonicalKeys) {
@@ -213,6 +215,9 @@ export function commitSessionEntryPatch(
       // Publish after every patch-owned write, including commit-receipt preparation.
       if (mutation.identity) {
         publishRetention?.();
+      }
+      if (publication && mutation.postimages) {
+        publishActor?.(mutation.postimages, publication);
       }
       result = {
         kind: "session-entry-patch",
