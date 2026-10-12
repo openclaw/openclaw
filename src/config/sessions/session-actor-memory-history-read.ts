@@ -94,6 +94,11 @@ export function readSessionActorMemoryHistoryQuery(
         kind: "recent",
         ...query.input,
       });
+    case "session.history.recent-text":
+      return readSessionActorMemoryProjection(window, readScope, {
+        kind: "recent-text",
+        ...query.input,
+      });
     case "session.history.page":
       return readSessionActorMemoryProjection(window, readScope, { kind: "page", ...query.input });
     case "session.history.around-id":

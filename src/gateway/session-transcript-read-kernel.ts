@@ -1,5 +1,6 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import { resolveVisibleHistoryEventCount } from "../config/sessions/session-accessor.sqlite-history-projection.js";
 import {
   readTranscriptDisplayDeltaFromProjection,
@@ -19,6 +20,7 @@ import {
   resolveVisibleMessagePositions,
 } from "../config/sessions/session-accessor.sqlite-reset-window.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { readRecentTranscriptConversationText } from "../config/sessions/transcript-recent-text.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import type { TranscriptAnchorPageOptions } from "../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-window.js";
@@ -153,6 +155,11 @@ export function selectSessionTranscriptProjection(
   sessionFile?: string,
 ): SessionTranscriptProjectionSelectionResults[SessionTranscriptProjectionSelection["kind"]] {
   switch (selection.kind) {
+    case "recent-text":
+      return readRecentTranscriptConversationText(
+        (page) => readSessionTranscriptBoundedMessageTailPageFromProjection(projection, page),
+        selection.options,
+      );
     case "delta":
       return readTranscriptDisplayDeltaFromProjection(projection, selection.options);
     case "count":

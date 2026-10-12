@@ -282,6 +282,7 @@ export function createSessionHistoryWorkerReaders(
           Array.isArray(value) ||
           (value.kind !== "active-accounting" &&
             value.kind !== "bounded-tail" &&
+            value.kind !== "recent-text" &&
             value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&

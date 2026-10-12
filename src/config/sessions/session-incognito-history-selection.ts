@@ -6,6 +6,8 @@ export function resolveIncognitoHistoryProjectionSelection(
   command: SqliteWorkerCommand<IncognitoHistoryOperations>,
 ): SessionTranscriptProjectionSelection | undefined {
   switch (command.type) {
+    case "session.history.recent-text":
+      return { kind: "recent-text", options: command.input.options };
     case "session.history.delta":
       return { kind: "delta", options: command.input.options };
     case "session.history.count":
