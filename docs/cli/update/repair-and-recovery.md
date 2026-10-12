@@ -20,11 +20,11 @@ Unexpected exceptions retain the known update mode, resolved target, failed step
 and any recorded recovery outcome. Reports include a bounded, redacted error code
 or name and first message line through the same diagnostics as failed commands;
 unrecognized private text and stack traces are excluded from the public preview.
-Git preflight cleanup continues if its progress history cannot be recorded. The
-direct result retains a reporting warning; if the update was already failing,
-its exception retains both the original failure and the reporting failure. A
-reporting warning alone does not mean runtime verification failed. Uncertain
-command cleanup still preserves the temporary artifacts and blocks recovery.
+Git preflight cleanup continues if its progress history cannot be recorded.
+Reporting failures produce sanitized warnings on stderr and the cleanup step.
+Reporting-only failures preserve an existing exception and its recovery classification.
+Reporting warnings alone do not mean runtime verification failed. Uncertain
+command cleanup still preserves temporary artifacts and blocks recovery.
 
 Choosing **Diagnose update failure** opens [Triage](/cli/triage), which starts the
 first directly launchable coding agent on `PATH`, in this order: Claude Code,

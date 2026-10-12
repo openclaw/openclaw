@@ -461,7 +461,6 @@ export async function runGitCandidatePreflight(params: {
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
-  onCleanupReportingError?: (error: unknown) => void;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
