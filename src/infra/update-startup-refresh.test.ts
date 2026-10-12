@@ -27,33 +27,63 @@ import {
   setUpdateScheduleCache,
 } from "./update-status-state.js";
 
-vi.mock("../version.js", () => ({ VERSION: "1.0.0" }));
-vi.mock("../state/config-machine-state.js", () => ({ readConfigMachineState: vi.fn(() => null) }));
-vi.mock("../state/config-machine-state-write.js", () => ({ writeConfigMachineState: vi.fn() }));
-vi.mock("../model-catalog/remote-config.js", () => ({ resolveRemoteCatalogUrl: vi.fn() }));
-vi.mock("../model-catalog/remote-overlay.js", () => ({ checkRemoteModelCatalogUpdate: vi.fn() }));
-vi.mock("../model-catalog/remote-refresh.js", () => ({
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "1.0.0",
+}));
+vi.mock("../state/config-machine-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/config-machine-state.js")>()),
+  readConfigMachineState: vi.fn(() => null),
+}));
+vi.mock("../state/config-machine-state-write.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/config-machine-state-write.js")>()),
+  writeConfigMachineState: vi.fn(),
+}));
+vi.mock("../model-catalog/remote-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../model-catalog/remote-config.js")>()),
+  resolveRemoteCatalogUrl: vi.fn(),
+}));
+vi.mock("../model-catalog/remote-overlay.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../model-catalog/remote-overlay.js")>()),
+  checkRemoteModelCatalogUpdate: vi.fn(),
+}));
+vi.mock("../model-catalog/remote-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../model-catalog/remote-refresh.js")>()),
   refreshRemoteModelCatalog: vi.fn(),
   REMOTE_MODEL_CATALOG_TTL_MS: 21_600_000,
 }));
-vi.mock("./openclaw-root.js", () => ({
+vi.mock("./openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-root.js")>()),
   resolveOpenClawPackageRoot: vi.fn(async () => "/opt/openclaw"),
 }));
-vi.mock("./restart-sentinel.js", () => ({ readVerifiedGitUpdateReceipt: vi.fn(async () => null) }));
-vi.mock("./telemetry.js", () => ({ checkTelemetryUpdate: vi.fn() }));
-vi.mock("./update-check.js", () => ({
+vi.mock("./restart-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./restart-sentinel.js")>()),
+  readVerifiedGitUpdateReceipt: vi.fn(async () => null),
+}));
+vi.mock("./telemetry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./telemetry.js")>()),
+  checkTelemetryUpdate: vi.fn(),
+}));
+vi.mock("./update-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-check.js")>()),
   checkUpdateStatus: vi.fn(),
   compareSemverStrings: vi.fn(),
   resolveNpmChannelTag: vi.fn(),
 }));
-vi.mock("./update-git-metadata.js", () => ({ resolveDevGitCommits: vi.fn() }));
-vi.mock("./update-startup-auto-run.js", () => ({
+vi.mock("./update-git-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-git-metadata.js")>()),
+  resolveDevGitCommits: vi.fn(),
+}));
+vi.mock("./update-startup-auto-run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-startup-auto-run.js")>()),
   runCampaignUpdate: vi.fn(async () => "handoff"),
 }));
-vi.mock("./gateway-active-work.js", () => ({
+vi.mock("./gateway-active-work.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-active-work.js")>()),
   createGatewayActiveWorkSnapshot: vi.fn(() => ({ idle: true })),
 }));
-vi.mock("./gateway-supervision.js", () => ({
+vi.mock("./gateway-supervision.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-supervision.js")>()),
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON: "external-supervisor-update-required",
   isGatewayExternallySupervised: vi.fn(() => false),
 }));

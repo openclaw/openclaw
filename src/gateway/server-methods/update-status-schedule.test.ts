@@ -35,7 +35,10 @@ vi.mock("../../infra/update-install-status.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-install-status.js")>()),
   resolveStartupInstallStatus: install,
 }));
-vi.mock("../../infra/update-git-metadata.js", () => ({ resolveDevGitCommits: vi.fn() }));
+vi.mock("../../infra/update-git-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-git-metadata.js")>()),
+  resolveDevGitCommits: vi.fn(),
+}));
 vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: () => null,
