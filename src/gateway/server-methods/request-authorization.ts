@@ -341,7 +341,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     const projection =
       !sessionPolicy &&
       resolveDirectSessionTargets(params.method, requestParams).length > 0 &&
-      (params.consumeSessionTurn || !isGatewayAdmin(params.client))
+      (params.consumeSessionTurn || params.method === "chat.send" || !isGatewayAdmin(params.client))
         ? getSessionRowProjection(params.context)
         : undefined;
     const sessionAuthorizationParams = {
