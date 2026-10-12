@@ -31,10 +31,15 @@ export function createChatPaneSendActions(
         !options.canSend ||
         (options.modelRequiredReason &&
           (state.chatAttachments.length > 0 || !isModelIndependentChatCommand(state.chatMessage)))
-      )
+      ) {
         return;
-      if (options.continueSession) return options.continueSession();
-      if (options.addSuggestion) return options.addSuggestion();
+      }
+      if (options.continueSession) {
+        return options.continueSession();
+      }
+      if (options.addSuggestion) {
+        return options.addSuggestion();
+      }
       return state.handleSendChat(
         undefined,
         followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,

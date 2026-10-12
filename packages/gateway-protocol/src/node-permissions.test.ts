@@ -17,7 +17,7 @@ describe("native node permission errors", () => {
       ...base,
       error: { code: "PERMISSION_MISSING", message: "Grant access", details },
     };
-    expect(validate.Check(JSON.parse(JSON.stringify(result)))).toBe(true);
+    expect(validate.Check(result)).toBe(true);
     expect(readNodePermissionDetails(result.error.details)).toEqual(details);
   });
 

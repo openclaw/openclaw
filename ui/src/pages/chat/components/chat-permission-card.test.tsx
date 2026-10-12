@@ -35,7 +35,9 @@ function fixture(state: NodePermissionRequest["state"], ids = ["screenRecording"
         state === "not-determined" ? "notDetermined" : state === "denied" ? "denied" : "granted",
       state,
     }));
-  if (ids.includes("computerControl")) snapshot.capabilities.computerControlEnabled = false;
+  if (ids.includes("computerControl")) {
+    snapshot.capabilities.computerControlEnabled = false;
+  }
   const post = vi.fn<(message: unknown) => Promise<unknown>>().mockResolvedValue(snapshot);
   vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
   vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
