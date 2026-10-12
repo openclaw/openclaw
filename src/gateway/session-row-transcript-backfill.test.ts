@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -92,6 +93,7 @@ async function withSession(
   entry: Partial<InternalSessionEntry> = {},
 ) {
   await withOpenClawTestState({ label: "session-row-backfill" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const params = {
       agentId: "main",
       storePath: state.statePath("sessions.json"),

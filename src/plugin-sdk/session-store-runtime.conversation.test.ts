@@ -6,6 +6,10 @@ import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import {
@@ -39,6 +43,7 @@ describe("current conversation session binding", () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-conversation-"));
     storePath = path.join(tempDir, "sessions.sqlite");
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
@@ -47,6 +52,7 @@ describe("current conversation session binding", () => {
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     fs.rmSync(tempDir, { recursive: true, force: true });
     // A Vitest thread cannot retire an escaped reclamation lease after this case.
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);

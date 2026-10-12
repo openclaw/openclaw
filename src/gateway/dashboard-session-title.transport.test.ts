@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import { slugifyWorktreeTitle, validateName } from "../agents/worktrees/name.js";
 import { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -112,6 +113,7 @@ async function withTitleProvider(
             },
           },
         };
+        setRuntimeConfigSnapshot(cfg);
         await run({
           cfg,
           agentDir: state.agentDir(),

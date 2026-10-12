@@ -6,11 +6,16 @@ import * as stateDb from "../state/openclaw-state-db.js";
 import { executeDevicePairingRead } from "./device-pairing-read.kernel.js";
 import {
   loadDevicePairingStoreState,
+  loadPairedDevicePairingStoreRecordFromDatabase,
   persistDevicePairingStoreState,
+  readPairedDevicePairingRecordsFromDatabase,
+  updatePairedDeviceInTransaction,
+  withDevicePairingStoreDatabase,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
 import { updatePairedDeviceMetadata } from "./device-pairing.js";
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
+import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let baseDir: string;
@@ -130,5 +135,96 @@ test.each([false, true])(
     expect(loadDevicePairingStoreState(baseDir).pairedByDeviceId).toEqual(
       rollback ? initial.pairedByDeviceId : {},
     );
+  },
+);
+
+test.each([false, true])(
+  "reuses one paired snapshot without stale reads or escaped rollback state (rollback=%s)",
+  (rollback) => {
+    const reads = trackSqliteStatementExecutions(database.db, ["paired"], (sql) =>
+      /^\s*select\b.*\bfrom "device_pairing_paired"/iu.test(sql) ? "paired" : null,
+    );
+    const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
+    const expected = {
+      node: {
+        deviceId: "node",
+        publicKey: "synthetic-key",
+        createdAtMs: 1,
+        approvedAtMs: 1,
+        remoteIp: "192.0.2.2",
+        tokens: {
+          operator: {
+            token: "synthetic-token",
+            role: "operator",
+            scopes: ["operator.read"],
+            createdAtMs: 2,
+          },
+        },
+      },
+      sibling: {
+        deviceId: "sibling",
+        publicKey: "synthetic-sibling-key",
+        createdAtMs: 3,
+        approvedAtMs: 3,
+      },
+    };
+    const operate = () =>
+      runWithSqliteWorkerStateContext({ environment: env }, () =>
+        stateDb.runOpenClawStateWriteTransaction(
+          () => {
+            const paired = readPairedDevicePairingRecordsFromDatabase(database.db);
+            return withDevicePairingStoreDatabase(
+              database,
+              () => {
+                updatePairedDeviceInTransaction("node", () => ({
+                  value: undefined,
+                  patch: { displayName: "Temporary name", tokens: expected.node.tokens },
+                }));
+                const state = loadDevicePairingStoreState();
+                state.pairedByDeviceId.sibling = expected.sibling;
+                persistDevicePairingStoreState(state, undefined, "paired");
+                updatePairedDeviceInTransaction("node", (device) => {
+                  // The callback owns a copy; unpersisted edits must not enter its receipt.
+                  if (device) {
+                    device.publicKey = "not-persisted";
+                  }
+                  return {
+                    value: undefined,
+                    patch: { displayName: undefined, remoteIp: "192.0.2.2" },
+                  };
+                });
+                expect(loadPairedDevicePairingStoreRecordFromDatabase(database.db, "node")).toEqual(
+                  expected.node,
+                );
+                expect(readPairedDevicePairingRecordsFromDatabase(database.db)).toEqual(expected);
+                expect(
+                  loadPairedDevicePairingStoreRecordFromDatabase(database.db, "constructor"),
+                ).toBeNull();
+                expect(
+                  loadPairedDevicePairingStoreRecordFromDatabase(database.db, "__proto__"),
+                ).toBeNull();
+                expect(reads.counts.paired).toBe(1);
+                if (rollback) {
+                  throw new Error("rollback pairing snapshot");
+                }
+              },
+              paired,
+            );
+          },
+          { database, env },
+        ),
+      );
+    try {
+      if (rollback) {
+        expect(operate).toThrow("rollback pairing snapshot");
+      } else {
+        operate();
+      }
+      expect(readPairedDevicePairingRecordsFromDatabase(database.db)).toEqual(
+        rollback ? initial.pairedByDeviceId : expected,
+      );
+    } finally {
+      reads.restore();
+    }
   },
 );

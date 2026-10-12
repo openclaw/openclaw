@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
@@ -33,12 +37,14 @@ describe("session transcript reader facade", () => {
       prefix: "openclaw-transcript-readers-",
       layout: "state-only",
     });
+    setRuntimeConfigSnapshot({});
     tempDir = state.stateDir;
     storePath = path.join(tempDir, "sessions.json");
   });
 
   afterEach(async () => {
     await state.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   async function writeTranscript(sessionId: string, events: unknown[]) {

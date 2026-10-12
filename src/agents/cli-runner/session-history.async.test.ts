@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   loadTranscriptEventsSync,
@@ -48,6 +49,7 @@ function targetIn(stateDir: string) {
 }
 
 function createRecorder(target: ReturnType<typeof targetIn>, text: string, timestamp = 1) {
+  setRuntimeConfigSnapshot({});
   return createUserTurnTranscriptRecorder({
     target: { ...target, sessionEntry: undefined },
     input: { text, timestamp },

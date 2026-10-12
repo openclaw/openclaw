@@ -421,7 +421,6 @@ describe("SDK migration guard endpoint context", () => {
           migrationDiagnostics,
           "assertAuthProfileCredentialMigrationStateAtDatabasePath",
         ).mockImplementationOnce((...args) => {
-          assertSelected(...args);
           writePersistedAuthProfileStoreRaw(
             apiKeyStore("arcee", {
               keyRef: { source: "env", provider: "default", id: "UNRESOLVED_IMPORTED_ARCEE" },
@@ -429,6 +428,7 @@ describe("SDK migration guard endpoint context", () => {
           );
           storage.reload();
           reloadedSelectedCredential = true;
+          assertSelected(...args);
         });
         const pending = storage.getApiKey("arcee", { baseUrl });
         await expect(pending).rejects.toMatchObject({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" });

@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -73,7 +74,8 @@ function createStoredSessionTool(config: OpenClawConfig = {}) {
   });
 }
 
-async function seedSessions() {
+async function seedSessions(config: OpenClawConfig = {}) {
+  setRuntimeConfigSnapshot(config);
   for (const [index, sessionKey] of [currentKey, ...targetKeys].entries()) {
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
@@ -158,8 +160,9 @@ describe("sessions tool batch patch", () => {
 
   it("preserves session visibility while applying allowed targets", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await seedSessions();
-      const tool = createStoredSessionTool({ tools: { sessions: { visibility: "self" } } });
+      const config: OpenClawConfig = { tools: { sessions: { visibility: "self" } } };
+      await seedSessions(config);
+      const tool = createStoredSessionTool(config);
       const result = await tool.execute("pin-visible", {
         action: "patch",
         targets: [{ sessionKey: targetKeys[0] }, { sessionKey: "current" }],

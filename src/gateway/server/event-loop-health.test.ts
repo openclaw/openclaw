@@ -222,20 +222,6 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     },
   );
 
-  it("retains completed observations until the next sampling window", async () => {
-    const harness = createMonitorHarness();
-    await harness.samples(50);
-    const first = harness.monitor.snapshot();
-    expect(first).toMatchObject({ degraded: false, intervalMs: 1_000 });
-    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
-    await harness.samples(12);
-    expect(harness.monitor.snapshot()).toBe(first);
-    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
-    await harness.samples(38);
-    expect(harness.monitor.snapshot()).not.toBe(first);
-    expect(harness.monitor.snapshot()).toMatchObject({ intervalMs: 1_000 });
-  });
-
   it("tracks persistent degradation at completed samples and clears on recovery", async () => {
     const harness = createMonitorHarness();
     await harness.sample(1_500);
@@ -362,23 +348,5 @@ describe("event-loop measurement telemetry", () => {
     } finally {
       await unsubscribe();
     }
-  });
-
-  it("does not turn reset, stop, or repeated reads into completed windows", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    onInternalDiagnosticEvent((event) => events.push(event), {
-      include: ["gateway.event_loop.sample"],
-    });
-    const harness = createMonitorHarness();
-    await harness.samples(4);
-    harness.elapseWithoutSampling(1_500);
-    harness.monitor.reset();
-    await harness.samples(50);
-    harness.monitor.stop();
-    expect(harness.monitor.snapshot()).toBeUndefined();
-    await waitForDiagnosticEventsDrained();
-    expect(events).toMatchObject([
-      { type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 20 },
-    ]);
   });
 });

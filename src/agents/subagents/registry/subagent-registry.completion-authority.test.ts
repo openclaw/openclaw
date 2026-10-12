@@ -135,6 +135,7 @@ describe("registered completion source custody", () => {
 
   it("keeps same-key child registrations owned by different agents separate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      config.setRuntimeConfigSnapshot({});
       const first = registration("research-global", {
         childSessionKey: "global",
         childAgentId: "research",

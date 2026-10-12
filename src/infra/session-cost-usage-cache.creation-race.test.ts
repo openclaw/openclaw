@@ -19,12 +19,12 @@ import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.tes
 it.each(["none", "cleanup", "after-open", "during-open"] as const)(
   "fences a cache creator's reader proof (failure=%s)",
   async (failure) => {
-    setRuntimeConfigSnapshot({});
     onTestFinished(() => clearRuntimeConfigSnapshot());
     const failCleanup = failure === "cleanup";
     const failDuringOpen = failure === "during-open";
     const failAfterOpen = failure === "after-open" || failDuringOpen;
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const exercise = async () => {
         const agentId = "main";
         const sessionKey = "agent:main:competing-creation";

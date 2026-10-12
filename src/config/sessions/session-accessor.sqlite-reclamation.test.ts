@@ -369,7 +369,7 @@ test.runIf(process.platform !== "win32")(
       await yieldToEventLoop();
       expect(canonicalWriteRan).toBe(false);
     };
-    const reclamation = runSqliteSessionReclamation({ forceInProcess: false, plan });
+    const reclamation = runSqliteSessionReclamation({ plan });
     try {
       await expect(reclamation).resolves.toMatchObject({
         kind: "lifecycle-artifacts",
@@ -405,9 +405,9 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
   const before = freePages();
   expect(before).toBeGreaterThan(512);
 
-  await expect(runSqliteSessionReclamation({ forceInProcess: false, plan })).resolves.toMatchObject(
-    { value: { deleted: true } },
-  );
+  await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
+    value: { deleted: true },
+  });
 
   const after = freePages();
   expect(before - after).toBeGreaterThan(0);
@@ -446,7 +446,6 @@ test("queued reclamations reuse their database Worker without borrowing another 
   const operations = [first, first, other].map((fixture, index) => {
     const record = diagnostics[index];
     return runSqliteSessionReclamation({
-      forceInProcess: false,
       plan: fixture.plan,
       diagnostics: record,
     });
@@ -505,7 +504,6 @@ test("file warnings retain rejected native admission releases without attributin
     clock += 1_100;
   };
   const first = runSqliteSessionReclamation({
-    forceInProcess: false,
     plan,
     diagnostics,
     assertCommitAllowed: () => {
@@ -621,7 +619,6 @@ test.each([
     const trace = { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: "01" };
     const operation = runWithDiagnosticTraceContext(trace, () =>
       runSqliteSessionReclamation({
-        forceInProcess: false,
         plan,
         diagnostics,
         assertCommitAllowed: () => {

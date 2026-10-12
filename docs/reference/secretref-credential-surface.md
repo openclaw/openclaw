@@ -108,6 +108,10 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 
 - `cron.webhookToken`
 
+#### `database`
+
+- `database.postgres.connection`
+
 #### `gateway`
 
 - `gateway.auth.password`

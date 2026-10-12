@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as announceOutput from "./subagent-announce-output.js";
 import type { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
@@ -12,6 +16,7 @@ import {
   completeBatchSpy,
   deliverSpy,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
+import { getRuntimeConfig } from "./subagent-announce.runtime.js";
 
 let sessionStore: Record<
   string,
@@ -117,6 +122,7 @@ function wakeParams(
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot(getRuntimeConfig());
   vi.spyOn(announceOutput, "readChildCompletionFindings").mockImplementation((children) =>
     readChildCompletionFindings(children, (runId) =>
       listedRequesterRuns(children[0]?.requesterSessionKey).find((entry) => entry.runId === runId),
@@ -135,7 +141,10 @@ beforeEach(() => {
     .mockReturnValue(undefined);
 });
 
-afterEach(() => vi.mocked(announceOutput.readChildCompletionFindings).mockRestore());
+afterEach(() => {
+  vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
+  clearRuntimeConfigSnapshot();
+});
 
 function setSessionStore(store: typeof sessionStore): void {
   sessionStore = store;

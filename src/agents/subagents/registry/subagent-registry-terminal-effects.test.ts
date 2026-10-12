@@ -86,6 +86,7 @@ it.each(["keep", "delete"] as const)(
       { entry, maybeWakeRequesterAfterAllChildrenSettled: wake },
       { callGateway: vi.fn(), cleanupBrowserSessionsForLifecycleEnd, ownersByEntry: new Map() },
     );
+    setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
     const settleRoots = observeRootWork();
 
     try {

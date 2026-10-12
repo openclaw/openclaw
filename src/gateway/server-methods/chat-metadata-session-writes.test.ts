@@ -12,6 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
@@ -27,7 +28,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../session-sharing.test-utils.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataHarness,
@@ -100,14 +101,14 @@ it.each(
     const writeTarget = write.includes("new sibling")
       ? { ...sibling, sessionKey: "agent:main:new-sibling" }
       : sibling;
-    await upsertSessionEntryCore(selected, {
+    replaceSessionEntrySync(selected, {
       sessionId: "selected",
       lifecycleRevision: "selected-original",
       sessionStartedAt: 1,
       label: "selected",
       updatedAt: 1,
     });
-    await upsertSessionEntryCore(sibling, {
+    replaceSessionEntrySync(sibling, {
       sessionId: "sibling",
       label: "sibling",
       updatedAt: 1,
@@ -377,7 +378,7 @@ it.each(
       return refresh ? await refresh : metadata;
     });
     const respond = vi.fn<RespondFn>();
-    const handler = chatHistoryHandlers["chat.metadata"]!;
+    const handler = handleChatMetadataRequest;
     const outcome = await Promise.resolve()
       .then(() =>
         handler({
@@ -528,7 +529,7 @@ it.each([
       const authProfileId = connectChatMetadataAccount(owner.id);
       const client = sharingPolicyClient({ user: viewer.id });
       const selected = { agentId: "main", sessionKey: "agent:main:metadata-read-marker" };
-      await upsertSessionEntryCore(selected, {
+      replaceSessionEntrySync(selected, {
         sessionId: "read-marker-session",
         lifecycleRevision: "read-marker-lifecycle",
         sessionStartedAt: 1,
@@ -567,7 +568,7 @@ it.each([
         getRuntimeConfig: () => config,
         readChatMetadata: harness.runtime.read,
       });
-      const handler = expectDefined(chatHistoryHandlers["chat.metadata"], "metadata handler");
+      const handler = handleChatMetadataRequest;
       const invoke = (respond: RespondFn) =>
         Promise.resolve(
           handler({

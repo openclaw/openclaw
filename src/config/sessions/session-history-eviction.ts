@@ -575,7 +575,6 @@ async function enforceSessionHistoryMaintenanceForDatabase(
                 throw new Error("Session became active; history eviction was canceled");
               }
             },
-            forceInProcess: params.reclamationMode === "in-process",
             plan: reclamationPlan,
           });
           if (reclaimed.kind !== reclamationPlan.kind) {

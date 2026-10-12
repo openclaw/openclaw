@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar pull request state", () => {
@@ -14,7 +15,7 @@ describe("AppSidebar pull request state", () => {
     expect(row?.querySelector(".session-row-badge--pull-request")).toBeNull();
 
     sessions.sessions.setPullRequestSummary(key, { numbers: [111532], state: "draft" });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const badge = row?.querySelector(".session-row-badge--pull-request");
     expect(badge?.getAttribute("aria-label")).toBe("#111532 · Draft");

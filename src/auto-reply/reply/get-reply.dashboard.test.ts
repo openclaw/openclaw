@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
@@ -21,6 +25,7 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
 let state: OpenClawTestState | undefined;
 afterEach(async () => {
   await state?.cleanup();
+  clearRuntimeConfigSnapshot();
   vi.clearAllMocks();
 });
 
@@ -54,6 +59,7 @@ it.each([
       commands: { text: true },
     });
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const body = "/dashboard release health";
     const sessionKey = "agent:main:dashboard-proof";
     const reply = await getReplyFromConfig(

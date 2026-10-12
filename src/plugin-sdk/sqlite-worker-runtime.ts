@@ -15,7 +15,6 @@ export {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
-export { PostgresSyncConnection } from "../infra/postgres-sync/connection.js";
 export type { SqlConnection } from "../infra/sql-connection.js";
 export {
   getSqliteDatabaseAdmission,
