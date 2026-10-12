@@ -260,6 +260,7 @@ describe("chat pane session access", () => {
     expect(
       container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
     ).toBe(false);
+    container.querySelector(".chat-pane__sharing-menu")?.dispatchEvent(new Event("wa-show"));
     expect(
       container.querySelector('wa-dropdown-item[value="visibility:read-only"]'),
     ).not.toBeNull();
