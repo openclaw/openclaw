@@ -237,6 +237,56 @@ describe("cli program (nodes diagnostics auth)", () => {
     expect(getRuntimeOutput()).toContain("Configured Auth Node");
   });
 
+  it("falls back to configured auth when role policies reject the stored device identity", async () => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as {
+        method?: string;
+        requireLocalBackendSharedAuth?: boolean;
+        useStoredDeviceAuth?: boolean;
+      };
+      if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
+        throw Object.assign(
+          new Error(
+            "operator role policies require a verified user identity for this authentication method",
+          ),
+          {
+            name: "GatewayClientRequestError",
+            gatewayCode: "INVALID_REQUEST",
+            details: { code: "AUTH_VERIFIED_USER_REQUIRED" },
+          },
+        );
+      }
+      if (opts.method === "node.list" && opts.requireLocalBackendSharedAuth) {
+        throw Object.assign(new Error("local backend shared auth unavailable for trusted-proxy"), {
+          name: "GatewayLocalBackendSharedAuthUnavailableError",
+        });
+      }
+      if (opts.method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "password-auth-node",
+              displayName: "Password Auth Node",
+              paired: true,
+              connected: true,
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "status"]);
+
+    const requests = gatewayRequests().filter((request) => request.method === "node.list");
+    expect(requests).toHaveLength(3);
+    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
+    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
+    expect(requests[2]?.useStoredDeviceAuth).toBeUndefined();
+    expect(requests[2]?.scopes).toBeUndefined();
+    expect(getRuntimeOutput()).toContain("Password Auth Node");
+  });
+
   it("falls back to configured auth when stored device auth lacks read scope", async () => {
     programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as {
