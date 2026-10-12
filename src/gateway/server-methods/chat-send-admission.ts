@@ -374,6 +374,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let retainedRequestConflict: ReturnType<typeof resolveChatSendRequestConflict>;
   try {
     gatewayWorkAdmission = await beginSessionWorkAdmission({
+      agentId,
       scope: storePath,
       isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
       identities: [sessionKey, backingSessionId],

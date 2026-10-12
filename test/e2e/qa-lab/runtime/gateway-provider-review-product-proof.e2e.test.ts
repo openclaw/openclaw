@@ -10,14 +10,11 @@ import { rawDataToString } from "../../../../packages/gateway-client/src/websock
 import type { ResponseFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
-} from "../../../../src/agents/internal-runtime-context.js";
-import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../../../../src/infra/device-identity.js";
+import { RUNTIME_CONTEXT_FOOTER, RUNTIME_CONTEXT_HEADER } from "../../../../src/llm/types.js";
 import { acquireTestPortBlock } from "../../../../src/test-utils/port-claims.js";
 import { VERSION } from "../../../../src/version.js";
 import {
@@ -71,8 +68,8 @@ function userTexts(body: ProviderRequest): string[] {
       .filter(
         (text) =>
           !(
-            text.startsWith(`${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`) &&
-            text.endsWith(`\n${INTERNAL_RUNTIME_CONTEXT_END}`)
+            text.startsWith(`${RUNTIME_CONTEXT_HEADER}\n`) &&
+            text.endsWith(`\n${RUNTIME_CONTEXT_FOOTER}`)
           ),
       )
   );

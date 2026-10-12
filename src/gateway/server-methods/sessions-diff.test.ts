@@ -9,7 +9,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
-import { parseNumstatZ, splitPatchByFile } from "../../sessions/session-diff-parser.js";
+import { splitPatchByFile } from "../../sessions/session-diff-parser.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
 
@@ -77,17 +77,6 @@ function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): v
 }
 
 describe("sessions.diff parsers", () => {
-  it("parses numstat -z including rename and binary entries", () => {
-    // NUL separators written as \u0000: a bare \0 before a digit would
-    // parse as an octal escape.
-    const byPath = parseNumstatZ(
-      "2\t1\ta.txt\u0000-\t-\tblob.bin\u00000\t0\t\u0000old.txt\u0000new.txt\u0000",
-    );
-    expect(byPath.get("a.txt")).toEqual({ additions: 2, deletions: 1, binary: false });
-    expect(byPath.get("blob.bin")).toEqual({ additions: 0, deletions: 0, binary: true });
-    expect(byPath.get("new.txt")).toEqual({ additions: 0, deletions: 0, binary: false });
-  });
-
   it("splits multi-file patches and keys deleted files by old path", () => {
     const patch = [
       "diff --git a/kept.txt b/kept.txt",
@@ -432,14 +421,13 @@ describe("loadSessionDiff", () => {
     }
   });
 
-  it("keeps tracked filenames and previews when line-count collection fails", async () => {
+  it("reports a failed tracked inventory instead of an empty diff", async () => {
     initRepo(repoRoot);
     fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "before\n");
     git(repoRoot, "add", ".");
     git(repoRoot, "commit", "-qm", "init");
     fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "after\n");
     mockSession(repoRoot);
-
     const runCommand = execRunner.runCommandBuffersWithTimeout;
     const observer = vi
       .spyOn(execRunner, "runCommandBuffersWithTimeout")
@@ -450,17 +438,9 @@ describe("loadSessionDiff", () => {
           : result;
       });
     try {
-      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-      expect(result.files).toEqual([
-        {
-          path: "tracked.txt",
-          status: "modified",
-          additions: 0,
-          deletions: 0,
-          patch: expect.stringContaining("+after\n"),
-        },
-      ]);
+      await expect(loadSessionDiff({ sessionKey: "agent:main:s1" })).rejects.toThrow(
+        "Unable to read tracked Git changes",
+      );
     } finally {
       observer.mockRestore();
     }

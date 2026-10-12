@@ -10,6 +10,7 @@ import { createGatewaySession } from "../../gateway/session-create-service.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  closeAgentWorkAdmissions,
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
@@ -737,6 +738,28 @@ describe("plugin runtime session work admission", () => {
     });
   });
 
+  it("refuses plugin work and session creation while the agent is draining", async () => {
+    const runtime = createRuntimeAgent();
+    const reason = new Error("agent deletion began");
+    const reopen = closeAgentWorkAdmissions({ agentId: "main", reason });
+    const run = vi.fn(async () => {});
+    try {
+      await expect(
+        runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run),
+      ).rejects.toBe(reason);
+      await expect(
+        runtime.session.createSessionEntry({
+          cfg: {},
+          key: "agent:main:harness:codex:draining",
+          initialEntry: { agentHarnessId: "codex" },
+        }),
+      ).rejects.toBe(reason);
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      reopen();
+    }
+  });
+
   it("waits for a queued archive mutation and rejects the stale start", async () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
@@ -801,13 +824,17 @@ describe("plugin runtime session work admission", () => {
       });
     const run = vi.fn(async () => {});
     const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
-    await snapshotRead.promise;
-    captureRead.mockRestore();
-    releaseMutation.resolve();
-    await mutation;
-
-    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-    expect(run).not.toHaveBeenCalled();
+    try {
+      await snapshotRead.promise;
+      captureRead.mockRestore();
+      releaseMutation.resolve();
+      await mutation;
+      await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      releaseMutation.resolve();
+      await Promise.allSettled([mutation, work]);
+    }
   });
 
   it("holds admission through the callback and relays lifecycle interruption", async () => {
