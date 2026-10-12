@@ -160,7 +160,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
         active: "exact",
         expectedEntry: {
           lifecycleRevision: expectedLifecycleRevision,
-          activeWriterRunId: selected.activeWriterRunId ?? null,
+          activeWriterRunId: expectedWriterRunId ?? selected.activeWriterRunId ?? null,
         },
         assertCurrent: assertLive,
         assertNativeCurrent,

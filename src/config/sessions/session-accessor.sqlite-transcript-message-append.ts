@@ -13,7 +13,7 @@ import {
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
-import { type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   readActiveTranscriptEntryAnchorInTransaction,
   readTranscriptMessageAppendMetadataInTransaction,

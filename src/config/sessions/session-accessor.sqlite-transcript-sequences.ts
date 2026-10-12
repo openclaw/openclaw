@@ -129,9 +129,10 @@ export async function rememberCommittedTranscriptMessageSequences(
     return;
   }
   if (appended.length === 1) {
-    const message = appended[0];
-    if (message.anchor) {
-      committedTranscriptMessageSequences.set(message, message.anchor.activeMessagePosition + 1);
+    for (const message of appended) {
+      if (message.anchor) {
+        committedTranscriptMessageSequences.set(message, message.anchor.activeMessagePosition + 1);
+      }
     }
     return;
   }
