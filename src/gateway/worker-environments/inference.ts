@@ -47,7 +47,7 @@ import {
 import { getWorkerTurnInference } from "./placement-turn-claim-events.js";
 import { formatWorkerInferenceError } from "./worker-error.js";
 
-export type { WorkerInferenceExecutor, WorkerInferenceSink } from "./inference.types.js";
+export type { WorkerInferenceSink } from "./inference.types.js";
 
 export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
   (await getWorkerTurnInference(params.identity)?.(params)) ??

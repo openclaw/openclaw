@@ -55,7 +55,6 @@ describe("shared control ownership", () => {
     // Searchable controls own their keyboard policy; page consumers reuse them.
     expect(matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette-view.ts",
-      "components/composer-menu.ts",
       "components/multi-select.ts",
       "components/select-picker.ts",
       "components/session-group-defaults-dialog.ts",
@@ -78,6 +77,7 @@ describe("shared control ownership", () => {
       "components/dock-layout-solid.ts",
       "pages/chat/chat-page-pane-render.ts",
       "pages/chat/components/chat-resizable-divider.ts",
+      "pages/chat/components/chat-sidebar-region.runtime.ts",
     ]);
   });
 });

@@ -47,11 +47,14 @@ describe("awaited compaction persistence", () => {
       compactionCount: 0,
     });
     const manager = await SessionManager.openAsync(scope, dir);
-    const keptId = await manager.appendMessageAsync({
-      role: "user",
-      content: "keep",
-      timestamp: 1,
-    });
+    const keptId = expectDefined(
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "keep",
+        timestamp: 1,
+      }),
+      "Compaction fixture must append its retained user entry",
+    );
     const compact = () =>
       withSessionCompactionPersistenceAsync(
         manager,

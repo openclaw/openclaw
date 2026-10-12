@@ -93,12 +93,6 @@ export class LinkReaderPrefetchOwner {
     this.release();
   }
 
-  connect(): void {
-    this.provider?.addEventListener("link-reader-capabilities-changed", this.handleCapabilities);
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    this.handleVisibilityChange();
-  }
-
   private readonly handleVisibilityChange = () => {
     if (this.connected() && this.active && !document.hidden) {
       if (!this.mutations) {

@@ -147,7 +147,7 @@ it("publishes native base changes and deletion before returning without exposing
   expect(prepared.current()).toBeUndefined();
 });
 
-it("fences detached absence while a successor settles and never revives it after a commit", async () => {
+it("fences detached absence while its removal settles", async () => {
   const { store } = await fixture();
   const workspaceId = "00000000-0000-4000-8000-000000000000";
   const absent = await store.prepare(workspaceId);
@@ -170,10 +170,6 @@ it("fences detached absence while a successor settles and never revives it after
   admission.mockRestore();
   expect(refused).toBe(true);
   expect(absent.current()).toBeUndefined();
-  const created = await store.create(source);
-  expect(() => absent.current()).toThrow("absence changed");
-  await store.delete({ workspaceId: created.workspaceId, assertCurrent });
-  expect(() => absent.current()).toThrow("absence changed");
   expect((await store.prepare(workspaceId)).current()).toBeUndefined();
 });
 

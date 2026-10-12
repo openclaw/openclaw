@@ -1,52 +1,51 @@
 /* @vitest-environment jsdom */
-import { createSignal } from "solid-js";
-import { afterEach, expect, it } from "vitest";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { render, nothing } from "lit";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { ChatComposer } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 
 afterEach(() => resetComposerFixture());
 
 it("keeps the context popover open and its usage link focused during live usage refreshes", () => {
-  const [current, setCurrent] = createSignal(
-    createComposerProps({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: 1,
-        totalTokens: 1_000,
-        contextTokens: 200_000,
-        modelProvider: "openai",
-      },
-      providerUsage: {
-        basePath: "/control",
-        modelAuthStatusResult: {
-          ts: 1,
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [{ profileId: "openai:oauth", type: "oauth", status: "ok" }],
-              usage: {
-                providerId: "openai",
-                plan: "Plus",
-                windows: [{ label: "Week", usedPercent: 21 }],
-              },
+  let current = createComposerProps({
+    selectedSession: {
+      key: "main",
+      kind: "direct",
+      updatedAt: 1,
+      totalTokens: 1_000,
+      contextTokens: 200_000,
+      modelProvider: "openai",
+    },
+    providerUsage: {
+      basePath: "/control",
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [{ profileId: "openai:oauth", type: "oauth", status: "ok" }],
+            usage: {
+              providerId: "openai",
+              plan: "Plus",
+              windows: [{ label: "Week", usedPercent: 21 }],
             },
-          ],
-        },
+          },
+        ],
       },
-    }),
-  );
-  const view = mountSolid(() => <ChatComposer {...current()} />, {
-    container: document.body.appendChild(createComposerContainer()),
+    },
   });
+  const view = { container: document.body.appendChild(createComposerContainer()) };
+  onTestFinished(() => {
+    render(nothing, view.container);
+  });
+  render(renderChatComposer(current), view.container);
   const details = view.container.querySelector<HTMLDetailsElement>(".context-usage details");
   const usageLink = view.container.querySelector<HTMLAnchorElement>("[data-chat-provider-usage]");
   if (!details || !usageLink) {
@@ -56,8 +55,8 @@ it("keeps the context popover open and its usage link focused during live usage 
   usageLink.focus();
   expect(document.activeElement).toBe(usageLink);
 
-  setCurrent((previous) => ({
-    ...previous,
+  current = {
+    ...current,
     selectedSession: {
       key: "main",
       kind: "direct",
@@ -87,7 +86,8 @@ it("keeps the context popover open and its usage link focused during live usage 
         ],
       },
     },
-  }));
+  };
+  render(renderChatComposer(current), view.container);
   flush();
 
   expect(view.container.querySelector(".context-usage details")).toBe(details);

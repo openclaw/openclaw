@@ -1,3 +1,4 @@
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
@@ -769,7 +770,6 @@ describe("buildCommandsMessagePaginated", () => {
     expect(pluginPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("buildToolsMessage", () => {
   const tool = (id: string, label: string, description: string, pluginId?: string) => ({
