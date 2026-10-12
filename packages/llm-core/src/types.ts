@@ -359,6 +359,8 @@ export const DEFAULT_MISSING_TOOL_RESULT_TEXT =
 
 export interface UserMessage {
   role: "user";
+  /** Host-generated context projected as a user message, not a human-authored turn. */
+  synthetic?: true;
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
   /** Trusted runtime-context metadata; ordinary user messages omit it. */

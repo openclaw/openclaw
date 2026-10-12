@@ -11,12 +11,12 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 
-function iconMarkup(icon: unknown): string | undefined {
+function iconShapes(icon: unknown): string[] {
   const container = document.createElement("div");
   render(icon, container);
-  return container.querySelector("svg")?.innerHTML;
+  return Array.from(container.querySelector("svg")?.children ?? [], (shape) => shape.outerHTML);
 }
 
 afterEach(async () => {
@@ -59,8 +59,12 @@ describe("renderChatComposer video", () => {
     });
 
     const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
-    expect(cameraToggle.querySelector("svg")?.innerHTML).toBe(iconMarkup(icons.cameraOff));
-    expect(cameraToggle.querySelector("svg")?.innerHTML).not.toBe(iconMarkup(icons.camera));
+    const shapes = Array.from(
+      cameraToggle.querySelector("svg")?.children ?? [],
+      (shape) => shape.outerHTML,
+    );
+    expect(shapes).toEqual(iconShapes(icons.cameraOff));
+    expect(shapes).not.toEqual(iconShapes(icons.camera));
   });
 
   it("offers camera switching only for a live preview with multiple cameras", () => {

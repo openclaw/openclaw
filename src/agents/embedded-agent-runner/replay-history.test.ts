@@ -329,6 +329,27 @@ describe("normalizeAssistantReplayContent", () => {
     },
   );
 
+  it.each([
+    { type: "openai-responses-retained-compaction", stopReason: "stop", retained: true },
+    { type: "openai-responses-retained-compaction", stopReason: "error", retained: false },
+    { type: "openai-responses-compaction-suppression", stopReason: "stop", retained: false },
+    { type: "unrelated-provider-replay", stopReason: "stop", retained: false },
+  ] as const)("keeps only successful empty compaction carriers: $type/$stopReason", (testCase) => {
+    const message = bedrockAssistant([], testCase.stopReason);
+    if (message.role !== "assistant") {
+      throw new Error("Expected an assistant fixture");
+    }
+    message.providerReplay = {
+      type: testCase.type,
+      v: 1,
+      data: "opaque-checkpoint",
+      provider: message.provider,
+      api: message.api,
+      model: message.model,
+    };
+    expect(normalizeAssistantReplayContent([message])).toEqual(testCase.retained ? [message] : []);
+  });
+
   it("preserves empty content with non-error stopReasons (toolUse, length) untouched", () => {
     // Boundary lock: only `stopReason:"error"` should trip the sentinel
     // substitution. `toolUse` and `length` are reachable in practice when a
