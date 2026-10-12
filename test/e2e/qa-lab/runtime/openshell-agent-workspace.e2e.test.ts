@@ -39,6 +39,19 @@ const COMMANDS = [
   "workspace.skills",
 ];
 
+type FileStep = {
+  label: string;
+  name: "file_fetch" | "file_write";
+  path: string;
+  expected: string;
+  write?: string;
+  denied?: true;
+};
+
+function writeProof(record: Record<string, unknown>) {
+  process.stdout.write("OPEN_SHELL_AUTHORITY_PROOF " + JSON.stringify(record) + "\n");
+}
+
 type ModelRequest = {
   messages: Array<{ role: string; content?: unknown; tool_call_id?: string }>;
   tools?: Array<{ function?: { name: string } }>;
@@ -62,6 +75,16 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
     }
     const document = path.join(remoteRoot, "AGENTS.md");
     const localDocument = path.join(localRoot, "AGENTS.md");
+    const sibling = path.join(root, "sibling", "AGENTS.md");
+    const privateFile = path.join(stateDir, "private-canary.md");
+    const ungranted = path.join(remoteRoot, "ungranted.md");
+    const revocable = path.join(remoteRoot, "memory", "revocable.md");
+    const PRIVATE = "SYNTHETIC_PRIVATE_CANARY";
+    const REVOKED = "SYNTHETIC_MEMORY_EDIT";
+    for (const target of [sibling, privateFile, ungranted, revocable]) {
+      await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+      await fs.writeFile(target, PRIVATE, { mode: 0o600 });
+    }
     await fs.writeFile(document, ORIGINAL, { mode: 0o600 });
     await fs.writeFile(localDocument, DECOY, { mode: 0o600 });
     const identity = loadOrCreateDeviceIdentity({ path: path.join(root, "node-identity.sqlite") });
@@ -85,6 +108,79 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
       ].join("\n"),
       { mode: 0o700 },
     );
+    const plans: Record<"A" | "B" | "REVOKED", FileStep[]> = {
+      A: [
+        { label: "allowed-document-read", name: "file_fetch", path: document, expected: ORIGINAL },
+        {
+          label: "allowed-document-write",
+          name: "file_write",
+          path: document,
+          write: UPDATED,
+          expected: UPDATED,
+        },
+        { label: "allowed-memory-read", name: "file_fetch", path: revocable, expected: PRIVATE },
+        {
+          label: "allowed-memory-write",
+          name: "file_write",
+          path: revocable,
+          write: REVOKED,
+          expected: REVOKED,
+        },
+        {
+          label: "forbidden-sibling-read",
+          name: "file_fetch",
+          path: sibling,
+          expected: PRIVATE,
+          denied: true,
+        },
+        {
+          label: "forbidden-sibling-write",
+          name: "file_write",
+          path: sibling,
+          expected: PRIVATE,
+          denied: true,
+        },
+        {
+          label: "forbidden-private-read",
+          name: "file_fetch",
+          path: privateFile,
+          expected: PRIVATE,
+          denied: true,
+        },
+        {
+          label: "forbidden-private-write",
+          name: "file_write",
+          path: privateFile,
+          expected: PRIVATE,
+          denied: true,
+        },
+        {
+          label: "ungranted-workspace-write",
+          name: "file_write",
+          path: ungranted,
+          expected: PRIVATE,
+          denied: true,
+        },
+      ],
+      B: [{ label: "other-session-read", name: "file_fetch", path: document, expected: UPDATED }],
+      REVOKED: [
+        {
+          label: "revoked-memory-read",
+          name: "file_fetch",
+          path: revocable,
+          expected: REVOKED,
+          denied: true,
+        },
+        {
+          label: "revoked-memory-write",
+          name: "file_write",
+          path: revocable,
+          expected: REVOKED,
+          denied: true,
+        },
+      ],
+    };
+    const frameMarks = new Map<string, number>();
     const requests: Array<{ marker: string; body: ModelRequest }> = [];
     const providerErrors: unknown[] = [];
     const failed = createDeferred<never>();
@@ -101,43 +197,94 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
         const body = JSON.parse(Buffer.concat(chunks).toString()) as ModelRequest;
         expect(request.url).toBe("/v1/chat/completions");
         expect(request.headers.authorization).toBe("Bearer synthetic-openshell-native-key");
-        const marker = body.messages
-          .filter((message) => message.role === "user")
-          .map((message) => JSON.stringify(message.content).match(/OPEN-SHELL-SESSION-[AB]/u)?.[0])
-          .findLast((value) => value !== undefined);
-        expect(marker).toMatch(/^OPEN-SHELL-SESSION-[AB]$/u);
-        requests.push({ marker: marker!, body });
-        const tools = body.messages.filter((message) => message.role === "tool");
+        const userIndex = body.messages.findLastIndex(
+          (message) =>
+            message.role === "user" &&
+            /OPEN-SHELL-SESSION-(A|B|REVOKED)/u.test(JSON.stringify(message.content)),
+        );
+        const marker = JSON.stringify(body.messages[userIndex]?.content).match(
+          /OPEN-SHELL-SESSION-(A|B|REVOKED)/u,
+        )?.[0];
+        const scenario = marker?.split("-").at(-1);
+        if (!marker || (scenario !== "A" && scenario !== "B" && scenario !== "REVOKED")) {
+          throw new Error("unexpected model scenario");
+        }
+        const plan = plans[scenario];
+        requests.push({ marker, body });
+        const tools = body.messages
+          .slice(userIndex + 1)
+          .filter((message) => message.role === "tool");
         const lastTool = tools.at(-1);
-        let name: "file_fetch" | "file_write" | undefined;
-        let callId = "";
-        let args: Record<string, unknown> = {};
-        if (!lastTool) {
+        if (lastTool) {
+          const previous = plan[tools.length - 1]!;
+          const previousId = marker + "-" + (tools.length - 1);
+          expect(lastTool.tool_call_id).toBe(previousId);
+          const frameMark = frameMarks.get(previousId);
+          if (frameMark === undefined || !node) {
+            throw new Error("missing node boundary observation");
+          }
+          // The wire fixture records before all handler dispatch, including preflight
+          // reads. Zero matching frames means the node performed no target-path I/O.
+          const frames = node.frames
+            .slice(frameMark)
+            .filter(
+              (frame) => frame.paramsJSON && JSON.parse(frame.paramsJSON).path === previous.path,
+            );
+          const result = wireMessageText(lastTool);
+          if (previous.denied) {
+            expect(result).toContain("POLICY_DENIED");
+            expect(result).not.toContain(previous.expected);
+            expect(frames).toEqual([]);
+          } else {
+            expect(result).toContain(
+              previous.name === "file_fetch" ? previous.expected : "Wrote " + previous.path,
+            );
+            expect(
+              frames.some((frame) => JSON.parse(frame.paramsJSON!).preflightOnly === true),
+            ).toBe(true);
+            expect(
+              frames.some((frame) => JSON.parse(frame.paramsJSON!).preflightOnly !== true),
+            ).toBe(true);
+          }
+          expect(await fs.readFile(previous.path, "utf8")).toBe(previous.expected);
+          expect(await fs.readFile(localDocument, "utf8")).toBe(DECOY);
+          writeProof({
+            case: previous.label,
+            outcome: previous.denied ? "POLICY_DENIED" : "allowed",
+            nodeFrames: frames.length,
+            preflightFrames: frames.filter(
+              (frame) => JSON.parse(frame.paramsJSON!).preflightOnly === true,
+            ).length,
+            targetBytes: previous.denied ? "unchanged" : "verified",
+            localFallback: false,
+          });
+        } else {
           const bootstrap = JSON.stringify(body.messages);
           expect(bootstrap).toContain(
-            marker!.endsWith("A") ? "CANONICAL_OPEN_SHELL_BEFORE" : "CANONICAL_OPEN_SHELL_AFTER",
+            scenario === "A" ? "CANONICAL_OPEN_SHELL_BEFORE" : "CANONICAL_OPEN_SHELL_AFTER",
           );
           expect(bootstrap).not.toContain("GATEWAY_LOCAL_DECOY_MUST_NOT_LOAD");
-          name = "file_fetch";
-          callId = marker + "-fetch";
-          args = { node: identity.deviceId, path: document };
-        } else if (marker!.endsWith("A") && lastTool.tool_call_id === marker + "-fetch") {
-          expect(JSON.stringify(lastTool.content)).toContain("CANONICAL_OPEN_SHELL_BEFORE");
-          name = "file_write";
-          callId = marker + "-write";
-          args = {
-            node: identity.deviceId,
-            path: document,
-            contentBase64: Buffer.from(UPDATED).toString("base64"),
-            overwrite: true,
-          };
-        } else {
-          expect(lastTool.tool_call_id).toBe(
-            marker + (marker!.endsWith("A") ? "-write" : "-fetch"),
-          );
-          expect(JSON.stringify(lastTool.content)).toContain(
-            marker!.endsWith("A") ? "Wrote " + document : "CANONICAL_OPEN_SHELL_AFTER",
-          );
+        }
+        expect(tools.length).toBeLessThanOrEqual(plan.length);
+        const step = plan[tools.length];
+        const name = step?.name;
+        const callId = marker + "-" + tools.length;
+        const args = step
+          ? {
+              node: identity.deviceId,
+              path: step.path,
+              ...(step.name === "file_write"
+                ? {
+                    contentBase64: Buffer.from(step.write ?? "DENIED_REPLACEMENT").toString(
+                      "base64",
+                    ),
+                    overwrite: true,
+                  }
+                : {}),
+            }
+          : {};
+        if (step) {
+          frameMarks.set(callId, node!.frames.length);
         }
         if (name) {
           expect(
@@ -186,6 +333,7 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
     let node: PairedNodeWorkerHost | undefined;
     let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
     let operatorReady = createDeferred();
+    let operatorConnections = 0;
     await runQaGatewayFixture(
       async () => {
         await new Promise<void>((resolve, reject) => {
@@ -228,12 +376,6 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
           JSON.stringify(nodeConfig.config),
           { mode: 0o600 },
         );
-        const policy = {
-          allowReadPaths: [remoteRoot, remoteRoot + "/**"],
-          allowWritePaths: [document],
-          followSymlinks: false,
-          ask: "off",
-        };
         const gateway = await startPairedNodeWorkerGateway({
           owner,
           providerBaseUrl: "http://127.0.0.1:1",
@@ -294,10 +436,10 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
                     },
                   },
                 },
-                // Existing least-privilege operator policy must survive configure unchanged.
+                // Exercise the runtime policy actually seeded by the production CLI.
                 "file-transfer": {
                   enabled: true,
-                  config: { policyVersion: 2, nodes: { [identity.deviceId]: policy } },
+                  config: { policyVersion: 2, nodes: {} },
                 },
               },
             };
@@ -312,7 +454,10 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
           gateway,
           role: "operator",
           identity: null,
-          onHelloOk: () => operatorReady.resolve(),
+          onHelloOk: () => {
+            operatorConnections += 1;
+            operatorReady.resolve();
+          },
         });
         const pluginRuntime = await prepareNodeHostRuntime({
           config: nodeConfig.config,
@@ -364,7 +509,15 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
           expect(fileTransfer?.workspaces).toEqual({
             qa: { nodeId: identity.deviceId, remoteRoot },
           });
-          expect(fileTransfer?.nodes).toEqual({ [identity.deviceId]: policy });
+          expect(fileTransfer?.nodes).toMatchObject({
+            [identity.deviceId]: {
+              ask: "off",
+              followSymlinks: false,
+              allowReadPaths: [remoteRoot, remoteRoot + "/**"],
+              allowWritePaths: expect.arrayContaining([document, remoteRoot + "/memory/**"]),
+            },
+          });
+          writeProof({ case: "configure-empty-map", policy: "seeded-by-cli" });
         });
         await checked(operatorReady.promise);
         await node.connect();
@@ -377,26 +530,28 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
           content: ORIGINAL,
           missing: false,
         });
-        for (const suffix of ["A", "B"]) {
-          const key = "agent:qa:openshell-" + suffix.toLowerCase();
+        const runTurn = async (suffix: "A" | "B" | "REVOKED") => {
+          const key = "agent:qa:openshell-" + (suffix === "B" ? "b" : "a");
           const marker = "OPEN-SHELL-SESSION-" + suffix;
-          await checked(
-            operator.request(
-              "sessions.create",
-              { key, agentId: "qa" },
-              { timeoutMs: PROOF_TIMEOUT_MS },
-            ),
-          );
+          if (suffix !== "REVOKED") {
+            await checked(
+              operator!.request(
+                "sessions.create",
+                { key, agentId: "qa" },
+                { timeoutMs: PROOF_TIMEOUT_MS },
+              ),
+            );
+          }
           const started = await checked(
-            operator.request<{ runId: string }>("chat.send", {
+            operator!.request<{ runId: string }>("chat.send", {
               sessionKey: key,
-              message: marker + ": read the canonical agent document; A updates it, B verifies it.",
+              message: marker + ": execute the canonical-file authority scenario.",
               deliver: false,
               idempotencyKey: marker,
             }),
           );
           const terminal = await checked(
-            operator.request<AgentJobTerminalSnapshot>(
+            operator!.request<AgentJobTerminalSnapshot>(
               "agent.wait",
               { runId: started.runId, timeoutMs: PROOF_TIMEOUT_MS },
               { timeoutMs: PROOF_TIMEOUT_MS + 5000 },
@@ -406,19 +561,21 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
             terminal,
             JSON.stringify({
               terminal,
-              nodeErrors: node.invokeErrors,
+              nodeErrors: node!.invokeErrors,
               logs: gateway.logs().slice(-12000),
             }),
           ).toMatchObject({ status: "ok" });
-          await node.waitForWorkersIdle();
+          await node!.waitForWorkersIdle();
           const history = await checked(
-            operator.request<{ messages: unknown[] }>("chat.history", { sessionKey: key }),
+            operator!.request<{ messages: unknown[] }>("chat.history", { sessionKey: key }),
           );
           expect(
             history.messages.filter((message) => wireMessageText(message) === marker + "-OK"),
           ).toHaveLength(1);
           expect((await checked(readDocument())).file.content).toBe(UPDATED);
-        }
+        };
+        await runTurn("A");
+        await runTurn("B");
         const launches = node.frames
           .filter((frame) => frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND)
           .map((frame) => parseNodeWorkerLaunchInput(frame.paramsJSON));
@@ -431,8 +588,56 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
         expect(new Set(workspaces).size).toBe(2);
         expect(await fs.readFile(localDocument, "utf8")).toBe(DECOY);
         expect(await fs.readFile(document, "utf8")).toBe(UPDATED);
-        expect(requests.filter((request) => request.marker.endsWith("A"))).toHaveLength(3);
+        expect(requests.filter((request) => request.marker.endsWith("A"))).toHaveLength(10);
         expect(requests.filter((request) => request.marker.endsWith("B"))).toHaveLength(2);
+        const beforeRevoke = await operator.request<{ hash: string }>("config.get", {});
+        const connections = operatorConnections;
+        const processId = gateway.pid;
+        // config.patch waits for the production runtime-application receipt, not
+        // just persistence or the earlier config.changed notification.
+        const applied = await operator.request<{
+          hash: string;
+          sentinel: { payload: { stats: { requiresRestart: boolean } } };
+        }>("config.patch", {
+          baseHash: beforeRevoke.hash,
+          raw: JSON.stringify({
+            plugins: {
+              entries: {
+                "file-transfer": {
+                  config: {
+                    nodes: { [identity.deviceId]: { denyPaths: [revocable] } },
+                  },
+                },
+              },
+            },
+          }),
+        });
+        expect(applied.sentinel.payload.stats.requiresRestart).toBe(false);
+        const active = await operator.request<{
+          hash: string;
+          appliedConfigHash: string | null;
+          configRevisionHash: string;
+        }>("config.get", {});
+        expect(active.hash).toBe(applied.hash);
+        expect(active.appliedConfigHash).not.toBeNull();
+        expect(active.appliedConfigHash).toBe(active.configRevisionHash);
+        expect(gateway.pid).toBe(processId);
+        expect(operatorConnections).toBe(connections);
+        writeProof({
+          case: "revoke-memory-grant",
+          runtime: "applied",
+          sameGateway: true,
+          sameCaller: true,
+        });
+        await runTurn("REVOKED");
+        expect(requests.filter((request) => request.marker.endsWith("REVOKED"))).toHaveLength(3);
+        const lastLaunch = node.frames.findLast(
+          (frame) => frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+        )!;
+        expect(
+          parseNodeWorkerLaunchInput(lastLaunch.paramsJSON).descriptor.assignment.workspaceDir,
+        ).toBe(workspaces[0]);
+        expect(operatorConnections).toBe(connections);
         expect(providerErrors).toEqual([]);
         expect(node.invokeErrors).toEqual([]);
         await node.disconnect();
@@ -443,7 +648,21 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
         const previousPid = gateway.pid;
         operatorReady = createDeferred();
         await gateway.restartAfterStateMutation(async ({ configPath }) => {
+          // Reconfigure must preserve the now-restrictive existing map too.
+          await gateway.runCli([
+            "openshell",
+            "worker",
+            "configure",
+            "binding-proof",
+            "--worker-profile",
+            "native",
+            "--apply",
+          ]);
           const next = await readConfig();
+          expect(next.plugins?.entries?.["file-transfer"]?.config?.nodes).toEqual(
+            before.plugins?.entries?.["file-transfer"]?.config?.nodes,
+          );
+          writeProof({ case: "configure-existing-map", policy: "revocation-preserved" });
           delete next.cloudWorkers!.requiredProfile;
           await fs.writeFile(configPath, JSON.stringify(next), { mode: 0o600 });
         });
