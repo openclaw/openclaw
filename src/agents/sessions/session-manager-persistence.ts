@@ -24,7 +24,6 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { appendSessionManagerActor } from "./session-manager-actor-append.js";
 import {
@@ -551,7 +550,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
     options?: PersistRecordOptions,
   ): Promise<PersistRecordResult> {
     // Raw callers retain their envelope; only nested immutable payloads are shared.
-    const canonical = { ...canonicalizeSessionEntry(entry, options) };
+    const canonical = { ...canonicalizeSessionEntry(entry) };
     return await withSessionManagerAppend(
       this,
       async (admission) => {
@@ -579,12 +578,10 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         const message =
           canonical.type === "message"
             ? {
-                prepared: prepareTranscriptMessageAppendForWorker(
-                  copyCodeModeSourceAppendOptions(options, {
-                    message: canonical.message,
-                    config: options?.config,
-                  }),
-                ),
+                prepared: prepareTranscriptMessageAppendForWorker({
+                  message: canonical.message,
+                  config: options?.config,
+                }),
                 cwd: this.cwd,
                 validateTurn: false,
                 idempotencyLookup: options?.idempotencyLookup,

@@ -4,6 +4,7 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildAgentRunProjectionIndex } from "../infra/agent-run-projection.js";
 import type { AgentRunContext } from "../infra/agent-run-registry.types.js";
+import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import { resolvePublicSessionCardFacts } from "./control-ui-public-session-card-facts.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -80,6 +81,23 @@ function cachedOwner(snapshot?: ControlUiSessionPullRequestSnapshot) {
 }
 
 describe("public session card facts", () => {
+  it("preserves published names and branches despite diagnostic masking patterns", () => {
+    const branch = "feature/internal-ticket-8315";
+    const input = fixture({
+      worktree: { id: "synthetic-worktree", branch, repoRoot: "/synthetic/repository" },
+    });
+    input.cfg.agents!.entries!.main!.identity = { name: "internal-ticket-8315" };
+    applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
+    try {
+      expect(resolvePublicSessionCardFacts(input)).toMatchObject({
+        agentName: "internal-ticket-8315",
+        worktree: { branch },
+      });
+    } finally {
+      resetLogger();
+    }
+  });
+
   it("keeps cold reads cache-only and omits private identity and unknown work facts", () => {
     const cached = cachedOwner();
     expect(resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner })).toEqual({

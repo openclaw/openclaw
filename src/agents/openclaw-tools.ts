@@ -8,6 +8,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
+import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
 import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
 import {
   resolveAgentDir,
@@ -22,7 +23,10 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
-import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import {
+  resolveOpenClawPluginToolsForOptions,
+  resolveOpenClawPluginToolsForOptionsAsync,
+} from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
 import {
@@ -81,6 +85,7 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createAvailablePortalTools } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
+import { createChannelQuestionPromptDelivery } from "./tools/question-prompt-send.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -124,19 +129,26 @@ export async function createOpenClawToolsWithPreparation(
   options: OpenClawToolsOptions | undefined,
   shared: PreparedToolConstruction,
 ): Promise<AnyAgentTool[]> {
-  const { captured, delegated, webSearchConfigured, mediaTools } = await prepareOpenClawTools(
-    options,
-    shared,
-  );
+  const { captured, delegated, webSearchConfigured, mediaTools, personalInstructionsEnabled } =
+    await prepareOpenClawTools(options, shared);
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
-  const steps = createOpenClawToolsSteps(captured, delegated, webSearchConfigured, mediaTools);
+  const steps = createOpenClawToolsSteps(
+    captured,
+    delegated,
+    webSearchConfigured,
+    mediaTools,
+    personalInstructionsEnabled,
+  );
   let next = steps.next();
   while (!next.done) {
-    const messageTool = await createMessageToolAsync(next.value);
+    const tools =
+      "message" in next.value
+        ? [await createMessageToolAsync(next.value.message)]
+        : await resolveOpenClawPluginToolsForOptionsAsync(next.value.plugins);
     shared.assertCurrent();
     captured.assertInvocationCurrent?.();
-    next = steps.next(messageTool);
+    next = steps.next(tools);
   }
   return next.value;
 }
@@ -161,10 +173,16 @@ export function createOpenClawTools(
     captured,
     preparedDelegateTools,
     preparedWebSearchConfigured,
+    undefined,
+    !isEmbeddedMode() && hasMultipleSessionSharingIdentitiesNative(),
   );
   let next = steps.next();
   while (!next.done) {
-    next = steps.next(createMessageTool(next.value));
+    next = steps.next(
+      "message" in next.value
+        ? [createMessageTool(next.value.message)]
+        : resolveOpenClawPluginToolsForOptions(next.value.plugins),
+    );
   }
   return next.value;
 }
@@ -174,7 +192,13 @@ function* createOpenClawToolsSteps(
   preparedDelegateTools?: AnyAgentTool[],
   preparedWebSearchConfigured?: boolean,
   preparedMediaTools?: Readonly<ReturnType<typeof resolveOptionalMediaToolFactoryPlan>>,
-): Generator<Parameters<typeof createMessageTool>[0], AnyAgentTool[], AnyAgentTool> {
+  personalInstructionsEnabled = false,
+): Generator<
+  | { message: Parameters<typeof createMessageTool>[0] }
+  | { plugins: Parameters<typeof resolveOpenClawPluginToolsForOptions>[0] },
+  AnyAgentTool[],
+  AnyAgentTool[]
+> {
   const resolvedConfig = options?.config;
   const sessionConfig = options?.sessionConfigSource === "runtime" ? undefined : resolvedConfig;
   const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
@@ -331,25 +355,28 @@ function* createOpenClawToolsSteps(
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
     ? null
-    : yield {
-        ...options,
-        agentSessionKey: options?.messageToolTurnCapability?.sessionKey ?? options?.agentSessionKey,
-        runSessionKey:
-          options?.runSessionKey ??
-          (options?.messageToolTurnCapability ? options.agentSessionKey : undefined),
-        agentId: sessionAgentId,
-        messageActionTurnCapability:
-          options?.messageToolTurnCapability?.token ?? options?.messageActionTurnCapability,
-        admitScheduledInvocation: options?.admitScheduledMessageInvocation,
-        preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
-        currentMessagingTarget:
-          options?.currentMessagingTarget ??
-          (options?.sourceReplyOnly ? options.agentTo : undefined),
-        currentChannelProvider: options?.agentChannel,
-        requireExplicitTarget: options?.requireExplicitMessageTarget,
-        requesterSenderId: options?.requesterSenderId ?? undefined,
-        workspaceDir,
-      };
+    : ((yield {
+        message: {
+          ...options,
+          agentSessionKey:
+            options?.messageToolTurnCapability?.sessionKey ?? options?.agentSessionKey,
+          runSessionKey:
+            options?.runSessionKey ??
+            (options?.messageToolTurnCapability ? options.agentSessionKey : undefined),
+          agentId: sessionAgentId,
+          messageActionTurnCapability:
+            options?.messageToolTurnCapability?.token ?? options?.messageActionTurnCapability,
+          admitScheduledInvocation: options?.admitScheduledMessageInvocation,
+          preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
+          currentMessagingTarget:
+            options?.currentMessagingTarget ??
+            (options?.sourceReplyOnly ? options.agentTo : undefined),
+          currentChannelProvider: options?.agentChannel,
+          requireExplicitTarget: options?.requireExplicitMessageTarget,
+          requesterSenderId: options?.requesterSenderId ?? undefined,
+          workspaceDir,
+        },
+      })[0] ?? null);
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
@@ -499,7 +526,13 @@ function* createOpenClawToolsSteps(
     imageGenerateTool,
     musicGenerateTool,
     videoGenerateTool,
-    ...createHostedGatewayTools(embedded, sessionAgentId, options, preparedDelegateTools),
+    ...createHostedGatewayTools(
+      embedded,
+      sessionAgentId,
+      options,
+      preparedDelegateTools,
+      personalInstructionsEnabled,
+    ),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: sessionAgentId,
@@ -533,6 +566,12 @@ function* createOpenClawToolsSteps(
       })
         ? createTool({
             ...options,
+            questionPrompt:
+              options?.questionPrompt ??
+              createChannelQuestionPromptDelivery({
+                cfg: resolvedConfig ?? getRuntimeConfig(),
+                ...deliveryContext,
+              }),
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
           })
@@ -645,10 +684,12 @@ function* createOpenClawToolsSteps(
   if (!options?.disablePluginTools) {
     allTools = [
       ...tools,
-      ...resolveOpenClawPluginToolsForOptions({
-        options: { ...options, activeProjectKeys },
-        resolvedConfig,
-        existingToolNames: new Set(tools.map((tool) => tool.name)),
+      ...(yield {
+        plugins: {
+          options: { ...options, activeProjectKeys },
+          resolvedConfig,
+          existingToolNames: new Set(tools.map((tool) => tool.name)),
+        },
       }),
     ];
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");

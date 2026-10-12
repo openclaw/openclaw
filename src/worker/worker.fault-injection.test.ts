@@ -11,6 +11,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   claimAgentRunContext,
@@ -97,6 +98,7 @@ describe("cloud worker milestone 2 fault injection", () => {
 
   beforeEach(async () => {
     harness = await ComposedGatewayHarness.create(tempDirs.make("oc-wf-"));
+    setRuntimeConfigSnapshot(harness.cfg);
     await harness.start();
   });
 
@@ -105,6 +107,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       await stopClients(current);
     }
     await harness.close();
+    clearRuntimeConfigSnapshot();
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([

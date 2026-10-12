@@ -420,8 +420,9 @@ export class ComposedGatewayHarness {
     this.abandonedServices.push(this.serviceValue);
     this.liveEventsValue.clear();
     this.liveEventsValue = liveEvents.createWorkerLiveEventReceiver();
+    const placement = this.placementStore.get(SESSION_ID);
     this.placementGateValue = createWorkerSessionPlacementGate(this.placementStore, {
-      rejectExistingWorkerClaims: true,
+      recoveryPlacements: placement ? [placement] : [],
     });
     this.useReplacementExecutor = true;
     this.serviceValue = this.createService();

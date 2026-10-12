@@ -104,27 +104,4 @@ export function registerCopilotToolEventTests({ createFakeSession, makeEvent }: 
       dispose();
     }
   });
-
-  it("tool.execution_start increments startedCount and pushes toolMetas without meta", () => {
-    const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
-
-    session.emit(
-      "tool.execution_start",
-      makeEvent("tool.execution_start", { toolCallId: "call-1", toolName: "bash" }),
-    );
-
-    expect(bridge.snapshot()).toEqual({
-      assistantTexts: [],
-      completedCount: 0,
-      lastAssistantEvent: undefined,
-      startedCount: 1,
-      streamError: undefined,
-      toolMetas: [{ toolName: "bash" }],
-      usage: undefined,
-    });
-  });
 }

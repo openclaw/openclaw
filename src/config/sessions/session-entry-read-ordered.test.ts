@@ -303,6 +303,71 @@ it("observes native and worker entry, participant, and membership writes after c
   });
 });
 
+it("retains exact membership and participant reads across metadata-only worker patches", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:metadata-facts";
+    const scope = { agentId: "main", storePath: database.path, sessionKey, env };
+    replaceSessionEntrySync(scope, { sessionId: "metadata-facts", updatedAt: 1 });
+    addSessionMember(scope, { identityId: "reader", addedBy: "owner", addedAt: 1 });
+    const participant = { identity: { type: "agent" as const, id: "helper" }, promptedAt: 2 };
+    recordSessionParticipant(scope, participant);
+    const read = () =>
+      readSessionEntriesFromStoreInWorker({
+        ...scope,
+        sessionKeys: [sessionKey],
+        includeMembers: true,
+        includeParticipantRecords: true,
+      });
+    const initial = await read();
+    const requests = observeEntryReaderRequests();
+    try {
+      await patchSessionEntryCore(scope, () => ({ label: "metadata only" }), {
+        assertCommitAllowed() {},
+        shouldCommit: () => true,
+        skipMaintenance: true,
+      });
+      const patched = await read();
+      expect(patched.entries[0]?.entry.label).toBe("metadata only");
+      expect(patched.members).toEqual(initial.members);
+      expect(patched.participantRecords).toEqual(initial.participantRecords);
+      expect(requests.count()).toBe(0);
+
+      for (const [index, writer] of ["native", "worker"].entries()) {
+        requests.clear();
+        const promptedAt = index + 3;
+        if (writer === "native") {
+          recordSessionParticipant(scope, { ...participant, promptedAt });
+        } else {
+          await recordSessionParticipantInWorker(scope, { ...participant, promptedAt });
+        }
+        await patchSessionEntryCore(scope, () => ({ label: writer }), {
+          assertCommitAllowed() {},
+          shouldCommit: () => true,
+          skipMaintenance: true,
+        });
+        expect((await read()).participantRecords?.[sessionKey]?.[0]).toMatchObject({
+          contributionCount: index + 2,
+          lastPromptedAt: promptedAt,
+        });
+        expect(requests.count()).toBe(1);
+      }
+
+      requests.clear();
+      await removeSessionMemberInWorker(scope, "reader");
+      const changed = await read();
+      expect(changed.members?.[sessionKey]).toEqual([]);
+      expect(changed.participantRecords?.[sessionKey]?.[0]).toMatchObject({
+        contributionCount: 3,
+        lastPromptedAt: 4,
+      });
+      expect(requests.count()).toBe(1);
+    } finally {
+      requests.restore();
+    }
+  });
+});
+
 it("keeps an ordered read current when session generation tracking initializes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };

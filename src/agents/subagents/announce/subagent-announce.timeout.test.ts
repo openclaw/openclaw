@@ -78,8 +78,9 @@ function createTimeoutHistoryWithNoReply() {
 
 vi.mock("../../../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("../spawn/subagent-depth.js", createSubagentDepthModuleMock);
-vi.mock("./subagent-announce-delivery.runtime.js", () =>
-  createSubagentAnnounceDeliveryRuntimeMock({
+vi.mock("./subagent-announce-delivery.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-announce-delivery.runtime.js")>()),
+  ...(await createSubagentAnnounceDeliveryRuntimeMock({
     callGateway: async (request: unknown) => {
       const typed = request as GatewayCall;
       gatewayCalls.push(typed);
@@ -90,7 +91,6 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
     },
     getRuntimeConfig: () => configOverride,
     loadSessionStore: () => sessionStore,
-    resolveAgentIdFromSessionKey: () => "main",
     resolveMainSessionKey: () => "agent:main:main",
     resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
     isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
@@ -100,8 +100,8 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
       reason: "not_streaming",
       gatewayHealth: "live",
     }),
-  }),
-);
+  })),
+}));
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: async (params: {
     targetRequesterSessionKey: string;
@@ -148,7 +148,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   }),
   loadSessionEntryByKey: (sessionKey: string) => sessionStore[sessionKey],
 }));
-vi.mock("./subagent-announce.runtime.js", () => ({
+vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-announce.runtime.js")>()),
   callSubagentLifecycleGateway: createGatewayCallModuleMock().callGateway,
   dispatchGatewayMethodInProcess: async (
     method: string,
@@ -168,7 +169,6 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   loadSessionStore: vi.fn(() => sessionStore),
   readSessionMessagesAsync: vi.fn(async () => []),
   readSubagentSessionEntry: (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
-  resolveAgentIdFromSessionKey: () => "main",
   resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
   resolveMainSessionKey: () => "agent:main:main",
   isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),

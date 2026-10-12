@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
+import { formatErrorMessage as formatToolErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { computeBackoffSchedule, sleepWithAbort } from "@openclaw/retry";
 import { getRuntimeConfig } from "../../config/config.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import {
   captureSessionTranscriptStorageEnvironment,
   captureSessionTranscriptTargetBinding,
@@ -176,25 +181,28 @@ function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
 }
 
 /** Preserve all launch authority across both requester lookup and its caller's return await. */
-export function captureMediaGenerationAdmission(assertSourceCurrent?: () => void): () => void {
+export function captureMediaGenerationAdmission(
+  assertSourceCurrent?: SessionSourceAssertion,
+): SessionSourceAssertion {
   const generation = getAgentRunLifecycleGeneration();
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const assertInvocationCurrent = captureAgentToolSourceExecutionGuard();
   const assertGatewayCallerCurrent = captureGatewayToolCallerAssertion();
-  return () => {
-    assertInvocationCurrent();
-    assertGatewayCallerCurrent?.();
-    assertSourceCurrent?.();
-    if (
-      generation !== getAgentRunLifecycleGeneration() ||
-      !sameSessionTranscriptStorageEnvironment(
-        env,
-        captureSessionTranscriptStorageEnvironment(process.env),
-      )
-    ) {
-      throw new Error("Media generation admission owner is no longer current");
-    }
-  };
+  return composeSessionSourceAssertion(
+    [assertInvocationCurrent, assertGatewayCallerCurrent, assertSourceCurrent],
+    (assertSource) => {
+      assertSource();
+      if (
+        generation !== getAgentRunLifecycleGeneration() ||
+        !sameSessionTranscriptStorageEnvironment(
+          env,
+          captureSessionTranscriptStorageEnvironment(process.env),
+        )
+      ) {
+        throw new Error("Media generation admission owner is no longer current");
+      }
+    },
+  );
 }
 
 async function createMediaGenerationTaskRun(
@@ -415,7 +423,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
               handle: params.handle,
               status: "error",
               statusLabel: "failed",
-              result: formatErrorMessage(error),
+              result: formatToolErrorMessage(error),
             }),
         });
         if (wakeOutcome.status !== "delivered") {
@@ -466,7 +474,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       }
     } catch (error) {
       terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
-        formatErrorMessage(error),
+        formatToolErrorMessage(error),
       );
       reportFailure(`${params.toolName} completion wake failed after successful generation`, {
         error,
@@ -557,7 +565,7 @@ export function createMediaGenerationTaskLifecycle(kind: "image" | "music" | "vi
       }
       try {
         const endedAt = Date.now();
-        const errorText = formatErrorMessage(params.error);
+        const errorText = formatToolErrorMessage(params.error);
         updateMediaGenerationOperation(params.handle.runId, {
           status: "failed",
           endedAt,

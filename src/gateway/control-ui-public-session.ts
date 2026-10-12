@@ -11,6 +11,7 @@ import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import { buildPublicSessionMediaBaseUrl } from "./control-ui-public-session-attachments.js";
 import type { PublicSessionCardRenderer } from "./control-ui-public-session-card.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
 import { PUBLIC_SESSION_CONTENT_SECURITY_POLICY } from "./control-ui-public-session-render.js";
@@ -89,7 +90,7 @@ export async function serveControlUiPublicSession(params: {
   if (!secureIngress) {
     return unavailable(404);
   }
-  // A truthful HEAD would still need authorization, transcript I/O, redaction, and
+  // A truthful HEAD would still need authorization, transcript I/O, projection, and
   // rendering to compute the GET status and length. Refuse it instead of doing that work.
   if (req.method === "HEAD") {
     if (isCard) {
@@ -142,6 +143,7 @@ export async function serveControlUiPublicSession(params: {
       ]),
       document: {
         latestUrl,
+        mediaBaseUrl: buildPublicSessionMediaBaseUrl(basePath, publicShare.token),
         canonicalUrl,
         assetBasePath: basePath,
         cardUrl: `${origin}${buildControlUiPublicSessionCardPath({ basePath, token: publicShare.token })}`,

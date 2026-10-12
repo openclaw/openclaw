@@ -14,7 +14,7 @@ import type { AgentSession } from "../../sessions/agent-session.js";
 import { SessionTranscriptMessageCommittedError } from "../../sessions/session-manager-message-error.js";
 import { withSessionManagerWriteAssertion } from "../../sessions/session-manager-write-admission.js";
 import { recordSessionModelUsage } from "../../sessions/session-model-usage.js";
-import { redactTranscriptMessage } from "../../transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../../transcript-sanitize.js";
 import { makeZeroUsageSnapshot, normalizeUsage } from "../../usage.js";
 import type { runCompactionHooks, runPostCompactionSideEffects } from "../compaction-hooks.js";
 import { compactWithSafetyTimeout } from "../compaction-safety-timeout.js";
@@ -81,6 +81,7 @@ export function createChatGPTV2CompactionBoundary(params: {
   requestAnchor?: MeasuredRequestContext,
 ) => Promise<AssistantMessage | undefined> {
   let failed = false;
+  let softSkipLogged = false;
   return async (streamFn, model, context, options, requestAnchor) => {
     if (!usesNativeOpenAICodexResponsesBackend(model) || params.session.isCompacting) {
       return undefined;
@@ -115,10 +116,28 @@ export function createChatGPTV2CompactionBoundary(params: {
     const outgoing = preflight
       ? (preflight.compactionReplay ?? preflight)
       : resolveProjectedRequestPressure({ ...budget, context, previousRequest: requestAnchor });
-    if (outgoing.route === "fits") {
+    // V2 must send the complete window plus its trigger. Leave room for the
+    // next tool result instead of waiting for the client's reserve-based limit.
+    const contextTokens = Math.min(
+      params.contextTokenBudget,
+      model.contextWindow ?? params.contextTokenBudget,
+    );
+    const softTriggerTokens = Math.min(
+      outgoing.promptBudgetBeforeReserve,
+      Math.max(1, Math.floor(contextTokens * 0.9)),
+    );
+    if (outgoing.estimatedPromptTokens < softTriggerTokens) {
       return undefined;
     }
-    const fallback = (reason: string) => {
+    const fallback = (reason: string, hardLimit = false) => {
+      // The early V2 trigger must not move the client's compaction threshold.
+      if (!hardLimit && outgoing.route === "fits") {
+        if (!softSkipLogged) {
+          log.debug(`ChatGPT V2 compaction skipped while the request still fits: ${reason}`);
+          softSkipLogged = true;
+        }
+        return undefined;
+      }
       log.warn(`ChatGPT V2 compaction unavailable; falling back to client compaction: ${reason}`);
       const request: MidTurnPrecheckRequest = {
         ...outgoing,
@@ -128,14 +147,14 @@ export function createChatGPTV2CompactionBoundary(params: {
       params.onFallback(request);
       throw new MidTurnPrecheckSignal(request);
     };
+    if (outgoing.estimatedPromptTokens > (model.contextWindow ?? params.contextTokenBudget)) {
+      return fallback("the outgoing request exceeds the model context window", true);
+    }
     if (failed) {
       return fallback("an earlier V2 attempt in this run failed");
     }
     if (params.session.agent.state.pendingToolCalls.size > 0) {
       return fallback("tool calls are still pending");
-    }
-    if (outgoing.estimatedPromptTokens > (model.contextWindow ?? params.contextTokenBudget)) {
-      return fallback("the outgoing request exceeds the model context window");
     }
     const manager = params.session.sessionManager;
     const coveredLeaf = manager.getLeafId();
@@ -153,17 +172,17 @@ export function createChatGPTV2CompactionBoundary(params: {
           !message.runtimeContextCarrier &&
           !message.runtimeContext
         ) {
-          const redacted = redactTranscriptMessage(message, params.config);
-          if (redacted.role !== "user" || !isDeepStrictEqual(redacted.content, message.content)) {
-            throw new Error("ChatGPT V2 retained input requires transcript redaction");
+          const prepared = sanitizeTranscriptMessage(message);
+          if (prepared.role !== "user" || !isDeepStrictEqual(prepared.content, message.content)) {
+            throw new Error("ChatGPT V2 retained input requires transcript normalization");
           }
         } else if (message.role === "assistant" && message.providerReplay) {
-          const redacted = redactTranscriptMessage(message, params.config);
+          const prepared = sanitizeTranscriptMessage(message);
           if (
-            redacted.role !== "assistant" ||
-            !isDeepStrictEqual(redacted.providerReplay, message.providerReplay)
+            prepared.role !== "assistant" ||
+            !isDeepStrictEqual(prepared.providerReplay, message.providerReplay)
           ) {
-            throw new Error("ChatGPT V2 prior checkpoint requires transcript redaction");
+            throw new Error("ChatGPT V2 prior checkpoint requires transcript normalization");
           }
         }
       }
@@ -292,12 +311,12 @@ export function createChatGPTV2CompactionBoundary(params: {
           if (tokensAfter > outgoing.promptBudgetBeforeReserve) {
             throw new Error("ChatGPT V2 checkpoint exceeds the next request budget");
           }
-          const redacted = redactTranscriptMessage(checkpoint, params.config);
+          const prepared = sanitizeTranscriptMessage(checkpoint);
           if (
-            redacted.role !== "assistant" ||
-            !isDeepStrictEqual(redacted.providerReplay, checkpoint.providerReplay)
+            prepared.role !== "assistant" ||
+            !isDeepStrictEqual(prepared.providerReplay, checkpoint.providerReplay)
           ) {
-            throw new Error("ChatGPT V2 checkpoint requires transcript redaction");
+            throw new Error("ChatGPT V2 checkpoint requires transcript normalization");
           }
           const assertCommitCurrent = () => {
             assertActive();
@@ -312,12 +331,12 @@ export function createChatGPTV2CompactionBoundary(params: {
               // A failure after append begins may have committed. Never client-compact
               // an uncertain checkpoint; the session writer owns its reconciliation.
               persistenceStarted = true;
-              const entryId = await getRawSessionAppendMessageAsync(manager)(redacted);
+              const entryId = await getRawSessionAppendMessageAsync(manager)(prepared);
               if (!entryId) {
                 throw new Error("ChatGPT V2 checkpoint was not persisted");
               }
               committed = true;
-              params.session.agent.state.messages.push(redacted);
+              params.session.agent.state.messages.push(prepared);
               reportCommit(compacted.usage.input_tokens, tokensAfter);
             }),
           );
@@ -336,7 +355,7 @@ export function createChatGPTV2CompactionBoundary(params: {
               sessionFile: params.session.sessionFile ?? "",
             });
           }
-          return redacted;
+          return prepared;
         },
         Boolean(params.hookContext),
       );

@@ -60,7 +60,7 @@ export function createCorrectionFixture(root: string, initialContent = "broken\n
   );
   const run = (invocation: string, envOverrides: NodeJS.ProcessEnv = {}) =>
     spawnSync(
-      "bash",
+      process.platform === "darwin" ? "/bin/bash" : "bash",
       [
         "-c",
         [

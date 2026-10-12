@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -12,6 +13,7 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { readSessionGroupCatalog } from "../session-group-catalog.js";
 import * as groups from "../session-groups.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
+import { loadGatewayTestConfig } from "../test-helpers.config-runtime.js";
 import { testState } from "../test-helpers.runtime-state.js";
 import {
   directSessionReq,
@@ -190,6 +192,7 @@ test("joins rejected post-commit group registration before reporting durable cre
 test("does not register an unapplied category on the reset-main creation path", async () => {
   await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "main" };
+  setRuntimeConfigSnapshot(loadGatewayTestConfig());
   expect(
     (await directSessionReq("sessions.create", { agentId: "main", key: "agent:main:main" })).ok,
   ).toBe(true);

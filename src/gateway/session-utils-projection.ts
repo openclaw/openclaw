@@ -6,8 +6,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { captureRuntimeStateEnvironment } from "../config/paths.js";
-import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
-import { resolveConcreteSessionStorePath } from "../config/sessions/paths.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { iterateProjectedAgentRunSessionKeys } from "../infra/agent-run-projection.js";
 import {
@@ -15,7 +14,7 @@ import {
   type ProjectedAgentRunIndex,
 } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-usage.js";
+import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import {
   createSessionRowModelCacheKey,
   type SessionActorProfileIdentity,
@@ -119,13 +118,14 @@ export function resolveTranscriptUsageFallbacks(params: {
   rowContext?: SessionListRowContext;
   agentId: string;
   storeAgentId?: string;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
 }): Map<
   string | undefined,
   { estimatedCostUsd?: number; totalTokens?: number; totalTokensFresh?: boolean } | null
 > {
   const { entry, agentId } = params;
   const fallbacks: ReturnType<typeof resolveTranscriptUsageFallbacks> = new Map();
-  let snapshot: ReturnType<typeof readScopedRecentSessionUsageFromTranscript> | undefined;
+  const snapshot = params.transcriptUsage;
   for (const fallbackModelRef of new Set(params.fallbackModelRefs)) {
     fallbacks.set(fallbackModelRef, null);
     if (!entry?.sessionId) {
@@ -149,25 +149,6 @@ export function resolveTranscriptUsageFallbacks(params: {
       }) !== undefined
     ) {
       continue;
-    }
-    if (snapshot === undefined) {
-      const storePath =
-        resolveConcreteSessionStorePath(params.storePath) ??
-        resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-      try {
-        snapshot = readScopedRecentSessionUsageFromTranscript(
-          {
-            agentId: params.storeAgentId ?? agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: params.key,
-            storePath,
-          },
-          256 * 1024,
-        );
-      } catch {
-        snapshot = null;
-      }
     }
     if (snapshot) {
       const estimatedCostUsd = resolveEstimatedSessionCostUsd({

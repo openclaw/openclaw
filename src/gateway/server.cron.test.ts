@@ -12,6 +12,7 @@ import { resetConfigRuntimeState } from "../config/config.js";
 import type * as CronDelivery from "../cron/delivery.js";
 import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -178,13 +179,16 @@ async function createDirectCronState(params?: {
     import("../config/config.js"),
     import("./server-cron.js"),
   ]);
+  const cfg = getRuntimeConfig();
+  const storePath = await resolveCronJobsStorePathFromConfigAsync(cfg);
   const cronState = {
     ...buildGatewayCronService({
       scheduler: createTestGatewayScheduler({
         ...createGatewaySchedulerClock().clock,
         now: () => Date.now(),
       }),
-      cfg: getRuntimeConfig(),
+      cfg,
+      storePath,
       deps: {} as never,
       broadcast: params?.broadcast ?? vi.fn(),
     }),

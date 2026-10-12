@@ -131,8 +131,7 @@ function cappedText(value: string, limit: number): string {
   const text = characters
     .slice(0, limit)
     .join("")
-    // oxlint-disable-next-line no-control-regex -- Strip XML-invalid controls and lone surrogates before SVG encoding.
-    .replace(/[\u0000-\u001f\u007f-\u009f\ud800-\udfff\ufffe\uffff]/gu, " ")
+    .replace(/[\p{Cc}\p{Cs}\ufffe\uffff]/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
   return characters.length > limit ? `${text}…` : text;
@@ -349,7 +348,7 @@ function receipt(
   return svg;
 }
 
-export function renderPublicSessionCardSvg(card: PublicSessionCard): string {
+function renderPublicSessionCardSvg(card: PublicSessionCard): string {
   const worktree = card.worktree;
   const hasChanges =
     worktree &&

@@ -52,7 +52,6 @@ import { sessionRunVisibility } from "./session-run-visibility.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
 import "./elapsed-time.tsx";
-import "./tooltip.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
@@ -561,34 +560,30 @@ export function renderRecentSession(params: {
                   ${icons.pin}
                 </button>`
           }
-          <openclaw-tooltip
-            .content=${archiveAccess.allowed ? archiveLabel : archiveAccess.reason}
-            .describe=${false}
+          <button
+            class="session-action"
+            data-sidebar-session-archive="true"
+            type="button"
+            title=${archiveAccess.allowed ? archiveLabel : archiveAccess.reason}
+            aria-label=${`${archiveLabel}: ${label}`}
+            ?disabled=${!archiveAccess.allowed || !archiveAllowed || archiving}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              if (session.archived) {
+                void host.sessionOrganizer.patchSession(
+                  session,
+                  { archived: false },
+                  {
+                    sessionScope: true,
+                  },
+                );
+              } else {
+                void host.sessionOrganizer.archiveSessionWithUndo(session);
+              }
+            }}
           >
-            <button
-              class="session-action"
-              data-sidebar-session-archive="true"
-              type="button"
-              aria-label=${`${archiveLabel}: ${label}`}
-              ?disabled=${!archiveAccess.allowed || !archiveAllowed || archiving}
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                if (session.archived) {
-                  void host.sessionOrganizer.patchSession(
-                    session,
-                    { archived: false },
-                    {
-                      sessionScope: true,
-                    },
-                  );
-                } else {
-                  void host.sessionOrganizer.archiveSessionWithUndo(session);
-                }
-              }}
-            >
-              ${session.archived ? icons.archiveRestore : icons.archive}
-            </button>
-          </openclaw-tooltip>
+            ${session.archived ? icons.archiveRestore : icons.archive}
+          </button>
           <button
             class="session-action session-action--touch-menu"
             data-sidebar-session-menu="true"

@@ -9,15 +9,16 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-b
 
 type ChatPaneVersionsMenuProps = {
   catalog: boolean;
-  paneId: string;
   branches: SessionBranch[];
   branchSwitchDisabledReason: string | null;
   onBranchSelect: (leafEntryId: string) => void;
 };
 
 type Props = { menu: ChatPaneVersionsMenuProps };
+let nextId = 0;
 
 function ChatPaneVersionsMenuContent(props: Props) {
+  const helpId = `versions-help-${++nextId}`;
   return (
     <Show when={!props.menu.catalog && props.menu.branches.length > 1}>
       <wa-dropdown
@@ -55,22 +56,22 @@ function ChatPaneVersionsMenuContent(props: Props) {
         <div class="chat-pane__versions-heading">
           <span>{t("chat.sessionHeader.branches")}</span>
           <button
-            id={`versions-help-${props.menu.paneId}`}
+            id={helpId}
             class="btn btn--ghost btn--icon chat-pane__versions-info"
             type="button"
             autofocus
             aria-label={t("chat.sessionHeader.versionsHelpLabel")}
             aria-haspopup="dialog"
             aria-expanded="false"
-            aria-controls={`versions-help-content-${props.menu.paneId}`}
+            aria-controls={`${helpId}-content`}
           >
             <Icon name="info" />
           </button>
           <wa-popover
             ref={syncPopoverLabel}
-            id={`versions-help-content-${props.menu.paneId}`}
+            id={`${helpId}-content`}
             class="chat-pane__versions-help"
-            for={`versions-help-${props.menu.paneId}`}
+            for={helpId}
             aria-label={t("chat.sessionHeader.versionsHelpLabel")}
             placement="bottom-end"
             onWa-show={syncPopoverExpanded}
@@ -123,20 +124,23 @@ function ChatPaneVersionsMenuContent(props: Props) {
 }
 
 type ChatPaneVersionsMenu = SolidBridgeElement<Props>;
-defineSolidBridge<Props>("openclaw-chat-pane-versions-menu", ChatPaneVersionsMenuContent, {
-  properties: {
-    menu: {
-      default: {
-        catalog: true,
-        paneId: "",
-        branches: [],
-        branchSwitchDisabledReason: null,
-        onBranchSelect: () => {},
+export const ChatPaneVersionsMenu = defineSolidBridge<Props>(
+  "openclaw-chat-pane-versions-menu",
+  ChatPaneVersionsMenuContent,
+  {
+    properties: {
+      menu: {
+        default: {
+          catalog: true,
+          branches: [],
+          branchSwitchDisabledReason: null,
+          onBranchSelect: () => {},
+        },
+        attribute: false,
       },
-      attribute: false,
     },
   },
-});
+);
 
 declare global {
   interface HTMLElementTagNameMap {

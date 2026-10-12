@@ -50,7 +50,8 @@ function Region(props: RegionProps, host: RegionElement) {
   let focusedSurface: Element | null = null;
   let focusBeforeSideLock: HTMLElement | null = null;
   let contentMounted = false;
-  const [hostedRevision, setHostedRevision] = createSignal(0);
+  // Child panels publish hosted tabs synchronously while their parent commits.
+  const [hostedRevision, setHostedRevision] = createSignal(0, { ownedWrite: true });
   const refreshHostedTabs = () => setHostedRevision((value) => value + 1);
   const trackFocus = (event: Event): void => {
     const surface = event

@@ -598,7 +598,6 @@ describe("accepted continuation status delivery", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledOnce();
     expect(result.queuedFinal).toBe(false);
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(3);
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
   });
 });

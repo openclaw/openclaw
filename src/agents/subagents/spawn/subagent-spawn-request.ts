@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { listAgentIds } from "../../agent-scope-config.js";
@@ -108,6 +109,7 @@ export async function resolveSubagentSpawnRequest(
   // progress receipts or private results to a replacement session at the same key.
   let completionRequesterSessionId: string | undefined;
   let completionRequesterLifecycleRevision: string | undefined;
+  let requesterEntry: SessionEntry | undefined;
   const captureRequester = async () => {
     try {
       const target = await resolveGatewaySessionStoreTargetInWorker({
@@ -116,10 +118,21 @@ export async function resolveSubagentSpawnRequest(
         agentId: ctx.requesterAgentIdOverride,
         assertActive: ctx.assertActive,
       });
+      const completionEntry = target.store[target.canonicalKey];
+      completionRequesterSessionId = completionEntry?.sessionId;
+      completionRequesterLifecycleRevision = completionEntry?.lifecycleRevision;
+      // Proxied completion never supplies the controller's isolation or preferences.
+      const requesterTarget =
+        requesterInternalKey === ownership.completionRequesterSessionKey
+          ? target
+          : await resolveGatewaySessionStoreTargetInWorker({
+              cfg,
+              key: requesterInternalKey,
+              agentId: ctx.requesterAgentIdOverride,
+              assertActive: ctx.assertActive,
+            });
       ctx.assertActive?.();
-      const requesterEntry = target.store[target.canonicalKey];
-      completionRequesterSessionId = requesterEntry?.sessionId;
-      completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
+      requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
     } catch (error) {
       return rejectSubagentSpawnRequest(
         "error",
@@ -335,6 +348,7 @@ export async function resolveSubagentSpawnRequest(
       contextMode,
       requesterInternalKey,
       ownership,
+      requesterEntry,
       requesterAgentId,
       targetAgentId,
       swarmConfig,

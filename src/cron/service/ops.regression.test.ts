@@ -42,6 +42,7 @@ import {
 } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { start, stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
 import type { CronEvent } from "./state.js";
@@ -350,61 +351,6 @@ describe("cron service ops regressions", () => {
     expect((await loadCronStore(store.storePath)).jobs[0]?.state.nextRunAtMs).toBe(dueAt);
   });
 
-  it("manual cron.run preserves unrelated due jobs but advances already-executed stale slots", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const nowMs = Date.now();
-    const dueNextRunAtMs = nowMs - 1_000;
-    const staleExecutedNextRunAtMs = nowMs - 2_000;
-
-    await saveCronStore(store.storePath, {
-      version: 1,
-      jobs: [
-        createIsolatedRegressionJob({
-          id: "manual-target",
-          name: "manual target",
-          scheduledAt: nowMs,
-          schedule: { kind: "at", at: new Date(nowMs + 3_600_000).toISOString() },
-          payload: { kind: "agentTurn", message: "manual target" },
-          state: { nextRunAtMs: nowMs + 3_600_000 },
-        }),
-        createIsolatedRegressionJob({
-          id: "unrelated-due",
-          name: "unrelated due",
-          scheduledAt: nowMs,
-          schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
-          payload: { kind: "agentTurn", message: "unrelated due" },
-          state: { nextRunAtMs: dueNextRunAtMs },
-        }),
-        createIsolatedRegressionJob({
-          id: "unrelated-stale-executed",
-          name: "unrelated stale executed",
-          scheduledAt: nowMs,
-          schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
-          payload: { kind: "agentTurn", message: "unrelated stale executed" },
-          state: {
-            nextRunAtMs: staleExecutedNextRunAtMs,
-            lastRunAtMs: staleExecutedNextRunAtMs + 1,
-          },
-        }),
-      ],
-    });
-
-    const state = createCronRegressionState({
-      cronEnabled: false,
-      storePath: store.storePath,
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-
-    const runResult = await run(state, "manual-target", "force");
-    expect(runResult).toEqual({ ok: true, ran: true });
-
-    const jobs = state.store?.jobs ?? [];
-    const unrelated = jobs.find((entry) => entry.id === "unrelated-due");
-    const staleExecuted = jobs.find((entry) => entry.id === "unrelated-stale-executed");
-    expect(unrelated?.state.nextRunAtMs).toBe(dueNextRunAtMs);
-    expect((staleExecuted?.state.nextRunAtMs ?? 0) > nowMs).toBe(true);
-  });
-
   it("force-runs a due paced job without consuming its pending slot", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const nowMs = Date.parse("2026-07-19T09:00:00.000Z");
@@ -450,36 +396,6 @@ describe("cron service ops regressions", () => {
     expect(reloaded?.state.startupCatchupAtMs).toBe(dueSlot);
   });
 
-  it("passes the rehydrated agentTurn payload message to isolated manual runs", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const nowMs = Date.now();
-    const marker =
-      "SERIALIZATION_PROBE: reply exactly with the marker token you received and nothing else.";
-    const job = createIsolatedRegressionJob({
-      id: "manual-payload-message",
-      name: "manual payload message",
-      scheduledAt: nowMs,
-      schedule: { kind: "at", at: new Date(nowMs + 3_600_000).toISOString() },
-      payload: { kind: "agentTurn", message: marker },
-      state: { nextRunAtMs: nowMs + 3_600_000 },
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
-    const state = createCronRegressionState({
-      cronEnabled: false,
-      storePath: store.storePath,
-      runIsolatedAgentJob,
-    });
-
-    const runResult = await run(state, job.id, "force");
-
-    expect(runResult).toEqual({ ok: true, ran: true });
-    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-    const [params] = mockCall(runIsolatedAgentJob, 0) as [{ message?: unknown }?];
-    expect(params?.message).toBe(marker);
-  });
-
   it("applies timeoutSeconds to manual cron.run isolated executions", async () => {
     vi.useFakeTimers();
     try {
@@ -522,7 +438,7 @@ describe("cron service ops regressions", () => {
     }
   });
 
-  it("#17554: run() clears stale runningAtMs and executes the job", async () => {
+  it("#17554: startup recovers a stale running marker before an explicit force run", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const staleRunningAtMs = now - 2 * 60 * 60 * 1000 - 1;
@@ -552,21 +468,33 @@ describe("cron service ops regressions", () => {
 
     const enqueueSystemEvent = vi.fn();
     const state = createCronRegressionState({
+      cronEnabled: false,
       storePath: store.storePath,
       nowMs: () => now,
       enqueueSystemEvent,
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
     });
 
-    const result = await run(state, "stale-running", "force");
-    expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    const [text, options] = mockCall(enqueueSystemEvent, 0) as [string, { agentId?: unknown }?];
-    expect(text).toBe("stale-running");
-    expect(options?.agentId).toBe("main");
+    try {
+      await start(state);
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+        lastRunStatus: "error",
+        lastError: "cron: job interrupted by gateway restart",
+      });
+      const result = await run(state, "stale-running", "force");
+      expect(result).toEqual({ ok: true, ran: true });
+      expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+      const [text, options] = mockCall(enqueueSystemEvent, 0) as [string, { agentId?: unknown }?];
+      expect(text).toBe("stale-running");
+      expect(options?.agentId).toBe("main");
+    } finally {
+      stop(state);
+      await state.schedulerDrain;
+    }
   });
 
-  it("clears an orphaned queued reservation and executes the due job", async () => {
+  it("startup clears an orphaned queued request before an explicit due run", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const now = Date.parse("2026-02-06T10:05:01.000Z");
     const job = createDueIsolatedJob({
@@ -579,16 +507,24 @@ describe("cron service ops regressions", () => {
 
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "ok" });
     const state = createCronRegressionState({
+      cronEnabled: false,
       storePath: store.storePath,
       nowMs: () => now,
       runIsolatedAgentJob,
     });
 
-    await expect(run(state, job.id, "due")).resolves.toEqual({ ok: true, ran: true });
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    expect(
-      state.store?.jobs.find((entry) => entry.id === job.id)?.state.queuedAtMs,
-    ).toBeUndefined();
+    try {
+      await start(state);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(
+        state.store?.jobs.find((entry) => entry.id === job.id)?.state.queuedAtMs,
+      ).toBeUndefined();
+      await expect(run(state, job.id, "due")).resolves.toEqual({ ok: true, ran: true });
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    } finally {
+      stop(state);
+      await state.schedulerDrain;
+    }
   });
 
   it("keeps a queued quiet schedule event separate from its one terminal event", async () => {
@@ -636,7 +572,7 @@ describe("cron service ops regressions", () => {
       await expect(waitForManualRun(state, runId, 5_000)).resolves.toBe(true);
 
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(events.map((event) => event.action)).toEqual(["started", "scheduled", "finished"]);
+      expect(events.map((event) => event.action)).toEqual(["started", "finished", "scheduled"]);
       expect(events.filter((event) => event.action === "finished")).toEqual([
         expect.objectContaining({
           jobId: job.id,

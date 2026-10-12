@@ -356,6 +356,7 @@ export class AcpSessionManager {
             await recordSubagentTerminalState(
               {
                 childSessionKey: target.sessionKey,
+                agentId: target.agentId,
                 runId: input.requestId,
                 requesterSessionKey,
                 outcomeStatus: "cancelled",

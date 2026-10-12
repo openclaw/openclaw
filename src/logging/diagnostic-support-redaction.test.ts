@@ -85,6 +85,14 @@ describe("diagnostic support redaction", () => {
       true,
     ],
     [
+      'journal "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1. Run openclaw doctor --fix.',
+      true,
+    ],
+    [
+      'journal "operation.sqlite" unsafe: mode=0600 nlink=2 uid=1000; expected owner-only mode nlink=1. Run openclaw doctor --fix. private-text',
+      false,
+    ],
+    [
       'helper "recovery.mjs" unsafe: mode=0644 nlink=1 uid=1000; expected owner-only mode nlink=1.',
       true,
     ],

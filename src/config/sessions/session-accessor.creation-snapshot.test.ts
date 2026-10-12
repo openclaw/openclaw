@@ -11,6 +11,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import {
   createSessionEntryWithTranscript,
   assignSessionOwner,
@@ -26,18 +28,26 @@ import { markCanonicalSessionValidationPending } from "./session-canonical-key.j
 import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
 
 const tempDirs: string[] = [];
+function createEnv(prefix: string): NodeJS.ProcessEnv {
+  const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, prefix) };
+  setRuntimeConfigSnapshot({
+    session: { store: resolveSessionStorePathCore(undefined, { agentId: "main", env }) },
+  });
+  return env;
+}
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   cleanupTempDirs(tempDirs);
 });
 
 describe("session creation snapshot", () => {
   it("preserves a competing creation committed while the initial entry is prepared", async () => {
-    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-conflict-") };
+    const env = createEnv("creation-conflict-");
     const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
     const competing = { sessionId: "competing", updatedAt: 1, label: "retained" };
     openOpenClawAgentDatabase(scope);
@@ -53,7 +63,7 @@ describe("session creation snapshot", () => {
   });
 
   it("preserves adopted history without selecting a new projection", async () => {
-    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-history-") };
+    const env = createEnv("creation-history-");
     const scope = { agentId: "main", env, sessionKey: "agent:main:target", sessionId: "target" };
     const entry = { sessionId: "target", updatedAt: 1 };
     replaceSessionEntrySync(scope, entry);
@@ -78,7 +88,7 @@ describe("session creation snapshot", () => {
   });
 
   it("prepares and adopts a complete target without decoding sibling entries", async () => {
-    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-snapshot-") };
+    const env = createEnv("creation-snapshot-");
     const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
     const target = {
       sessionId: "target",
@@ -138,7 +148,7 @@ describe("session creation snapshot", () => {
     });
   });
   it("preserves normalized and opaque target identities after reopening", async () => {
-    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-identities-") };
+    const env = createEnv("creation-identities-");
     const scope = { agentId: "main", env };
     const key = "agent:main:matrix:group:!Room:example.org";
     const sibling = "agent:main:matrix:group:!room:example.org";
@@ -191,7 +201,7 @@ describe("session creation snapshot", () => {
   it.each(["mismatched-time", "nul"])(
     "preserves native warm listing but refuses corrupt worker input for a %s target",
     async (kind) => {
-      const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-warm-rows-") };
+      const env = createEnv("creation-warm-rows-");
       const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
       const entry = {
         sessionId: "target",
@@ -244,7 +254,7 @@ describe("session creation snapshot", () => {
   );
 
   it("keeps the target and sibling labels on one snapshot across an external commit and callback await", async () => {
-    const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-concurrent-snapshot-") };
+    const env = createEnv("creation-concurrent-snapshot-");
     const scope = { agentId: "main", env, sessionKey: "agent:main:a-target" };
     const entry = {
       sessionId: "target",

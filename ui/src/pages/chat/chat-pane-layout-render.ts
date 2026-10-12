@@ -217,7 +217,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionSessionKey = state.sessionKey;
-    const companionThread = this.sessionCompanionThreads.view(companionSessionKey, currentAgentId);
+    // Publish the mutable owner's current fields across the reactive property boundary.
+    const companionThread = {
+      ...this.sessionCompanionThreads.view(companionSessionKey, currentAgentId),
+    };
     const companionPresented = slotPresentation("companion");
     // Capture the opening before the lazy rail can yield to newer input intent.
     this.syncSessionCompanionPresentation(companionPresented.isPresented());

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
-import { sql } from "kysely";
+import { sql, type Expression } from "kysely";
 import {
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
@@ -62,22 +62,20 @@ export async function streamSessionTranscriptHydration(
         ...request.target,
         beforeEventSeq: fence?.beforeRawSeq,
       }).$if(request.afterSeq !== undefined, (query) => query.where("seq", ">", request.afterSeq!));
+      const eventSlice = (offset: number | Expression<number>) =>
+        /* kysely-allow-raw: Slice database-encoded canonical bytes natively so identity TEXT never enters JS whole. */
+        sql<Uint8Array>`substr(CAST(${transcriptEventJsonSql(database.db)} AS BLOB), ${offset}, ${SLICE_BYTES})`.as(
+          "data",
+        );
       const readPart = prepareSqliteQueryTakeFirstSync<
         { seq: number; offset: number },
         { data: Uint8Array }
       >(database.db, (parameter) =>
-        source
-          .select(
-            /* kysely-allow-raw: Slice database-encoded canonical bytes natively so identity TEXT never enters JS whole. */
-            sql<Uint8Array>`substr(CAST(${transcriptEventJsonSql(database.db)} AS BLOB), ${parameter((value) => value.offset)}, ${SLICE_BYTES})`.as(
-              "data",
-            ),
-          )
-          .where(
-            "seq",
-            "=",
-            parameter((value) => value.seq),
-          ),
+        source.select(eventSlice(parameter((value) => value.offset))).where(
+          "seq",
+          "=",
+          parameter((value) => value.seq),
+        ),
       );
       let frames: SessionTranscriptHydrationChunk["frames"] = [];
       let bytes = 0;
@@ -98,14 +96,14 @@ export async function streamSessionTranscriptHydration(
       };
       for (const row of iterateSqliteQuerySync(
         database.db,
-        source.select("seq").orderBy("seq", "asc"),
+        source.select(["seq", eventSlice(1)]).orderBy("seq", "asc"),
       )) {
         for (let offset = 1; ; offset += SLICE_BYTES) {
           control.throwIfCancelled();
-          const { data } = expectDefined(
-            readPart({ seq: row.seq, offset }),
-            "transcript snapshot row",
-          );
+          const data =
+            offset === 1
+              ? row.data
+              : expectDefined(readPart({ seq: row.seq, offset }), "transcript snapshot row").data;
           if (bytes + data.byteLength > CHUNK_BYTES) {
             await flush();
           }

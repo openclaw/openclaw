@@ -11,8 +11,11 @@ import {
 } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
-  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
@@ -38,6 +41,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
+import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
 import { readVoiceSessionRecordInTransaction } from "../../../talk/client-voice-session-store.js";
 import * as voiceWriters from "../../../talk/client-voice-session-write.js";
 import * as voiceKernel from "../../../talk/client-voice-session-write.kernel.js";
@@ -46,6 +51,7 @@ import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.te
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
+import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { makeClient } from "../../server-broadcast.test-helpers.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import {
@@ -96,6 +102,7 @@ function configureDelegatedBrowserProvider(
   createBrowserSession: (request: BrowserRequest) => Promise<typeof browserSession>,
 ) {
   const fixture = createDelegatedBrowserProviderFixture(createBrowserSession, tempDir);
+  setRuntimeConfigSnapshot(fixture.context.getRuntimeConfig());
   voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
     provider: fixture.provider,
     providerConfig: {},
@@ -104,6 +111,8 @@ function configureDelegatedBrowserProvider(
   return fixture;
 }
 async function invokeCreate(options: GatewayRequestHandlerOptions) {
+  setRuntimeConfigSnapshot(options.context.getRuntimeConfig());
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const admission = resolveSessionMutationAuthorization({
     method: "talk.client.create",
     requestParams: options.params,
@@ -141,6 +150,7 @@ describe("voice creation authority", () => {
       clientVoiceSessionTesting.reset();
       try {
         await cleanupSessionStateForTest({ stateDir: tempDir });
+        clearRuntimeConfigSnapshot();
       } finally {
         envSnapshot.restore();
         remove();
@@ -189,9 +199,12 @@ describe("voice creation authority", () => {
     ownedVoiceSessionKey = sessionKey;
     tempDir = tempDirs.make("openclaw-voice-authority-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    await replaceSessionEntry(
+    setRuntimeConfigSnapshot({});
+    const seedEntry = { sessionId, updatedAt: Date.now() };
+    await applySessionEntryOperation(
       { agentId: "main", sessionKey },
-      { sessionId, updatedAt: Date.now() },
+      { kind: "fields", patch: seedEntry },
+      { fallbackEntry: seedEntry, replaceEntry: true, skipMaintenance: true },
     );
   });
   it("releases transport authority after a same-session replacement closes", async () => {
@@ -257,7 +270,10 @@ describe("voice creation authority", () => {
         ...rolePolicyConfig(),
         agents: { entries: { main: {}, source: {} } },
       };
+      setRuntimeConfigSnapshot(config);
       const client = roleClient("write", "cross-store-voice");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      prepareGatewayRecipientProfile(client);
       const prepare = (scope: typeof local, method = "sessions.patch") => {
         const result = resolveSessionMutationAuthorization({
           method,
@@ -530,14 +546,20 @@ describe("voice creation authority", () => {
           : {}),
       };
       fixture.context.getRuntimeConfig = () => config;
+      setRuntimeConfigSnapshot(config);
       const key = kind === "incognito" ? "agent:main:dashboard:incognito-voice-source" : sessionKey;
       ownedVoiceSessionKey = key;
       const scope = { agentId: "main", sessionKey: key, storePath: config.session?.store };
-      await replaceSessionEntry(scope, {
+      const seedEntry = {
         sessionId,
         updatedAt: Date.now(),
-        ...(kind === "incognito" ? { incognito: true } : {}),
-      });
+        ...(kind === "incognito" ? { incognito: true as const } : {}),
+      };
+      await applySessionEntryOperation(
+        scope,
+        { kind: "fields", patch: seedEntry },
+        { fallbackEntry: seedEntry, replaceEntry: true, skipMaintenance: true },
+      );
       const respond = vi.fn();
       const create = (voiceChangeId?: string) =>
         invokeCreate({
@@ -760,6 +782,7 @@ describe("voice creation authority", () => {
   it.each(["startup-copy", "active-copy", "healthy"] as const)(
     "keeps browser provider writes on their creator source (%s)",
     async (phase) => {
+      const persistence = prepareClientVoiceSessionClose();
       let providerRequest: BrowserRequest | undefined;
       const fixture = configureDelegatedBrowserProvider(async (request) => {
         providerRequest = request;
@@ -819,6 +842,7 @@ describe("voice creation authority", () => {
           });
         }
         expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
+        await persistence.drain();
         await closeOpenClawAgentDatabasesAsync(tempDir);
         if (replacementBytes) {
           expect(readFileSync(sourcePath)).toEqual(replacementBytes);
@@ -829,7 +853,11 @@ describe("voice creation authority", () => {
           });
         }
       } finally {
-        intercepted.mockRestore();
+        try {
+          await persistence.drain();
+        } finally {
+          intercepted.mockRestore();
+        }
       }
     },
   );

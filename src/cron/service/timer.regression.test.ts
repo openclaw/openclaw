@@ -7,7 +7,7 @@ import {
   createIsolatedRegressionJob,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeatAndWait as requestOwnedHeartbeatAndWait,
@@ -43,8 +43,7 @@ import { update } from "./ops-mutations.js";
 import { run as runManualCronJob } from "./ops-run.js";
 import type { CronEvent, CronServiceDeps, CronServiceState } from "./state.js";
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
-import { runMissedJobs } from "./timer.js";
-import { onTimer } from "./timer.test-support.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-timer-regressions-",
@@ -105,7 +104,11 @@ async function occupyWorkerSlots(state: CronServiceState, count: number) {
     return { status: "ok" };
   };
   const done = Promise.all(jobs.map((job) => runManualCronJob(state, job.id, "force")));
-  await started.promise;
+  await awaitGateBeforeSettlement(
+    started.promise,
+    done,
+    "Capacity fixture finished before its runs started",
+  );
   return { release: () => release.resolve(), done };
 }
 
@@ -611,7 +614,11 @@ describe("cron service timer regressions", () => {
     const slots = await occupyWorkerSlots(state, 7);
     const timerRun = onTimer(state);
     try {
-      await firstStarted.promise;
+      await awaitGateBeforeSettlement(
+        firstStarted.promise,
+        timerRun,
+        "Scheduled requests finished before the first launch",
+      );
       expect(requireJob(state, second.id).state.queuedAtMs).toBe(dueAt);
       now += 2 * 60 * 60 * 1000 + 1;
       await onTimer(state);
@@ -890,6 +897,7 @@ describe("cron service timer regressions", () => {
     const releaseRun = createDeferred<{ status: "ok"; summary: string }>();
     const state = createCronServiceState({
       storePath,
+      maxMissedJobsPerRestart: 1,
       nowMs: () => scheduledAt,
       runIsolatedAgentJob: async () => {
         runStarted.resolve();

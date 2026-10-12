@@ -22,8 +22,8 @@ Learning happens in three places:
 - **Unused-skill cleanup** archives learned skills unused for 30 days. See
   [Unused-skill cleanup](/tools/skill-workshop#unused-skill-cleanup).
 
-Every change applies immediately, is announced in the conversation, and can be
-undone. See [Undo](/tools/skill-workshop#undo).
+Every change applies immediately and can be undone. Background review changes
+appear in the Control UI chat. See [Undo](/tools/skill-workshop#undo).
 
 ## When a review runs
 
@@ -70,49 +70,60 @@ and the review never re-runs your task. The review must `view` a skill
 before it patches, writes, or archives it, and an archive needs `absorbed_into`
 or `reason`.
 
-The reviewer looks for:
+The reviewer keeps your learned skills a small set of repeatable procedures, so
+most reviews change nothing. It changes a skill only for a class of task you
+will ask for again, where the next run would go wrong or redo work without the
+change. The evidence is one of:
 
-- a correction to your approach, output, or style.
-- a non-obvious technique, fix, or command sequence that worked after trial and
-  error.
-- a learned skill that was wrong, missing a step, or outdated.
+- a correction to the agent's method.
+- a non-obvious method that worked after trial and error.
+- a learned skill with a wrong, missing, or outdated step.
 
-It lists learned skills first, then prefers patching a skill that was used or
-already covers the task, then adding a `references/`, `templates/`, or
-`scripts/` file to one, and creates a new skill only when none covers the task.
-Listed skills that cover the same class of task get merged into one umbrella
-skill: the review patches the survivor and archives the rest with
-`absorbed_into`. When the turn was interrupted, it keeps only steps that visibly
-worked before the stop.
+Details true of only one request, such as one product, order, menu, date,
+place, or booking, stay in the conversation.
+
+A review makes at most one change. It lists learned skills first, then either
+sharpens the step the lesson changes in the skill for that class of task, or
+creates one focused skill when none covers it. An unrelated class of task gets
+its own skill instead of a new branch in an existing one. When two listed skills
+cover the same class of task, the review merges them: it patches the survivor
+and archives the other with `absorbed_into`. When the turn was interrupted, it
+keeps only steps that visibly worked before the stop.
 
 It does not capture environment-specific or transient failures, negative claims
 about tools, unresolved failures or guesses, knowledge about one codebase,
 one-off tasks, personal facts, secrets, or generic advice without concrete
-commands, paths, or ids. When nothing durable was learned, it changes nothing.
+commands, paths, or ids.
 
 ## What you see
 
-If the review changed a skill, one line is posted to the conversation that
-triggered it and mirrored into the session transcript:
+When a review changes a skill, the Control UI chat shows a **Learned** row: one
+chip per changed skill, each opening that skill in the Skill Workshop, and an
+**Undo** button. Nothing appears when nothing changed.
+
+Channel messages are off by default. Set
+`skills.workshop.autonomous.channelNotices: true` to post the notice to the
+conversation that triggered the review instead. That session's Control UI
+chat then shows the channel message as plain text, not the **Learned** row:
 
 ```text
 💾 Learned: updated `deploy-staging` (tightened the rollback step). Say "undo" to revert this skill change.
 ```
 
-Channel-less Control UI sessions show it as a **Learned** row instead: one chip
-per changed skill, each opening that skill in the Skill Workshop, and an
-**Undo** button. Nothing is posted when nothing changed. Slack conversations get
-no notice; the change still appears in the Skill Workshop, where you can undo it.
+Slack never gets a channel message; its sessions still get the Control UI row.
 
-To undo everything the review changed, press **Undo** on the notice (a button
-on channels that render buttons, a copyable `/learn undo <id>` command on
-plain-text ones) or on the Control UI card. You can also reply "undo" and the
+To undo everything the review changed, press **Undo** on the Control UI row or
+channel notice. Channels that do not render buttons show a copyable
+`/learn undo <id>` command; the id comes from the channel notice. You can also
+say "undo" in the conversation, whether channel notices are on or off, and the
 agent restores the previous version. See
 [Skill Workshop undo](/tools/skill-workshop#undo).
 
 A review stops without changing anything further if you turn learning off, or
 if the source session is deleted, replaced, or changes permission mode while it
 runs. Changes it already made stay, each with a saved previous version.
+Expected cancellations during Gateway shutdown or a source transcript change
+appear only in debug logs. Provider and storage failures still produce warnings.
 
 ## Turn it on or off
 

@@ -6,7 +6,7 @@ import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { prepareRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import {
   LegacyPluginSdkResourceHost,
   bindLegacyPluginSdkResourceHost,
@@ -101,6 +101,8 @@ function formatRuntimeGatewayAuthTokenWarning(): string {
 
 type GatewayKernelOptions = {
   deferEarlyRuntime?: boolean;
+  /** HTTP startup binds its listener before awaiting session projection readiness. */
+  deferRequestRuntime?: boolean;
   sdkResourceHost?: LegacyPluginSdkResourceHost;
 };
 
@@ -134,8 +136,8 @@ async function createGatewayKernelWithSdkHost(
     throw new Error("Gateway boot ID must contain 1 to 96 characters");
   }
   const bootId = suppliedBootId ?? randomUUID();
-  // Capture before bootstrap yields or creates workers; later downloads publish through adoption.
-  captureRemoteModelCatalogStartupSnapshot();
+  // Publish before bootstrap creates catalog consumers; later downloads use explicit adoption.
+  await prepareRemoteModelCatalogStartupSnapshot();
   // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
   const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
   ensureOpenClawCliOnPath();
@@ -231,7 +233,7 @@ async function createGatewayKernelWithSdkHost(
       await coreRuntime.startEarlyRuntime();
     }
     await pluginMetadata.waitForRetirement();
-    return await runtime.startupTrace.measure("gateway.request-runtime", () =>
+    const requestRuntime = await runtime.startupTrace.measure("gateway.request-runtime", () =>
       prepareGatewayKernelRequestRuntime({
         coreRuntime,
         log,
@@ -239,6 +241,10 @@ async function createGatewayKernelWithSdkHost(
         hostLifecycle: opts.hostLifecycle,
       }),
     );
+    if (!options.deferRequestRuntime) {
+      await requestRuntime.ensureRequestRuntimeReady();
+    }
+    return requestRuntime;
   } catch (error) {
     startupError = error;
   }

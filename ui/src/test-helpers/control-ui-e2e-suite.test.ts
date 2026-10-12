@@ -112,10 +112,10 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             return { failureSummary: { available: true } };
           },
         });
-        context = {
+        context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
           pages: () => pageClosed ? [] : [page],
-          newPage: async () => page,
+          newPage: async () => { context.emit("page", page); return page; },
           browser: () => ({ isConnected: () => true }),
           unrouteAll: async () => { state.events.push("drain"); record(); },
           close: async () => {
@@ -126,7 +126,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             state.pendingPageReject?.(new Error("synthetic page closed"));
             record();
           },
-        };
+        });
         return context;
       }
       if (${JSON.stringify(mode)} === "held-route-drain") {
@@ -186,10 +186,10 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             return settled;
           },
         });
-        context = {
+        context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
           pages: () => [page],
-          newPage: async () => page,
+          newPage: async () => { context.emit("page", page); return page; },
           route: async (pattern, handler) => { contextHandlers.push({ pattern, handler }); },
           unrouteAll: async (options) => {
             expect(options).toEqual({ behavior: "wait" });
@@ -206,13 +206,13 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             state.contextCleanupStarted.resolve("close");
             record();
           },
-        };
+        });
         return context;
       }
-      return {
+      const context = Object.assign(new EventEmitter(), {
         setDefaultTimeout() {},
         pages: () => [],
-        newPage: async () => closedPage,
+        newPage: async () => { context.emit("page", closedPage); return closedPage; },
         unrouteAll: async () => {},
         close: () => {
           state.closeCalls++;
@@ -221,7 +221,8 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
           return ${JSON.stringify(mode)} === "concurrent-close" && state.closeCalls === 1
             ? state.gate : Promise.resolve();
         }
-      };
+      });
+      return context;
     },
     close: async () => { state.browserClosed = true; record(); },
   };
@@ -315,9 +316,32 @@ suite.define(() => {
     });
   } else if (${JSON.stringify(mode)}.startsWith("diagnostic-")) {
     it("retains the native page timeout", async (context) => {
-      const run = () => suite.withPage({}, async () => {
+      const awaitTimeout = async (page) => {
+        expect(page.listenerCount("websocket"), "one RPC observer owns each page").toBe(1);
+        const socket = new EventEmitter();
+        page.emit("websocket", socket);
+        const frame = (direction, value) => socket.emit(direction, { payload: JSON.stringify(value) });
+        for (const method of ["agents.files.get",
+          "chat.history", "chat.startup", "sessions.list", "sessions.subscribe",
+          "sessions.unsubscribe", "sessions.messages.subscribe", "sessions.messages.unsubscribe",
+          "connect", "private-unknown-method"]) {
+          for (const ok of [true, false]) {
+            frame("framesent", { type: "req", id: "private-request-id", method,
+              params: { token: "private-token", sessionKey: "private-session", text: "private-content" } });
+            frame("framereceived", { type: "res", id: "private-request-id", ok,
+              payload: { text: "private-content" }, error: { message: "private-error" } });
+          }
+        }
         await new Promise((resolve, reject) => { state.pendingPageReject = reject; });
-      });
+      };
+      const run = async () => {
+        if (${JSON.stringify(mode)} === "diagnostic-page-timeout") {
+          await suite.withPage({}, ({ page }) => awaitTimeout(page));
+        } else {
+          const browserContext = await suite.newBrowserContext({});
+          await awaitTimeout(await browserContext.newPage());
+        }
+      };
       if (${JSON.stringify(mode)} === "diagnostic-scenario-timeout") {
         await suite.runScenario(context, { run });
       } else {
@@ -630,7 +654,11 @@ async function runFixture(mode: FixtureMode, signal: AbortSignal) {
       );
     }
     const captures: Array<{
-      public: { hostBeforeRead: { pageClosed: boolean }; rendererRead: string };
+      public: {
+        hostBeforeRead: { pageClosed: boolean };
+        rendererRead: string;
+        gatewayRpc: Array<{ method: string; outcome: string }>;
+      };
       private: { failure: { message: string } };
     }> = [];
     if (mode.startsWith("diagnostic-")) {
@@ -719,6 +747,24 @@ it.for([
       hostBeforeRead: { pageClosed: false },
       rendererRead: "completed",
     });
+    expect(result.captures[0]?.public.gatewayRpc).toEqual(
+      [
+        "agents.files.get",
+        "chat.history",
+        "chat.startup",
+        "sessions.list",
+        "sessions.subscribe",
+        "sessions.unsubscribe",
+        "sessions.messages.subscribe",
+        "sessions.messages.unsubscribe",
+      ].flatMap((method) => [
+        { method, outcome: "sent" },
+        { method, outcome: "ok" },
+        { method, outcome: "sent" },
+        { method, outcome: "error" },
+      ]),
+    );
+    expect(JSON.stringify(result.captures[0]?.public)).not.toContain("private-");
     expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
     expect(result.journal).toMatchObject({
       closeCalls: 1,

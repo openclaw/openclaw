@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
@@ -66,6 +67,7 @@ it.each([
       mocked.timed.mockImplementation(actual.runCommandWithTimeout);
       const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const source = state.path("source"),
         bare = state.path("origin.git"),
         cloud = state.path("cloud");

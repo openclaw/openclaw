@@ -24,6 +24,10 @@ import {
   getActivePluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { drainSessionDiskBudgetWorkers } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
@@ -76,7 +80,10 @@ export {
 } from "./run-attempt-hook-test-support.js";
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
-  loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
+  loadExecApprovalsReadOnlyAsync: vi.fn<() => Promise<ExecApprovalsFile>>(async () => ({
+    version: 1,
+    agents: {},
+  })),
 }));
 
 function createHarnessHostCapabilities(
@@ -112,7 +119,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>();
   return {
     ...actual,
-    loadExecApprovals: execApprovalsRuntimeMocks.loadExecApprovals,
+    loadExecApprovalsReadOnlyAsync: execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync,
   };
 });
 
@@ -669,8 +676,11 @@ export function setupRunAttemptTestHooks(
     // Machine-managed sandbox requirements must not leak into policy fixtures.
     vi.spyOn(codexRequirements, "readCodexRequirementsToml").mockReturnValue(undefined);
     // An uninitialized real host approvals store intentionally fails closed.
-    execApprovalsRuntimeMocks.loadExecApprovals.mockReset();
-    execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({ version: 1, agents: {} });
+    execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockReset();
+    execApprovalsRuntimeMocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({
+      version: 1,
+      agents: {},
+    });
     defaultCodexAppInventoryCache.clear();
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
@@ -690,6 +700,7 @@ export function setupRunAttemptTestHooks(
       vi.stubEnv("HOME", nativeSkillTestHome);
       vi.stubEnv("CODEX_HOME", "");
     }
+    setRuntimeConfigSnapshot({});
     await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.
@@ -718,6 +729,7 @@ export function setupRunAttemptTestHooks(
     await context.codexAttemptRuntime.stop();
     // A run beyond the drain deadline still needs the original database revocation fence.
     await cleanupRunSessionOwnersForTest({ closeDatabases: !drained });
+    clearRuntimeConfigSnapshot();
     resetCodexAppServerClientFactoryForTest();
     setManagedCodexPluginRoot(undefined);
     clearRuntimeAuthProfileStoreSnapshots();

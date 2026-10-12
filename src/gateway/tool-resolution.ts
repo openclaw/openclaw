@@ -13,7 +13,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descriptors.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
-import { resolveExecDefaults } from "../agents/exec-defaults.js";
+import { resolveExecDefaultsAsync } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
@@ -47,7 +47,6 @@ import {
   type CronCreatorToolAllowlistEntry,
   type CronToolsAllowCaptureRef,
 } from "../agents/tools/cron-tool.js";
-import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
 import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-target.js";
 import {
   hasSessionControlAuthority,
@@ -397,13 +396,6 @@ export async function resolveGatewayScopedTools(
       : undefined,
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
-    questionPrompt: createChannelQuestionPromptDelivery({
-      cfg: params.cfg,
-      channel: params.messageProvider,
-      to: params.currentChannelId ?? params.agentTo,
-      accountId: params.accountId,
-      threadId: params.currentThreadTs ?? params.agentThreadId,
-    }),
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
     gatewayCallerLocal: gatewayCaller.local,
@@ -439,7 +431,7 @@ export async function resolveGatewayScopedTools(
   assertCurrent();
   const execDefaults =
     nodeExecSurface || mediatedToolNames.size > 0
-      ? resolveExecDefaults({
+      ? await resolveExecDefaultsAsync({
           cfg: params.cfg,
           sessionEntry: params.execSession,
           execOverrides: params.execOverrides,

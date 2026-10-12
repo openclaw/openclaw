@@ -23,7 +23,7 @@ import { startSessionTranscriptIndexReconcile } from "./session-transcript-recon
 
 type SessionLifecyclePlanningOwner = {
   database: ReclamationDatabaseOptions;
-  execution: OpenClawAgentDatabaseExecution;
+  execution?: OpenClawAgentDatabaseExecution;
 };
 
 function runSessionLifecyclePlanningInWorker<Key extends keyof SessionLifecyclePlanningOperations>(
@@ -34,7 +34,7 @@ function runSessionLifecyclePlanningInWorker<Key extends keyof SessionLifecycleP
   return withSessionEntryWorker(
     params.database,
     undefined,
-    () => params.execution.assertCurrent(),
+    () => params.execution?.assertCurrent(),
     async (execution, source) => {
       const result = await execution.runExisting(source, async (worker) => ({
         value: await executeOpenClawAgentWorkerPublication<SessionLifecyclePlanningOperations, Key>(
@@ -62,13 +62,17 @@ function runSessionLifecyclePlanningInWorker<Key extends keyof SessionLifecycleP
 /** Keep builders outside SQL while retaining the caller's physical FIFO and exact source. */
 export async function projectSessionEntryLifecycleMutationInWorker(
   params: SessionLifecyclePlanningOwner & {
+    execution: OpenClawAgentDatabaseExecution;
     input: LifecycleRemovalProjectionInput;
     upserts: readonly SessionEntryLifecycleUpsert[];
   },
 ) {
   const prepared = await runSessionLifecyclePlanningInWorker(params, "prepare", {
     ...params.input,
-    upsertSessionKeys: params.upserts.map((upsert) => upsert.sessionKey.trim()),
+    upserts: params.upserts.map(({ sessionKey, relatedSessionKeys }) => ({
+      sessionKey,
+      ...(relatedSessionKeys !== undefined ? { relatedSessionKeys } : {}),
+    })),
   });
   const upsertedEntries = await buildProjectedLifecycleUpserts(
     prepared.store,

@@ -100,16 +100,10 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
     const requests = chatHistoryRequests(state);
-    let startedBeforeReady = this.context.gateway.snapshot.phase !== "connected";
-    let readyAt: number | undefined;
-    const reading = store.read(cacheKey, (prewarmReadyAt) => {
-      startedBeforeReady = true;
-      readyAt = prewarmReadyAt;
-    });
+    const reading = store.read(cacheKey);
     const hydration: InitialChatSnapshotHydration = {
       sessionKey,
-      startedBeforeReady,
-      readyAt,
+      connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
         .then((storedSnapshot) => {
           if (
@@ -138,7 +132,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
               this.progressCard.hydrate(target, snapshot.progressCard);
             }
           }
-          // Release startup with the adopted cursor before Lit queues the snapshot render.
+          // Release the history response before Lit queues the cached transcript render.
           hydration.complete?.();
           state.requestUpdate?.();
         })

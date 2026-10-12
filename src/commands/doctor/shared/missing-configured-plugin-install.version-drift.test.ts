@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../../plugins/installed-plugin-index-records.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
 import { invokePluginArtifactInstallMock } from "../../../plugins/test-helpers/install-fixtures.js";
@@ -163,7 +163,9 @@ function createDriftedInstalls({
         repairVersionDrift: true,
         ...options,
       });
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(result.records);
+      expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env })).toEqual(
+        result.records,
+      );
       return result;
     },
   };

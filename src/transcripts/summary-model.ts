@@ -161,6 +161,7 @@ export async function summarizeTranscriptsWithModel(params: {
             abortSignal: signal,
             assertCurrent: params.assertCurrent,
             outputTextPolicy: "strict-visible",
+            thinkLevel: "off",
             answerTokenBudget: 1_500,
           }),
         );

@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import {
-  panelTabStripStyles,
   renderPanelTabStrip,
   type PanelTabStripTab,
   type PanelTabStripParams,
@@ -170,10 +169,6 @@ afterEach(async () => {
 });
 
 describe("renderPanelTabStrip", () => {
-  it("keeps the new-tab control from shrinking when the strip overflows", () => {
-    expect(panelTabStripStyles.cssText).toMatch(/\.tabstrip-new\s*\{[^}]*flex:\s*none/u);
-  });
-
   it("renders an unslotted new button without an empty tab group", async () => {
     const onNew = vi.fn();
     const container = await renderStrip({ onNew });

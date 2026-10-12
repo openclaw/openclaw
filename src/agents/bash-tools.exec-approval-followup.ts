@@ -20,7 +20,6 @@ import {
   type ExternalBestEffortDeliveryTarget,
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -199,11 +198,9 @@ function formatDirectExecApprovalFollowupText(
 
   const metadata =
     parsed.kind === "finished" ? normalizeLowercaseStringOrEmpty(parsed.metadata) : "";
-  const body = redactToolPayloadText(
-    renderUserFacingText(
-      parsed.kind === "finished" || parsed.kind === "completed" ? parsed.body : parsed.raw,
-      { errorContext: !metadata.includes("code 0") },
-    ),
+  const body = renderUserFacingText(
+    parsed.kind === "finished" || parsed.kind === "completed" ? parsed.body : parsed.raw,
+    { errorContext: !metadata.includes("code 0") },
   ).trim();
   if (parsed.kind === "finished") {
     return (

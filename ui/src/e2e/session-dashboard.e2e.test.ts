@@ -1,4 +1,3 @@
-// Control UI E2E covers the real session-dashboard provider and transcript bridge.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";

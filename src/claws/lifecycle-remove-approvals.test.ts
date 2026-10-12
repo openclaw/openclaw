@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgent } from "../agents/agent-create.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -153,6 +154,7 @@ describe("Claw exec approvals removal", () => {
         },
       };
       await writeOpenClawConfig(home, config);
+      await captureRuntimeConfigAsyncReader()();
       const workerScope = { agentId: "worker", sessionKey: "agent:worker:main" };
       const keptScope = { agentId: "kept", sessionKey: "agent:kept:main" };
       replaceSessionEntrySync(workerScope, { sessionId: "worker-session", updatedAt: 1 });
@@ -190,6 +192,7 @@ describe("Claw exec approvals removal", () => {
         },
       };
       await writeOpenClawConfig(home, config);
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "worker",
         sessionKey: "agent:worker:main",
@@ -542,6 +545,7 @@ describe("Claw exec approvals removal", () => {
     await withTempHomeConfig({}, async ({ home }) => {
       const { config } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
+      await captureRuntimeConfigAsyncReader()();
       saveExecApprovals({
         version: 1,
         agents: {
@@ -588,6 +592,7 @@ describe("Claw exec approvals removal", () => {
     await withTempHomeConfig({}, async ({ home }) => {
       const { config } = await installApprovalAgent(addPlan, home);
       await writeOpenClawConfig(home, config);
+      await captureRuntimeConfigAsyncReader()();
       const plan = await buildClawRemovePlan("worker");
       let creationDuringCleanup: Awaited<ReturnType<typeof createAgent>> | undefined;
 

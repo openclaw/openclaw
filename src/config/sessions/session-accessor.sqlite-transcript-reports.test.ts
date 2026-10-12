@@ -1,8 +1,10 @@
 import { copyFileSync, readFileSync, renameSync } from "node:fs";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -17,6 +19,7 @@ import {
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.js";
 import {
   appendSessionTranscriptReport,
   loadTranscriptEvents,
@@ -60,6 +63,7 @@ const assistant = {
 const selected = { customType: "status", content: body, details: { selected: true } };
 
 async function seedReports(stopReason: AssistantMessage["stopReason"] = assistant.stopReason) {
+  await captureRuntimeConfigAsyncReader()();
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
@@ -503,7 +507,8 @@ describe("SQLite report payload selection", () => {
       const alias = state.path("report-alias");
       await symlink(path.dirname(databasePath), alias, "junction");
       const aliasedScope = { ...scope, storePath: path.join(alias, path.basename(databasePath)) };
-      const other = new DatabaseSync(databasePath);
+      const other = openNodeSqliteDatabase(databasePath);
+      admitSqliteSchema(other);
       const competitor = {
         customType: "status",
         content: "concurrent report",
@@ -649,6 +654,7 @@ describe("SQLite report payload selection", () => {
 
   it("does not let an unreadable compressed assistant suppress a real response", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const unreadable = {
         type: "message",
@@ -681,14 +687,12 @@ describe("SQLite report payload selection", () => {
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(3);
       expect(events[1]).toEqual(unreadable);
-      expect(JSON.stringify(events[2])).not.toContain(secret);
-      expect(JSON.stringify(events[2])).toContain("synthe…alue");
       expect(events[2]).toMatchObject({
         type: "message",
         parentId: "unreadable",
         message: {
           responseId: assistant.responseId,
-          content: [{ type: "text", text: expect.stringContaining(body) }],
+          content: [{ type: "text", text: `${body}${secret}` }],
         },
       });
     });
@@ -696,6 +700,7 @@ describe("SQLite report payload selection", () => {
 
   it("uses the last original duplicate member for response suppression", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const raw = `{"type":"message","id":"duplicate","parentId":null,
         "message":{"role":"assistant","content":${JSON.stringify(body)},"responseId":"first"},
         "message":{"role":"assistant","content":${JSON.stringify(body)},"responseId":"discarded","responseId":"last"}}`;

@@ -402,6 +402,7 @@ export function createImageGenerateTool(
             }
             const referenceMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
             const loadedReferenceImages = await loadMediaToolReferences({
+              workspaceReadiness: context.workspaceReadiness,
               inputs: imageInputs,
               toolName: "image_generate",
               expectedKind: "image",

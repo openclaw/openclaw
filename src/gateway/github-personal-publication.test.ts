@@ -30,7 +30,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   mutateUserGitHubConnection,
-  readUserGitHubConnection,
+  readUserGitHubConnectionAsync,
 } from "../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
@@ -1018,6 +1018,6 @@ describe("personal publication authority and recovery", () => {
         requestId: result.requestId,
       }),
     ).toThrow("corrupt");
-    expect(readUserGitHubConnection(owner)?.generation).toBe(generation);
+    expect((await readUserGitHubConnectionAsync(owner))?.generation).toBe(generation);
   });
 });

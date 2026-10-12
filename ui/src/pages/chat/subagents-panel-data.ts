@@ -30,20 +30,21 @@ import { requestSharedHistory } from "./chat-history-request.ts";
 import { historySessionId, isHistoryCursor } from "./chat-history-snapshot.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { isSubagentsPanelSession } from "./chat-spawned-subagent.ts";
+import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import {
   readSubagentActivitySnapshot,
   readSubagentToolEvent,
   subagentToolCallCount,
   type SubagentActivitySnapshot,
 } from "./subagents-panel-activity.ts";
-import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { buildToolStreamIdentity, toolStreamIdentityRunId } from "./tool-stream-identity.ts";
 
 const HISTORY_CONCURRENCY = 2;
 const MAX_RETAINED_CALLS = 1024;
 
 export type SubagentsPanelRow = {
   session: GatewaySessionRow;
-  callCount?: number;
+  callCount?: { count: number; exact: boolean };
   activity?: string;
   toolDisplayName?: string;
   canStop: boolean;
@@ -512,6 +513,24 @@ export class SubagentsPanelData {
       const tool = isSessionRunActive(session)
         ? (this.tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
         : undefined;
+      const headline =
+        isSessionRunActive(session) && metrics
+          ? selectActivityHeadline(
+              [...metrics.calls]
+                .filter(([identity, item]) => {
+                  const runId = toolStreamIdentityRunId(identity);
+                  return (
+                    runId !== undefined &&
+                    session.activeRunIds?.includes(runId) &&
+                    !item.hideFromChannelProgress &&
+                    !item.suppressChannelProgress
+                  );
+                })
+                .map(([, item]) => item),
+              [],
+              new Map(),
+            )
+          : undefined;
       const stopAccess = readChatSessionActionAccess(this.context.gateway.snapshot, true, {
         session,
         sessionAbortable: true,
@@ -520,7 +539,8 @@ export class SubagentsPanelData {
         session,
         callCount: metrics ? subagentToolCallCount(metrics) : undefined,
         activity:
-          tool?.text ??
+          tool?.text ||
+          headline?.title ||
           (isSessionRunActive(session) &&
           session.observerDigest?.runId &&
           session.activeRunIds?.includes(session.observerDigest.runId)

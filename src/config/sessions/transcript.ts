@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -12,6 +12,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
+import type { ModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
@@ -101,7 +102,8 @@ type InternalSessionTranscriptDeliveryMirror =
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     }
-  | SkillWorkshopChangeNotice;
+  | SkillWorkshopChangeNotice
+  | ModelFallbackNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -517,7 +519,6 @@ async function appendExactAssistantMessageWithSource(
               ? await findLatestEquivalentAssistantMessageId(
                   appendTarget,
                   preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
-                  params.config,
                 )
               : undefined;
           equivalentAssistant = messageId
@@ -643,9 +644,8 @@ function extractAssistantMessageText(message: AgentMessage): string | null {
 async function findLatestEquivalentAssistantMessageId(
   target: SessionTranscriptTurnWriteContext,
   message: SessionTranscriptAssistantMessage,
-  config?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(redactTranscriptMessage(message, config));
+  const expectedText = extractAssistantMessageText(sanitizeTranscriptMessage(message));
   if (!expectedText) {
     return undefined;
   }
@@ -662,7 +662,7 @@ async function findLatestEquivalentAssistantMessageId(
       return undefined;
     }
     const candidateText = latest
-      ? extractAssistantMessageText(redactTranscriptMessage(latest.message as AgentMessage, config))
+      ? extractAssistantMessageText(sanitizeTranscriptMessage(latest.message as AgentMessage))
       : undefined;
     return candidateText === expectedText ? latest?.id : undefined;
   }

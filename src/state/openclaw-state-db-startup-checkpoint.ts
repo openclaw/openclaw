@@ -8,7 +8,7 @@ import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -143,6 +143,16 @@ function ensureStartupMigrationCheckpointSchema(
 }
 
 function hasStartupMigrationCheckpointSchema(db: DatabaseSync): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return (
+      schema.tables.has("schema_meta") &&
+      schema.tables.has("state_leases") &&
+      schema.indexes.has("idx_state_leases_expiry") &&
+      schema.indexes.has("idx_state_leases_owner") &&
+      tableHasColumn(db, "schema_meta", "app_version")
+    );
+  }
   const objects = db // sqlite-allow-raw -- Checkpoint open admission distinguishes row access from additive schema repair.
     .prepare(`SELECT type, name FROM sqlite_schema WHERE name IN (
       'schema_meta', 'state_leases', 'idx_state_leases_expiry', 'idx_state_leases_owner'

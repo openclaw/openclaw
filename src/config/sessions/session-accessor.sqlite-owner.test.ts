@@ -13,6 +13,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.js";
 import {
   assignSessionOwner,
   loadSessionEntry,
@@ -97,6 +98,7 @@ describe("SQLite session owner assignment", () => {
 
   it("refuses stale session identity and lifecycle before assigning an owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         env: state.env,
@@ -135,6 +137,7 @@ describe("SQLite session owner assignment", () => {
 
   it("lazily adds bare columns and preserves the assignment across reopen", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         env: state.env,

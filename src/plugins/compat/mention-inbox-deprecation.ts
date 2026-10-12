@@ -9,6 +9,6 @@ export function warnMentionInboxDeprecation(
     pluginId,
     family: "mention-inbox",
     compatibility:
-      "Legacy recording queues work after commit; await recordCommittedInputAsync for completion. Other synchronous methods retain their completion timing.",
+      "Legacy recording queues work after commit; await recordCommittedInputAsync for completion. Synchronous reads, dismissals, and invalidation reject calls with async migration guidance.",
   });
 }

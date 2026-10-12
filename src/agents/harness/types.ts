@@ -410,15 +410,21 @@ export type AgentHarnessSessionDeletionParams = {
   assertCurrent: () => void;
 };
 
+/**
+ * Direct, unbound commit/rollback callbacks are deprecated and will be removed
+ * in the next Plugin SDK major. Use createNativeSessionBindingLifecycleV2 for
+ * reversible stored bindings or createNativeSessionCommitFinalizer for
+ * commit-only cleanup from openclaw/plugin-sdk/agent-harness-session-runtime.
+ * Factory-produced participants remain supported by this contract.
+ */
 export type AgentHarnessSessionDeletionMutation = {
   /**
-   * Synchronously remove only the prepared owner's state at the session commit edge.
-   * @deprecated Opaque transaction callbacks retain the legacy synchronous adapter.
-   * Use createNativeSessionBindingLifecycleV2 for stored bindings or
-   * createNativeSessionCommitFinalizer for commit-only effects.
+   * @deprecated Opaque callbacks run after durable session commit. Use
+   * createNativeSessionBindingLifecycleV2 for stored bindings or
+   * createNativeSessionCommitFinalizer for cleanup.
    */
   commit: () => void;
-  /** Restore only that removal when the authoritative session transaction rolls back. */
+  /** @deprecated Opaque callbacks no longer run before commit, so their rollback is unused. */
   rollback: () => void;
 };
 
@@ -455,6 +461,19 @@ export type AgentHarnessModelCatalogResult =
       entries: readonly import("../model-catalog.types.js").ModelCatalogEntry[];
       outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
     };
+
+export type AgentHarnessDescendantCancellationResult = {
+  killed: number;
+  /** Settlement failures do not erase already acknowledged sibling cancellations. */
+  errors?: readonly unknown[];
+  cancelledRequesters: Array<{
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+    requesterTurnRunId: string;
+  }>;
+};
 
 type AgentHarnessContract<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
@@ -570,6 +589,17 @@ type AgentHarnessContract<
 
   /** Throw AgentHarnessSessionCleanupError when required cleanup must block session replacement. */
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Reserve descendants before parent Stop; cancel joins native terminal and delivery custody. */
+  withDescendantCancellation?<T>(
+    this: void,
+    params: Omit<AgentHarnessSessionDeletionParams, "initialization"> & {
+      requesterTurnRunId?: string;
+      acceptsRequest: (
+        custody: import("../../infra/exec-request-context.js").ExecRequestCustody | undefined,
+      ) => boolean;
+    },
+    run: (cancel: () => Promise<AgentHarnessDescendantCancellationResult>) => Promise<T>,
+  ): Promise<T>;
   /** Invalidate native context only when a same-key history cut commits; preserve compaction. */
   withSessionContextReset?<T>(
     this: void,

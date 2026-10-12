@@ -8,6 +8,7 @@ import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -121,6 +122,7 @@ import {
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
 let compactTesting: typeof import("./compact.hooks.owner-test-support.js");
+let configRuntime: typeof import("../../config/runtime-snapshot.js");
 
 let TEST_STORE_PATH: string;
 let TEST_SESSION_ID: string;
@@ -282,18 +284,29 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
   compactTesting = await import("./compact.hooks.owner-test-support.js");
-  compactEmbeddedAgentSessionDirect = (params) =>
-    loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
-  compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
+  configRuntime = await import("../../config/runtime-snapshot.js");
+  compactEmbeddedAgentSessionDirect = (params) => {
+    configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
+    return loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
+  };
+  compactEmbeddedAgentSession = (params, host) => {
+    configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
+    return loaded.compactEmbeddedAgentSession(params, host);
+  };
   TEST_STORE_PATH = await compactionFixture.prepare();
 });
 
 beforeEach(async () => {
+  configRuntime.setRuntimeConfigSnapshot({});
   ({
     workspaceDir: TEST_WORKSPACE_DIR,
     sessionFile: TEST_SESSION_FILE,
     sessionId: TEST_SESSION_ID,
   } = await compactionFixture.prepareSession());
+});
+
+afterEach(() => {
+  configRuntime.clearRuntimeConfigSnapshot();
 });
 
 describe("compactEmbeddedAgentSessionDirect hooks", () => {
@@ -690,14 +703,29 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it("uses sandboxSessionKey only for compaction sandbox resolution", async () => {
+  it("uses the independent compaction sandbox policy without host session reads", async () => {
     const { addSession, deleteSession } = await import("../bash-process-registry.js");
+    const { resolveSandboxContext } = await import("../sandbox/context.js");
     const owned = createProcessSessionFixture({ id: "compaction-owned", backgrounded: true });
-    owned.scopeKey = "agent:main:main";
+    owned.scopeKey = TEST_SESSION_KEY;
     const other = createProcessSessionFixture({ id: "policy-owned", backgrounded: true });
     other.scopeKey = "agent:main:telegram:default:direct:12345";
     addSession(owned);
     addSession(other);
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: other.scopeKey, storePath: TEST_STORE_PATH },
+      { sessionId: "policy-owned", updatedAt: 1, sandboxMode: "off" },
+    );
+    const sandboxQueries: string[] = [];
+    resolveSandboxContextMock.mockImplementationOnce(async (params) => {
+      const sql = observeHostDataSql();
+      try {
+        return await resolveSandboxContext(params);
+      } finally {
+        sandboxQueries.push(...sql.queries);
+        sql.restore();
+      }
+    });
     try {
       await compactEmbeddedAgentSessionDirect({
         sessionId: TEST_SESSION_ID,
@@ -705,15 +733,19 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         sandboxSessionKey: other.scopeKey,
         sessionFile: TEST_SESSION_KEY,
         workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+        config: {
+          session: { store: TEST_STORE_PATH },
+          agents: { defaults: { sandbox: { mode: "all" } } },
+        },
       });
 
       expect(resolveSandboxContextMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          config: {},
           sessionKey: other.scopeKey,
           workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
         }),
       );
+      expect(sandboxQueries).toEqual([]);
       expect(buildConfiguredAgentSystemPromptMock).toHaveBeenCalledWith(
         expect.objectContaining({
           runtimeInfo: expect.objectContaining({

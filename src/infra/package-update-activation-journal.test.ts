@@ -343,6 +343,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         `uid=${observed.uid}`,
         "expected owner-only mode",
         ...(change === "control mode" ? [] : ["nlink=1"]),
+        ...(change === "journal links" ? ["openclaw doctor --fix"] : []),
       ];
       const report = await prepareUpdateFailureReport(
         {

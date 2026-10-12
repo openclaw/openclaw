@@ -10,7 +10,6 @@ import {
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
-  prepareSharedStateSqliteWorkerRuntime,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
   isSqliteWorkerStoreAvailable,
@@ -421,9 +420,6 @@ function createSharedStateWorkerOwner() {
     }
   }
   return {
-    prepareRuntime() {
-      return prepareSharedStateSqliteWorkerRuntime(captureRuntimeWorkerSource(moduleUrl));
-    },
     close,
     retainOperation,
     // Source and bundled callers must share the owner's backend URL.
@@ -489,13 +485,7 @@ function createSharedStateWorkerOwner() {
       context: OpenClawStateWorkerContext,
       options: Omit<OperationOptions, "createAdmission"> = {},
     ): Promise<Store | undefined> {
-      const {
-        existingOnly = false,
-        assertCurrent,
-        preparation,
-        runtimePreparation,
-        signal,
-      } = options;
+      const { existingOnly = false, assertCurrent, preparation, signal } = options;
       const { admission } = context;
       const wait = <T>(pending: Promise<T>) => racePromiseWithAbortSignal(pending, signal);
       const source = captureRuntimeWorkerSource(moduleUrl);
@@ -615,7 +605,6 @@ function createSharedStateWorkerOwner() {
               {
                 maintenanceScope: context.maintenanceScope,
                 preparation,
-                runtimePreparation,
                 signal,
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;
@@ -714,5 +703,6 @@ export function getOpenClawStateWorkerOwner() {
     Symbol.for("openclaw.sharedStateWorkerOwner"),
     createSharedStateWorkerOwner,
     (sharedOwner) => sharedOwner.close(),
+    "shared-state",
   );
 }

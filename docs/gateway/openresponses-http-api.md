@@ -166,7 +166,8 @@ URL fetch defaults:
 
 ## File + image limits
 
-The endpoint uses a built-in 20 MB request-body limit. File and image source
+The endpoint uses a built-in 20 MB request-body limit and a 60-second body-read
+deadline. Uploads that exceed the deadline return HTTP `408`. File and image source
 policy remains configurable under `gateway.http.endpoints.responses`:
 
 ```json5

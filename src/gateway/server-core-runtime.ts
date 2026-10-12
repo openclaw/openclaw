@@ -300,44 +300,45 @@ export async function startGatewayCoreRuntime(input: {
   } = await startupTrace.measure("gateway.handlers", async () => {
     const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
       await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
+    const auxHandlers = createGatewayAuxHandlers({
+      scheduler: runtime.scheduler,
+      log,
+      chatAbortControllers,
+      hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
+      getNativeApprovalRouteCoordinator: () =>
+        runtime.gatewayInstanceRuntimeRef.current?.nativeApprovals.routeCoordinator,
+      // Grant terms freeze at mint. This reads the live config so a policy
+      // change applies to grants minted after it, never retroactively.
+      resolveGrantDefaultExpiresAtMs: (nowMs) => {
+        const days = resolveGrantExpiryDaysConfig(getRuntimeConfig());
+        return days !== null ? nowMs + days * 86_400_000 : null;
+      },
+      activateRuntimeSecrets,
+      sharedGatewaySessionGenerationState,
+      resolveSharedGatewaySessionGenerationForConfig,
+      clients,
+      channelManager,
+      getChannelAutostartSuppression: channelManager.getAutostartSuppression,
+      logChannels,
+      registerWorkerTurnClaimClosedHandler: workerEnvironmentStartup?.placementStore
+        ? (handler) =>
+            workerEnvironmentStartup.placementStore.registerTurnClaimClosedHandler(handler)
+        : undefined,
+      validateAgentRuntimeDelegatedAuthority: (authority) =>
+        validateAgentRuntimeApprovalAuthority({
+          kind: "agentRuntime",
+          agentId: "approval-manager",
+          sessionKey: "approval-manager",
+          operationalRunInstance: authority.operationalRunInstance,
+          delegatedAuthority: authority,
+        }),
+      onApprovalLifecycle: approvalSessionEvents.publish,
+      onAgentRunAuthorityClosed: (authority) => {
+        gatewayComputerService.revokeRunAuthority(authority);
+      },
+    });
     return {
-      ...createGatewayAuxHandlers({
-        scheduler: runtime.scheduler,
-        log,
-        chatAbortControllers,
-        hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
-        getNativeApprovalRouteCoordinator: () =>
-          runtime.gatewayInstanceRuntimeRef.current?.nativeApprovals.routeCoordinator,
-        // Grant terms freeze at mint. This reads the live config so a policy
-        // change applies to grants minted after it, never retroactively.
-        resolveGrantDefaultExpiresAtMs: (nowMs) => {
-          const days = resolveGrantExpiryDaysConfig(getRuntimeConfig());
-          return days !== null ? nowMs + days * 86_400_000 : null;
-        },
-        activateRuntimeSecrets,
-        sharedGatewaySessionGenerationState,
-        resolveSharedGatewaySessionGenerationForConfig,
-        clients,
-        channelManager,
-        getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-        logChannels,
-        registerWorkerTurnClaimClosedHandler: workerEnvironmentStartup?.placementStore
-          ? (handler) =>
-              workerEnvironmentStartup.placementStore.registerTurnClaimClosedHandler(handler)
-          : undefined,
-        validateAgentRuntimeDelegatedAuthority: (authority) =>
-          validateAgentRuntimeApprovalAuthority({
-            kind: "agentRuntime",
-            agentId: "approval-manager",
-            sessionKey: "approval-manager",
-            operationalRunInstance: authority.operationalRunInstance,
-            delegatedAuthority: authority,
-          }),
-        onApprovalLifecycle: approvalSessionEvents.publish,
-        onAgentRunAuthorityClosed: (authority) => {
-          gatewayComputerService.revokeRunAuthority(authority);
-        },
-      }),
+      ...auxHandlers,
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
   });
@@ -354,6 +355,7 @@ export async function startGatewayCoreRuntime(input: {
       await stopOperatorInteractions();
     },
   });
+  await approvalRuntime.ready;
   approvalManagersForReplay.set("exec", execApprovalManager);
   approvalManagersForReplay.set("plugin", pluginApprovalManager);
   approvalManagersForReplay.set("system-agent", systemAgentApprovalManager);

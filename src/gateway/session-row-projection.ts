@@ -246,14 +246,14 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       if (disposed || !topologyDirty) {
         return;
       }
+      const revision = epoch;
       const nextConfig = params.getConfig?.() ?? cfg;
       const prepared = await discoveryRead.readWithCurrentAdmission();
       prepared.assertCurrent();
-      if (disposed) {
+      if (disposed || epoch !== revision) {
         return;
       }
       const discovery = { env, snapshot: prepared.snapshot };
-      const revision = epoch;
       const storeRead = createStoreRead({ stores, rows, byStore, env });
       await storeRead.loadCombinedStore(nextConfig, discovery, (load, scopeTargets) => {
         prepared.assertCurrent();

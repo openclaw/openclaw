@@ -8,7 +8,7 @@ import {
   loadMemorySessionMetadataBatchAsync,
   matchesSessionEntryPrefixHash,
   sessionPathForFile,
-  statSessionEntrySync,
+  statSessionEntry,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -300,7 +300,7 @@ function hashSessionMessageId(value: string): string {
 async function statSessionSource(source: SessionIngestionSource) {
   if (source.buildOptions.agentId && source.buildOptions.storePath) {
     try {
-      const stat = statSessionEntrySync(source.absolutePath, source.buildOptions);
+      const stat = await statSessionEntry(source.absolutePath, source.buildOptions);
       return stat
         ? {
             mtimeMs: Math.floor(Math.max(0, stat.revisionMs ?? stat.mtimeMs)),

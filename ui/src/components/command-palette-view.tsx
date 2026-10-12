@@ -34,8 +34,7 @@ import {
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
 import { COMMAND_PALETTE_DIALOG_STYLE } from "./command-palette-contract.ts";
-import { COMMAND_PALETTE_INPUT_ID } from "./command-palette-input.ts";
-import { CommandPaletteInput } from "./command-palette-input.tsx";
+import { COMMAND_PALETTE_INPUT_ID, CommandPaletteInput } from "./command-palette-input.tsx";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import {
@@ -93,7 +92,7 @@ export type CommandPaletteProps = {
   onPluginIconError: (pluginId: string) => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;
-  onInputRef: (element: Element | undefined) => void;
+  onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
   draft: PaletteSessionDraft;
 };
 

@@ -17,6 +17,10 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import {
   afterEach,
@@ -107,6 +111,7 @@ function captureOutput() {
 }
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({});
   scheduler = createTestPluginServiceScheduler();
   openDuplex = undefined;
   const parent = await fs.realpath(tempDirs.make("node-workspace-test-"));
@@ -189,6 +194,7 @@ afterEach(async () => {
     await service.stop?.(context());
   } finally {
     await scheduler.stop();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
   }
 });

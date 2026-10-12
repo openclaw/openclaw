@@ -87,9 +87,6 @@ export function createTranscriptIdentityReader(
   const actor = readSessionActorTransactionState(database, { sessionId });
   if (actor) {
     return (eventId: string) => {
-      if (readSessionActorTransactionState(database, { sessionId }) !== actor) {
-        throw new Error("Transcript identity reader escaped its actor transaction");
-      }
       if (actor.transcript.coldArchive) {
         throw new SessionTranscriptColdError(sessionId);
       }

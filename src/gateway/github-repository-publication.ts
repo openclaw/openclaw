@@ -13,11 +13,11 @@ import {
 } from "../state/github-publication-requester.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { PersonalGitHubAction } from "./github-personal-oauth.js";
+import { createRepositoryPersonalPublicationStatus } from "./github-personal-publication-status.js";
 import {
   assertPersonalGitHubPublicationReplay,
   bindPersonalGitHubPublicationSelection,
   preparePersonalRepositoryPublicationStatus as preparePersonalStatus,
-  presentPersonalGitHubPublicationStatus,
   preparePersonalGitHubPublicationSelection,
   type PersonalGitHubSessionActionV2,
   type PreparedRepositoryPublicationStatus,
@@ -56,7 +56,6 @@ import {
 } from "./github-repository-publication-store.js";
 import { prepareRepositoryOwner } from "./github-repository-publication-workspace.js";
 import { matchesRepositoryGitHubPublicationClaim } from "./github-repository-publication.kernel.js";
-import type { RepositoryGitHubPublicationStatusRow } from "./github-repository-publication.kernel.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolvePlacementTurnEnvironment } from "./worker-environments/placement-record.js";
 import type {
@@ -86,20 +85,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
   };
   const instanceId = placements.workspaceResultInstanceId();
   const active = new Map<string, string>();
-  const personalStatus = (
-    row: RepositoryGitHubPublicationStatusRow,
-    action: PersonalGitHubAction,
-    session: SessionIdentity,
-    prepared: PreparedRepositoryPublicationStatus | undefined,
-  ) =>
-    presentPersonalGitHubPublicationStatus(
-      { kind: "repository", row, prepared },
-      action,
-      session,
-      row.execution_id !== null &&
-        row.gateway_instance_id === instanceId &&
-        active.get(row.request_id) === row.execution_id,
-    );
+  const personalStatus = createRepositoryPersonalPublicationStatus(instanceId, active);
   const execute = createRepositoryGitHubPublicationExecution({
     instanceId,
     active,
@@ -372,9 +358,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         assertPersonalGitHubPublicationReplay(existing, input, selected);
         const prepared = await preparePersonalStatus(existing.request_id);
         action.assertCurrent();
-        return personalStatus(existing, action, action, prepared).result;
+        return (await personalStatus(existing, action, action, prepared)).result;
       }
-      const bound = bindPersonalGitHubPublicationSelection(action, selected, {
+      const bound = await bindPersonalGitHubPublicationSelection(action, selected, {
         idempotencyKey: input.idempotencyKey,
         hasRequest: () => Boolean(existing),
       });
@@ -523,7 +509,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (!row.checkpoint_ref) {
         throw new Error("GitHub publication has no accepted checkpoint.");
       }
-      bindPersonalGitHubPublicationSelection(action, input);
+      await bindPersonalGitHubPublicationSelection(action, input);
       return await placements.withRepositoryWorkspaceReservation(
         action,
         async (assertReservation) =>

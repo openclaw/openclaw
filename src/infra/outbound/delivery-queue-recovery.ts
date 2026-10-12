@@ -70,6 +70,7 @@ import {
   canReplayAmbiguousFinalText,
   isPermanentDeliveryError,
   resolveMaxRetries,
+  shouldInspectQueuedDelivery,
 } from "./delivery-queue-recovery-policy.js";
 import {
   claimDeliveryPlatformSendAttempt,
@@ -77,7 +78,6 @@ import {
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   finalizeDeliveryFailureSettlement,
-  hasActiveDeliveryOwner,
   loadUnfinishedDelivery,
   loadUnfinishedDeliveries,
   stageDeliveryFailureSettlement,
@@ -114,6 +114,7 @@ type RecoveryOptions = {
   log: RecoveryLogger;
   stateDir?: string;
   shouldContinue?: () => boolean;
+  onPending?: () => void;
 };
 
 type EntryRecoveryOptions = RecoveryOptions & {
@@ -1043,7 +1044,7 @@ async function processQueuedRecovery(
     await settleQueuedFailure({ ...opts, error: entry.settlement.error }, stateContext);
     return "continue";
   }
-  if (hasActiveDeliveryOwner(entry, Date.now())) {
+  if (!shouldInspectQueuedDelivery(entry, Date.now())) {
     if (context.kind === "startup") {
       log.info(`Recovery skipped for delivery ${entry.id}: active platform owner`);
     }
@@ -1251,8 +1252,11 @@ export async function drainPendingDeliveriesCore(
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
     const matchingEntries = (await loadUnfinishedDeliveries(opts.stateDir, stateContext)).filter(
-      (entry) => entry.settlement || opts.selectEntry(entry, now).match,
+      (entry) => shouldInspectQueuedDelivery(entry, now, opts.selectEntry),
     );
+    if (matchingEntries.length > 0) {
+      opts.onPending?.();
+    }
     await recoveryCoordinator.scan({
       entries: matchingEntries,
       loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir, stateContext),
@@ -1297,6 +1301,7 @@ export async function recoverPendingDeliveries(
   if (pending.length === 0) {
     return createEmptyDeliveryRecoverySummary();
   }
+  opts.onPending?.();
 
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 
@@ -1307,7 +1312,7 @@ export async function recoverPendingDeliveries(
     opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
   };
   await recoveryCoordinator.scan({
-    entries: pending,
+    entries: pending.filter((entry) => shouldInspectQueuedDelivery(entry, Date.now())),
     loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir, stateContext),
     deadlineMs: deadline,
     onDeadlineExceeded,

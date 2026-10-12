@@ -382,8 +382,8 @@ export async function runInstallPolicy(params: {
   let config = params.config;
   if (!config) {
     try {
-      const { getRuntimeConfig } = await import("../config/io.js");
-      config = getRuntimeConfig({ skipPluginValidation: true });
+      const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+      config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
     } catch (err) {
       return failClosed(`could not load OpenClaw config (${formatErrorMessage(err)})`);
     }

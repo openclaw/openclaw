@@ -23,16 +23,13 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import {
-  assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabaseFileIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
-  getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
   withOpenClawAgentDatabaseRuntime,
@@ -133,7 +130,11 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     options: BoardWriteOptions | undefined,
     operationLabel: string,
-    native: (database: OpenClawAgentDatabase, sessionKey: string) => T,
+    native: (
+      database: OpenClawAgentDatabase,
+      sessionKey: string,
+      expectedSession: BoardSessionIdentity | undefined,
+    ) => T,
     worker: (
       scope: Pick<SqliteWorkerStore<BoardWriteOperations>, "execute">,
       sessionKey: string,
@@ -285,31 +286,13 @@ export class SqliteBoardStore implements BoardStore {
               await prepare();
             }
             assertPreparedCurrent();
-            if (prepare && getOpenClawAgentDatabaseIfOpen(databaseOptions) !== database) {
-              throw new BoardValidationError(
-                "invalid_operation",
-                "board database closed or changed; retry",
-              );
-            }
-            if (
-              nativeSource ||
-              typeof readOpenClawAgentDatabaseIdentity(database).identity === "symbol"
-            ) {
-              // Released opaque/cross-store guards keep synchronous authority and mutation together.
+            if (nativeSource) {
+              // Cross-store and process-held source checks cannot share the target worker's snapshot.
               ensureBoardSchema(database);
               return runOpenClawAgentWriteTransaction(
                 (current) => {
                   assertPreparedCurrent();
-                  if (
-                    expectedSession &&
-                    !hasBoardSession(current, resolved.sessionKey, expectedSession)
-                  ) {
-                    throw new BoardValidationError(
-                      "invalid_operation",
-                      "board session changed; retry",
-                    );
-                  }
-                  const value = native(current, resolved.sessionKey);
+                  const value = native(current, resolved.sessionKey, expectedSession);
                   assertPreparedCurrent();
                   return value;
                 },
@@ -514,7 +497,6 @@ export class SqliteBoardStore implements BoardStore {
           async () => {
             this.assertTargetCurrent(capturedTarget, resolved);
             const value = await worker(reader, captured.sessionKey, env, identity);
-            assertExistingDatabaseIdentity(captured.path, identity.key, identity.birthtime);
             reader.assertCurrent();
             return accept(value);
           },
@@ -592,7 +574,8 @@ export class SqliteBoardStore implements BoardStore {
       target,
       options,
       "board.apply-ops",
-      (database, sessionKey) => applyBoardOpsToDatabase(database, sessionKey, capturedOps),
+      (database, sessionKey, expectedSession) =>
+        applyBoardOpsToDatabase(database, sessionKey, capturedOps, expectedSession),
       (scope, sessionKey) =>
         scope.execute({
           type: "boards.applyOps",
@@ -631,12 +614,13 @@ export class SqliteBoardStore implements BoardStore {
       params,
       options,
       "board.put-widget",
-      (database, sessionKey) =>
+      (database, sessionKey, expectedSession) =>
         putBoardWidgetInDatabase(
           database,
           sessionKey,
           normalizeBoardWidgetPutParams(preparedParams, sessionKey),
           viewGeneration,
+          expectedSession,
         ),
       (scope, sessionKey) =>
         scope.execute({
@@ -675,8 +659,16 @@ export class SqliteBoardStore implements BoardStore {
       target,
       options,
       "board.grant-widget",
-      (database, sessionKey) =>
-        grantBoardWidgetInDatabase(database, sessionKey, name, decision, revision, instanceId),
+      (database, sessionKey, expectedSession) =>
+        grantBoardWidgetInDatabase(
+          database,
+          sessionKey,
+          name,
+          decision,
+          revision,
+          instanceId,
+          expectedSession,
+        ),
       (scope, sessionKey) =>
         scope.execute({
           type: "boards.grant",

@@ -1,18 +1,22 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "./targets-read-availability.worker.js";
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 describe("session store availability", () => {
   it("uses admitted per-agent availability without probing session rows", async () => {
     await withTempHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      setRuntimeConfigSnapshot({});
       await replaceSessionEntry(
         { agentId: "main", env, sessionKey: "agent:main:existing" },
         { sessionId: "existing", updatedAt: 1 },
@@ -72,6 +76,7 @@ describe("session store availability", () => {
   it("does not let a missing configured store poison readable discovered siblings", async () => {
     await withTempHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      setRuntimeConfigSnapshot({});
       // Sessions live in the discovered default per-agent store...
       await replaceSessionEntry(
         { agentId: "main", env, sessionKey: "agent:main:main" },
