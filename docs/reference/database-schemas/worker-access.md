@@ -34,7 +34,7 @@ validates the complete candidate and current caller authority before granting
 COMMIT, then publishes only a confirmed native receipt. FIFO ordering, durability,
 schemas, stored formats, and update behavior are unchanged.
 
-Heartbeat outcome claims check the current row in their existing worker FIFO.
+Durable heartbeat outcome claims check the current row in their existing worker FIFO.
 Missing outcomes and already committed claims for the same run return without
 another write. New claims keep their atomic conditional update and live commit
 authority check; retries retain the original claim timestamp.
