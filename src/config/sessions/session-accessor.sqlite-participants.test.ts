@@ -822,15 +822,17 @@ describe("SQLite session participants", () => {
   it("merges alias contributions with current destination writes and unknown timestamps", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await captureRuntimeConfigAsyncReader()();
-      const scopes = ["canonical", "first-alias", "second-alias"].map((name) => ({
+      const makeScope = (name: string) => ({
         agentId: "main",
         env: state.env,
         sessionKey: `agent:main:${name}`,
-      }));
-      for (const scope of scopes) {
+      });
+      const canonical = makeScope("canonical");
+      const first = makeScope("first-alias");
+      const second = makeScope("second-alias");
+      for (const scope of [canonical, first, second]) {
         await upsertSessionEntryCore(scope, { sessionId: scope.sessionKey, updatedAt: 1 });
       }
-      const [canonical, first, second] = scopes;
       recordSessionParticipant(canonical, { identity: profile("shared"), promptedAt: 20 });
       recordSessionParticipant(first, { identity: profile("shared"), promptedAt: 10 });
       recordSessionParticipant(first, { identity: profile("shared"), promptedAt: 30 });
