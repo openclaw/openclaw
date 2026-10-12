@@ -39,6 +39,22 @@ describe("cron shorthand recovery", () => {
     expect(presentation({ action: "list" }, result)).toEqual({
       text: "Automations listed.\nCount: 250",
     });
+    expect(
+      presentation(
+        { action: "list" },
+        {
+          content: [],
+          details: {
+            total: 1,
+            jobs: [{ id: "one", name: "private reminder" }],
+            scope: "caller",
+            scopeHint: "Restricted automation inventory.",
+          },
+        },
+      ),
+    ).toEqual({
+      text: "Automations listed.\nCount: 1\nRestricted automation inventory.",
+    });
     expect(presentation({ action: "add" }, result)).toBeUndefined();
   });
 
