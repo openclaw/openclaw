@@ -469,7 +469,7 @@ export function createGitHubPublicationCoordinator(params: {
       await repository.prepareClaimWorkspace(claim);
     },
     /** @deprecated Use deferClaimPreparationAsync; removed in the next Plugin SDK major. */
-    deferClaimPreparation(_claim: WorkerSessionTurnClaim) {
+    deferClaimPreparation(_claim: WorkerSessionTurnClaim): void {
       warnPluginSdkDeprecation({
         family: "github-publication",
         method: "deferClaimPreparation",
@@ -637,7 +637,7 @@ export function createGitHubPublicationCoordinator(params: {
       return (await repository.readAsync(requestId)) ?? methods.readAsync(requestId);
     },
     /** @deprecated Use markReportedAsync; removed in the next Plugin SDK major. */
-    markReported(_requestId: string) {
+    markReported(_requestId: string): void {
       warnPluginSdkDeprecation({
         family: "github-publication",
         method: "markReported",

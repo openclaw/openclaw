@@ -20,7 +20,7 @@ import { readUserGitHubConnection } from "../state/user-github-connections.js";
 import { requestCurrentPersonalGitHubRefresh } from "./github-oauth-lifecycle.js";
 import { personalGitHubStatus, type PersonalGitHubAction } from "./github-personal-oauth.js";
 import { personalGitHubRequestDigest } from "./github-personal-publication-store.js";
-import { type PersonalGitHubPublicationRow } from "./github-personal-publication-store.worker.js";
+import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.worker.js";
 import {
   readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity as SessionIdentity,

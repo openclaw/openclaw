@@ -415,6 +415,16 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
       lifecycleRevision: randomUUID(),
     },
   );
+  if (!realWorktree && original(sessionKey).entry.worktree) {
+    const worktree = mocks.findWorktree("session", sessionKey);
+    await deleteRegistryWorktree(process.env, worktree.id);
+    await insertRegistryWorktree(process.env, {
+      ...worktree,
+      name: "publication",
+      createdAt: Date.now(),
+      lastActiveAt: Date.now(),
+    });
+  }
   mocks.loadSession.mockImplementation(
     (key: string, options: Parameters<typeof loadGatewaySessionEntryReadOnly>[1]) =>
       key === sessionKey ? loadGatewaySessionEntryReadOnly(key, options) : original(key, options),
@@ -446,14 +456,6 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
 
 export async function persistClaimPublicationWorkspace() {
   await persistPublicationTestSession(REQUEST.sessionKey);
-  const worktree = mocks.findWorktree("session", REQUEST.sessionKey);
-  await deleteRegistryWorktree(process.env, worktree.id);
-  await insertRegistryWorktree(process.env, {
-    ...worktree,
-    name: "publication",
-    createdAt: Date.now(),
-    lastActiveAt: Date.now(),
-  });
 }
 
 export function installGitHubPublicationTestHarness(

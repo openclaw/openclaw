@@ -46,7 +46,7 @@ describe("Gateway GitHub publication", () => {
   it("does not create publication state when reading an absent receipt", async () => {
     const database = openOpenClawStateDatabase();
     // Older admitted stores can lack this additive, first-publication table.
-    database.db.exec("DROP TABLE github_publication_requests");
+    database.db.exec("DROP TABLE IF EXISTS github_publication_requests");
     const coordinator = createGitHubPublicationCoordinator({
       placements: createWorkerSessionPlacementStore({ database }),
     });

@@ -8,6 +8,7 @@ import {
   preparePersonalGitHubPublicationSelection,
   type PersonalGitHubSessionActionV2,
 } from "./github-personal-publication.js";
+import { GitHubPublicationAuthorityLostError } from "./github-publication-execution-identity.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import {
@@ -85,10 +86,18 @@ export function createRepositoryGitHubPublicationExecution(params: {
       // Classify source loss before personal preparation can turn it into a retryable error.
       assertReceiptOwner(row, preparedOwner);
       assertCustody();
+      try {
+        context.assertCurrent?.();
+      } catch (cause) {
+        // A closed invocation leaves observed effects retryable; retained policy decides denial.
+        throw new GitHubPublicationAuthorityLostError(
+          "GitHub publication invocation authority changed.",
+          { cause },
+        );
+      }
       if (row.owner_profile_id === null) {
         getRequester().assertCurrent();
       }
-      context.assertCurrent?.();
       bound?.assertCurrent();
     };
     const authority: GitHubPublicationTransitionAuthority = {

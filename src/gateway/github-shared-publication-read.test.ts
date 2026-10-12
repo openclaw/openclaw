@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -35,6 +34,7 @@ import {
   SESSION_KEY,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
 import {
@@ -85,46 +85,28 @@ function prohibitPublicationWork() {
 }
 
 describe("shared worktree receipt observation", () => {
-  it("publishes a bound private worktree through the existing coordinator without host session reads", async () => {
-    const authority = { assertCurrent() {} };
-    const actor = await openIncognitoTestActor({ OPENCLAW_STATE_DIR: root }, authority);
+  it("publishes a durable draft worktree through the coordinator without host session reads", async () => {
+    const privateKey = "agent:main:dashboard:private-publication-execute";
+    const loadSession = mocks.loadSession.getMockImplementation()!;
+    mocks.loadSession.mockImplementation((key: string) => {
+      const loaded = loadSession(key);
+      return key === privateKey
+        ? { ...loaded, entry: { ...loaded.entry, visibility: "draft" } }
+        : loaded;
+    });
+    await persistPublicationTestSession(privateKey);
+    const coordinator = sharedPublicationCoordinator();
+    const sql = observeHostDataSql();
     try {
-      const privateKey = "agent:main:dashboard:incognito-publication-execute";
-      await actor.sessions.create(authority, {
+      const result = await coordinator.requestForSessionV2({
         sessionKey: privateKey,
-        entry: { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now() },
+        agentId: "main",
+        idempotencyKey: "private-publication",
       });
-      await deleteRegistryWorktree(process.env, "worktree-1");
-      await insertRegistryWorktree(process.env, {
-        id: "worktree-1",
-        name: "publication",
-        repoRoot: "/repo",
-        repoFingerprint: "fingerprint-1",
-        path: "/repo/worktree",
-        branch: BRANCH,
-        baseRef: "origin/main",
-        ownerKind: "session",
-        ownerId: privateKey,
-        createdAt: 1,
-        lastActiveAt: 1,
-      });
-      const sql = observeHostDataSql();
-      try {
-        const result = await withIncognitoSessionBinding({ actor }, () =>
-          sharedPublicationCoordinator().requestForSessionV2({
-            sessionKey: privateKey,
-            agentId: "main",
-            idempotencyKey: "bound-publication",
-          }),
-        );
-        expect(result).toMatchObject({ status: "published", headCommit: NEW_HEAD });
-        expect(sql.queries.filter((query) => /\bsession_nodes\b/.test(query))).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+      expect(result).toMatchObject({ status: "published", headCommit: NEW_HEAD });
+      expect(sql.queries.filter((query) => /\bsession_nodes\b/.test(query))).toEqual([]);
     } finally {
-      await actor.close();
-      await actor.release();
+      sql.restore();
     }
   });
   it("keeps ordinary private receipt reads on the native owner without allocating an actor", async () => {

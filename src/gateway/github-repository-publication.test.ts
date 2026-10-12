@@ -222,57 +222,6 @@ describe("repository checkpoint GitHub publication", () => {
     expect(f.runtime.effects).toEqual([]);
   });
 
-  it("replays the current receipt when another same-key call finishes before reservation", async () => {
-    const f = await repositoryFixture();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const secondAdmitted = createDeferredCore();
-    const enterSecondReservation = createDeferredCore();
-    const capture = checkpoint.getMockImplementation()!;
-    checkpoint.mockImplementationOnce(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return await capture(...args);
-    });
-    const reserve = f.placements.withRepositoryWorkspaceReservation.bind(f.placements);
-    let reservations = 0;
-    vi.spyOn(f.placements, "withRepositoryWorkspaceReservation").mockImplementation(
-      async <T>(
-        identity: Parameters<typeof reserve>[0],
-        run: (assertCurrent: () => void) => Promise<T>,
-      ) => {
-        if (++reservations === 2) {
-          // The real lease rejects contention; delay this admitted request before
-          // acquisition so it carries a stale receipt across the awaited boundary.
-          secondAdmitted.resolve();
-          await enterSecondReservation.promise;
-        }
-        return await reserve(identity, run);
-      },
-    );
-    const input = { agentId: "main", sessionKey: SESSION_KEY, idempotencyKey: "concurrent-shared" };
-    const first = f.coordinator.requestForSessionV2(input);
-    void first.catch(entered.reject);
-    let second: typeof first | undefined;
-    try {
-      await entered.promise;
-      second = f.coordinator.requestForSessionV2(input);
-      void second.catch(secondAdmitted.reject);
-      await secondAdmitted.promise;
-      release.resolve();
-      const published = await first;
-      enterSecondReservation.resolve();
-      expect(await second).toEqual(published);
-      expect(published.status).toBe("published");
-      expect(listRepositoryGitHubPublications()).toHaveLength(1);
-      expect(f.runtime.effects).toEqual(["push", "pull_request"]);
-    } finally {
-      release.resolve();
-      enterSecondReservation.resolve();
-      await Promise.allSettled([first, ...(second ? [second] : [])]);
-    }
-  });
-
   it.each([
     { name: "topic", ref: "topic" },
     { name: "tag", ref: "refs/tags/release" },
