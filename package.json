@@ -2278,6 +2278,7 @@
     "@openclaw/fs-safe": "0.26.0",
     "@openclaw/proc-safe": "0.2.0",
     "@openclaw/proxyline": "0.4.0",
+    "@resvg/resvg-js": "2.6.2",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.33.1",
     "acorn": "8.18.0",

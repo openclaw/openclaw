@@ -177,7 +177,7 @@ h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-
 @media(min-width:840px){.assistant{grid-template-columns:minmax(0,1fr);margin-left:-44px;padding-left:44px}.avatar{position:absolute;margin-left:-44px}.assistant .content{grid-column:1}}
 @media(max-width:640px){.page{width:calc(100% - 36px)}.topbar{height:56px}.article-head{padding-top:36px;margin-bottom:32px}.user .content{max-width:88%}.content{font-size:15.5px}.install pre{white-space:pre-wrap;overflow-wrap:anywhere}.status{display:block}.status a{display:inline-block;margin-top:8px}}`;
 
-function publicMessageText(
+export function publicMessageText(
   message: unknown,
 ): { role: "user" | "assistant"; text: string } | undefined {
   const entry = asOptionalRecord(message);
@@ -245,6 +245,13 @@ function publicMessageText(
   return text ? { role: entry.role, text } : undefined;
 }
 
+export function publicSessionTitle(title: string): string {
+  return (
+    truncateUtf16Safe(redactToolPayloadText(stripInternalMetadataForDisplay(title)), 200).trim() ||
+    "Shared conversation"
+  );
+}
+
 export function renderPublicSessionDocument(params: {
   messages: unknown[];
   title: string;
@@ -265,12 +272,7 @@ export function renderPublicSessionDocument(params: {
   const entryLink = params.entryUrl
     ? `<a class="button login" id="session-login"${params.clientAuthBasePath !== undefined ? ` data-gateway-path="${escapeHtml(params.clientAuthBasePath)}"` : ""} href="${escapeHtml(params.entryUrl)}">Log in <span aria-hidden="true">→</span></a>`
     : "";
-  const title = escapeHtml(
-    truncateUtf16Safe(
-      redactToolPayloadText(stripInternalMetadataForDisplay(params.title)),
-      200,
-    ).trim() || "Shared conversation",
-  );
+  const title = escapeHtml(publicSessionTitle(params.title));
   let truncated = params.truncated || params.messages.length > MAX_MESSAGES;
   let remaining = MAX_DOCUMENT_CHARS;
   const entries: { role: "user" | "assistant"; html: string }[] = [];
@@ -323,7 +325,10 @@ ${isLatest && !params.entryUrl ? '<meta http-equiv="refresh" content="15">' : ""
 <meta property="og:type" content="website"><meta property="og:site_name" content="OpenClaw">
 <meta property="og:title" content="${title}"><meta property="og:description" content="${description}">
 <meta property="og:image" content="${escapeHtml(params.cardUrl)}">
+<meta property="og:image:type" content="image/png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="${title} · OpenClaw public session">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${escapeHtml(params.cardUrl)}"><meta name="twitter:image:alt" content="${title} · OpenClaw public session">
 <link rel="stylesheet" href="${escapeHtml(params.assetBasePath)}/fonts/instrument-sans.css">
 <style>
 ${PUBLIC_SESSION_STYLES}

@@ -6876,8 +6876,6 @@
 ["src/gateway/control-ui-assistant-media-policy.test.ts","./http-utils.js","b1d34f3c6f794fca41c82916de2b6724f365f9b15293400ae108b1ccaa364b51",1]
 ["src/gateway/control-ui-assistant-media-policy.test.ts","./session-utils.js","93df61bf60cbe656b13c0d8be23d5e2f96289c9feeb517947c61c1c6a05ff49e",1]
 ["src/gateway/control-ui-assistant-media-policy.test.ts","./session-worker-placement-context.js","44449ea645d0a291272b03093fc360dd4ecbca56a4d61db599a00487321e08d0",1]
-["src/gateway/control-ui-public-session.http.test.ts","./control-ui-public-session-read.js","2c71804902ba2f01ad890a9e18a59d2b7c56875f3b90e86ca5cfaf7f240f30e6",1]
-["src/gateway/control-ui-public-session.http.test.ts","./control-ui-public-session-token.js","cb1d7a23f6ca5abea6055944b2049cacb4ad58eb4b08e0d23c0665ccc0a47e06",1]
 ["src/gateway/control-ui-session-prs-retention.test.ts","../infra/git-worker.js","73b1601423791dced3e8926147c1acbbc424d262187b7a663c2d4c6ba6471644",1]
 ["src/gateway/control-ui-session-prs.test.ts","../infra/git-worker.js","73b1601423791dced3e8926147c1acbbc424d262187b7a663c2d4c6ba6471644",1]
 ["src/gateway/control-ui.http.test.ts","../infra/dev-install-branch.js","44417829ee73353c7c876e4c6690c2752f0cd345f071d3589eab7281c8a8d746",1]

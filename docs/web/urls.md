@@ -288,6 +288,13 @@ visible. **Older messages** opens earlier pages without automatic refresh;
 with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
 
+Public session links include a 1200 × 630 preview card with the session title and
+opening public request. When recorded worktree changes are already available,
+the card shows a work receipt with change counts and recorded PR/check details.
+Cards use the public reader's redaction rules and never fetch Git or GitHub data;
+missing facts are omitted. Unavailable sessions use the generic OpenClaw card.
+Preview images may remain cached by a recipient for five minutes after revocation.
+
 Public reads wait for current sharing facts when a session changes during the
 request. If the page changes while it is being prepared, the reader can return a
 temporary-unavailable response; retrying reads the current publication.

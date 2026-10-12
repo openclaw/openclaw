@@ -6,6 +6,7 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadPublicSessionShareTokenCodec,
+  mintExistingPublicSessionShareToken,
   resolvePublicSessionShareToken,
   type PublicSessionShareLocator,
 } from "./control-ui-public-session-token.js";
@@ -75,11 +76,15 @@ describe("public session share token", () => {
     );
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       expect(await resolvePublicSessionShareToken(foreignToken)).toBeNull();
+      expect(await mintExistingPublicSessionShareToken(LOCATOR)).toBeUndefined();
       expect(await loadDeviceIdentityIfPresentAsync()).toBeNull();
 
       const localToken = (await loadPublicSessionShareTokenCodec()).mint(LOCATOR);
       expect(await loadDeviceIdentityIfPresentAsync()).not.toBeNull();
       expect(await resolvePublicSessionShareToken(localToken)).toEqual(LOCATOR);
+      const preview = await mintExistingPublicSessionShareToken(LOCATOR);
+      expect(await mintExistingPublicSessionShareToken(LOCATOR)).toBe(preview);
+      expect(await resolvePublicSessionShareToken(preview!)).toEqual(LOCATOR);
     });
   });
 });

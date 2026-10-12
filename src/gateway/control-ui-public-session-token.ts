@@ -190,6 +190,7 @@ function createPublicSessionShareTokenCodec(
 
 const codecsByDatabasePath = new Map<string, PublicSessionShareTokenCodec>();
 const missingIdentityDatabasePaths = new Map<string, true>();
+const previewTokens = new WeakMap<PublicSessionShareTokenCodec, Map<string, string>>();
 
 function cacheCodec(databasePath: string, identity: DeviceIdentity): PublicSessionShareTokenCodec {
   const cached = codecsByDatabasePath.get(databasePath);
@@ -269,4 +270,27 @@ export async function resolvePublicSessionShareToken(
       })
     )?.resolve(token) ?? null
   );
+}
+
+/** Public readers may reuse the installation identity but must never create it. */
+export async function mintExistingPublicSessionShareToken(
+  locator: PublicSessionShareLocator,
+): Promise<string | undefined> {
+  const codec = await resolveProcessCodec({ create: false });
+  if (!codec) {
+    return undefined;
+  }
+  let tokens = previewTokens.get(codec);
+  if (!tokens) {
+    tokens = new Map();
+    previewTokens.set(codec, tokens);
+  }
+  const key = JSON.stringify(locator);
+  let token = tokens.get(key);
+  if (!token) {
+    token = codec.mint(locator);
+    pruneMapToMaxSize(tokens, 127);
+    tokens.set(key, token);
+  }
+  return token;
 }

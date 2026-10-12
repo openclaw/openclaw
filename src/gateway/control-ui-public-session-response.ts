@@ -25,7 +25,7 @@ export async function servePublicSessionRepresentation(params: {
     "latestUrl" | "canonicalUrl" | "cardUrl" | "entryUrl" | "clientAuthBasePath" | "assetBasePath"
   >;
   olderUrl: (offset: number) => string;
-  unavailable: (status: 404 | 429 | 503, retryAfterSeconds?: number) => void;
+  unavailable: (status: 404 | 429 | 503, retryAfterSeconds?: number) => true | Promise<true>;
 }): Promise<true> {
   const { req, res, config, gate, locator, projection, offset, unavailable } = params;
   const result = await gate.run({
@@ -48,35 +48,39 @@ export async function servePublicSessionRepresentation(params: {
     },
   });
   if (result.kind !== "ok") {
-    unavailable(
+    await unavailable(
       result.kind === "rate-limited" ? 429 : 503,
       result.kind === "rate-limited" ? result.retryAfterSeconds : undefined,
     );
     return true;
   }
-  return withReadySessionRows(
+  const unavailableStatus = await withReadySessionRows(
     projection,
     () => [{ key: locator.sessionKey, agentId: locator.agentId }],
     () => {
       const representation = result.value;
       if (!representation || !isPublicSessionShareActive(config, locator, projection)) {
-        unavailable(404);
-      } else if (!representation.isCurrent()) {
-        unavailable(503);
-      } else {
-        const { body, etag } = representation;
-        res.setHeader("ETag", etag);
-        if (req.headers["if-none-match"] === etag) {
-          res.statusCode = 304;
-          res.end();
-        } else {
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "text/html; charset=utf-8");
-          res.setHeader("Content-Length", Buffer.byteLength(body));
-          res.end(body);
-        }
+        return 404 as const;
       }
-      return true as const;
+      if (!representation.isCurrent()) {
+        return 503 as const;
+      }
+      const { body, etag } = representation;
+      res.setHeader("ETag", etag);
+      if (req.headers["if-none-match"] === etag) {
+        res.statusCode = 304;
+        res.end();
+      } else {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Content-Length", Buffer.byteLength(body));
+        res.end(body);
+      }
+      return undefined;
     },
   );
+  if (unavailableStatus !== undefined) {
+    await unavailable(unavailableStatus);
+  }
+  return true;
 }
