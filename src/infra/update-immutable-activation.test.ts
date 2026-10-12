@@ -50,6 +50,11 @@ const mocks = vi.hoisted(() => ({
   prepareRecovery: vi.fn(),
   verifyRecovery: vi.fn(),
   operationLock: vi.fn(),
+  prewarm: vi.fn(),
+}));
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runCommandWithTimeout: mocks.prewarm,
 }));
 vi.mock("./package-update-activation-immutable-recovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./package-update-activation-immutable-recovery.js")>()),
@@ -340,6 +345,35 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     expect(read()).toEqual(before);
     expect(selectedSha()).toBe(previousSha);
   });
+
+  it.each([0, 1])(
+    "prewarms before stopping the service and treats exit %i as advisory",
+    async (code) => {
+      fs.mkdirSync(path.join(candidate.path, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(candidate.path, "dist", "gateway-prewarm.js"), "");
+      mocks.prewarm.mockImplementation(async (argv) => {
+        expect(serving?.generationPath).toBe(descriptor.current.path);
+        expect(argv).toEqual([
+          "/usr/sbin/runuser",
+          "-u",
+          descriptor.service.account,
+          "--",
+          "/usr/bin/env",
+          "-i",
+          descriptor.runtime.path,
+          path.join(candidate.path, "gateway-prewarm.mjs"),
+        ]);
+        return { code, stdout: "", stderr: "" };
+      });
+      const onReceipt = vi.fn();
+      await activateImmutableUpdate({ root, expectedPrepared: candidate, onReceipt });
+      expect(mocks.prewarm).toHaveBeenCalledOnce();
+      expect(selectedSha()).toBe(candidateSha);
+      expect(
+        onReceipt.mock.calls.flat().some((line) => line.includes("compile-cache-warning")),
+      ).toBe(code !== 0);
+    },
+  );
 
   it("activates a prepared generation in lifecycle order and retires only verified success", async () => {
     const receipts: string[] = [];

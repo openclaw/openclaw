@@ -113,6 +113,17 @@ for the retirement contract.
 
 ## Complete-pair adoption
 
+Release publication now prewarms Node's release-scoped compile cache before
+cutover, including reuse of an already published release. The bounded import
+runs as `openclaw`, with the selected Gateway runtime, after publication at its
+final path. It loads the Gateway graph without starting a server or reading
+Gateway state; the existing cache owner chooses the build-ID namespace and
+retention policy. Missing prewarm entries in older releases are skipped, and
+prewarm failures warn and leave ordinary cold startup available. Bun does not
+use Node's compile cache. Night Watch must adopt this reviewed controller
+change through the complete-pair procedure below; landing it does not change
+the installed controller or authorize a Team deployment.
+
 Only the designated Night Watch executor performs these steps. Resolve its
 exact host and coordinator session from the private operator record, preserve
 per-deployment approval, and coordinate any intentional restart there. A code

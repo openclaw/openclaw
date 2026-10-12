@@ -8,6 +8,7 @@ import { createConfigIO } from "../config/io.factory.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import {
   publishImmutablePointer,
   reconcileImmutablePointer,
@@ -587,6 +588,38 @@ export async function activateImmutableUpdate(
     }
     options.onReceipt?.("immutable:canary");
     await rehearse(record, candidate.path, service, options, assertCurrent);
+    if (await fs.stat(path.join(candidate.path, "dist", "gateway-prewarm.js")).catch(() => null)) {
+      // Rehearsal stays isolated. Warm only final release paths, as the service user.
+      assertCurrent();
+      try {
+        const result = await runCommandWithTimeout(
+          [
+            "/usr/sbin/runuser",
+            "-u",
+            record.descriptor.service.account,
+            "--",
+            "/usr/bin/env",
+            "-i",
+            ..."HOME TMPDIR TMP TEMP NODE_COMPILE_CACHE NODE_DISABLE_COMPILE_CACHE"
+              .split(" ")
+              .flatMap((key) =>
+                service.state.env[key] === undefined ? [] : [`${key}=${service.state.env[key]}`],
+              ),
+            record.descriptor.runtime.path,
+            path.join(candidate.path, "gateway-prewarm.mjs"),
+          ],
+          { cwd: candidate.path, baseEnv: {}, env: {}, timeoutMs: 120_000, killProcessTree: true },
+        );
+        if (result.code !== 0) {
+          options.onReceipt?.("immutable:compile-cache-warning: Gateway will compile on startup");
+        }
+      } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
+        options.onReceipt?.("immutable:compile-cache-warning: Gateway will compile on startup");
+      }
+    }
     const current = await inspectService();
     if (
       current.pid !== service.pid ||
