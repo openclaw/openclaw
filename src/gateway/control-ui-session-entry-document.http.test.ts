@@ -80,6 +80,7 @@ it("restores the mounted canonical path before SPA scripts with the full app CSP
       isSessionEntryCurrent: () => false,
     },
   );
-  expect(revoked.res.statusCode).toBe(403);
+  expect(revoked.res.statusCode).toBe(303);
+  expect(revoked.setHeader).toHaveBeenCalledWith("Location", canonical);
   expect(revoked.getBody()).not.toContain("openclaw-app");
 });
