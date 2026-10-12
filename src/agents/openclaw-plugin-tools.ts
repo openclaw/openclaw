@@ -6,12 +6,15 @@ import {
   selectMessageActionRequesterIdentity,
 } from "../gateway/message-action-turn-capability.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.js";
+import { runOutsidePluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
@@ -37,6 +40,7 @@ import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  pluginToolSelectionScope?: "generation" | "enabled";
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   disablePluginTools?: boolean;
@@ -303,8 +307,35 @@ export function resolveOpenClawPluginToolsForOptions(params: {
   const preparedRegistry = preparedModelRuntime
     ? preparedModelRuntime.pluginRegistry
     : requestRegistry;
-  const loadContext = getPluginRuntimeLoadContext(preparedRegistry);
-  const metadataSnapshot = preparedModelRuntime?.metadataSnapshot ?? loadContext?.metadataSnapshot;
+  // A control-plane inventory read must select plugin tools from the full
+  // enabled set: the run generation is narrowed to the selected model owners,
+  // which would otherwise hide enabled tool-only plugins from previews such as
+  // `tools.effective`. Escaping the narrowed generation metadata frame lets the
+  // resolve reuse the process-owned Gateway snapshot instead of forcing a fresh
+  // synchronous discovery; the scoped registry still serves already-loaded owners.
+  const enabledScopeSnapshot =
+    params.options?.pluginToolSelectionScope === "enabled"
+      ? runOutsidePluginMetadataSnapshotScope(() =>
+          resolvePluginMetadataSnapshot({
+            config: inputConfig,
+            env: process.env,
+            workspaceDir: pluginToolInputs.context.workspaceDir,
+          }),
+        )
+      : undefined;
+  const preparedLoadContext = getPluginRuntimeLoadContext(preparedRegistry);
+  const loadContext = enabledScopeSnapshot
+    ? resolvePluginRuntimeLoadContext({
+        config: inputConfig,
+        env: process.env,
+        workspaceDir: pluginToolInputs.context.workspaceDir,
+        metadataSnapshot: enabledScopeSnapshot,
+      })
+    : preparedLoadContext;
+  const metadataSnapshot =
+    enabledScopeSnapshot ??
+    preparedModelRuntime?.metadataSnapshot ??
+    preparedLoadContext?.metadataSnapshot;
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const assertRequestCurrent = params.options?.assertInvocationCurrent;
   const pluginTools = resolvePluginTools({

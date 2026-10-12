@@ -362,6 +362,9 @@ export async function resolveEffectiveToolInventory(
       groupChannel: params.groupChannel ?? undefined,
       groupSpace: params.groupSpace ?? undefined,
       allowGatewaySubagentBinding: true,
+      // Preview every enabled plugin tool even when the session's model lease
+      // narrowed its runtime generation to the selected model owners.
+      pluginToolSelectionScope: "enabled",
     },
     undefined,
     diagnostics.onFilter,

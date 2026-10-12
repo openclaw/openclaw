@@ -87,6 +87,13 @@ export type OpenClawSharedToolsOptions = {
   hasRepliedRef?: { value: boolean };
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /**
+   * Selects the plugin-tool eligibility scope for a control-plane inventory read.
+   * The default follows the exact run generation (which may be narrowed to the
+   * selected model owners); `"enabled"` selects from the full enabled plugin set
+   * so previews like `tools.effective` report every available plugin tool.
+   */
+  pluginToolSelectionScope?: "generation" | "enabled";
   runtimeToolAllowlist?: string[];
   /** Host-prepared proof that this exact session can request Gateway publication. */
   githubPublicationAvailable?: boolean;
