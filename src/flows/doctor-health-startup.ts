@@ -6,7 +6,6 @@ import type { DoctorDatabasePreflight } from "../commands/doctor-database-prefli
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
-import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
 export const showDoctorIntro = (message: string) =>
@@ -155,37 +154,17 @@ export async function prepareDoctorMaintenanceArchives(
   return discovery;
 }
 
-export async function prepareDoctorMaintenanceState(params: {
-  schemas: DoctorDatabasePreflight;
-  shouldRepair: boolean;
-  runtime: RuntimeEnv;
-}) {
-  let { schemas } = params;
-  let stateSchemaPreparation: LegacyStateMigrationStepReceipt | undefined;
-  if (params.shouldRepair && schemas.pendingMigrations?.some((entry) => entry.kind === "state")) {
-    const { prepareLegacyStateDatabaseSchema } =
-      await import("../infra/state-migrations.doctor.js");
-    const { throwIfDoctorStateMigrationRefused } =
-      await import("../infra/state-migrations.messages.js");
-    // Journal recovery needs current SQL; config preflight consumes this same receipt.
-    stateSchemaPreparation = await prepareLegacyStateDatabaseSchema(process.env);
-    throwIfDoctorStateMigrationRefused([stateSchemaPreparation]);
+export async function prepareDoctorStateSchema(
+  schemas: DoctorDatabasePreflight,
+  shouldRepair: boolean,
+) {
+  if (!shouldRepair || !schemas.pendingMigrations?.some((entry) => entry.kind === "state")) {
+    return undefined;
   }
-  const { repairDoctorAgentDeletionJournal } =
-    await import("../commands/doctor-agent-deletion-journal.js");
-  const deletionJournal = await repairDoctorAgentDeletionJournal({
-    preflight: schemas,
-    shouldRepair: params.shouldRepair,
-    env: process.env,
-  });
-  for (const message of [...deletionJournal.changes, ...deletionJournal.warnings]) {
-    params.runtime.log(message);
-  }
-  if (deletionJournal.changes.length > 0) {
-    // Quarantine can turn previously active targets into held stores.
-    const { prepareDoctorDatabasePreflight } =
-      await import("../commands/doctor-database-preflight.js");
-    schemas = await prepareDoctorDatabasePreflight();
-  }
-  return { schemas, deletionJournal, stateSchemaPreparation };
+  const { prepareLegacyStateDatabaseSchema } = await import("../infra/state-migrations.doctor.js");
+  const { throwIfDoctorStateMigrationRefused } =
+    await import("../infra/state-migrations.messages.js");
+  const receipt = await prepareLegacyStateDatabaseSchema(process.env);
+  throwIfDoctorStateMigrationRefused([receipt]);
+  return receipt;
 }

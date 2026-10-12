@@ -126,18 +126,10 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       throw failure;
     }
   };
-  const releaseState = async () => {
-    if (cleanupFailure) {
-      throw cleanupFailure.error;
-    }
-    const settledFailure = await state.release();
-    repairStoresMayBeOpen = false;
-    return settledFailure;
-  };
   // A settled state cleanup failure is reported only after Doctor restores what it stopped.
   const releaseAndRestoreAutoStart = (assertCustody?: () => void) =>
     settle(async () => {
-      const settledFailure = await releaseState();
+      const settledFailure = await state.release();
       const recovery = stopped?.windowsTaskAutoStartRecovery;
       try {
         assertCustody?.();
@@ -644,7 +636,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       return state.receipt;
     },
     run: <T>(operation: () => T) => state.run(operation),
-    releaseState: async () => throwSettledFailure(await settle(releaseState)),
+    releaseState: async () => throwSettledFailure(await settle(() => state.release())),
     async repairSqliteNoCow(paths: readonly string[]) {
       assertHeld(this, "SQLite NOCOW repair");
       const result = await settle(() => state.repairSqliteNoCow(paths));

@@ -125,7 +125,7 @@ async function runDoctorHealthFlowWithResult(
     prepareDoctorHealthFlow,
     prepareDoctorInteractiveMaintenance,
     prepareDoctorMaintenanceArchives,
-    prepareDoctorMaintenanceState,
+    prepareDoctorStateSchema,
   } = await import("./doctor-health-startup.js");
   const { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root } =
     await prepareDoctorHealthFlow(runtime, options, showDoctorIntro);
@@ -331,13 +331,21 @@ async function runDoctorHealthFlowWithResult(
         }
       }
 
-      const preparedState = await prepareDoctorMaintenanceState({
-        schemas,
+      const stateSchemaPreparation = await prepareDoctorStateSchema(schemas, prompter.shouldRepair);
+      const { repairDoctorAgentDeletionJournal } =
+        await import("../commands/doctor-agent-deletion-journal.js");
+      const deletionJournal = await repairDoctorAgentDeletionJournal({
+        preflight: schemas,
         shouldRepair: prompter.shouldRepair,
-        runtime: effectiveRuntime,
+        env: process.env,
       });
-      schemas = preparedState.schemas;
-      const { deletionJournal, stateSchemaPreparation } = preparedState;
+      for (const message of [...deletionJournal.changes, ...deletionJournal.warnings]) {
+        effectiveRuntime.log(message);
+      }
+      if (deletionJournal.changes.length > 0) {
+        // Quarantine can turn previously active targets into held stores.
+        schemas = await prepareDoctorDatabasePreflight();
+      }
       const { inspectDoctorSqliteNoCow } = await import("../commands/doctor-sqlite-nocow.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../state/openclaw-state-db.paths.js");
