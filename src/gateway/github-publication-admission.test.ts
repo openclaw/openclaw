@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
-import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount,
 } from "./github-personal-publication.test-support.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.js";
+import { readPersonalGitHubPublicationAsync } from "./github-publication-store-async.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
   SESSION_ID,
   SESSION_KEY,
@@ -66,14 +66,14 @@ async function sharedAdmission(surface: "local" | "deferred" | "claim") {
     read: () => readGitHubPublicationRequest(db, { sessionId, idempotencyKey: key }),
     request: (expected = obsolete) =>
       claim
-        ? coordinator.requestForClaim({
+        ? coordinator.requestForClaimV2({
             claim,
             sessionKey,
             agentId: "main",
             idempotencyKey: key,
             expectedPublisher: expected,
           })
-        : coordinator.requestForSession({
+        : coordinator.requestForSessionV2({
             sessionKey,
             agentId: "main",
             idempotencyKey: key,
@@ -114,7 +114,7 @@ describe("GitHub publication selection admission", () => {
         }),
     );
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
-    const pending = coordinator.requestForClaim({
+    const pending = coordinator.requestForClaimV2({
       claim,
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
@@ -153,7 +153,7 @@ describe("GitHub publication selection admission", () => {
       owner: { kind: "worker", environmentId: "environment-idempotency", ownerEpoch: 2 },
     });
     const coordinator = createTestGitHubPublicationCoordinator({ placements });
-    await coordinator.requestForClaim({
+    await coordinator.requestForClaimV2({
       claim: firstClaim,
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
@@ -170,7 +170,7 @@ describe("GitHub publication selection admission", () => {
     });
 
     await expect(
-      coordinator.requestForClaim({
+      coordinator.requestForClaimV2({
         claim: secondClaim,
         sessionKey: REQUEST.sessionKey,
         agentId: REQUEST.agentId,
@@ -382,7 +382,7 @@ describe("GitHub publication selection admission", () => {
     const response = await callPersonalPublicationRpc(fixture, "sessions.github.publish", request);
     expect(response[0]).toBe(false);
     expect(
-      readPersonalGitHubPublication(fixture.owner, {
+      await readPersonalGitHubPublicationAsync(fixture.owner, {
         sessionId: SESSION_ID,
         idempotencyKey: key,
       }),
@@ -406,13 +406,13 @@ describe("GitHub publication selection admission", () => {
     });
     expect(response[0]).toBe(false);
     expect(response[2]).not.toHaveProperty("details");
-    const row = readPersonalGitHubPublication(fixture.owner, {
+    const row = await readPersonalGitHubPublicationAsync(fixture.owner, {
       sessionId: SESSION_ID,
       idempotencyKey: key,
     });
     expect(row).toMatchObject({ status: "requested", execution_id: null });
     expect(
-      fixture.coordinator.personalStatus(
+      await fixture.coordinator.personalStatusAsync(
         fixture.action,
         fixture.action,
         row!.request_id,

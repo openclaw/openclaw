@@ -19,7 +19,6 @@ import {
   readGitHubRepositoryPublicationMetadata,
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
-import { failRepositoryGitHubPublicationPreparation } from "./github-repository-publication-store.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 
 export async function prepareRepositoryOwner(session: PublicationSessionIdentity) {
@@ -85,10 +84,10 @@ export async function captureCheckpoint<T>(
     prepared: {
       snapshot: GitHubRepositoryPublicationSnapshot;
       snapshotRoot: string;
-      authority: GitHubPublicationTransitionAuthority | undefined;
+      authority: GitHubPublicationTransitionAuthority;
     },
   ) => Promise<T>,
-  authority: GitHubPublicationTransitionAuthority | undefined,
+  authority: GitHubPublicationTransitionAuthority,
 ): Promise<T | SessionGitHubPublicationResult> {
   let checkpointRef = row.checkpoint_ref;
   let assertSelected = assertCurrent;
@@ -113,7 +112,7 @@ export async function captureCheckpoint<T>(
       }
     };
   }
-  const selectedAuthority: GitHubPublicationTransitionAuthority | undefined = authority && {
+  const selectedAuthority: GitHubPublicationTransitionAuthority = {
     ...authority,
     assertAction: assertSelected,
   };
@@ -137,11 +136,9 @@ export async function captureCheckpoint<T>(
         const nextAction =
           "Save a new checkpoint and request publication again. If capture remains unavailable, resolve any merge conflicts and review the repository's Git clean filters and transport configuration. Your session changes remain recoverable.";
         return projectGitHubPublicationResult(
-          selectedAuthority
-            ? await failRepositoryGitHubPublicationPreparationAsync(row, nextAction, () =>
-                selectedAuthority.assertCustody(),
-              )
-            : failRepositoryGitHubPublicationPreparation(row, nextAction, assertSelected),
+          await failRepositoryGitHubPublicationPreparationAsync(row, nextAction, () =>
+            selectedAuthority.assertCustody(),
+          ),
         );
       }
       const { snapshot } = await readGitHubRepositoryPublicationMetadata(

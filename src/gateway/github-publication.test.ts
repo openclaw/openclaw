@@ -10,10 +10,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
-  hasGitHubPublicationStore,
-  isGitHubPublicationExecutionOwner,
-} from "./github-publication-store.js";
-import {
   BASE_HEAD,
   BRANCH,
   NEW_HEAD,
@@ -47,24 +43,20 @@ const mocks = githubPublicationTestMocks();
 
 describe("Gateway GitHub publication", () => {
   installGitHubPublicationTestHarness();
-  it.each(["receipt", "execution owner"])(
-    "does not create publication state when reading an absent %s",
-    (kind) => {
-      const database = openOpenClawStateDatabase();
-      // Older admitted stores can lack this additive, first-publication table.
-      database.db.exec("DROP TABLE github_publication_requests");
-      const coordinator = createGitHubPublicationCoordinator({
-        placements: createWorkerSessionPlacementStore({ database }),
-      });
-      expect(hasGitHubPublicationStore()).toBe(false);
-      if (kind === "receipt") {
-        expect(coordinator.read("absent")).toBeUndefined();
-      } else {
-        expect(isGitHubPublicationExecutionOwner("absent", "instance")).toBe(false);
-      }
-      expect(hasGitHubPublicationStore()).toBe(false);
-    },
-  );
+  it("does not create publication state when reading an absent receipt", async () => {
+    const database = openOpenClawStateDatabase();
+    // Older admitted stores can lack this additive, first-publication table.
+    database.db.exec("DROP TABLE github_publication_requests");
+    const coordinator = createGitHubPublicationCoordinator({
+      placements: createWorkerSessionPlacementStore({ database }),
+    });
+    expect(await coordinator.readAsync("absent")).toBeUndefined();
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_master WHERE name = ?")
+        .get("github_publication_requests"),
+    ).toBeUndefined();
+  });
 
   it("publishes through exact HTTPS and replays the durable terminal result", async () => {
     await persistPublicationTestSession();
@@ -223,7 +215,7 @@ describe("Gateway GitHub publication", () => {
       }),
     });
 
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       sessionKey: SESSION_KEY,
       agentId: "main",
       idempotencyKey: "fork-existing-pr",
@@ -286,7 +278,7 @@ describe("Gateway GitHub publication", () => {
         }),
       });
 
-      const result = await coordinator.requestForSession({
+      const result = await coordinator.requestForSessionV2({
         sessionKey: SESSION_KEY,
         agentId: "main",
         idempotencyKey: "lost-post-response",
@@ -345,7 +337,7 @@ describe("Gateway GitHub publication", () => {
       }),
     });
 
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       sessionKey: SESSION_KEY,
       agentId: "main",
       idempotencyKey: "wrong-base-pr",
@@ -380,7 +372,7 @@ describe("Gateway GitHub publication", () => {
     });
 
     await expect(
-      coordinator.requestForSession({
+      coordinator.requestForSessionV2({
         sessionKey: SESSION_KEY,
         agentId: "main",
         idempotencyKey: "active-clean-filter",
@@ -402,7 +394,7 @@ describe("Gateway GitHub publication", () => {
       }),
     });
 
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       sessionKey: SESSION_KEY,
       agentId: "main",
       idempotencyKey: "redirected-checkout",
@@ -426,7 +418,7 @@ describe("Gateway GitHub publication", () => {
       }),
     });
 
-    const result = await coordinator.requestForSession({
+    const result = await coordinator.requestForSessionV2({
       sessionKey: SESSION_KEY,
       agentId: "main",
       idempotencyKey: "symbolic-branch",
@@ -458,7 +450,7 @@ describe("Gateway GitHub publication", () => {
 
     await coordinator.resumeSessionRequests();
 
-    expect(coordinator.read(requestId)).toMatchObject({
+    expect(await coordinator.readAsync(requestId)).toMatchObject({
       status: "failed",
       code: "workspace_changed",
     });
@@ -491,7 +483,7 @@ describe("Gateway GitHub publication", () => {
       title: "Publish once",
     };
 
-    const requests = [first.requestForSession(request), second.requestForSession(request)];
+    const requests = [first.requestForSessionV2(request), second.requestForSessionV2(request)];
     try {
       await withinTest(Promise.race([repositoryEntered.promise, ...requests]), signal);
       expect(mocks.resolveRepository).toHaveBeenCalledOnce();
@@ -543,7 +535,7 @@ describe("Gateway GitHub publication", () => {
       },
       warn: () => undefined,
     });
-    const requested = await runtime.coordinator.requestForClaim({
+    const requested = await runtime.coordinator.requestForClaimV2({
       claim,
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
@@ -594,7 +586,7 @@ describe("Gateway GitHub publication", () => {
           placements: createWorkerSessionPlacementStore({ database }),
         });
         await expect(
-          coordinator.requestForSession({
+          coordinator.requestForSessionV2({
             sessionKey: SESSION_KEY,
             agentId: "main",
             idempotencyKey: "publish-stale-worktree-await",
@@ -726,7 +718,7 @@ describe("Gateway GitHub publication", () => {
       await resumed.resumeSessionRequests();
 
       if (bodyOnlyCredit) {
-        expect(resumed.read(requestId)).toMatchObject({
+        expect(await resumed.readAsync(requestId)).toMatchObject({
           status: "failed",
           code: "identity_changed",
           nextAction: expect.stringMatching(/credit/i),
@@ -740,7 +732,7 @@ describe("Gateway GitHub publication", () => {
         return;
       }
 
-      expect(resumed.read(requestId)).toEqual({
+      expect(await resumed.readAsync(requestId)).toEqual({
         publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
         requestId,
         status: "published",
@@ -803,7 +795,7 @@ describe("Gateway GitHub publication", () => {
       loadSessionRuntime,
       warn: (message) => warnings.push(message),
     });
-    const requested = await runtime.coordinator.requestForClaim({
+    const requested = await runtime.coordinator.requestForClaimV2({
       claim,
       sessionKey: REQUEST.sessionKey,
       agentId: REQUEST.agentId,
@@ -830,8 +822,10 @@ describe("Gateway GitHub publication", () => {
     expect(warnings).toEqual([
       expect.stringContaining("GitHub publication result reporting deferred"),
     ]);
-    expect(runtime.coordinator.read(requested.requestId)).toMatchObject({ status: "published" });
-    expect(runtime.coordinator.listUnreportedResults()).toHaveLength(1);
+    expect(await runtime.coordinator.readAsync(requested.requestId)).toMatchObject({
+      status: "published",
+    });
+    expect(await runtime.coordinator.listUnreportedResultsAsync()).toHaveLength(1);
     let events = await loadTranscriptEvents({
       agentId: REQUEST.agentId,
       sessionId: REQUEST.sessionId,
@@ -858,7 +852,7 @@ describe("Gateway GitHub publication", () => {
       sessionKey: REQUEST.sessionKey,
     });
     expect(publicationTranscriptMessages(events, requested.requestId)).toHaveLength(1);
-    expect(restarted.coordinator.listUnreportedResults()).toEqual([]);
+    expect(await restarted.coordinator.listUnreportedResultsAsync()).toEqual([]);
     expect(warnings).toHaveLength(1);
   });
 });

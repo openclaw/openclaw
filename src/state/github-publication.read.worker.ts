@@ -1,17 +1,17 @@
 import {
   readPersonalGitHubPublicationInDatabase,
   listUnreportedPersonalGitHubPublicationsInDatabase,
-} from "../gateway/github-personal-publication-store.js";
+} from "../gateway/github-personal-publication-store.worker.js";
 import {
   listGitHubPublicationsForClaimInDatabase,
   listSharedGitHubPublicationsInDatabase,
   readGitHubPublicationRequest,
-} from "../gateway/github-publication-store.js";
+} from "../gateway/github-publication-store.worker.js";
+import { listRepositoryGitHubPublicationsInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import {
   readRepositoryGitHubPublicationBranchInDatabase,
   readRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-repository-publication-store.js";
-import { listRepositoryGitHubPublicationsInDatabase } from "../gateway/github-repository-publication.kernel.js";
+} from "../gateway/github-repository-publication-store.worker.js";
 import type { PublicationReadOperations } from "./github-publication-worker.types.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";

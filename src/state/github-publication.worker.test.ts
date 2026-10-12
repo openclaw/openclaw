@@ -13,14 +13,12 @@ import {
   claimRepositoryGitHubPublicationAsync,
   runGitHubPublicationMaintenanceAsync,
 } from "../gateway/github-publication-store-async.js";
+import { listRepositoryGitHubPublicationsInDatabase } from "../gateway/github-repository-publication-read.worker.js";
 import {
   claimRepositoryGitHubPublicationInDatabase,
   insertRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-repository-publication-store.js";
-import {
-  listRepositoryGitHubPublicationsInDatabase,
-  repositoryGitHubPublicationDigest,
-} from "../gateway/github-repository-publication.kernel.js";
+} from "../gateway/github-repository-publication-store.worker.js";
+import { repositoryGitHubPublicationDigest } from "../gateway/github-repository-publication.kernel.js";
 import type { SqliteWorkerReply, SqliteWorkerRequest } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";

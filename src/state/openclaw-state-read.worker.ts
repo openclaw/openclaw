@@ -28,8 +28,8 @@ import {
 import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
-} from "../gateway/github-publication-store.js";
-import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.js";
+} from "../gateway/github-publication-store.worker.js";
+import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.worker.js";
 import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
 import {
   listCronStandingGrantsInDatabase,

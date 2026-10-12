@@ -9,6 +9,7 @@ import {
   personalPublicationAccount,
   expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
+import { claimRepositoryGitHubPublicationAsync } from "./github-publication-store-async.js";
 import {
   SESSION_ID,
   SESSION_KEY,
@@ -16,11 +17,8 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
-import {
-  claimRepositoryGitHubPublication,
-  listRepositoryGitHubPublications,
-  readRepositoryGitHubPublication,
-} from "./github-repository-publication-store.js";
+import { listRepositoryGitHubPublicationsInDatabase } from "./github-repository-publication-read.worker.js";
+import { readRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
 import {
   createRepositoryPublicationFixture,
   repositoryPublicationTestUrl as url,
@@ -30,6 +28,12 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
+
+const readRepositoryGitHubPublication = (requestId: string) =>
+  readRepositoryGitHubPublicationInDatabase(openOpenClawStateDatabase().db, requestId);
+const listRepositoryGitHubPublications = (
+  filter: Parameters<typeof listRepositoryGitHubPublicationsInDatabase>[1] = {},
+) => listRepositoryGitHubPublicationsInDatabase(openOpenClawStateDatabase().db, filter);
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
@@ -69,7 +73,6 @@ describe("repository checkpoint GitHub publication", () => {
         f.runtime.accountId = personalPublicationAccount.accountId;
       }
       let current = true;
-      let checkedPublishingTransaction = false;
       const transport = mocks.runCommand.getMockImplementation()!;
       mocks.runCommand.mockImplementation(async (args: string[], options) => {
         const result = await transport(args, options);
@@ -84,7 +87,7 @@ describe("repository checkpoint GitHub publication", () => {
       const coordinator = person?.coordinator ?? f.coordinator;
       const request = () =>
         person
-          ? coordinator.requestPersonalForSession(
+          ? coordinator.requestPersonalForSessionV2(
               {
                 sessionKey: SESSION_KEY,
                 idempotencyKey: "accepted-before-close",
@@ -96,17 +99,11 @@ describe("repository checkpoint GitHub publication", () => {
               },
               person.action,
             )
-          : coordinator.requestForSession({
+          : coordinator.requestForSessionV2({
               agentId: "main",
               sessionKey: SESSION_KEY,
               idempotencyKey: "accepted-before-close",
               assertCurrent: () => {
-                if (
-                  openOpenClawStateDatabase().db.isTransaction &&
-                  listRepositoryGitHubPublications().some((row) => row.status === "publishing")
-                ) {
-                  checkedPublishingTransaction = true;
-                }
                 if (!current) {
                   throw new Error("Publication authority closed");
                 }
@@ -114,9 +111,6 @@ describe("repository checkpoint GitHub publication", () => {
             });
       const published = await request();
       expect(published).toMatchObject({ status: "published", url });
-      if (source === "shared") {
-        expect(checkedPublishingTransaction).toBe(true);
-      }
       expect(readRepositoryGitHubPublication(published.requestId)).toMatchObject({
         status: "published",
         pull_request_url: url,
@@ -160,7 +154,7 @@ describe("repository checkpoint GitHub publication", () => {
       const coordinator = personal?.coordinator ?? f.coordinator;
       const request = () =>
         personal
-          ? coordinator.requestPersonalForSession(
+          ? coordinator.requestPersonalForSessionV2(
               {
                 sessionKey: SESSION_KEY,
                 idempotencyKey: "no-publication-snapshot",
@@ -172,7 +166,7 @@ describe("repository checkpoint GitHub publication", () => {
               },
               personal.action,
             )
-          : coordinator.requestForSession({
+          : coordinator.requestForSessionV2({
               agentId: "main",
               sessionKey: SESSION_KEY,
               idempotencyKey: "no-publication-snapshot",
@@ -196,7 +190,7 @@ describe("repository checkpoint GitHub publication", () => {
       expect(await request()).toEqual(result);
       await coordinator.resumeSessionRequests();
       expect(checkpoint).toHaveBeenCalledOnce();
-      expect(coordinator.listUnreportedResults()).toEqual([
+      expect(await coordinator.listUnreportedResultsAsync()).toEqual([
         expect.objectContaining({
           result: expect.objectContaining({
             requestId: result.requestId,
@@ -216,7 +210,7 @@ describe("repository checkpoint GitHub publication", () => {
       return await use({});
     });
     await expect(
-      f.coordinator.requestForSession({
+      f.coordinator.requestForSessionV2({
         agentId: "main",
         sessionKey: SESSION_KEY,
         idempotencyKey: "changed-unavailable",
@@ -257,12 +251,12 @@ describe("repository checkpoint GitHub publication", () => {
       },
     );
     const input = { agentId: "main", sessionKey: SESSION_KEY, idempotencyKey: "concurrent-shared" };
-    const first = f.coordinator.requestForSession(input);
+    const first = f.coordinator.requestForSessionV2(input);
     void first.catch(entered.reject);
     let second: typeof first | undefined;
     try {
       await entered.promise;
-      second = f.coordinator.requestForSession(input);
+      second = f.coordinator.requestForSessionV2(input);
       void second.catch(secondAdmitted.reject);
       await secondAdmitted.promise;
       release.resolve();
@@ -292,7 +286,7 @@ describe("repository checkpoint GitHub publication", () => {
       f.runtime.baseHeadTree = "c".repeat(40);
       f.runtime.mergeBase = "e".repeat(40);
       f.runtime.mergeBaseTree = "c".repeat(40);
-      const result = await f.coordinator.requestForSession({
+      const result = await f.coordinator.requestForSessionV2({
         agentId: "main",
         sessionKey: SESSION_KEY,
         idempotencyKey: "related-ref",
@@ -308,7 +302,7 @@ describe("repository checkpoint GitHub publication", () => {
   it("rejects a missing common ancestor before uploading or changing references", async () => {
     const f = await repositoryFixture();
     f.runtime.commonHistory = false;
-    const result = await f.coordinator.requestForSession({
+    const result = await f.coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
       idempotencyKey: "unrelated-ref",
@@ -321,7 +315,7 @@ describe("repository checkpoint GitHub publication", () => {
   it("distinguishes an unchanged published tree from a complete revert to the PR base", async () => {
     const f = await repositoryFixture();
     const publish = (idempotencyKey: string) =>
-      f.coordinator.requestForSession({
+      f.coordinator.requestForSessionV2({
         agentId: "main",
         sessionKey: SESSION_KEY,
         idempotencyKey,
@@ -366,14 +360,14 @@ describe("repository checkpoint GitHub publication", () => {
 
   it("does not recreate a deleted branch when a prior published head was recorded", async () => {
     const f = await repositoryFixture();
-    await f.coordinator.requestForSession({
+    await f.coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
       idempotencyKey: "before-delete",
     });
     f.runtime.head = null;
     await f.capture("next accepted change\n", "after-delete");
-    const result = await f.coordinator.requestForSession({
+    const result = await f.coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
       idempotencyKey: "after-delete",
@@ -387,7 +381,7 @@ describe("repository checkpoint GitHub publication", () => {
   it("extends its recorded pushed head after the earlier PR was closed before confirmation", async () => {
     const f = await repositoryFixture();
     f.runtime.closePullRequest = true;
-    const failed = await f.coordinator.requestForSession({
+    const failed = await f.coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
       idempotencyKey: "closed-before-confirmation",
@@ -402,7 +396,7 @@ describe("repository checkpoint GitHub publication", () => {
     });
     f.runtime.closePullRequest = false;
     await f.capture("accepted after closed PR\n", "after-closed-pr");
-    const published = await f.coordinator.requestForSession({
+    const published = await f.coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
       idempotencyKey: "fresh-after-closed-pr",
@@ -426,13 +420,13 @@ describe("repository checkpoint GitHub publication", () => {
         }
       },
     };
-    const first = await f.coordinator.requestForSession(request);
+    const first = await f.coordinator.requestForSessionV2(request);
     expect(first.status).toBe("requested");
     expect(readRepositoryGitHubPublication(first.requestId)?.pushed_head_commit).toBeNull();
     f.runtime.afterHeadObservation = () => {
       current = false;
     };
-    expect((await f.coordinator.requestForSession(request)).status).toBe("requested");
+    expect((await f.coordinator.requestForSessionV2(request)).status).toBe("requested");
     expect(readRepositoryGitHubPublication(first.requestId)?.pushed_head_commit).toBe(
       f.runtime.head,
     );
@@ -464,7 +458,7 @@ describe("repository checkpoint GitHub publication", () => {
         return result;
       });
       const pending = person
-        ? person.coordinator.requestPersonalForSession(
+        ? person.coordinator.requestPersonalForSessionV2(
             {
               sessionKey: SESSION_KEY,
               idempotencyKey: "reset-during-push",
@@ -476,7 +470,7 @@ describe("repository checkpoint GitHub publication", () => {
             },
             person.action,
           )
-        : f.coordinator.requestForSession({
+        : f.coordinator.requestForSessionV2({
             agentId: "main",
             sessionKey: SESSION_KEY,
             idempotencyKey: "reset-during-push",
@@ -527,7 +521,12 @@ describe("repository checkpoint GitHub publication", () => {
           const requestId = listRepositoryGitHubPublications()[0]!.request_id;
           const prepared = await person.coordinator.preparePersonalStatus(requestId);
           expect(
-            person.coordinator.personalStatus(person.action, person.action, requestId, prepared),
+            await person.coordinator.personalStatusAsync(
+              person.action,
+              person.action,
+              requestId,
+              prepared,
+            ),
           ).toMatchObject({
             result: { status: "failed", code: "session_changed" },
             confirmation: null,
@@ -536,7 +535,7 @@ describe("repository checkpoint GitHub publication", () => {
         return;
       }
       await f.capture("new session edit\n", "after-reset");
-      const next = await f.coordinator.requestForSession({
+      const next = await f.coordinator.requestForSessionV2({
         agentId: "main",
         sessionKey: SESSION_KEY,
         idempotencyKey: "new-after-reset",
@@ -554,21 +553,27 @@ describe("repository checkpoint GitHub publication", () => {
     async (kind) => {
       const stale = await repositoryFixture();
       stale.runtime.interruptPush = true;
-      const first = await stale.coordinator.requestForSession({
+      const first = await stale.coordinator.requestForSessionV2({
         agentId: "main",
         sessionKey: SESSION_KEY,
         idempotencyKey: "stale-before-recovery",
       });
       expect(first.status).toBe("requested");
-      const retained = claimRepositoryGitHubPublication(
+      const retained = await claimRepositoryGitHubPublicationAsync(
         readRepositoryGitHubPublication(first.requestId)!,
         "retained-execution",
-        { assertCustody: () => {}, assertCurrent: () => {} },
+        {
+          assertCustody: () => {},
+          assertAction: () => {},
+          prepareSource: async () => {
+            throw new Error("Unexpected source acquisition");
+          },
+        },
       );
       await stale.closeSession(kind);
       if (kind === "reset") {
         await expect(
-          stale.coordinator.requestForSession({
+          stale.coordinator.requestForSessionV2({
             agentId: "main",
             sessionKey: SESSION_KEY,
             idempotencyKey: "stale-before-recovery",
@@ -581,8 +586,9 @@ describe("repository checkpoint GitHub publication", () => {
         error_code: "session_changed",
         execution_id: null,
       });
-      expect(retained.ownsExecution()).toBe(false);
-      expect(() => retained.recordEffect("push", { headCommit: stale.runtime.head! })).toThrow();
+      await expect(
+        retained.recordEffect("push", { headCommit: stale.runtime.head! }),
+      ).rejects.toThrow();
       expect(stale.runtime.effects).toEqual(["push"]);
       const validSession = {
         sessionId: "valid-later-session",
@@ -590,7 +596,7 @@ describe("repository checkpoint GitHub publication", () => {
       };
       const valid = await repositoryFixture(undefined, validSession);
       valid.runtime.interruptPush = true;
-      const second = await valid.coordinator.requestForSession({
+      const second = await valid.coordinator.requestForSessionV2({
         agentId: "main",
         sessionKey: validSession.sessionKey,
         idempotencyKey: "valid-after-stale",
@@ -607,7 +613,7 @@ describe("repository checkpoint GitHub publication", () => {
     async (blocker) => {
       const blocked = await repositoryFixture(undefined, REQUEST);
       blocked.runtime.interruptPush = true;
-      const first = await blocked.coordinator.requestForSession({
+      const first = await blocked.coordinator.requestForSessionV2({
         agentId: REQUEST.agentId,
         sessionKey: REQUEST.sessionKey,
         idempotencyKey: "blocked-first",
@@ -651,7 +657,7 @@ describe("repository checkpoint GitHub publication", () => {
         };
         const valid = await repositoryFixture(undefined, validSession);
         valid.runtime.interruptPush = true;
-        const second = await valid.coordinator.requestForSession({
+        const second = await valid.coordinator.requestForSessionV2({
           agentId: "main",
           sessionKey: validSession.sessionKey,
           idempotencyKey: "valid-after-blocked",
@@ -699,7 +705,7 @@ describe("repository checkpoint GitHub publication", () => {
           ownerEpoch: 7,
         },
       });
-      const requested = await f.coordinator.requestForSession({
+      const requested = await f.coordinator.requestForSessionV2({
         sessionKey: REQUEST.sessionKey,
         agentId: REQUEST.agentId,
         expectedRunId: claim.runId,
@@ -729,7 +735,7 @@ describe("repository checkpoint GitHub publication", () => {
           error_code: "unavailable",
           last_effect: null,
         });
-        expect(f.coordinator.listUnreportedResults()).toEqual([
+        expect(await f.coordinator.listUnreportedResultsAsync()).toEqual([
           expect.objectContaining({
             result: expect.objectContaining({
               requestId: requested.requestId,
@@ -775,12 +781,12 @@ describe("repository checkpoint GitHub publication", () => {
         idempotencyKey: "stale-supplied-run",
       };
       await expect(
-        f.coordinator.requestForSession({ ...input, expectedRunId: "stale-run" }),
+        f.coordinator.requestForSessionV2({ ...input, expectedRunId: "stale-run" }),
       ).rejects.toThrow("run identity changed");
       expect(listRepositoryGitHubPublications()).toEqual([]);
       expect(mocks.prepareIdentity).not.toHaveBeenCalled();
       expect(f.runtime.effects).toEqual([]);
-      const direct = await f.coordinator.requestForSession(input);
+      const direct = await f.coordinator.requestForSessionV2(input);
       expect(direct.status).toBe(executionMode ? "requested" : "published");
       expect(readRepositoryGitHubPublication(direct.requestId)?.claim_id).toBeNull();
     },
@@ -797,7 +803,7 @@ describe("repository checkpoint GitHub publication", () => {
       owner: { kind: "local" },
     });
     await expect(
-      f.coordinator.requestForSession({
+      f.coordinator.requestForSessionV2({
         sessionKey: SESSION_KEY,
         agentId: "main",
         expectedRunId: claim.runId,
@@ -836,7 +842,7 @@ describe("repository checkpoint GitHub publication", () => {
         });
       }
       await expect(
-        f.coordinator.requestForClaim({
+        f.coordinator.requestForClaimV2({
           claim:
             mismatch === "mismatched environment"
               ? { ...claim, owner: { ...claim.owner, environmentId: "other-worker" } }
@@ -864,7 +870,7 @@ describe("repository checkpoint GitHub publication", () => {
         runId: "publication-run",
         owner: { kind: "worker", environmentId: "publication-worker", ownerEpoch: 7 },
       });
-      const accepted = await f.coordinator.requestForClaim({
+      const accepted = await f.coordinator.requestForClaimV2({
         claim,
         sessionKey: REQUEST.sessionKey,
         agentId: REQUEST.agentId,
@@ -877,9 +883,9 @@ describe("repository checkpoint GitHub publication", () => {
       await f.coordinator.prepareClaimWorkspace(claim);
       expect(readRepositoryGitHubPublication(accepted.requestId)?.checkpoint_ref).toBeNull();
       expect(await f.coordinator.processClaim(claim)).toEqual([]);
-      f.coordinator.deferClaimPreparation(claim);
+      await f.coordinator.deferClaimPreparationAsync(claim);
       expect(readRepositoryGitHubPublication(accepted.requestId)?.claim_id).toBe(claim.claimId);
-      expect(f.coordinator.deferOrphanedRequests()).toBeUndefined();
+      await expect(f.coordinator.deferOrphanedRequestsAsync()).resolves.toBeUndefined();
       expect(readRepositoryGitHubPublication(accepted.requestId)?.claim_id).toBeNull();
       expect(f.runtime.effects).toEqual([]);
     },
@@ -888,7 +894,7 @@ describe("repository checkpoint GitHub publication", () => {
   it("does not overwrite a branch changed after observation", async () => {
     const f = await repositoryFixture();
     f.runtime.changeHeadDuringPush = true;
-    const result = await f.coordinator.requestForSession({
+    const result = await f.coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
       idempotencyKey: "ref-race",
@@ -912,7 +918,7 @@ describe("repository checkpoint GitHub publication", () => {
       if (source === "personal") {
         const person = await createPersonalPublicationFixture();
         f.runtime.accountId = personalPublicationAccount.accountId;
-        const result = await person.coordinator.requestPersonalForSession(
+        const result = await person.coordinator.requestPersonalForSessionV2(
           {
             sessionKey: SESSION_KEY,
             idempotencyKey: "delete-personal",
@@ -927,7 +933,7 @@ describe("repository checkpoint GitHub publication", () => {
         requestId = result.requestId;
       } else {
         requestId = (
-          await f.coordinator.requestForSession({
+          await f.coordinator.requestForSessionV2({
             agentId: "main",
             sessionKey: SESSION_KEY,
             idempotencyKey: "delete-shared",
@@ -935,9 +941,12 @@ describe("repository checkpoint GitHub publication", () => {
         ).requestId;
       }
       const row = readRepositoryGitHubPublication(requestId)!;
-      const execution = claimRepositoryGitHubPublication(row, "current-instance", {
+      const execution = await claimRepositoryGitHubPublicationAsync(row, "current-instance", {
         assertCustody: () => {},
-        assertCurrent: () => {},
+        assertAction: () => {},
+        prepareSource: async () => {
+          throw new Error("Unexpected source acquisition");
+        },
       });
       const deleteReceipts = await preparePersonalGitHubSessionReceiptDeletion({
         agentId: "main",
@@ -950,9 +959,10 @@ describe("repository checkpoint GitHub publication", () => {
         ],
       });
       await deleteReceipts();
-      expect(execution.ownsExecution()).toBe(false);
-      expect(() => execution.recordEffect("push")).toThrow();
-      expect(() => execution.recordEffect("push", { headCommit: "e".repeat(40) })).toThrow();
+      await expect(execution.recordEffect("push")).rejects.toThrow();
+      await expect(
+        execution.recordEffect("push", { headCommit: "e".repeat(40) }),
+      ).rejects.toThrow();
     },
   );
 });

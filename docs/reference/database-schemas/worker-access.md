@@ -634,29 +634,25 @@ head and unsettled status derive from one result set; reads add no source
 reservation or transaction.
 These changes do not alter the schema, stored representation, or update behavior.
 
-Released coordinator methods with opaque requester assertions remain explicit
-native compatibility adapters. Personal OAuth `cancelAuthorization` and
-`disconnect` also retain synchronous completion through the same connection
-mutation kernel and commit-receipt owner. Their `cancelAuthorizationAsync` and
-`disconnectAsync` replacements select the worker path explicitly.
-The compatibility route is selected before any callback runs;
-worker failure never selects it as a fallback. Synchronous compatibility writes
-still commit before returning. The shared SDK helper warns once per plugin and
-`github-publication` family on actual legacy use, and all bundled callers use the
-V2 or awaited methods. See the
+Publication coordinator methods use the worker-owned path exclusively. Deprecated
+SDK publication methods retain their signatures but warn and fail with an explicit
+V2 or async replacement; bundled callers use those replacements. Internal native
+store adapters have been removed. SQL kernels are worker-only modules; native
+coordinators only await operations and apply committed facts. See the
 [SDK migration guide](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
-for the exact method mapping and removal window.
+for method pairs. Personal OAuth `cancelAuthorization` and `disconnect` keep their
+separate compatibility contract.
 
-Retained final-authority guards still synchronously read current session,
-placement, personal connection, and publication execution facts immediately
-before privileged effects. In particular, `readUserGitHubConnection` and
-`resolvePersonalGitHubOwner` remain native final checks; preparation uses their
-worker-owned readers. These guards are not worker-migration completion claims:
-retire them when the next Plugin SDK major removes raw synchronous writers and
-their owners publish complete revocation facts. No runtime freshness probes are
-added. Other processes must route writes through the serving Gateway or run while
-it is stopped. This cutover changes no schema, stored bytes, retention, durability,
-or update format.
+Publication execution is owned by the coordinator's per-request promise and
+workspace exclusion. Its worker transaction retains execution predicates, while
+native effect guards check current requester, connection, placement, and workspace
+authority. They do not reread publication rows to reconfirm internal execution
+ownership. Request preparation carries the admitted workspace instead of recapturing
+it, and materialization carries the branch receipt under its existing reservation.
+A concurrently accepted request may require a retry after a rejected selection;
+canonical insertion still enforces idempotency. These changes add no runtime
+freshness probes and change no schema, stored bytes, retention, or update format.
+Other processes must route writes through the serving Gateway or run while stopped.
 
 ### Session authority projections
 

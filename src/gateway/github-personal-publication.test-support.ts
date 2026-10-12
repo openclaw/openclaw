@@ -16,10 +16,7 @@ import {
   createPersonalGitHubOAuthLifecycle,
   personalGitHubStatus,
 } from "./github-personal-oauth.js";
-import type {
-  PersonalGitHubSessionAction,
-  PersonalGitHubSessionActionV2,
-} from "./github-personal-publication.js";
+import type { PersonalGitHubSessionActionV2 } from "./github-personal-publication.js";
 import {
   SESSION_ID,
   SESSION_KEY,
@@ -76,11 +73,8 @@ export async function preparePersonalPublicationFixtureV2(
 export async function preparePersonalPublicationFixtureAction(
   fixture: Parameters<typeof preparePersonalPublicationFixtureV2>[0],
   signal?: AbortSignal,
-): Promise<PersonalGitHubSessionAction> {
-  const { owner, assertCurrent, sessionId, sessionKey, agentId, lifecycleRevision } =
-    await preparePersonalPublicationFixtureV2(fixture, signal);
-  // Omit V2 fields so compatibility tests exercise released synchronous writes.
-  return { owner, assertCurrent, sessionId, sessionKey, agentId, lifecycleRevision };
+): Promise<PersonalGitHubSessionActionV2> {
+  return await preparePersonalPublicationFixtureV2(fixture, signal);
 }
 
 export function readPersonalPublicationFixtureStatus(
@@ -90,7 +84,7 @@ export function readPersonalPublicationFixtureStatus(
   >,
   requestId: string,
 ) {
-  return fixture.coordinator.personalStatus(
+  return fixture.coordinator.personalStatusAsync(
     fixture.action,
     {
       sessionKey: SESSION_KEY,
@@ -110,16 +104,14 @@ export async function expectPersonalPublicationReplay(
     action,
   }: Pick<Awaited<ReturnType<typeof createPersonalPublicationFixture>>, "coordinator"> & {
     generation: string;
-    action: PersonalGitHubSessionAction | PersonalGitHubSessionActionV2;
+    action: PersonalGitHubSessionActionV2;
   },
   capture: (requestId: string) => unknown,
 ) {
   const selection = { source: "personal" as const, generation, account };
   const request = { sessionKey: SESSION_KEY, idempotencyKey: "personal-replay", selection };
-  const publish = (input: Parameters<typeof coordinator.requestPersonalForSession>[0]) =>
-    "version" in action
-      ? coordinator.requestPersonalForSessionV2(input, action)
-      : coordinator.requestPersonalForSession(input, action);
+  const publish = (input: Parameters<typeof coordinator.requestPersonalForSessionV2>[0]) =>
+    coordinator.requestPersonalForSessionV2(input, action);
   const published = await publish(request);
   expect(published.status).toBe("published");
   const before = capture(published.requestId);

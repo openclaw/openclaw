@@ -36,7 +36,7 @@ import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import {
   prepareGitHubPublicationRequesterV2,
-  type GitHubPublicationRequester,
+  type GitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { createGitHubPublicationRuntime as createRuntime } from "./github-publication-runtime.js";
 import { createGitHubPublicationCoordinator as createCoordinator } from "./github-publication.js";
@@ -159,18 +159,12 @@ vi.mock("./github-publication-git-index.js", async (importOriginal) => ({
   updateGitHubPublicationBranchAndIndex: mocks.updateIndex,
 }));
 
-export const systemPublicationRequester: GitHubPublicationRequester = Object.freeze({
-  snapshot: Object.freeze({
-    version: 1,
-    actor: Object.freeze({ kind: "system" }),
-    scopes: Object.freeze(["operator.admin"]),
-    grant: null,
-  }),
-  assertCurrent: () => {},
-  assertInvocationCurrent: () => {},
-});
+export let systemPublicationRequester: GitHubPublicationRequesterV2;
 
-export async function createSystemGitHubPublicationRequesterFixture() {
+export async function createSystemGitHubPublicationRequesterFixture(
+  session = { sessionKey: SESSION_KEY, agentId: "main" },
+  assertCurrent?: () => void,
+) {
   const { createSyntheticPluginRuntimeClient } = await import("./server-plugin-runtime-client.js");
   const captured = await prepareGitHubPublicationRequesterV2(
     {
@@ -179,55 +173,57 @@ export async function createSystemGitHubPublicationRequesterFixture() {
         scopes: ["operator.admin"],
       }),
       context: { getRuntimeConfig: currentGitHubPublicationConfig },
+      ...(assertCurrent
+        ? { sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent } }
+        : {}),
     },
-    { sessionKey: SESSION_KEY, agentId: "main" },
+    session,
   );
   onTestFinished(captured.release);
   return captured;
 }
 
 type PublicationFixtureRequest<T> = Omit<T, "requester"> & {
-  requester?: GitHubPublicationRequester;
+  requester?: GitHubPublicationRequesterV2;
   assertCurrent?: () => void;
 };
 
-function bindPublicationFixtureRequest<
-  T extends { requester?: GitHubPublicationRequester; assertCurrent?: () => void },
+async function bindPublicationFixtureRequest<
+  T extends {
+    requester?: GitHubPublicationRequesterV2;
+    assertCurrent?: () => void;
+    sessionKey: string;
+    agentId: string;
+  },
 >(input: T) {
   const { assertCurrent, ...request } = input;
-  const params = { requester: systemPublicationRequester, ...request };
-  const requester = params.requester;
+  const requester =
+    input.requester ??
+    (
+      await createSystemGitHubPublicationRequesterFixture(
+        { sessionKey: input.sessionKey, agentId: input.agentId },
+        assertCurrent,
+      )
+    ).requester;
   return {
-    ...params,
-    requester: assertCurrent
-      ? {
-          snapshot: requester.snapshot,
-          assertCurrent: () => {
-            requester.assertCurrent();
-            assertCurrent();
-          },
-          assertInvocationCurrent: () => {
-            requester.assertInvocationCurrent();
-            assertCurrent();
-          },
-        }
-      : requester,
+    ...request,
+    requester,
   };
 }
 
 function withSystemRequesterFixture(coordinator: ReturnType<typeof createCoordinator>) {
-  const requestForSession = coordinator.requestForSession.bind(coordinator);
-  const requestForClaim = coordinator.requestForClaim;
+  const requestForSession = coordinator.requestForSessionV2.bind(coordinator);
+  const requestForClaim = coordinator.requestForClaimV2.bind(coordinator);
   return Object.assign(coordinator, {
-    requestForSession(
-      input: PublicationFixtureRequest<Parameters<typeof coordinator.requestForSession>[0]>,
+    async requestForSessionV2(
+      input: PublicationFixtureRequest<Parameters<typeof coordinator.requestForSessionV2>[0]>,
     ) {
-      return requestForSession(bindPublicationFixtureRequest(input));
+      return requestForSession(await bindPublicationFixtureRequest(input));
     },
-    requestForClaim(
-      input: PublicationFixtureRequest<Parameters<typeof coordinator.requestForClaim>[0]>,
+    async requestForClaimV2(
+      input: PublicationFixtureRequest<Parameters<typeof coordinator.requestForClaimV2>[0]>,
     ) {
-      return requestForClaim(bindPublicationFixtureRequest(input));
+      return requestForClaim(await bindPublicationFixtureRequest(input));
     },
   });
 }
@@ -705,9 +701,14 @@ export function installGitHubPublicationTestHarness(
       { agentId: "main", sessionKey: SESSION_KEY },
       { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now() },
     );
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: REQUEST.sessionKey },
+      { ...mocks.loadSession(REQUEST.sessionKey).entry, updatedAt: Date.now() },
+    );
     // Custody remains persisted for policy reads; release its writer lease so
     // receipt-only tests can observe a genuinely cold shared database.
     await closeOpenClawAgentDatabasesAsync();
+    systemPublicationRequester = (await createSystemGitHubPublicationRequesterFixture()).requester;
   });
 
   afterEach(async () => {

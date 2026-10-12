@@ -1,10 +1,10 @@
-import { insertPersonalGitHubPublicationInDatabase } from "../gateway/github-personal-publication-store.js";
+import { insertPersonalGitHubPublicationInDatabase } from "../gateway/github-personal-publication-store.worker.js";
 import { captureGitHubPublicationChanges } from "../gateway/github-publication-events.js";
 import {
   assertSharedGitHubPublicationClaimInDatabase,
   insertGitHubPublicationRequest,
-} from "../gateway/github-publication-store.js";
-import { insertRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-store.js";
+} from "../gateway/github-publication-store.worker.js";
+import { insertRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-store.worker.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import type { RepositoryGitHubPublicationRow } from "./github-publication-read.types.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";

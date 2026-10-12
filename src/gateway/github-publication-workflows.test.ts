@@ -266,7 +266,7 @@ describe("accepted GitHub workflow publication", () => {
       if (kind !== "first") {
         await fs.writeFile(path.join(workspace.cwd, "artifact.txt"), "first source change\n");
         expect(
-          await f.coordinator.requestForSession(f.request("first-source", f.guest)),
+          await f.coordinator.requestForSessionV2(f.request("first-source", f.guest)),
         ).toMatchObject({ status: "published" });
       }
       const publishedHead = await workspace.git("rev-parse", "HEAD");
@@ -376,7 +376,7 @@ describe("accepted GitHub workflow publication", () => {
       return await transport(args, options);
     });
     await fs.writeFile(path.join(workspace.cwd, "artifact.txt"), "ordinary source\n");
-    expect(await f.coordinator.requestForSession(f.request("first", f.guest))).toMatchObject({
+    expect(await f.coordinator.requestForSessionV2(f.request("first", f.guest))).toMatchObject({
       status: "published",
     });
     const published = await workspace.git("rev-parse", "HEAD");
@@ -399,7 +399,7 @@ describe("accepted GitHub workflow publication", () => {
       "accepted merge",
     );
     await workspace.git("reset", "--hard", merged);
-    expect(await f.coordinator.requestForSession(f.request("ambiguous", f.guest))).toMatchObject({
+    expect(await f.coordinator.requestForSessionV2(f.request("ambiguous", f.guest))).toMatchObject({
       status: "failed",
       code: "github_rejected",
       nextAction: expect.stringContaining("Ask a maintainer"),
@@ -419,7 +419,7 @@ describe("accepted GitHub workflow publication", () => {
       return await resolveRepository();
     });
     expect(
-      await f.coordinator.requestForSession(f.request("immutable-workflows", f.guest)),
+      await f.coordinator.requestForSessionV2(f.request("immutable-workflows", f.guest)),
     ).toMatchObject({ status: "published" });
     expect(await workspace.git("ls-tree", "HEAD", ".github/workflows")).toBe("");
     expect(await fs.readFile(file, "utf8")).toBe(workflow);
@@ -450,7 +450,7 @@ describe("accepted GitHub workflow publication", () => {
         return result;
       });
       await expect(
-        f.coordinator.requestForSession(f.request(boundary, f.maintainer)),
+        f.coordinator.requestForSessionV2(f.request(boundary, f.maintainer)),
       ).resolves.toMatchObject({ status: "failed", code: "identity_changed" });
       expect(workspace.effects).toEqual([]);
       if (boundary === "before push") {
@@ -504,7 +504,7 @@ describe("accepted GitHub workflow publication", () => {
     onTestFinished(() => intercepted.mockRestore());
 
     await expect(
-      f.coordinator.requestForSession(f.request("publisher-at-push", f.maintainer)),
+      f.coordinator.requestForSessionV2(f.request("publisher-at-push", f.maintainer)),
     ).rejects.toThrow(GitHubPublicationRecoveryPendingError);
     expect(publisherRevoked).toBe(true);
     expect(f.maintainer.assertCurrent).not.toThrow();
@@ -553,10 +553,10 @@ describe("accepted GitHub workflow publication", () => {
       return await transport(args, options);
     });
     const request = f.request("reset-after-observation", f.guest);
-    await expect(f.coordinator.requestForSession(request)).rejects.toThrow(
+    await expect(f.coordinator.requestForSessionV2(request)).rejects.toThrow(
       GitHubPublicationRecoveryPendingError,
     );
-    expect(await f.coordinator.requestForSession(request)).toMatchObject({
+    expect(await f.coordinator.requestForSessionV2(request)).toMatchObject({
       status: "failed",
       code: "github_rejected",
     });
