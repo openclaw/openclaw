@@ -2,13 +2,16 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpxPluginConfigSchema } from "./config-schema.js";
 import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
 const requireFromTest = createRequire(import.meta.url);
 const TSX_IMPORT = requireFromTest.resolve("tsx");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectedMcpServerArgs(params: { sourceEntry: string; distEntry: string }): string[] {
   const distEntry = path.resolve(params.distEntry);
@@ -183,6 +186,47 @@ describe("embedded acpx plugin config", () => {
         distEntry: "dist/mcp/openclaw-tools-serve.js",
       }),
     });
+  });
+
+  it("launches managed bridges from the host package when acpx is an external package", () => {
+    const tmp = fs.realpathSync(tempDirs.make("openclaw-acpx-external-"));
+    const hostRoot = path.join(tmp, "lib", "node_modules", "openclaw");
+    fs.mkdirSync(path.join(hostRoot, "dist", "mcp"), { recursive: true });
+    fs.writeFileSync(path.join(hostRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+    fs.writeFileSync(path.join(hostRoot, "openclaw.mjs"), "");
+    fs.writeFileSync(path.join(hostRoot, "dist", "mcp", "plugin-tools-serve.js"), "");
+    fs.writeFileSync(path.join(hostRoot, "dist", "mcp", "openclaw-tools-serve.js"), "");
+    fs.mkdirSync(path.join(tmp, "bin"));
+    fs.symlinkSync(path.join(hostRoot, "openclaw.mjs"), path.join(tmp, "bin", "openclaw"));
+    const pluginRoot = path.join(tmp, "captures", "package-0", "node_modules", "@openclaw", "acpx");
+    fs.mkdirSync(path.join(pluginRoot, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ name: "@openclaw/acpx" }),
+    );
+    fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "{}");
+    const originalArgv = process.argv;
+    process.argv = [process.execPath, path.join(tmp, "bin", "openclaw"), "gateway"];
+    try {
+      const resolved = resolveAcpxPluginConfig({
+        rawConfig: { pluginToolsMcpBridge: true, openClawToolsMcpBridge: true },
+        workspaceDir: "/tmp/openclaw-acpx",
+        moduleUrl: pathToFileURL(path.join(pluginRoot, "dist", "config.js")).href,
+      });
+
+      expect(resolved.mcpServers).toEqual({
+        "openclaw-plugin-tools": {
+          command: process.execPath,
+          args: [path.join(hostRoot, "dist", "mcp", "plugin-tools-serve.js")],
+        },
+        "openclaw-tools": {
+          command: process.execPath,
+          args: [path.join(hostRoot, "dist", "mcp", "openclaw-tools-serve.js")],
+        },
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
   });
 
   it("resolves the plugin root from shared dist chunk paths", () => {
