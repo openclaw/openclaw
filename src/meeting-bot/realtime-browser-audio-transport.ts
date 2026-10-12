@@ -10,6 +10,12 @@ import type { MeetingBrowserRequestCaller } from "./platform-adapter-contract.js
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
+/** Minimal view of the Gateway's session-owned authority hold for detached capture. */
+type MeetingBrowserCaptureContinuation = {
+  run: <T>(run: () => T) => T;
+  release: () => void;
+};
+
 export async function createBrowserMeetingRealtimeAudioTransport(params: {
   nativeTransport: MeetingRealtimeAudioTransport;
   hasConfiguredInputCommand: boolean;
@@ -20,14 +26,27 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
   targetId?: string;
   audioFormat: MeetingRealtimeAudioFormat;
   logger: RuntimeLogger;
+  /**
+   * Session-owned continuation captured while the starting tool still holds a
+   * live operator source. The recurring capture loop outlives that invocation,
+   * so it runs under this hold instead of the finished request's authority.
+   * Only consulted on the browser-capture path; absent on hosts without an
+   * in-process Gateway.
+   */
+  captureContinuation?: () => Promise<MeetingBrowserCaptureContinuation | undefined> | undefined;
 }): Promise<MeetingRealtimeAudioTransport> {
-  const { buildCaptureScript, targetId } = params;
+  const { buildCaptureScript, targetId, captureContinuation } = params;
   if (params.hasConfiguredInputCommand || !buildCaptureScript) {
     return params.nativeTransport;
   }
   if (!targetId) {
     throw new Error("Meeting browser audio capture requires its tracked tab.");
   }
+  const continuation = await captureContinuation?.();
+  const callBrowser: MeetingBrowserRequestCaller = (request) =>
+    continuation
+      ? continuation.run(() => params.callBrowser(request))
+      : params.callBrowser(request);
   const captureId = randomUUID();
   let stopped = false;
   let inputStarted = false;
@@ -43,7 +62,7 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
         if (stopped && action !== "stop") {
           return { closed: true };
         }
-        const response = await params.callBrowser({
+        const response = await callBrowser({
           method: "POST",
           path: "/act",
           timeoutMs,
@@ -76,6 +95,7 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
           params.logger.warn(`Meeting browser audio cleanup failed: ${formatErrorMessage(error)}`);
         }),
       ]);
+      continuation?.release();
     })();
     return stopPromise;
   };

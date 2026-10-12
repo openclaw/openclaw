@@ -1,5 +1,6 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureOperatorToolGatewayContinuationContext } from "../gateway/server-plugin-in-process-dispatch.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import {
@@ -264,6 +265,7 @@ function createMeetingChromeTransportWithAudioPolicy<
       ...params,
       nativeTransport,
       callBrowser,
+      captureContinuation: captureOperatorToolGatewayContinuationContext,
       hasConfiguredInputCommand: params.config.chrome.audioInputCommandOverride !== undefined,
       buildCaptureScript: options.platform.browser.buildAudioCaptureScript?.bind(
         options.platform.browser,
