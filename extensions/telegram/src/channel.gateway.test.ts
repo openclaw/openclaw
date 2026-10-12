@@ -12,6 +12,7 @@ import {
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import { getOrCreateAccountThrottler, releaseAccountThrottler } from "./account-throttler.js";
 import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { telegramPlugin } from "./channel.js";
@@ -20,6 +21,7 @@ import { acquireTelegramPollingLease } from "./polling-lease.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramAccountThrottlersForTest,
   resetTelegramPollingLeasesForTest as resetTelegramPollingLeasesForTests,
 } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -467,6 +469,120 @@ describe("telegramPlugin gateway startup", () => {
         botToken: "123456:bad-token",
       }),
     ).resolves.toBeNull();
+  });
+
+  describe("account throttler lifecycle", () => {
+    beforeEach(() => {
+      resetTelegramAccountThrottlersForTest();
+    });
+    afterEach(() => {
+      resetTelegramAccountThrottlersForTest();
+    });
+
+    it("releases the rotated-out token's throttler", async () => {
+      installTelegramRuntime();
+      const oldToken = "123456:bad-token";
+      const first = getOrCreateAccountThrottler(oldToken);
+
+      await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
+        accountId: "ops",
+        prevCfg: createTelegramConfig("ops"),
+        nextCfg: createTelegramConfig("ops", { botToken: "654321:new-token" }),
+        runtime: createRuntimeSpies(),
+      });
+
+      expect(getOrCreateAccountThrottler(oldToken)).not.toBe(first);
+    });
+
+    it("keeps the throttler when the token change keeps it in use elsewhere", async () => {
+      installTelegramRuntime();
+      const sharedToken = "123456:bad-token";
+      const cfg = {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: { botToken: sharedToken },
+              other: { botToken: sharedToken },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const first = getOrCreateAccountThrottler(sharedToken);
+
+      await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
+        accountId: "ops",
+        prevCfg: cfg,
+        nextCfg: {
+          channels: {
+            telegram: {
+              accounts: {
+                ops: { botToken: "654321:new-token" },
+                other: { botToken: sharedToken },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        runtime: createRuntimeSpies(),
+      });
+
+      expect(getOrCreateAccountThrottler(sharedToken)).toBe(first);
+      await releaseAccountThrottler(sharedToken);
+    });
+
+    it("releases the removed account's throttler", async () => {
+      installTelegramRuntime();
+      const token = "123456:bad-token";
+      const first = getOrCreateAccountThrottler(token);
+
+      await telegramPlugin.lifecycle?.onAccountRemoved?.({
+        accountId: "ops",
+        prevCfg: createTelegramConfig("ops"),
+        runtime: createRuntimeSpies(),
+      });
+
+      expect(getOrCreateAccountThrottler(token)).not.toBe(first);
+    });
+
+    it("keeps a shared-token throttler when one account is removed", async () => {
+      installTelegramRuntime();
+      const sharedToken = "123456:bad-token";
+      const cfg = {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: { botToken: sharedToken },
+              other: { botToken: sharedToken },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const first = getOrCreateAccountThrottler(sharedToken);
+
+      await telegramPlugin.lifecycle?.onAccountRemoved?.({
+        accountId: "ops",
+        prevCfg: cfg,
+        runtime: createRuntimeSpies(),
+      });
+
+      expect(getOrCreateAccountThrottler(sharedToken)).toBe(first);
+      await releaseAccountThrottler(sharedToken);
+    });
+
+    it("keeps the throttler when an unrelated setting changes", async () => {
+      installTelegramRuntime();
+      const token = "123456:bad-token";
+      const first = getOrCreateAccountThrottler(token);
+
+      await telegramPlugin.lifecycle?.onAccountConfigChanged?.({
+        accountId: "ops",
+        prevCfg: createTelegramConfig("ops"),
+        nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
+        runtime: createRuntimeSpies(),
+      });
+
+      expect(getOrCreateAccountThrottler(token)).toBe(first);
+      await releaseAccountThrottler(token);
+    });
   });
 
   it("deletes cached startup botInfo when logout clears the account token", async () => {
