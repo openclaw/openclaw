@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import type { FailoverReason } from "../failover/signal.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import type { ModelFallbackRunOptions } from "../model-fallback-attempt.js";
@@ -398,6 +398,39 @@ describe("runEmbeddedAgentEntry", () => {
       // The retrying caller re-enters with this runId, so the budget must survive this exit.
       expect(peekTurnSendCount(key)).toBe(1);
       expect(retained).toEqual([{ agentId: "main", sessionKey: "session-1", runId }, grantScope]);
+    });
+
+    it("still disposes the logical-turn lease when releasing the ledger scope throws", async () => {
+      const retainError = new Error("retain callback failed");
+      let dispose: MockInstance | undefined;
+      const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+
+      await expect(
+        runEmbeddedAgentEntry({
+          selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
+          identity: { runId: "ledger-release-throws", agentId: "main", sessionId: "session-1" },
+          harness: {
+            workspaceDir: "/tmp/workspace",
+            preparation: { kind: "direct" },
+            resolveRuntimeOverride: () => undefined,
+          },
+          behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+          sessionOverride: { kind: "preserve" },
+          retainTurnSendLedgerScope: () => {
+            throw retainError;
+          },
+          runCandidate: async (provider, model, options) => {
+            dispose ??= vi.spyOn(options.contextEngineLogicalTurnLease, "dispose");
+            return makeResult({
+              provider,
+              model,
+              classification: options.isFinalFallbackAttempt ? undefined : "empty",
+            });
+          },
+        }),
+      ).rejects.toBe(retainError);
+
+      expect(dispose).toHaveBeenCalledTimes(1);
     });
   });
 });
