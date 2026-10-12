@@ -291,6 +291,12 @@ importers:
       acorn:
         specifier: 8.18.0
         version: 8.18.0
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1
       chalk:
         specifier: 6.0.1
         version: 6.0.1

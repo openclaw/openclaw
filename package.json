@@ -2281,6 +2281,8 @@
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.33.1",
     "acorn": "8.18.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "chalk": "6.0.1",
     "chrome-devtools-mcp": "1.10.1",
     "clawpdf": "0.3.2",
