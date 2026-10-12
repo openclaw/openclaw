@@ -627,7 +627,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
       const generation = rewrites.every((row) =>
         isSteerConfirmationRewrite(row.expectedEventJson, row.eventJson),
       )
-        ? readTranscriptGenerationInTransaction(database, resolved.sessionId)
+        ? undefined
         : rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
       if (!projectionUnchanged) {
         if (options.legacyTextStorage) {

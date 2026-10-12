@@ -1,7 +1,7 @@
 import type { Selectable, SqlBool } from "kysely";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionEntryRow = Selectable<DB["session_nodes"]>;

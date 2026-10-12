@@ -626,9 +626,8 @@ export function applySessionMessageRewrite<T>(
             seq: current.seq,
           },
         ]);
-      } else {
-        generation = readTranscriptGenerationInTransaction(database, input.scope.sessionId);
       }
+      generation ??= readTranscriptGenerationInTransaction(database, input.scope.sessionId);
       const candidate: SessionMessageRewriteCommitted = {
         kind: "session-message-rewrite",
         result:
