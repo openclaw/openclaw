@@ -12,12 +12,7 @@ import { runGit, runGitBuffered } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { GIT_TIMEOUT_MS } from "../infra/git-exec.js";
 import type { GitCheckoutDiffInput, GitReadOperations } from "../infra/git-read-operations.js";
-import {
-  parseDiffInventoryZ,
-  parseNameStatusZ,
-  parseNumstatZ,
-  splitPatchByFile,
-} from "./session-diff-parser.js";
+import { parseDiffInventoryZ, parseNameStatusZ, splitPatchByFile } from "./session-diff-parser.js";
 import {
   loadSessionDiffBranchMetadata,
   resolveSessionDiffBase,
@@ -232,20 +227,10 @@ async function collectTrackedFiles(
 ): Promise<{ files: SessionDiffFile[]; truncated: boolean }> {
   const diffArgs = (options: string[]) => ["diff", "-M", ...options, ...revisions, "--"];
   const inventoryText = await gitOut(root, diffArgs(["--raw", "--numstat", "--no-color", "-z"]));
-  let inventory: ReturnType<typeof parseDiffInventoryZ>;
-  if (inventoryText !== null) {
-    inventory = parseDiffInventoryZ(inventoryText);
-  } else {
-    // Preserve filename-only results when Git cannot compute line counts.
-    const nameStatus = await gitOut(root, diffArgs(["--name-status", "-z"]));
-    const entries = parseNameStatusZ(nameStatus ?? "");
-    if (entries.length === 0) {
-      return { files: [], truncated: false };
-    }
-    const numstatText = (await gitOut(root, diffArgs(["--numstat", "-z"]))) ?? "";
-    inventory = { entries, numstat: parseNumstatZ(numstatText) };
+  if (inventoryText === null) {
+    throw new Error("Unable to read tracked Git changes");
   }
-  const { entries, numstat } = inventory;
+  const { entries, numstat } = parseDiffInventoryZ(inventoryText);
   if (entries.length === 0) {
     return { files: [], truncated: false };
   }
@@ -504,21 +489,12 @@ async function collectBaselineCandidates(params: {
   const baseInfo = head
     ? await resolveSessionDiffBase({ branch, gitOut, head, root })
     : await resolveSessionDiffEmptyTree(root, objectFormat);
-  const [trackedResult, untrackedResult] = await Promise.allSettled([
+  const [trackedText, untrackedText] = await Promise.all([
     baseInfo
       ? gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
       : Promise.resolve(""),
     gitOutForBaseline(root, ["ls-files", "--others", "--exclude-standard", "-z"]),
   ]);
-  // Join both command lifetimes before returning a failure to the capture owner.
-  if (trackedResult.status === "rejected") {
-    throw trackedResult.reason;
-  }
-  if (untrackedResult.status === "rejected") {
-    throw untrackedResult.reason;
-  }
-  const trackedText = trackedResult.value;
-  const untrackedText = untrackedResult.value;
   if (trackedText === null || untrackedText === null) {
     return { root, candidates: [], truncated: true };
   }

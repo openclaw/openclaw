@@ -12,11 +12,7 @@ let lastPruneAt = 0;
 let prunePending: Promise<void> | undefined;
 
 function reportPruneFailure(error: unknown): void {
-  try {
-    log.warn(`failed to prune session state history: ${String(error)}`);
-  } catch {
-    // Pruning cannot fail a committed action, including when its diagnostic sink fails.
-  }
+  log.warn(`failed to prune session state history: ${String(error)}`);
 }
 
 /** Join explicit sweeps; periodic producers coalesce within the existing retention window. */

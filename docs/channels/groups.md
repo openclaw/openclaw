@@ -127,7 +127,7 @@ the shared [thread mention policy](/plugins/sdk-channel-plugins/mention-policy).
 
 For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`: the final assistant text posts to the room as the visible reply.
 
-Use `messages.groupChat.visibleReplies: "message_tool"` when visible answers must go through `message(action=send)`. This selects the delivery method, not whether a reply is required. It works best with models that reliably follow tool-only delivery. If the model misses the tool and returns substantive final text, OpenClaw keeps that text private and attempts a bounded delivery recovery rather than posting it directly.
+Use `messages.groupChat.visibleReplies: "message_tool"` when visible answers must go through `message(action=send)`. This selects the delivery method, not whether a reply is required. It works best with models that reliably follow tool-only delivery. If the model misses the tool and returns substantive final text, OpenClaw keeps that text private and attempts a bounded delivery recovery rather than posting it directly. Claude CLI runs call the registered tool as `mcp__openclaw__message`; the backend explains this mapping and how to discover deferred tools in the system prompt.
 
 Use `"automatic"` for models or runtimes that do not reliably follow tool-only delivery: normal text finals post directly to the room, and the agent may still call `message(action=send)` for files, images, or other attachments that cannot ride along with the final text.
 
