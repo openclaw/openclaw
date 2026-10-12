@@ -213,7 +213,7 @@ jq '{tag, commit: .bun.commit, revision: .bun.revision,
 
 Repin one shared owner in one PR and run the shared stager for all four Darwin/Linux
 targets; execute native proofs on matching hosts (Rosetta can verify Darwin x64).
-Windows packaging consumes the signed Windows entries. Do not advance an
+The signed Windows entries are available for Windows packaging integration. Do not advance an
 individual artifact or copy the pin into an app or workflow.
 
 ## 3. Install the CLI and Gateway
