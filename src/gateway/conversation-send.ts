@@ -70,7 +70,7 @@ export async function runGatewayConversationSend(params: {
       agentId: params.agentId,
       conversation,
     });
-    routeAuthority.assertCurrent(conversation);
+    routeAuthority.assertRequestEligible();
     // Completed retries retain persisted metadata and bypass current delivery-store resolution.
     const completed = operation ? resultFromExistingOperation(operation) : undefined;
     const sent =

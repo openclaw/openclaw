@@ -1,5 +1,4 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelMessagingAdapter } from "openclaw/plugin-sdk/core";
 import { resolveAccountEntry, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { hasImplicitDefaultSlackAccount } from "./accounts.js";

@@ -13,5 +13,5 @@ export async function inspectSlackConversationRouteOwner(
       return () => inspections;
     },
   );
-  return resolve!(params);
+  return resolve!();
 }

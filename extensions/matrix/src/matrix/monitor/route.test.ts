@@ -112,7 +112,7 @@ describe("resolveMatrixInboundRouteAsync", () => {
 
   it.each(["global"])(
     "lets runtime binding %s override sender and room routes",
-    (targetSessionKey) => {
+    async (targetSessionKey) => {
       const touch = vi.fn();
       registerSessionBindingAdapter({
         channel: "matrix",
@@ -145,7 +145,7 @@ describe("resolveMatrixInboundRouteAsync", () => {
         ],
       } satisfies OpenClawConfig;
 
-      const { route, configuredBinding, runtimeBindingId } = resolveDmRoute(cfg);
+      const { route, configuredBinding, runtimeBindingId } = await resolveDmRoute(cfg);
 
       expect(configuredBinding).toBeNull();
       expect(runtimeBindingId).toBe("ops:!dm:example.org");

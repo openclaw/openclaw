@@ -114,7 +114,9 @@ export async function prepareDiscordConversationRouteOwnersAsync(
   );
   let index = 0;
   return prepared.map((item) => {
-    if (!item) return () => null;
+    if (!item) {
+      return () => null;
+    }
     const position = index++;
     return () => item.resolve(inspect()[position]!);
   });

@@ -8,5 +8,5 @@ export async function inspectTelegramConversationRouteOwner(
     const inspections = await Promise.all(refs.map(inspectConversationBindingAsync));
     return () => inspections;
   });
-  return resolve!(params);
+  return resolve!();
 }

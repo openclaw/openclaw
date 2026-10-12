@@ -32,6 +32,7 @@ import { normalizeRouteBindingId } from "../routing/binding-scope.js";
 import { peerKindMatches } from "../routing/peer-kind-match.js";
 import { resolveAgentRoute, type ResolvedAgentRoute } from "../routing/resolve-route.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { ConversationInputError } from "./conversation-errors.js";
 
 type ConversationRouteCandidate = Pick<
   ConversationRecord,
@@ -89,12 +90,13 @@ function resolvePluginRouteOwner(
   if (!resolver) {
     return undefined;
   }
-  if (!preparedResolver)
+  if (!preparedResolver) {
     warnPluginSdkDeprecation({
       family: "conversation-route-ownership",
       method: "ChannelMessagingAdapter.resolveConversationRouteOwner",
       replacement: "ChannelMessagingAdapter.prepareConversationRouteOwnersAsync",
     });
+  }
   try {
     const owner = resolver(pluginRouteOwnerInput(config, conversation));
     if (owner === undefined) {
@@ -307,11 +309,15 @@ export async function prepareConversationRouteEligibilitiesForAgent(params: {
           const [resolver] = messaging.prepareConversationRouteOwners(
             [pluginRouteOwnerInput(params.config, input.conversation)],
             (refs) => {
-              if (!preparing) throw new Error("Conversation route preparation is no longer active");
+              if (!preparing) {
+                throw new Error("Conversation route preparation is no longer active");
+              }
               return inspectSessionBindingsByConversations(refs);
             },
           );
-          if (resolver) resolvers.set(index, resolver);
+          if (resolver) {
+            resolvers.set(index, resolver);
+          }
         } finally {
           preparing = false;
         }
@@ -324,21 +330,26 @@ export async function prepareConversationRouteEligibilitiesForAgent(params: {
         selected = await prepare(
           indexes.map((index) => pluginRouteOwnerInput(params.config, inputs[index]!.conversation)),
           (refs) => {
-            if (!preparing) throw new Error("Conversation route preparation is no longer active");
+            if (!preparing) {
+              throw new Error("Conversation route preparation is no longer active");
+            }
             return inspectBindings(refs);
           },
         );
       } finally {
         preparing = false;
       }
-      if (selected.length !== indexes.length)
+      if (selected.length !== indexes.length) {
         throw new Error("Plugin route owner returned an incomplete selection");
+      }
       indexes.forEach((index, position) => resolvers.set(index, selected[position]!));
     }
     const prepared = inputs.map((input, index) => {
       const resolver = resolvers.get(index);
       const owner = resolvePluginRouteOwner(input.config, input.conversation, resolver);
-      if (owner) return { kind: "plugin" as const, resolver };
+      if (owner) {
+        return { kind: "plugin" as const, resolver };
+      }
       const route = resolveConfiguredRouteOwner(
         input.config,
         input.conversation,
@@ -357,13 +368,16 @@ export async function prepareConversationRouteEligibilitiesForAgent(params: {
     return {
       read(): ConversationRouteEligibility[] {
         for (const { channel, plugin } of plugins) {
-          if (channel && getLoadedChannelPlugin(channel) !== plugin)
+          if (channel && getLoadedChannelPlugin(channel) !== plugin) {
             throw new Error("Conversation route owner changed. Retry the request.");
+          }
         }
         const inspections = inspect();
         let position = 0;
         return prepared.map((entry, index) => {
-          if (entry.kind === "denied") return "denied";
+          if (entry.kind === "denied") {
+            return "denied";
+          }
           const input = inputs[index]!;
           const owner =
             entry.kind === "plugin"
@@ -373,11 +387,15 @@ export async function prepareConversationRouteEligibilitiesForAgent(params: {
         });
       },
       dispose() {
-        for (const release of releases) release();
+        for (const release of releases) {
+          release();
+        }
       },
     };
   } catch (error) {
-    for (const release of releases) release();
+    for (const release of releases) {
+      release();
+    }
     throw error;
   }
 }
@@ -433,23 +451,40 @@ export async function prepareConversationDeliveryRouteAuthorization(
     ...params,
     conversations: [params.conversation],
   });
+  const assertConfigCurrent = () => {
+    if ((params.readCurrentConfig?.() ?? params.config) !== params.config) {
+      throw new PlatformMessageNotDispatchedError(
+        "Conversation routing configuration changed. Retry the request.",
+        { cause: undefined, retryable: true },
+      );
+    }
+  };
   return {
+    assertRequestEligible() {
+      assertConfigCurrent();
+      const eligibility = prepared.read()[0]!;
+      if (eligibility === "denied") {
+        throw new ConversationInputError(
+          `Conversation is not available to this agent: ${params.conversationRef}`,
+        );
+      }
+      if (eligibility === "unavailable") {
+        throw new Error(
+          `Conversation ownership is temporarily unavailable: ${params.conversationRef}`,
+        );
+      }
+    },
     assertCurrent(
       conversation: ConversationRecord | undefined,
       authority: ConversationAuthority = params,
     ) {
-      const config = params.readCurrentConfig?.() ?? params.config;
-      if (config !== params.config)
-        throw new PlatformMessageNotDispatchedError(
-          "Conversation routing configuration changed. Retry the request.",
-          { cause: undefined, retryable: true },
-        );
+      assertConfigCurrent();
       assertConversationDeliveryRouteAuthorized(
-        { ...params, ...authority, conversation, config },
+        { ...params, ...authority, conversation },
         prepared.read()[0]!,
       );
     },
-    dispose: prepared.dispose,
+    dispose: () => prepared.dispose(),
   };
 }
 
@@ -466,11 +501,12 @@ export async function withAuthorizedConversationDelivery<T>(
   const conversation = params.routeAuthority
     ? undefined
     : await readConversation(params.scope, params.conversationRef);
-  if (!params.routeAuthority && !conversation)
+  if (!params.routeAuthority && !conversation) {
     throw new PlatformMessageNotDispatchedError("Conversation is no longer available", {
       cause: undefined,
       retryable: false,
     });
+  }
   const routeAuthority =
     params.routeAuthority ??
     (await prepareConversationDeliveryRouteAuthorization({
@@ -481,13 +517,15 @@ export async function withAuthorizedConversationDelivery<T>(
     return await withConversationAuthority(
       params.scope,
       { conversationRef: params.conversationRef },
-      ({ conversation }) => {
-        routeAuthority.assertCurrent(conversation, params);
+      ({ conversation: currentConversation }) => {
+        routeAuthority.assertCurrent(currentConversation, params);
         return initiate;
       },
     );
   } finally {
-    if (!params.routeAuthority) routeAuthority.dispose();
+    if (!params.routeAuthority) {
+      routeAuthority.dispose();
+    }
   }
 }
 
@@ -501,17 +539,19 @@ export async function withAuthorizedQueuedConversationDelivery<T>(
   initiate: () => Promise<T>,
 ): Promise<T> {
   const operation = await getConversationDeliveryOperation(capturedScope, params.operationId);
-  if (!operation)
+  if (!operation) {
     throw new PlatformMessageNotDispatchedError(
       `Conversation delivery operation no longer exists: ${params.operationId}`,
       { cause: undefined, retryable: false },
     );
+  }
   const conversation = await readConversation(capturedScope, operation.conversationRef);
-  if (!conversation)
+  if (!conversation) {
     throw new PlatformMessageNotDispatchedError("Conversation is no longer available", {
       cause: undefined,
       retryable: false,
     });
+  }
   const authority = {
     conversationRef: operation.conversationRef,
     expectedRouteFingerprint: params.routeFingerprint,
@@ -527,13 +567,14 @@ export async function withAuthorizedQueuedConversationDelivery<T>(
     return await withConversationAuthority(
       capturedScope,
       { operationId: params.operationId },
-      ({ operation, conversation }) => {
-        if (!operation || operation.conversationRef !== authority.conversationRef)
+      ({ operation: currentOperation, conversation: currentConversation }) => {
+        if (!currentOperation || currentOperation.conversationRef !== authority.conversationRef) {
           throw new PlatformMessageNotDispatchedError(
             `Conversation delivery operation no longer exists: ${params.operationId}`,
             { cause: undefined, retryable: false },
           );
-        routeAuthority.assertCurrent(conversation, authority);
+        }
+        routeAuthority.assertCurrent(currentConversation, authority);
         return initiate;
       },
     );

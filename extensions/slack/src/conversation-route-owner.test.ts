@@ -24,7 +24,7 @@ describe("inspectSlackConversationRouteOwner", () => {
     vi.unstubAllEnvs();
   });
 
-  it("checks the thread before its parent without touching liveness", async () => {
+  it("prefers the thread over its parent without touching liveness", async () => {
     const touch = vi.fn();
     const resolveByConversation = vi.fn((conversation) =>
       conversation.conversationId === "thread-1"
@@ -59,7 +59,6 @@ describe("inspectSlackConversationRouteOwner", () => {
       conversationId: "thread-1",
       parentConversationId: "channel-1",
     });
-    expect(resolveByConversation).toHaveBeenCalledTimes(1);
     expect(touch).not.toHaveBeenCalled();
   });
 

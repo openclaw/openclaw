@@ -171,8 +171,9 @@ export async function runGatewayConversationList(
           discoveredIdentities,
           Date.now(),
           (candidates) => {
-            if ((params.readCurrentConfig?.() ?? params.config) !== routeConfig)
+            if ((params.readCurrentConfig?.() ?? params.config) !== routeConfig) {
               return candidates.map(() => false);
+            }
             const all = prepared.read();
             const eligibility = candidates.map(
               (identity) => all[indexes.get(identity.conversationRef) ?? -1] ?? "denied",

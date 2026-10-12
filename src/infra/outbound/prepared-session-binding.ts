@@ -17,9 +17,10 @@ import {
   captureConversationRef,
   withSessionBindingInspectionConversation,
 } from "./session-binding-normalization.js";
-import type { SessionBindingAdapter, SessionBindingAdapterV2 } from "./session-binding-service.js";
 import type {
   ConversationRef,
+  SessionBindingAdapter,
+  SessionBindingAdapterV2,
   SessionBindingInspection,
   SessionBindingRecord,
   SessionBindingScope,
@@ -73,8 +74,10 @@ export async function prepareSessionBindingSelection(
       if (adapter?.[nativeSessionBindingInspection]) {
         const source = adapter[nativeSessionBindingInspection]!;
         const captured = source.capture(conversation);
-        checks.push(source.assertCurrent);
-        if (captured) native.push({ index, conversation: captured });
+        checks.push(() => source.assertCurrent());
+        if (captured) {
+          native.push({ index, conversation: captured });
+        }
       } else if (adapter) {
         const indexes = groups.get(adapter) ?? [];
         indexes.push(index);
@@ -82,7 +85,9 @@ export async function prepareSessionBindingSelection(
       } else if (!requiresRegisteredSessionBindingAdapter(conversation)) {
         const support = captureGenericBindingSupport(conversation);
         checks.push(support.assertCurrent);
-        if (support.supported) native.push({ index, conversation });
+        if (support.supported) {
+          native.push({ index, conversation });
+        }
       }
     }
     if (native.length) {
@@ -99,8 +104,9 @@ export async function prepareSessionBindingSelection(
       const selected = indexes.map((index) => conversations[index]!);
       if (owner.isAsyncAdapter(adapter)) {
         const snapshot = await adapter.inspectByConversationsAsync(selected);
-        if (snapshot.bindings.length !== selected.length)
+        if (snapshot.bindings.length !== selected.length) {
           throw new Error("Session binding owner returned an incomplete conversation selection");
+        }
         checks.push(snapshot.assertCurrent);
         indexes.forEach((index, position) => {
           records[index] = snapshot.bindings[position] ?? null;
@@ -117,9 +123,15 @@ export async function prepareSessionBindingSelection(
     }
     return {
       inspect() {
-        if (!active) throw new Error("Conversation binding inspection is no longer active");
-        if (changed) throw new Error("Conversation binding ownership changed. Retry the request.");
-        for (const check of checks) check();
+        if (!active) {
+          throw new Error("Conversation binding inspection is no longer active");
+        }
+        if (changed) {
+          throw new Error("Conversation binding ownership changed. Retry the request.");
+        }
+        for (const check of checks) {
+          check();
+        }
         return conversations.map((conversation, index) => {
           const adapter = owner.resolveAdapterForChannelAccount(conversation);
           if (!adapter && requiresRegisteredSessionBindingAdapter(conversation)) {

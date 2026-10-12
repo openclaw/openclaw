@@ -150,7 +150,7 @@ export async function runGatewayConversationTurn(params: {
     expectedRouteFingerprint: discoveredRouteFingerprint,
   });
   try {
-    routeAuthority.assertCurrent(discoveredConversation);
+    routeAuthority.assertRequestEligible();
     if (begun) {
       const completed = resultForCompletedOperation(begun.record);
       if (completed) {
