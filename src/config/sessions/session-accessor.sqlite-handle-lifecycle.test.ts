@@ -222,7 +222,11 @@ describe("SQLite session handle lifecycle", () => {
       }),
     );
     expect(facts.sourceEvents).toMatchObject([{ id: "run-answer" }]);
-    expect(facts.messagesByIdempotencyKey.get("old-delivery")).toEqual(messages[0].message);
+    expect(facts.messagesByIdempotencyKey.get("old-delivery")).toEqual({
+      role: "assistant",
+      content: "old answer",
+      idempotencyKey: "old-delivery",
+    });
     expect(facts.anchorsByIdempotencyKey.get("old-delivery")?.entryId).toBe("old-key");
   });
   it.each([
