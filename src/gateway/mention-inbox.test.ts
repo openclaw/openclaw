@@ -54,6 +54,26 @@ function holdMentionRead() {
 }
 
 describe("temporary human mention Inbox", () => {
+  it("dismisses an absent mention while an unrelated session is published", async () => {
+    await withInbox(async (f) => {
+      await f.post("retained");
+      const before = (await read(f.inbox, f.bobClient)).items;
+      const commit = mentionWorker.commitMentionChanges;
+      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(async (...args) => {
+        await f.setSession({ displayName: "Unrelated conversation" }, "agent:main:unrelated");
+        return commit(...args);
+      });
+
+      expect(await f.call("mentions.dismiss", { ids: ["synthetic-absent-mention"] })).toMatchObject(
+        {
+          ok: true,
+          payload: { items: before },
+        },
+      );
+      expect((await read(f.openInbox("after-no-op"), f.bobClient)).items).toEqual(before);
+    });
+  });
+
   it("merges a foreign dismissal between snapshot and mutation while keeping queued input FIFO", async () => {
     await withInbox(async (f) => {
       await f.post("original");
