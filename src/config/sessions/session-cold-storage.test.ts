@@ -10,6 +10,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -25,7 +26,6 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
@@ -335,7 +335,7 @@ describe("cold transcript storage workers", () => {
     process.on("worker", observeWorker);
     try {
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(fixture.options.path);
+      revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await expect(runSessionColdStorageMaintenance({ config: fixture.config })).resolves.toEqual({
         archivedTranscripts: 2,
         externalizedTranscripts: 0,
@@ -346,11 +346,11 @@ describe("cold transcript storage workers", () => {
       ).toBeDefined();
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(fixture.options.path);
+      revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await restoreSessionColdTranscript(fixture.scope);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
-      clearOpenClawAgentIntegrityVerification(fixture.options.path);
+      revokeSqliteDatabaseAdmissionsForPath(fixture.options.path);
       await restoreSessionColdTranscript(fixture.secondScope);
       expect(fixture.snapshot()).toEqual(fixture.original);
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);

@@ -12,7 +12,6 @@ import { formatAgentDatabaseOwnershipRepairHint } from "../infra/state-migration
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -61,7 +60,6 @@ const preparation = new AsyncLocalStorage<{
   key: string;
   active: boolean;
   assertCurrent: () => void;
-  completion: Promise<void>;
 }>();
 
 export function createAgentDatabaseInspectionRefusal(params: {
@@ -172,19 +170,6 @@ export function captureAgentDatabasePreparationJournal(
       throw new Error(`Agent ${scope.refusal.agentId} was deleted during startup inspection`);
     }
   };
-}
-
-/** Background work joins its creating admission without retaining the temporary write borrow. */
-export function captureAgentDatabasePreparationCompletion(
-  agentId: string,
-  options: AdmissionOptions = {},
-): Promise<void> | undefined {
-  const scope = preparation.getStore();
-  return scope?.active &&
-    scope.refusal.agentId === normalizeAgentId(agentId) &&
-    sameKnownState(scope.key, stateKey(options))
-    ? scope.completion
-    : undefined;
 }
 
 /** Ownership is derived from the inspected file; missing or corrupt metadata keeps normal refusal. */
@@ -306,10 +291,7 @@ export async function preparePendingAgentDatabase(
     }
   };
   assertCurrent();
-  const completion = createDeferredCore();
-  // Preparation can fail without a background consumer.
-  void completion.promise.catch(() => {});
-  const scope = { key, refusal, assertCurrent, active: true, completion: completion.promise };
+  const scope = { key, refusal, assertCurrent, active: true };
   try {
     await preparation.run(scope, run);
     scope.assertCurrent();
@@ -317,10 +299,6 @@ export async function preparePendingAgentDatabase(
     const refusals = new Map(current.refusals);
     refusals.delete(refusal.agentId);
     current.refusals = refusals;
-    completion.resolve();
-  } catch (error) {
-    completion.reject(error);
-    throw error;
   } finally {
     scope.active = false;
   }

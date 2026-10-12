@@ -4557,8 +4557,8 @@ function offlineTree(directory) {
     if (entry.kind !== "symlink" && entry.device !== entries[0].device) reject("offline Doctor store crosses filesystems");
   }
   const databases = new Set(entries.filter(entry => !entry.directory && entry.kind !== "symlink" && entry.path.endsWith(".sqlite")).map(entry => entry.path));
-  // SQLite may remove or recreate its coordination sidecars on a read-only WAL open.
-  return entries.filter(entry => entry.kind === "symlink" || !["-wal", "-shm", "-journal"].some(suffix => entry.path.endsWith(suffix) && databases.has(entry.path.slice(0, -suffix.length))))
+  // SQLite coordination files and owner-written clean-close seals are reconstructible.
+  return entries.filter(entry => entry.kind === "symlink" || entry.directory || !["-wal", "-shm", "-journal", ".seal"].some(suffix => entry.path.endsWith(suffix) && databases.has(entry.path.slice(0, -suffix.length))))
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 

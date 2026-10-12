@@ -8,6 +8,7 @@ import { prepareAgentDeleteDatabases } from "../../agents/agent-delete-databases
 import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import * as sessionDirs from "../../agents/session-dirs.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
@@ -26,7 +27,6 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -543,7 +543,7 @@ it.each(["registry", "main-key"] as const)(
     const initial = openOpenClawAgentDatabase(options);
     setCanonicalSqliteSessionMainKey(initial, repair === "main-key" ? "previous" : "main");
     closeOpenClawAgentDatabasesForTest();
-    clearOpenClawAgentIntegrityVerification(initial.path, env);
+    revokeSqliteDatabaseAdmissionsForPath(initial.path);
     if (repair === "registry") {
       unregisterOpenClawAgentDatabase({ ...options, path: initial.path });
     }

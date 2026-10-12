@@ -9,6 +9,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -27,7 +28,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
-import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repairMessage = "Rebuilt canonical agent SQLite indexes";
@@ -112,7 +112,7 @@ it.for(["missing", "drifted"] as const)(
         log: { info: vi.fn(), warn: vi.fn() },
       });
     for (const agent of agents) {
-      expect(readOpenClawAgentIntegrityVerification(agent.path, env)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(false);
     }
     const allAdmitted = createDeferredCore();
     const admitted = new Set<string>();

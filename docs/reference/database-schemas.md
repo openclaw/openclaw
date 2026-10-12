@@ -71,19 +71,30 @@ commits independently of reply delivery. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
 for ordering, rollback, and the writer families that still retain native guards.
 
-SQLite format, schema-version, integrity, canonical-index, and
-table-existence validation runs once per physical database per process load,
-on its first admission. The admitted facts are shared with all workers and
-handles, including later opens and reopens after idle close. File identity uses
-volume, inode, and stable birthtime captured once with `fstat` on the retained
-admission descriptor, not SQL. Admission lookups and established borrowers reuse
-those shared facts without checking the pathname again. Native open and reopen
-still identify replacement files, and creation witnesses retain their physical
-file check. A replaced or
-restored file needs its own first validation. Migration and repair owners validate
-their changes and publish the new facts after successful DDL settlement; later
-runtime consumers do not recheck them. Doctor and explicit verification retain
-their checks, and observed corruption still revokes admission.
+SQLite format, schema-version, integrity, canonical-index, and table-existence
+validation runs once per physical database per process load. A regular
+`<database>.seal` file can carry admitted facts across clean restarts: the owner
+writes it after a successful `TRUNCATE` checkpoint and native close, and unlinks
+it before the next write. Startup reuses it only when its checksum, schema
+identity, device, inode, stable birthtime, size, and nanosecond modification time
+match, journals are absent or empty, and full verification is at most seven days
+old. A hit skips startup snapshot, readiness, schema, and integrity inspection,
+including post-ready scans. The plain checksum-protected write needs no rename
+or fsync protocol; an incomplete seal falls back to full validation.
+
+Admitted facts are shared with all workers and handles, including later opens
+and reopens after idle close. File identity uses volume, inode, and stable
+birthtime captured once with `fstat` on the retained admission descriptor, not SQL.
+Admission lookups and established borrowers reuse those shared facts without
+checking the pathname again. Native open and reopen still identify replacement
+files, and creation witnesses retain their physical file check. A replaced or
+restored file needs fresh admission. Migration and repair owners validate their
+changes and publish new facts after successful DDL settlement. Doctor and explicit
+verification retain full checks, and observed corruption still revokes admission.
+Silent corruption with unchanged metadata is outside the seal's guarantee and
+is caught by normal SQLite access or the next full verification. See
+[clean-close seal and integrity checks](/reference/database-schemas/integrity-and-recovery#integrity-checks)
+for the crash argument, verification interval, and maintenance behavior.
 
 Shared-state and agent read-only connections reuse bounded prepared statements
 under their native connection lifecycle. Prepared-statement reuse alone does not
@@ -268,12 +279,11 @@ uncertain outcomes, and service restart reloads it. Active notifications retain
 their current subscription checks and delivery receipts; persisted subscriptions
 and receipt retention are unchanged.
 
-The Gateway does not schedule daily full-database scans. Admission-requested
-background checks stay limited to the requested agent database: `quick_check`
-for clean restart proof, or a full check after proven same-boot process death or
-native WAL admission without a verification receipt while the verifier is running.
-See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
-for the provenance requirements and operator-requested verification.
+The Gateway does not schedule daily full-database scans. Startup reuses recent
+clean-close seals or performs the required full validation; a seal hit does not
+queue a post-ready verification scan. Doctor and explicit verification retain
+full checks. See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
+for the seven-day verification interval and operator-requested verification.
 
 Two mechanisms back that contract. CI runs
 `scripts/check-native-state-schema-version.mjs`, which fails the build when the

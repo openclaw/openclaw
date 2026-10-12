@@ -22,6 +22,10 @@ import {
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  readSqliteDatabaseCleanClose,
+  revokeSqliteDatabaseAdmissionsForPath,
+} from "../infra/sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import * as workerCpu from "../infra/worker-cpu.js";
 import * as logging from "../logging/subsystem.js";
@@ -48,8 +52,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
-import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
-import { resolveQuarantineStorePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
@@ -236,7 +238,7 @@ it.for([
     await closeStateDatabaseForTest();
     if (outcome !== "fast") {
       // Unclean external mutation requires the writable owner's integrity gate.
-      clearOpenClawAgentIntegrityVerification(agentPath, env);
+      revokeSqliteDatabaseAdmissionsForPath(agentPath);
       const raw = new DatabaseSync(agentPath);
       try {
         raw.exec("PRAGMA journal_mode=DELETE");
@@ -670,7 +672,7 @@ it.for([
   },
 );
 
-it("admits a version-changed fleet in parallel without gating readiness on an unconfigured leftover", async ({
+it("admits an unsealed fleet in parallel without gating readiness on an unconfigured leftover", async ({
   signal,
 }) => {
   testState.agentsConfig = {
@@ -686,18 +688,9 @@ it("admits a version-changed fleet in parallel without gating readiness on an un
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
-  const receipts = new DatabaseSync(resolveQuarantineStorePath(env));
-  try {
-    expect(
-      receipts
-        .prepare(
-          "SELECT COUNT(*) AS count FROM agent_integrity_verifications WHERE clean_close = 1",
-        )
-        .get()?.count,
-    ).toBe(4);
-    receipts.prepare("UPDATE agent_integrity_verifications SET app_version = ?").run("2026.9.7");
-  } finally {
-    receipts.close();
+  for (const pathname of [...paths, leftover]) {
+    expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
   }
   fs.writeFileSync(leftover, "unconfigured leftover must not be inspected or repaired");
   const leftoverBytes = fs.readFileSync(leftover);

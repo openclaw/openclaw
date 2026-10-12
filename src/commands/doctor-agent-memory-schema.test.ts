@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import { encodeMemoryEmbedding } from "../plugin-sdk/memory-core-host-engine-storage.js";
 import { AGENT_DATABASE_MAINTENANCE_LEASE } from "../state/openclaw-agent-db-lease.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
@@ -12,7 +13,6 @@ import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -89,20 +89,21 @@ describe("doctor agent memory schema repair", () => {
   it("invalidates verification before a failed writable repair while inspection preserves it", async () => {
     const { databasePath, env } = createRegisteredAgentDatabase();
     recreateUnreleasedInlineMemoryMetadata(databasePath);
-    expect(readOpenClawAgentIntegrityVerification(databasePath, env)?.clean_close).toBe(1);
+    const verification = readSqliteDatabaseIntegrityVerification(databasePath);
+    expect(verification).toBeDefined();
     await noteDoctorAgentMemorySchemaHealth({ env, shouldRepair: false }, { note: vi.fn() });
-    expect(readOpenClawAgentIntegrityVerification(databasePath, env)?.clean_close).toBe(1);
+    expect(readSqliteDatabaseIntegrityVerification(databasePath)).toEqual(verification);
 
     const sqlite = await import("../infra/node-sqlite.js");
     const nativeOpen = sqlite.openNodeSqliteDatabase;
     let observedWritableOpen = false;
-    let receiptBeforeOpen: ReturnType<typeof readOpenClawAgentIntegrityVerification>;
+    let receiptBeforeOpen: ReturnType<typeof readSqliteDatabaseIntegrityVerification>;
     const open = vi
       .spyOn(sqlite, "openNodeSqliteDatabase")
       .mockImplementation((pathname, options) => {
         if (pathname === databasePath && !options?.readOnly) {
           observedWritableOpen = true;
-          receiptBeforeOpen = readOpenClawAgentIntegrityVerification(databasePath, env);
+          receiptBeforeOpen = readSqliteDatabaseIntegrityVerification(databasePath);
           throw new Error("synthetic maintenance native open failed");
         }
         return nativeOpen(pathname, options);
@@ -116,7 +117,7 @@ describe("doctor agent memory schema repair", () => {
       expect(receiptBeforeOpen).toBeUndefined();
       expect(report.repaired).toEqual([]);
       expect(report.warnings.join(" ")).toContain("synthetic maintenance native open failed");
-      expect(readOpenClawAgentIntegrityVerification(databasePath, env)).toBeUndefined();
+      expect(readSqliteDatabaseIntegrityVerification(databasePath)).toBeUndefined();
     } finally {
       open.mockRestore();
     }

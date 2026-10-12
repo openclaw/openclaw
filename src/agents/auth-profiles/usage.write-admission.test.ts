@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import * as configEnvVars from "../../config/config-env-vars.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
@@ -17,7 +18,6 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -83,7 +83,7 @@ it.each(["current", "relocated", "closed"] as const)(
         setRuntimeAuthProfileStoreSnapshot(store, agentDir);
         const pathname = openOpenClawAgentDatabase(options).path;
         closeOpenClawAgentDatabasesForTest(state.env.OPENCLAW_STATE_DIR);
-        clearOpenClawAgentIntegrityVerification(pathname, state.env);
+        revokeSqliteDatabaseAdmissionsForPath(pathname);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const prepare = sqliteRead.prepareAgentAuthProfileRowsRead;

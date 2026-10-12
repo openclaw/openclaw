@@ -55,7 +55,7 @@ export async function compactDoctorSessionSqliteTarget(
     }
   };
   const compactTarget = () => {
-    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(sqlitePath, databaseOptions.env);
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(sqlitePath);
     const compact = compactDoctorSqliteFile({
       operation: options.operation,
       afterSuccess: () => {

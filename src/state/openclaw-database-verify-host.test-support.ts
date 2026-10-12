@@ -3,12 +3,16 @@ import { once } from "node:events";
 import { isMainThread, MessageChannel } from "node:worker_threads";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseCleanClose,
+  readSqliteDatabaseIntegrityVerification,
+} from "../infra/sqlite-database-admission.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
@@ -17,10 +21,7 @@ import {
   requestOpenClawAgentDatabaseIntegrityCheck,
   startOpenClawDatabaseIntegrityVerifier,
 } from "./openclaw-database-verify.js";
-import {
-  readOpenClawAgentIntegrityVerification,
-  readOpenClawDatabaseQuarantineFailure,
-} from "./openclaw-quarantine-store.js";
+import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 assert.equal(isMainThread, true, "Broker admission must run on the real host thread");
@@ -29,10 +30,9 @@ await withOpenClawTestState(
   async ({ env, statePath }) => {
     setLoggerOverride({ level: "info", file: statePath("verify.log"), consoleLevel: "silent" });
     const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    // Simulate a restart: retain the clean receipt without the initializer's runtime proof.
-    closeOpenClawAgentDatabasesForTest();
-    const before = readOpenClawAgentIntegrityVerification(agent.path, env);
-    assert.equal(before?.clean_close, 1);
+    closeOpenClawAgentDatabaseByPath(agent.path);
+    const before = readSqliteDatabaseIntegrityVerification(agent.path);
+    assert.equal(readSqliteDatabaseCleanClose(agent.path), true);
     assert.ok(before);
 
     // The real Gateway keeps a listener alive; its verifier timer is deliberately unref'd.
@@ -72,14 +72,9 @@ await withOpenClawTestState(
       await execution.runExisting(source, (scope) =>
         scope.execute({ type: "database.prepareWrite", input: undefined }),
       );
+      requestOpenClawAgentDatabaseIntegrityCheck({ env, path: agent.path, check: "quick" });
       await verified;
-      assert.deepEqual(
-        { ...readOpenClawAgentIntegrityVerification(agent.path, env) },
-        {
-          ...before,
-          clean_close: 0,
-        },
-      );
+      assert.deepEqual(readSqliteDatabaseIntegrityVerification(agent.path), before);
       const database = new (requireNodeSqlite().DatabaseSync)(agent.path);
       try {
         database.exec(`

@@ -15,7 +15,7 @@ export type ExistingAgentSchemaMeta = {
   schemaVersion: number | null;
 };
 
-const metadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
+export const agentSchemaMetadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
   // Fixed ownership is reusable until tracked DDL can remove or rebuild its storage.
   name: "agent.schema-metadata",
   schemaDependent: true,
@@ -39,7 +39,7 @@ const metadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
 function schemaMetadataKey(
   admissionId: string,
 ): SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> {
-  return { name: `agent.schema-metadata:${admissionId}`, read: metadataKey.read };
+  return { name: `agent.schema-metadata:${admissionId}`, read: agentSchemaMetadataKey.read };
 }
 
 /** The metadata writer publishes its committed format facts without a readback. */
@@ -47,7 +47,7 @@ export function publishAgentSchemaMetadata(
   db: DatabaseSync,
   metadata: ExistingAgentSchemaMeta,
 ): void {
-  publishSqliteDatabaseAdmission(db, metadataKey, metadata);
+  publishSqliteDatabaseAdmission(db, agentSchemaMetadataKey, metadata);
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
     publishSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId), metadata);
@@ -77,7 +77,7 @@ export function readExistingAgentSchemaMeta(
   const admitted =
     !options?.includeAppVersion &&
     (!schema || getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId)
-      ? getSqliteDatabaseAdmission(db, metadataKey)
+      ? getSqliteDatabaseAdmission(db, agentSchemaMetadataKey)
       : undefined;
   if (admitted) {
     if (schema) {

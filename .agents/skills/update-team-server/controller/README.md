@@ -211,7 +211,7 @@ canonical database layout, command responses, and independent capacity inputs.
 ## Source SHA-256
 
 The reviewed `release-lib.mjs` in this tree has SHA-256
-`53bd61bcaccd34cd1f0f21c5a0b998682bd5a700d99038e3a3b873a0e40eea96`.
+`8694ba2af6d58dbe3fd8838286664cf6ea415baf41b62bf1de4f55f5b53422e0`.
 Verify that hash against the exact merged tree before adoption. This replaces
 the obsolete Workshop row-preservation check; the original import hash below
 remains provenance for the Manager source, not the installable library.

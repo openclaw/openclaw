@@ -6,6 +6,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqlite from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as pidAlive from "../shared/pid-alive.js";
@@ -27,7 +28,6 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -76,7 +76,7 @@ function seed(freshIdentity = false) {
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest();
   // Independent fixture writers model unclean state that requires physical admission checks.
-  clearOpenClawAgentIntegrityVerification(pathname, options.env);
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
   if (freshIdentity) {
     fs.copyFileSync(pathname, `${pathname}.replacement`);
     fs.renameSync(`${pathname}.replacement`, pathname);
@@ -191,7 +191,7 @@ describe("physical-open admission ordering", () => {
     expect(openOpenClawAgentDatabase(options)).toBe(first);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
-    clearOpenClawAgentIntegrityVerification(pathname, options.env);
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
   });
 
@@ -650,7 +650,7 @@ describe("asynchronous canonical admission", () => {
     const { options, pathname, writer } = seed();
     await openOpenClawAgentDatabaseAsync(options);
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
-    clearOpenClawAgentIntegrityVerification(pathname, options.env);
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
     corruptForeignKey(writer);
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
       /foreign_key_check failed/,

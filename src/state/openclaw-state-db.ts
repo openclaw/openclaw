@@ -198,7 +198,7 @@ export async function prepareOpenClawStateDatabaseSchema(
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   callback: (db: DatabaseSync) => T,
-  options: OpenClawStateDatabaseOptions & { atomic?: boolean } = {},
+  options: OpenClawStateDatabaseOptions & { atomic?: boolean; sealOnClose?: boolean } = {},
 ): T {
   assertOpenClawStateSchemaRepairAllowed(resolveDatabasePath(options));
   const database = getOpenClawStateDatabaseIfOpen(options);

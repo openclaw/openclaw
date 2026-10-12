@@ -24,6 +24,7 @@ export const SqliteDatabaseGenerationSlot = {
   hostRevision: 5,
   unscopedWriteRevision: 6,
   writeScopeCount: 7,
+  sealPresent: 8,
 } as const;
 const SQLITE_DATABASE_GENERATION_LENGTH = Object.keys(SqliteDatabaseGenerationSlot).length;
 

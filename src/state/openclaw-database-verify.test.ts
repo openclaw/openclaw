@@ -6,6 +6,10 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  revokeSqliteDatabaseAdmissionsForPath,
+  readSqliteDatabaseIntegrityVerification,
+} from "../infra/sqlite-database-admission.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
@@ -31,9 +35,7 @@ import {
   verifyOpenClawDatabases,
 } from "./openclaw-database-verify.worker.js";
 import {
-  clearOpenClawAgentIntegrityVerification,
   clearOpenClawDatabaseQuarantine,
-  readOpenClawAgentIntegrityVerification,
   readOpenClawDatabaseQuarantineFailure,
   recordOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
@@ -232,7 +234,7 @@ describe("OpenClaw database integrity verifier", () => {
     },
   );
 
-  it("relays native Worker checks and revokes its writes after a deferred full-check failure", async () => {
+  it("relays requested native Worker checks and revokes writes after verification failure", async () => {
     const result = await runNodeScript(
       (workerArgv) => workerArgv(resolveRuntimeWorkerUrl(databaseVerifyHostRuntimeEntrypoint)),
       process.env,
@@ -252,7 +254,7 @@ describe("OpenClaw database integrity verifier", () => {
       const stateDir = tempDirs.make("openclaw-database-quick-receipt-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
       const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-      const before = readOpenClawAgentIntegrityVerification(agent.path, env);
+      const before = readSqliteDatabaseIntegrityVerification(agent.path);
       expect(before).toBeDefined();
       const targets: OpenClawDatabaseVerifyTarget[] = [
         { kind: "agent", label: "synthetic agent", path: agent.path, check },
@@ -260,16 +262,16 @@ describe("OpenClaw database integrity verifier", () => {
       const results = await runDatabaseVerifyWorker(targets);
       expect(results).toMatchObject([{ path: agent.path, ok: true }]);
       if (receipt === "cleared") {
-        clearOpenClawAgentIntegrityVerification(agent.path, env);
+        revokeSqliteDatabaseAdmissionsForPath(agent.path);
       }
-      const verifiedAt = (before?.verified_at ?? 0) + 100;
+      const verifiedAt = (before?.verifiedAt ?? 0) + 100;
       const now = vi.spyOn(Date, "now").mockReturnValue(verifiedAt);
       try {
         await applyOpenClawDatabaseVerificationResults({ env, results, targets });
       } finally {
         now.mockRestore();
       }
-      expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toEqual(
+      expect(readSqliteDatabaseIntegrityVerification(agent.path)).toEqual(
         receipt === "cleared" ? undefined : before,
       );
     },
@@ -314,7 +316,7 @@ describe("OpenClaw database integrity verifier", () => {
       expect(readPersistedQuarantineRow(agent.path, { env })?.reason).toContain(
         "foreign_key_check failed",
       );
-      expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toBeUndefined();
+      expect(readSqliteDatabaseIntegrityVerification(agent.path)).toBeUndefined();
       expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
         expect.objectContaining({ name: "SqliteIntegrityError" }),
       );
@@ -369,7 +371,7 @@ describe("OpenClaw database integrity verifier", () => {
         terminal: true,
       },
     ]);
-    clearOpenClawAgentIntegrityVerification(healthy.path, env);
+    revokeSqliteDatabaseAdmissionsForPath(healthy.path);
     let quarantineAtPublication: ReturnType<typeof readOpenClawDatabaseQuarantineFailure>;
     let corruptOwnerOpenAtPublication: boolean | undefined;
     const onVerified = vi.fn(async () => {
@@ -389,7 +391,7 @@ describe("OpenClaw database integrity verifier", () => {
       message: expect.stringContaining("unsafe_index_records_value"),
     });
     expect(corruptOwnerOpenAtPublication).toBe(false);
-    expect(readOpenClawAgentIntegrityVerification(healthy.path, env)).toBeUndefined();
+    expect(readSqliteDatabaseIntegrityVerification(healthy.path)).toBeUndefined();
     expect(healthy.db.isOpen).toBe(true);
     expect(readPersistedQuarantineRow(healthy.path, { env })).toBeUndefined();
     expect(agent.db.isOpen).toBe(false);
@@ -706,7 +708,7 @@ describe("OpenClaw database integrity verifier", () => {
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
   });
 
-  it("keeps state opens and quarantine reads noncreating while agent opens record verification", () => {
+  it("retains the quarantine history marker without storing integrity receipts", () => {
     const stateDir = tempDirs.make("openclaw-database-verify-clean-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const state = openOpenClawStateDatabase({ env });
@@ -714,21 +716,13 @@ describe("OpenClaw database integrity verifier", () => {
     expect(fs.existsSync(quarantineStorePath(stateDir))).toBe(false);
 
     const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(readOpenClawAgentIntegrityVerification(agent.path, env)).toMatchObject({
-      path: agent.path,
-      clean_close: 0,
+    expect(readSqliteDatabaseIntegrityVerification(agent.path)).toMatchObject({
+      verifiedAt: expect.any(Number),
     });
     expect(readPersistedQuarantineRow(agent.path, { env })).toBeUndefined();
-    const raw = new (requireNodeSqlite().DatabaseSync)(quarantineStorePath(stateDir), {
-      readOnly: true,
-    });
-    try {
-      expect(raw.prepare("SELECT COUNT(*) AS count FROM quarantined_databases").get()).toEqual({
-        count: 0,
-      });
-    } finally {
-      raw.close();
-    }
+    const { DatabaseSync } = requireNodeSqlite();
+    using quarantine = new DatabaseSync(quarantineStorePath(stateDir), { readOnly: true });
+    expect(quarantine.prepare("SELECT * FROM agent_integrity_verifications").all()).toEqual([]);
   });
 
   it("records and clears dedicated quarantine rows with rollback journaling", () => {

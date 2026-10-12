@@ -33,6 +33,7 @@ import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
 import * as stateOwners from "./gateway-state-owner.js";
 import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { readSqliteDatabaseCleanClose } from "./sqlite-database-admission.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -718,6 +719,7 @@ describe("Gateway owner lease", () => {
 
     await lease.release();
     expect(readGatewayOwnerLease({ env })).toBeUndefined();
+    expect(readSqliteDatabaseCleanClose(resolveOpenClawStateSqlitePath(env))).toBe(true);
     await closeOpenClawStateDatabaseAsync();
   });
 

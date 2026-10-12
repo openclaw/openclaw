@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   captureSqliteSchemaContracts,
@@ -16,6 +17,7 @@ import type {
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import { describeDeferredStateSchemaPublication } from "./openclaw-database-preflight.messages.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
+import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -62,6 +64,10 @@ export function inspectStateDatabaseSchema(
   const { pathname, supportedVersion } = input;
   const schemas: OpenClawDatabaseSchemaPreflight = { incompatible: [], indeterminate: [] };
   const inspection: StateSchemaInspection = { schemas, inspectionErrors: [] };
+  const cleanClose =
+    input.purpose === "runtime" &&
+    readSqliteDatabaseCleanClose(pathname) &&
+    getStateRuntimeSchemaAdmission(database)?.startupReady === true;
   try {
     const stateVersion = readSqliteUserVersion(database);
     const contentVersion =
@@ -102,7 +108,11 @@ export function inspectStateDatabaseSchema(
         ),
       ];
     }
-    if (input.requireStartupMigrationReadiness && contentVersion <= OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (
+      !cleanClose &&
+      input.requireStartupMigrationReadiness &&
+      contentVersion <= OPENCLAW_STATE_SCHEMA_VERSION
+    ) {
       assertSqliteIntegrity(database, pathname);
       assertCanonicalStateSchemaShape(database, pathname);
       // Readiness must reject malformed ownership even when startup has no pending writes.
@@ -122,6 +132,7 @@ export function inspectStateDatabaseSchema(
         openClawStateMigrationAssertions.get(migrationVersion)?.(database, { pathname });
       }
     } else if (
+      !cleanClose &&
       input.verifyCurrentSchemaShape &&
       migrationVersion === OPENCLAW_STATE_SCHEMA_VERSION
     ) {

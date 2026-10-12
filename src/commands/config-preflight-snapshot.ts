@@ -200,7 +200,11 @@ export async function readAdmittedConfigSnapshot(params: {
             }
             return { ...read, ...(recovery ? { recovery } : {}) };
           },
-          { env: params.env, admissionTimeoutMs: STARTUP_STATE_ADMISSION_TIMEOUT_MS },
+          {
+            env: params.env,
+            admissionTimeoutMs: STARTUP_STATE_ADMISSION_TIMEOUT_MS,
+            reuseCleanClose: true,
+          },
         ),
       );
       if (

@@ -1,3 +1,4 @@
+import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { assertSqliteIntegrityInWorker } from "./sqlite-integrity-worker.js";
 import type { SqliteIntegrityOperation } from "./sqlite-integrity.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
@@ -35,6 +36,9 @@ export async function runSqliteIntegrityOperationInWorker(
       }
       // Neither cancellation nor lost custody may resume an index/schema repair.
       beforeResume();
+      if (!failure) {
+        recordSqliteDatabaseIntegrity(step.value.database);
+      }
       step =
         failure && !options.repairIntegrityError?.()
           ? operation.throw(failure.error)

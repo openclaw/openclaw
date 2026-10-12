@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as agentLeases from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-lifecycle.js";
@@ -18,7 +19,6 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -55,7 +55,7 @@ function fixture(repair = false) {
   }
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest(root);
-  clearOpenClawAgentIntegrityVerification(pathname, options.env);
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
   const state = openOpenClawStateDatabase({ env: options.env });
   const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
   return { options, pathname, state, leases };

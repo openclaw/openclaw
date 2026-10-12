@@ -1,9 +1,10 @@
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import { clearOpenClawAgentDatabaseValidationCache } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 
 const fixtures = process.argv.slice(2).map((agentId) => {
   const created = openOpenClawAgentDatabase({ agentId });
@@ -31,7 +32,8 @@ const fixtures = process.argv.slice(2).map((agentId) => {
   if (agentId === "interrupted-admission") {
     database.db.exec("ROLLBACK");
     closeOpenClawAgentDatabaseByPath(database.path);
-    clearOpenClawAgentIntegrityVerification(database.path);
+    clearOpenClawAgentDatabaseValidationCache(database.path);
+    revokeSqliteDatabaseAdmissionsForPath(database.path);
   }
   return { agentId, path: database.path, corruptionOffset: (rootPage - 1) * pageSize };
 });

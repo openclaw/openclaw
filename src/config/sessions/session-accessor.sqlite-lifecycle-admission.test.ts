@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as logging from "../../logging/logger.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -17,7 +18,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import {
@@ -153,7 +153,7 @@ function fixture() {
   };
   closeOpenClawAgentDatabaseByPath(database.path);
   invalidateOpenClawAgentDatabaseValidation(database.path);
-  clearOpenClawAgentIntegrityVerification(database.path, databaseOptions.env);
+  revokeSqliteDatabaseAdmissionsForPath(database.path);
   return { scope, databaseOptions };
 }
 
@@ -475,7 +475,7 @@ it("keeps historical preparation asynchronous after materialization evicts its p
       eviction: true,
     });
     invalidateOpenClawAgentDatabaseValidation(f.databaseOptions.path);
-    clearOpenClawAgentIntegrityVerification(f.databaseOptions.path, f.databaseOptions.env);
+    revokeSqliteDatabaseAdmissionsForPath(f.databaseOptions.path);
     admission.armHistoricalCheck();
   };
   const work = own(

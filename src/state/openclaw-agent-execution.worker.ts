@@ -32,10 +32,7 @@ import type {
 } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
-import {
-  recordOpenClawAgentDatabaseBackgroundVerification,
-  retainAgentDatabase,
-} from "./openclaw-agent-db-lifecycle.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   getOpenClawAgentDatabaseValidation,
@@ -269,10 +266,10 @@ function openAgentDatabaseBackend(
         // SAFETY: this private port receives only the host's typed validation receipt.
         const preparation = receiveMessageOnPort(port1)?.message as {
           validation?: OpenClawAgentDatabaseValidation;
-          deferUnverifiedIntegrity: boolean;
+          integrityRevoked: boolean;
         };
         lease.validation = preparation.validation;
-        lease.deferUnverifiedIntegrity = preparation.deferUnverifiedIntegrity;
+        lease.integrityRevoked = preparation.integrityRevoked;
       } catch (error) {
         throw new SqliteWorkerOpenRefusedError(error);
       } finally {
@@ -546,11 +543,6 @@ function openAgentDatabaseBackend(
     if (command.type === "database.prepareWrite") {
       openWriter(true);
       return undefined;
-    }
-    if (command.type === "database.recordIntegrity") {
-      const opened = openWriter();
-      admit("transaction");
-      return recordOpenClawAgentDatabaseBackgroundVerification(opened, () => admit("commit"));
     }
     if (command.type === "database.walMaintenance") {
       return (

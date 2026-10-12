@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sqlite from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -13,7 +14,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
@@ -72,7 +72,7 @@ async function fixture() {
 it("waits for a cold projection without superseding its native integrity admission", async () => {
   const { root, options, scope } = await fixture();
   closeOpenClawAgentDatabasesForTest(root);
-  clearOpenClawAgentIntegrityVerification(options.path, options.env);
+  revokeSqliteDatabaseAdmissionsForPath(options.path);
   let parentChecks = 0;
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
     const database = realOpen(pathname, openOptions);

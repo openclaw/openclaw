@@ -1,6 +1,7 @@
 import type { WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -8,7 +9,6 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -89,7 +89,7 @@ test("commits foreground replacement while cold reclamation holds native integri
   vi.stubEnv("OPENCLAW_STATE_DIR", fixture.options.env.OPENCLAW_STATE_DIR);
   await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
   invalidateOpenClawAgentDatabaseValidation(fixture.database.path);
-  clearOpenClawAgentIntegrityVerification(fixture.database.path, fixture.options.env);
+  revokeSqliteDatabaseAdmissionsForPath(fixture.database.path);
   const entered = createDeferredCore();
   const counts = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   const release = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);

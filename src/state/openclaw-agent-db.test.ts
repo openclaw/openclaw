@@ -11,6 +11,7 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
@@ -68,7 +69,6 @@ import {
   seedSchema19SessionKeyRepairFixture,
 } from "./openclaw-agent-db.test-support.js";
 import { materializeV21WorkerAgentDatabase } from "./openclaw-agent-schema-v21.test-support.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -2130,7 +2130,7 @@ describe("openclaw agent database", () => {
     expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
 
     // Retiring a claim during a real integrity read must precede index repair, not only exposure.
-    clearOpenClawAgentIntegrityVerification(databasePath, env);
+    revokeSqliteDatabaseAdmissionsForPath(databasePath);
     const editor = nodeSqlite.openNodeSqliteDatabase(databasePath);
     try {
       editor.exec("DROP INDEX idx_agent_cache_expiry");

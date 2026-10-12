@@ -99,7 +99,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     cleanup?.assertCurrent();
   };
   assertOwned();
-  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname, env);
+  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   const database = openNodeSqliteDatabase(pathname);
   try {
     invalidateSqliteSchemaFacts(database);

@@ -2,6 +2,7 @@ import { MessageChannel, type Worker, type MessagePort } from "node:worker_threa
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readSqliteDatabaseCleanClose } from "../../infra/sqlite-database-admission.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -11,7 +12,6 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { readOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -49,9 +49,9 @@ it("preserves verification until the writer closes after read-only reconciliatio
       });
       await waitForSessionTranscriptIndexReconcile(options);
       const database = openOpenClawAgentDatabase(options);
-      expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
+      expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(database.path)).toBe(true);
     } finally {
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();

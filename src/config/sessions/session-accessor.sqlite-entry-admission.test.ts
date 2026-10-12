@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -16,7 +17,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -122,7 +122,7 @@ function evictHandle(databasePath: string) {
 function closeCold(f: ReturnType<typeof fixture>) {
   evictHandle(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
 function nativeChecks(databasePath: string) {
@@ -350,7 +350,7 @@ it("retains FIFO, caller context and publication across cold admission", async (
   const f = fixture();
   closeOpenClawAgentDatabaseByPath(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
   const gate = holdWorkerValidation(f.databasePath);
   const contexts = new AsyncLocalStorage<string>();
   const order: string[] = [];

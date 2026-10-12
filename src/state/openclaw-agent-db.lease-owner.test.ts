@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -26,7 +27,6 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabaseWriteAdmission,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -128,7 +128,7 @@ describe("agent database lease acquisition owner", () => {
     `);
     expect(closeOpenClawAgentDatabaseByPath(original.path)).toBe(true);
     closeOpenClawAgentDatabasesForTest(owner.stateDir);
-    clearOpenClawAgentIntegrityVerification(original.path, owner.env);
+    revokeSqliteDatabaseAdmissionsForPath(original.path);
     const nativeOpen = nodeSqlite.openNodeSqliteDatabase;
     let opened: DatabaseSync | undefined;
     const open = vi

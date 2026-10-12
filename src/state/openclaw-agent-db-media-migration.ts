@@ -34,10 +34,7 @@ export function* migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps(
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
   assertSupportedAgentMigrationSchemas(db, pathname, readSqliteUserVersion(db));
   if (db.location()) {
-    maintenanceAuthority.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(
-      pathname,
-      options.env,
-    );
+    maintenanceAuthority.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   }
   yield* agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
   configureSqlitePreSchemaPragmas(db, {

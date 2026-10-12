@@ -9,6 +9,7 @@ import {
   registerNodeSqliteKyselyQueryErrorHandler,
 } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import { prepareSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import {
   isSqliteCorruptionError,
   isSqliteLockError,
@@ -260,10 +261,13 @@ function closeOpenClawStateDatabaseHandle(
   }
   idleReferences.delete(database.db);
   const errors: unknown[] = [];
+  const publishSeal = prepareSqliteDatabaseCleanClose(database.db);
+  let checkpointed = false;
   openClawStateSnapshotOwners.release(database.db);
   try {
     void cancelSqliteWalWriteAdmission(database.db);
-    database.walMaintenance?.close(options);
+    checkpointed =
+      database.walMaintenance?.close(options) === true && options?.checkpointMode !== "PASSIVE";
   } catch (error) {
     errors.push(error);
   }
@@ -285,6 +289,9 @@ function closeOpenClawStateDatabaseHandle(
       errors.push(error);
       cleanupPending = true;
     }
+  }
+  if (checkpointed && errors.length === 0 && !cleanupPending) {
+    publishSeal();
   }
   if (database.db.isOpen || cleanupPending) {
     retainStateDatabaseClose(database);

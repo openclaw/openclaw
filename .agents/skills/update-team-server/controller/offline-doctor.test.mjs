@@ -874,6 +874,19 @@ for (const rewrite of [false, true]) test(`crossing without offline flag ${rewri
   assert.equal(f.load().record.agentMigration.artifacts.rebinding, undefined);
 });
 
+test("offline Doctor permits clean-close seal removal and replacement beside inventoried databases", t => {
+  const f = fixture(t, { auxiliary: true, beforePreflight: ({ shared, agent, auxiliaryPaths }) => {
+    for (const path of [shared, agent, auxiliaryPaths[0]]) fs.writeFileSync(`${path}.seal`, "old proof", { mode: 0o600 });
+  } });
+  fs.unlinkSync(`${f.shared}.seal`);
+  fs.writeFileSync(`${f.agent}.seal`, "new proof with different length");
+  fs.writeFileSync(`${f.auxiliaryPaths[1]}.seal`, "new auxiliary proof", { mode: 0o600 });
+  f.ok(f.verify());
+  f.ok(f.command("migration-verify-stores", [f.config, f.shared]));
+  f.ok(f.command("migration-permit-publish", [f.env.OPENCLAW_TEAM_PROC_ROOT]));
+  assert.equal(fs.existsSync(f.permit), true);
+});
+
 test("auxiliary WAL snapshots preserve data without adopting the primary user_version contract", t => {
   const f = fixture(t, { auxiliary: true, beforeCold: ({ auxiliaryPaths }) => {
     const path = auxiliaryPaths[1], db = new DatabaseSync(path);
@@ -1028,6 +1041,7 @@ for (const [name, change, pattern] of [
   ["retained mode drift", f => { const r = f.rewrite(dirname(f.shared)), path = join(r.replacement, "openclaw.sqlite"); fs.chmodSync(path, 0o644); return [path, "mode"]; }, /retained original entry/],
   ["ACL drift", f => { f.rewrite(dirname(f.shared)); fs.writeFileSync(f.aclOverrides, JSON.stringify({ [f.shared]: "user:4242:rw-" })); return [f.shared, "acl"]; }, /ownership, mode, ACL/],
   ["added entry", f => { f.rewrite(dirname(f.shared)); const path = join(f.nested, 'extra\n"entry'); fs.writeFileSync(path, "private fixture content"); return [path, "membership"]; }, /directory membership changed/],
+  ["unrelated seal", f => { f.rewrite(dirname(f.shared)); const path = join(f.nested, "note.seal"); fs.writeFileSync(path, "private fixture content"); return [path, "membership"]; }, /directory membership changed/],
   ["removed entry", f => { f.rewrite(dirname(f.shared)); const path = join(f.nested, "note"); fs.unlinkSync(path); return [path, "membership"]; }, /ownership, mode, ACL/],
 ]) test(`offline Doctor refuses ${name} without rebinding or start permission`, t => {
   const f = fixture(t), before = f.load().record.protectedPaths;

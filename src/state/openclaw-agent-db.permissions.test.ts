@@ -36,7 +36,7 @@ vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) 
       "validationPort" in facts &&
       facts.validationPort instanceof MessagePort
     ) {
-      facts.validationPort.postMessage({ deferUnverifiedIntegrity: false }, []);
+      facts.validationPort.postMessage({}, []);
     }
     workerAdmission(...args);
   },

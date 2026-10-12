@@ -7,10 +7,10 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
@@ -154,7 +154,7 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
     await withinTest(closing, signal);
     expect(params.stopScheduler).toHaveBeenCalledTimes(1);
     expect(agent.db.isOpen).toBe(false);
-    expect(readOpenClawAgentIntegrityVerification(agent.path, state.env)?.clean_close).toBe(1);
+    expect(readSqliteDatabaseCleanClose(agent.path)).toBe(true);
     expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
     expect(loadSessionEntry(target)).toMatchObject({
       label: "accepted before shutdown",

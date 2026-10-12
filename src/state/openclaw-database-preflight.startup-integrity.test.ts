@@ -3,20 +3,24 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  revokeSqliteDatabaseAdmissionsForPath,
+  readSqliteDatabaseCleanClose,
+} from "../infra/sqlite-database-admission.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
 import {
-  clearOpenClawAgentIntegrityVerification,
-  readOpenClawAgentIntegrityVerification,
-} from "./openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseForTest,
+} from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -28,9 +32,9 @@ afterEach(() => {
 it("reuses a clean closed-WAL receipt without copying the agent database", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-clean-startup-") };
   const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env });
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  expect(readOpenClawAgentIntegrityVerification(agentPath, env)?.clean_close).toBe(1);
+  closeOpenClawAgentDatabaseByPath(agentPath);
+  closeOpenClawStateDatabase();
+  expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
   expect(fs.existsSync(`${agentPath}-wal`)).toBe(false);
   expect(fs.existsSync(`${agentPath}-shm`)).toBe(false);
   const before = fs.readFileSync(agentPath);
@@ -54,7 +58,7 @@ it("reuses a clean closed-WAL receipt without copying the agent database", async
     expect.objectContaining({ schemaSnapshotCount: 0 }),
   );
   expect(fs.readFileSync(agentPath)).toEqual(before);
-  expect(readOpenClawAgentIntegrityVerification(agentPath, env)?.clean_close).toBe(1);
+  expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
 });
 
 it.each(["DELETE", "WAL", "closed WAL"])(
@@ -67,7 +71,7 @@ it.each(["DELETE", "WAL", "closed WAL"])(
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     // These raw writers model unclean external mutation, outside the lease owner.
-    clearOpenClawAgentIntegrityVerification(agentPath, env);
+    revokeSqliteDatabaseAdmissionsForPath(agentPath);
     const { DatabaseSync } = requireNodeSqlite();
     const writer = mode === "closed WAL" ? undefined : new DatabaseSync(agentPath);
     writer?.exec(`PRAGMA journal_mode=${mode}; PRAGMA wal_autocheckpoint=0;`);

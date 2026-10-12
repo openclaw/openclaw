@@ -8,6 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -29,7 +30,6 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
@@ -200,13 +200,13 @@ type Fixture = ReturnType<typeof fixture>;
 async function closeForIntegrityAdmission(f: Fixture) {
   expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
 async function closeWorkerForIntegrityAdmission(f: Fixture) {
   await runInDetachedAsyncContext(() => closeOpenClawAgentDatabaseByPathAsync(f.databasePath));
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
 function evictCachedHandleForIntegrityAdmission(f: Fixture) {
@@ -217,7 +217,7 @@ function evictCachedHandleForIntegrityAdmission(f: Fixture) {
   closeCachedOpenClawAgentDatabase(database, { eviction: true });
   expect(database.db.isOpen).toBe(false);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
 function observeAdmission(databasePath: string, hold = false) {
@@ -586,7 +586,7 @@ it.each([false, true])(
       closeCachedOpenClawAgentDatabase(cached, { eviction: true });
       expect(cached.db.isOpen).toBe(false);
       invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-      clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+      revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
     });
     const harness: AgentHarness = {
       id: "prepared-native",
@@ -799,7 +799,7 @@ it("revalidates expired proof before the maintenance finalizer commits", async (
     expect(getOpenClawAgentDatabaseIfOpen(f.options)).toBe(database);
     expect(getOpenClawAgentDatabaseValidation(database)).toBeDefined();
     invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-    clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+    revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
     expect(database.db.isOpen).toBe(true);
   };
   const work = own(

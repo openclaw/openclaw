@@ -1029,6 +1029,7 @@ src/infra/sqlite-audit-record-store.ts
 src/infra/sqlite-audit-record.kernel.ts
 src/infra/sqlite-backup.ts
 src/infra/sqlite-busy-timeout.ts
+src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-record.ts
@@ -1764,6 +1765,7 @@ src/state/openclaw-database-preflight-state-path.ts
 src/state/openclaw-database-preflight-targets.ts
 src/state/openclaw-database-preflight.messages.ts
 src/state/openclaw-database-preflight.ts
+src/state/openclaw-database-seal-schema.ts
 src/state/openclaw-database-verify.impl.ts
 src/state/openclaw-database-verify.ts
 src/state/openclaw-quarantine-error.ts

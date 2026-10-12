@@ -13,6 +13,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -24,7 +25,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -463,7 +463,7 @@ test("queued reclamations reuse their database Worker without borrowing another 
 test("file warnings retain rejected native admission releases without attributing them to a successor", async () => {
   const { databaseOptions, plan } = createFixture();
   closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
-  clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+  revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
   const file = path.join(tempDirs.make("openclaw-writer-log-"), "writer.log");
   const diagnostics: SqliteSessionReclamationDiagnostics = {};
   setLoggerOverride({ level: "info", file });
@@ -477,7 +477,7 @@ test("file warnings retain rejected native admission releases without attributin
     if (admissions === 0) {
       // Revoke incoming warm proof at the actual cold prepare admission so native
       // validation releases and reacquires its own writer before acceptance.
-      clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+      revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
     }
     if (admissions === 1) {
       revoked = true;
@@ -575,7 +575,7 @@ test.each([
   async ({ elapsedMs, rejected, failLog }) => {
     const { databaseOptions, plan } = createFixture();
     closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
-    clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+    revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
     const file = path.join(tempDirs.make("openclaw-reclamation-log-"), "reclamation.log");
     await fs.writeFile(file, "");
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });
@@ -594,7 +594,7 @@ test.each([
       if (++admissions === 1) {
         // Invalidate at native preparation's first admission, preserving the proof
         // owner while requiring validation to release its preliminary writer.
-        clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+        revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
         return;
       }
       if (admissions !== 2) {

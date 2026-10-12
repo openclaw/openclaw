@@ -26,10 +26,7 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  resolveOpenClawStateSqlitePath,
-  resolveQuarantineStorePath,
-} from "../state/openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { listArchiveEntries } from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -313,18 +310,14 @@ describe("backup SQLite ownership", () => {
               ]);
             },
           );
-          const canonicalAgentPath = await fs.realpath(agentPath);
-          inspectDatabase(
-            path.join(
-              restored.targetPath,
-              buildBackupArchivePath(archive.archiveRoot, resolveQuarantineStorePath(state.env)),
+          await expect(
+            fs.stat(
+              path.join(
+                restored.targetPath,
+                `${buildBackupArchivePath(archive.archiveRoot, agentPath)}.seal`,
+              ),
             ),
-            (database) => {
-              expect(
-                database.prepare("SELECT path FROM agent_integrity_verifications").all(),
-              ).toEqual([{ path: canonicalAgentPath }]);
-            },
-          );
+          ).rejects.toMatchObject({ code: "ENOENT" });
         } finally {
           snapshot.mockRestore();
         }
