@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isUtf8 } from "node:buffer";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import {
@@ -207,7 +208,7 @@ export type IdentityFileRead = { identityPath: string; knownRevision?: string };
 export type IdentityFileSnapshot =
   | { kind: "unchanged" }
   | { kind: "loaded"; revision: string; size: number; identity: AgentIdentityFile | null }
-  | { kind: "missing" | "too-large" };
+  | { kind: "missing" | "too-large" | "invalid-utf8" };
 
 /** Shared admission kernel for the worker and the shipped synchronous SDK reader. */
 export function readIdentityFileSnapshot(input: IdentityFileRead): IdentityFileSnapshot {
@@ -233,6 +234,10 @@ export function readIdentityFileSnapshot(input: IdentityFileRead): IdentityFileS
         return { kind: "unchanged" };
       }
       const buffer = readFileDescriptorBoundedSync(opened.fd, MAX_IDENTITY_FILE_BYTES);
+      // Replacement decoding would turn Latin-1 identity bytes into U+FFFD in config.
+      if (!isUtf8(buffer)) {
+        return { kind: "invalid-utf8" };
+      }
       const identity = parseIdentityMarkdown(buffer.toString("utf-8"));
       return {
         kind: "loaded",
@@ -266,6 +271,9 @@ export async function loadAgentIdentityFromFile(
         ),
       },
     );
+  }
+  if (result.kind === "invalid-utf8") {
+    throw new Error(`Identity file ${identityPath} must be valid UTF-8`);
   }
   return result.kind === "loaded" ? result.identity : null;
 }

@@ -241,3 +241,43 @@ describe("loadAgentIdentityFromWorkspace", () => {
     },
   );
 });
+
+describe("identity file UTF-8 admission", () => {
+  it("rejects invalid UTF-8 identity files for explicit --identity-file loads", async () => {
+    const tempDir = tempDirs.make("openclaw-identity-latin1-");
+    const filePath = path.join(tempDir, "IDENTITY.md");
+    // Latin-1 "é" (0xe9) is not valid UTF-8; trailing emoji bytes are valid UTF-8 alone.
+    fs.writeFileSync(
+      filePath,
+      Buffer.from([
+        0x2d, 0x20, 0x2a, 0x2a, 0x4e, 0x61, 0x6d, 0x65, 0x3a, 0x2a, 0x2a, 0x20, 0x43, 0x61, 0x66,
+        0xe9, 0x20, 0x42, 0x6f, 0x74, 0x0a, 0x2d, 0x20, 0x2a, 0x2a, 0x45, 0x6d, 0x6f, 0x6a, 0x69,
+        0x3a, 0x2a, 0x2a, 0x20, 0xf0, 0x9f, 0xa4, 0x96, 0x0a,
+      ]),
+    );
+    await expect(loadAgentIdentityFromFile(filePath)).rejects.toThrow(/must be valid UTF-8/);
+  });
+
+  it("treats invalid UTF-8 workspace IDENTITY.md as absent", async () => {
+    const tempDir = tempDirs.make("openclaw-identity-ws-latin1-");
+    fs.writeFileSync(
+      path.join(tempDir, "IDENTITY.md"),
+      Buffer.from([
+        0x2d, 0x20, 0x2a, 0x2a, 0x4e, 0x61, 0x6d, 0x65, 0x3a, 0x2a, 0x2a, 0x20, 0x43, 0x61, 0x66,
+        0xe9, 0x20, 0x42, 0x6f, 0x74, 0x0a,
+      ]),
+    );
+    expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
+    await expect(loadAgentIdentityFromWorkspaceAsync(tempDir)).resolves.toBeNull();
+  });
+
+  it("still loads valid UTF-8 identity files", async () => {
+    const tempDir = tempDirs.make("openclaw-identity-utf8-");
+    const filePath = path.join(tempDir, "IDENTITY.md");
+    fs.writeFileSync(filePath, "- **Name:** Café Bot\n- **Emoji:** 🤖\n", "utf-8");
+    await expect(loadAgentIdentityFromFile(filePath)).resolves.toMatchObject({
+      name: "Café Bot",
+      emoji: "🤖",
+    });
+  });
+});
