@@ -13,6 +13,7 @@ import {
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
 export function resolveEffectivePromptTokens(
   basePromptTokens?: number,
@@ -25,6 +26,24 @@ export function resolveEffectivePromptTokens(
   // Flush gating projects the next input context by adding the previous
   // completion and the current user prompt estimate.
   return base + output + estimate;
+}
+
+export function resolveProjectedPromptTokens(
+  persistedPromptTokens: number | undefined,
+  promptTokenEstimate: number | undefined,
+  transcript: TranscriptTokenEstimate | undefined,
+): number {
+  const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
+    typeof promptTokens === "number"
+      ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
+      : 0;
+  return Math.max(
+    project(persistedPromptTokens, transcript?.outputTokens),
+    project(
+      transcript?.promptTokens,
+      transcript?.promptIncludesOutput ? undefined : transcript?.outputTokens,
+    ),
+  );
 }
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {

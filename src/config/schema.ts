@@ -3,7 +3,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import type { PluginConfigUiHint } from "../plugins/manifest-types.js";
+import type {
+  PluginConfigUiHint,
+  PluginManifestProviderRequest,
+} from "../plugins/manifest-types.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { applySharedChannelFieldHelp } from "./schema.channel-field-help.js";
@@ -60,6 +64,7 @@ export type PluginUiMetadata = {
   configGroups?: ConfigUiHint["groups"];
   configUiHints?: Record<string, PluginConfigUiHint>;
   configSchema?: JsonSchemaNode;
+  providerRequest?: PluginManifestProviderRequest;
 };
 
 export type ChannelUiMetadata = {
@@ -97,18 +102,18 @@ function limitExtensionSchemas(params: {
   let totalBytes = 0;
   let includedItems = 0;
 
-  const keepSchema = (schema: JsonSchemaNode): boolean => {
+  const keepSchema = (schema: JsonSchemaNode, copies = 1): boolean => {
     const bytes = schemaJsonBytes(schema);
     if (
       !Number.isFinite(bytes) ||
       bytes > EXTENSION_SCHEMA_MAX_BYTES ||
-      totalBytes + bytes > EXTENSION_SCHEMA_TOTAL_MAX_BYTES ||
-      includedItems >= EXTENSION_SCHEMA_MAX_ITEMS
+      totalBytes + bytes * copies > EXTENSION_SCHEMA_TOTAL_MAX_BYTES ||
+      includedItems + copies > EXTENSION_SCHEMA_MAX_ITEMS
     ) {
       return false;
     }
-    totalBytes += bytes;
-    includedItems += 1;
+    totalBytes += bytes * copies;
+    includedItems += copies;
     return true;
   };
 
@@ -122,8 +127,28 @@ function limitExtensionSchemas(params: {
         : { ...entry, configSchema: buildOmittedExtensionConfigSchema(kind, entry.id) },
     );
 
+  const plugins = limitSchemas(params.plugins, "plugin");
+  for (const [index, plugin] of plugins.entries()) {
+    if (!plugin.providerRequest) {
+      continue;
+    }
+    plugins[index] = {
+      ...plugin,
+      providerRequest: {
+        providers: Object.fromEntries(
+          Object.entries(plugin.providerRequest.providers ?? {}).map(([id, policy]) => [
+            id,
+            // Each model schema appears under both defaults and agent entries.
+            policy.modelParamsSchema && !keepSchema(policy.modelParamsSchema, 2)
+              ? { ...policy, modelParamsSchema: buildOmittedExtensionConfigSchema("plugin", id) }
+              : policy,
+          ]),
+        ),
+      },
+    };
+  }
   return {
-    plugins: limitSchemas(params.plugins, "plugin"),
+    plugins,
     channels: limitSchemas(params.channels, "channel"),
   };
 }
@@ -290,8 +315,31 @@ function mergeExtensionSchemas(
   if (entriesNode && plugins) {
     entriesNode.properties = entryProperties;
   }
+  const agents = asSchemaObject(root?.properties?.agents);
+  const defaults = asSchemaObject(agents?.properties?.defaults);
+  const agentEntries = asSchemaObject(agents?.properties?.entries);
+  const agentEntry = asSchemaObject(agentEntries?.additionalProperties);
+  const modelMaps = [defaults, agentEntry]
+    .map((entry) => asSchemaObject(entry?.properties?.models))
+    .filter((entry) => entry !== null);
 
   for (const plugin of plugins ?? []) {
+    for (const [provider, policy] of Object.entries(plugin.providerRequest?.providers ?? {})) {
+      if (!policy.modelParamsSchema) {
+        continue;
+      }
+      for (const models of modelMaps) {
+        const modelEntry = asSchemaObject(models.additionalProperties);
+        models.patternProperties ??= {};
+        models.patternProperties[`^${escapeRegExp(provider)}/.+$`] = {
+          ...structuredClone(modelEntry),
+          properties: {
+            ...structuredClone(modelEntry?.properties),
+            params: structuredClone(policy.modelParamsSchema),
+          },
+        };
+      }
+    }
     if (!entriesNode || !plugin.configSchema) {
       continue;
     }
@@ -357,6 +405,7 @@ function buildMergedSchemaCacheKey(params: {
       configSecretInputPaths: plugin.configSecretInputPaths ?? null,
       configUiHints: plugin.configUiHints ?? null,
       configGroups: plugin.configGroups ?? null,
+      providerRequest: plugin.providerRequest ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
   const channels = params.channels

@@ -15,6 +15,7 @@ import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscri
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
@@ -562,6 +563,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvedTransport,
     {
       preparedExtraParams: effectiveExtraParams,
+      modelCallUrgency: resolveModelCallUrgency(attempt),
       auth,
       nativeWebSearchPolicyContext,
     },

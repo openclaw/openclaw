@@ -16,10 +16,14 @@ import { createEventBus } from "../sessions/event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory } from "../sessions/extensions/loader.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
+import { mockCallArg } from "./compact.hooks.assertions.test-support.js";
 import {
+  applyExtraParamsToAgentMock,
   hookRunner,
   limitHistoryTurnsMock,
   resolveEffectiveCompactionModeMock,
+  sessionAutomaticCompactionMock,
+  sessionManualCompactionMock,
 } from "./compact.hooks.harness.js";
 
 type Compact = typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
@@ -33,6 +37,41 @@ export function registerCompactionSafeguardTests({
   wrappedCompactionArgs: (overrides?: Record<string, unknown>) => Parameters<Compact>[0];
   getWorkspaceDir: () => string;
 }) {
+  it.each([
+    { modelCallUrgency: undefined, expectedUrgency: "background" },
+    { modelCallUrgency: "foreground", expectedUrgency: "foreground" },
+    { modelCallUrgency: "normal", expectedUrgency: "normal" },
+  ] as const)(
+    "carries the pending request and $expectedUrgency urgency into safeguard budget recovery",
+    async ({ modelCallUrgency, expectedUrgency }) => {
+      const { attachCompactionAccountingRecorder } =
+        await import("./run/compaction-accounting-bridge.js");
+      const contextEngineRuntimeContext = {};
+      attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
+        pendingRequestState: "unresolved",
+      });
+      resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
+
+      const compactionParams = wrappedCompactionArgs({
+        trigger: "budget",
+        modelCallUrgency,
+        contextEngineRuntimeContext,
+      });
+      const result = await compactEmbeddedAgentSessionDirect(compactionParams);
+
+      expect(result).toMatchObject({ ok: true, compacted: true });
+      expect(mockCallArg(applyExtraParamsToAgentMock, 0, 11)).toMatchObject({
+        modelCallUrgency: expectedUrgency,
+      });
+      expect(sessionAutomaticCompactionMock).toHaveBeenCalledWith(
+        compactionParams.customInstructions,
+        "unresolved",
+        "none",
+      );
+      expect(sessionManualCompactionMock).not.toHaveBeenCalled();
+    },
+  );
+
   describe("safeguard failure provenance", () => {
     registerAgentSessionLoopTestLifecycle();
     const originalHistoryLimit = expectDefined(

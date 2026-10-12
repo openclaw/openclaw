@@ -32,6 +32,7 @@ import {
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
 import { collectHeartbeatOwnerWarnings } from "./validation-core.js";
+import { validateProviderModelParams } from "./validation-model-params.js";
 import {
   formatChannelConfigIssueMessage,
   resolveDeferredChannelConfigWarning,
@@ -373,6 +374,16 @@ export function validatePreparedConfigWithPlugins(
       return;
     }
     const { registry } = ensureRegistry();
+    if (!findUninspectedPluginDiagnostic(registry.diagnostics)) {
+      issues.push(
+        ...validateProviderModelParams({
+          config,
+          registry,
+          deferredPluginIds,
+          schemaValidations: opts.schemaValidations,
+        }),
+      );
+    }
     const { suppressions } = planManifestModelCatalogSuppressions({ registry });
     const suppressedModels = new Map<string, (typeof suppressions)[number]>();
     for (const suppression of suppressions) {

@@ -2617,7 +2617,6 @@
 ["src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts","./attempt.js","337c18430e6f4b14ebe58d248018006239b5dc2b350ef483326c09ca0c4ace79",1]
 ["src/agents/embedded-agent-runner/run/attempt.skills-policy.test.ts","../../embedded-agent.js","e2e07fe23e4e1002d79f5530451fbafbe92b34c5f9f8ce97bb7bb229a4805862",1]
 ["src/agents/embedded-agent-runner/run/attempt.subscription-cleanup.test.ts","../logger.js","a5faab9a0a35832a4ff771dca0d77acd0a8b40a6869d8fe4a39b560570a603df",1]
-["src/agents/embedded-agent-runner/run/attempt.test.ts","../context-engine-capabilities.js","db8251d5ac2209b21286b80eb0602b763fe46ca7acd5ea698a56975767cd408c",1]
 ["src/agents/embedded-agent-runner/run/attempt.transcript-policy.test.ts","../../../plugins/provider-hook-runtime.js","26383cb587b2dded8c37d3da0fb5b066675a59e1849f389d18fdde2742785bda",1]
 ["src/agents/embedded-agent-runner/run/auth-plan.auth-pin.test.ts","../../cli-credentials.js","a5236baa503ad76a20a663c61b6799a53cb05342555bc8ec13a9e8a8876273cf",1]
 ["src/agents/embedded-agent-runner/run/backend.test.ts","../../harness/selection.js","c00de9b7c4be0b6a1eb9d3c3f706a40c7972c9718feb261731ba27bbd8bbb5d3",1]

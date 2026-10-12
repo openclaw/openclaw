@@ -11,10 +11,101 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import { attachModelProviderRequestRouteFacts } from "../provider-request-config.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { applyExtraParamsToAgent, resolvePreparedExtraParams } from "./extra-params.js";
 
 describe("prepared provider extra-param lifecycle", () => {
+  it("keeps shared MiMo request and output policy when a provider decorates the stream", async () => {
+    const model = makeProviderModelFixture({
+      provider: "fixture-provider",
+      id: "mimo-v2-pro",
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid/v1",
+      reasoning: true,
+    });
+    const modelRef = `${model.provider}/${model.id}`;
+    const cfg = {
+      agents: {
+        defaults: {
+          params: { globalOnly: true },
+          models: { [modelRef]: { params: { policy: "model", modelOnly: true } } },
+        },
+        entries: {
+          worker: {
+            params: { policy: "agent" },
+            models: { [modelRef]: { params: { policy: "agent-model" } } },
+          },
+        },
+      },
+    };
+    const plugin: ProviderPlugin = {
+      id: model.provider,
+      label: "Fixture",
+      auth: [],
+      wrapStreamFn: ({ streamFn, modelParams, modelCallUrgency }) => {
+        expect(modelParams).toEqual({ policy: "agent-model", modelOnly: true });
+        expect(modelCallUrgency).toBe("foreground");
+        const underlying = expectDefined(streamFn, "prepared provider stream");
+        const decorated: StreamFn = (requestModel, context, options) =>
+          underlying(requestModel, context, {
+            ...options,
+            headers: { ...options?.headers, "x-fixture-policy": String(modelParams?.policy) },
+          });
+        return Object.assign(decorated, { preservesGenericCompatibility: true });
+      },
+    };
+    const preparedModel = attachModelProviderRuntimePluginHandle(model, {
+      provider: model.provider,
+      modelId: model.id,
+      config: cfg,
+      plugin,
+    });
+    const payload: Record<string, unknown> = {
+      messages: [{ role: "assistant", content: "Earlier answer" }],
+    };
+    const baseStreamFn: StreamFn = async (requestModel, _context, options) => {
+      expect(options?.headers).toMatchObject({ "x-fixture-policy": "agent-model" });
+      await options?.onPayload?.(payload, requestModel);
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: makeAgentAssistantMessage({
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          content: [{ type: "thinking", thinking: "Visible answer" }],
+        }),
+      });
+      return stream;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(
+      agent,
+      cfg,
+      model.provider,
+      model.id,
+      undefined,
+      "high",
+      "worker",
+      undefined,
+      preparedModel,
+      undefined,
+      undefined,
+      { modelCallUrgency: "foreground" },
+    );
+    const stream = await agent.streamFn(preparedModel, { messages: [] });
+    expect(payload).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+      messages: [{ role: "assistant", content: "Earlier answer", reasoning_content: "" }],
+    });
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "Visible answer" }],
+    });
+  });
+
   it("uses each prepared owner for params and stream wrapping with shared config", () => {
     const cfg = { agents: { defaults: { params: { temperature: 0.1 } } } };
     const model = makeProviderModelFixture({

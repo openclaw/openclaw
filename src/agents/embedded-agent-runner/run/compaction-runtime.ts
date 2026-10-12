@@ -17,6 +17,7 @@ import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-manager-api.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import {
@@ -105,6 +106,7 @@ export async function compactEmbeddedRunForRecovery(
     ...buildEmbeddedCompactionRuntimeContext(
       {
         ...runParams,
+        modelCallUrgency: resolveModelCallUrgency(runParams),
         authProfileId: input.modelSelection.authProfileId,
         authProfileIdSource: input.modelSelection.authProfileIdSource,
         runtimeAuthPlan: input.runtimeAuthPlan,

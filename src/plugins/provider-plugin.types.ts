@@ -329,7 +329,13 @@ export type ProviderPlugin = {
    * provider-specific compat payload patches that do not justify a separate
    * transport implementation.
    */
-  wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) =>
+    | (StreamFn & {
+        /** A decorator that leaves shared request and output compatibility policy active. */
+        preservesGenericCompatibility?: boolean;
+      })
+    | null
+    | undefined;
   /**
    * Provider-owned wrapper for direct `completeSimple` callers.
    *

@@ -130,6 +130,58 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
 
 ## Advanced configuration
 
+### Prioritize interactive requests
+
+When interactive and background work share one vLLM engine, enable native
+priority scheduling on the server:
+
+```bash
+vllm serve <model-id> --scheduling-policy priority
+```
+
+Then opt in for that model in OpenClaw:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "vllm/your-model-id": { params: { priorityScheduling: true } },
+      },
+    },
+  },
+}
+```
+
+`priorityScheduling` is an optional boolean, disabled by default. It applies
+only to the selected `vllm/*` model's params; agent-specific model params can
+override it. Global or agent-wide params do not enable it. Other providers and
+fallback models do not inherit the opt-in.
+
+| Request                                              | Native `priority` |
+| ---------------------------------------------------- | ----------------: |
+| Interactive user turn or manual `/compact`           |            `-100` |
+| Delegated or unclassified work                       |               `0` |
+| Cron, heartbeat, memory, or simple helper completion |             `100` |
+
+Run-triggered compaction inherits the originating urgency. Independent automatic
+compaction uses background priority. Simple helper completions include utility
+summaries and tool-side model calls, even when a user is waiting for their result.
+
+Lower numbers are scheduled first under contention; arrival order breaks ties.
+OpenClaw sends the native field and does not maintain another queue, reserve
+capacity, or isolate model memory. See the [vLLM scheduler reference](https://docs.vllm.ai/en/stable/api/vllm/config/scheduler/).
+
+When enabled, dynamic priority takes precedence over an explicit
+`extraBody.priority` or `extra_body.priority`. When disabled, OpenClaw adds no
+scheduling field and preserves existing literal priority overrides, including
+zero. Numeric `priority: 0` never enables scheduling.
+
+The vLLM request contract requires priority scheduling for nonzero priorities.
+Before switching the server back to FCFS, disable `priorityScheduling` and remove
+any explicit nonzero priority overrides. This new optional field needs no Doctor
+migration.
+
 <AccordionGroup>
   <Accordion title="Proxy-style behavior">
     vLLM is treated as a proxy-style OpenAI-compatible `/v1` backend, not a native OpenAI endpoint:

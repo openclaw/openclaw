@@ -10,6 +10,7 @@ import {
   createPayloadPatchStreamWrapper,
   setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { wrapVllmPriorityStream } from "./priority.js";
 import {
   isVllmNemotronThinkingModel,
   resolveVllmEffortProfile,
@@ -117,10 +118,10 @@ export function wrapVllmProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   const qwenFormat = resolveVllmQwenThinkingFormatFromCompat(ctx.model?.compat);
   const deepSeek = !qwenFormat && isVllmDeepSeekV4Model(ctx.modelId);
   if (!qwenFormat && !deepSeek && !isVllmNemotronThinkingModel(ctx.modelId)) {
-    return undefined;
+    return wrapVllmPriorityStream(ctx);
   }
   return composeProviderStreamWrappers(
-    ctx.streamFn,
+    wrapVllmPriorityStream(ctx),
     qwenFormat &&
       ((streamFn) =>
         createVllmQwenThinkingWrapper({

@@ -196,3 +196,17 @@ Provider fields:
 | `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics.  |
 | `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.               |
 | `openAICompletions`   | `object`     | OpenAI-compatible completions request flags. `supportsStreamingUsage` is the only flag. |
+| `modelParamsSchema`   | `object`     | JSON Schema for this provider's per-model runtime params.                               |
+
+`modelParamsSchema` validates `params` in `agents.defaults.models["provider/model"]`
+and `agents.entries.<agentId>.models["provider/model"]`. It applies only to the
+declared provider, and only provider IDs owned by the plugin are accepted.
+Keep `additionalProperties: true` so shared runtime parameters remain available.
+Use property `title` and `description` for labels and help in schema lookup.
+Schema defaults are descriptive: validation does not insert defaults into model
+override layers or change their inheritance. Global and per-agent `params` are
+not covered by this per-model schema.
+
+For example, the vLLM plugin declares the optional boolean `priorityScheduling`
+here. Operators enable it under an exact `vllm/<model>` entry's `params`, after
+starting the server with `--scheduling-policy priority`.

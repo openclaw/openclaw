@@ -15,6 +15,7 @@ import {
   resolveOfficialExternalPluginId,
 } from "../plugins/official-external-plugin-catalog.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { collectPluginProviderRequestOwners } from "../plugins/plugin-provider-request-policy.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -158,6 +159,7 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
 export function collectPluginSchemaMetadataCore(
   registry: PluginManifestRegistry,
 ): PluginUiMetadata[] {
+  const requestOwners = collectPluginProviderRequestOwners(registry.plugins);
   const deduped = new Map<
     string,
     PluginUiMetadata & {
@@ -182,6 +184,15 @@ export function collectPluginSchemaMetadataCore(
       configUiHints: record.configUiHints,
       configGroups: record.configGroups,
       configSchema: record.configSchema,
+      providerRequest: record.providerRequest
+        ? {
+            providers: Object.fromEntries(
+              [...requestOwners]
+                .filter(([, owner]) => owner.plugin === record)
+                .map(([provider, { policy }]) => [provider, policy]),
+            ),
+          }
+        : undefined,
       originRank: nextRank,
     });
   }

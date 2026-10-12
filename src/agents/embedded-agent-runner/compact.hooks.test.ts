@@ -77,7 +77,6 @@ import {
   resolveContextWindowInfoMock,
   resolveCliBackendConfigMock,
   resolveContextEngineMock,
-  resolveEffectiveCompactionModeMock,
   resolveEmbeddedAgentStreamMock,
   resolveModelAsyncMock,
   resolveModelMock,
@@ -88,10 +87,8 @@ import {
   selectAgentHarnessForPreparedModelProvidersMock,
   selectAgentHarnessMock,
   resetCompactSessionStateMocks,
-  sessionAutomaticCompactionMock,
   sessionMessages,
   sessionCompactImpl,
-  sessionManualCompactionMock,
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
 import {
@@ -376,6 +373,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         provider: "xai",
         model: "grok-4.5",
         trigger: "manual",
+        modelCallUrgency: "background",
         toolsAllow: ["read"],
         customInstructions: undefined,
         config: {
@@ -390,6 +388,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result).toMatchObject({ compacted: true, compactionKind: "server-endpoint" });
     expect(result.result).not.toHaveProperty("summary");
     expect(mockCallArg(applyExtraParamsToAgentMock, 0, 11)).toMatchObject({
+      modelCallUrgency: "foreground",
       nativeWebSearchPolicyContext: { webSearchEnabled: false, runtimeToolAllowlist: [] },
     });
     expect(endpointSystemPrompt).toBeDefined();
@@ -1501,33 +1500,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     sessionKey: TEST_SESSION_KEY,
     sessionFile: () => TEST_SESSION_FILE,
   });
-  it.each(["budget"] as const)(
-    "carries the pending request into safeguard %s recovery after endpoint fallback",
-    async (trigger) => {
-      const { attachCompactionAccountingRecorder } =
-        await import("./run/compaction-accounting-bridge.js");
-      const contextEngineRuntimeContext = {};
-      if (trigger === "budget") {
-        attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
-          pendingRequestState: "unresolved",
-        });
-      }
-      resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
-
-      const result = await compactEmbeddedAgentSessionDirect(
-        wrappedCompactionArgs({ trigger, contextEngineRuntimeContext }),
-      );
-
-      expect(result).toMatchObject({ ok: true, compacted: true });
-      expect(sessionAutomaticCompactionMock).toHaveBeenCalledWith(
-        TEST_CUSTOM_INSTRUCTIONS,
-        "unresolved",
-        "none",
-      );
-      expect(sessionManualCompactionMock).not.toHaveBeenCalled();
-    },
-  );
-
   it("carries the prepared provider reconciler into direct compaction", async () => {
     mockResolvedModel();
     const reconcile = vi.fn(async () => undefined);

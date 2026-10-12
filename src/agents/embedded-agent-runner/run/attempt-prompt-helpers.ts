@@ -23,6 +23,7 @@ import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
@@ -398,6 +399,12 @@ export function resolveAttemptFsWorkspaceOnly(params: {
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "sessionTarget"
+  | "trigger"
+  | "bootstrapContextRunKind"
+  | "currentInboundEventKind"
+  | "inputProvenance"
+  | "spawnedBy"
+  | "trustedInternalHandoff"
   | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
@@ -460,6 +467,7 @@ export function buildAfterTurnRuntimeContext(params: {
     ...buildEmbeddedCompactionRuntimeContext(
       {
         ...params.attempt,
+        modelCallUrgency: resolveModelCallUrgency(params.attempt),
         runtimeAuthPlan: params.attempt.runtimePlan?.auth,
         workspaceDir: params.workspaceDir,
         cwd: params.cwd,
