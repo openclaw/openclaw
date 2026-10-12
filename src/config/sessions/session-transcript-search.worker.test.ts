@@ -16,7 +16,6 @@ import { captureSessionStoreReadCandidate } from "./session-store-read-candidate
 import * as projectionWriter from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
-  reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 import {
