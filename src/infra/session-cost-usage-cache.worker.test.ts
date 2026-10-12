@@ -19,6 +19,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
@@ -660,6 +661,8 @@ it("reports the failed session in doctor and clears it after successful refresh"
     await maybeRepairLegacyRuntimeFiles(false, state.env);
     expect(note.mock.calls.filter(([, title]) => title === "Usage cost cache")).toEqual([]);
   });
+  // A cache-miss worker retains no database; runtime shutdown owns its retirement.
+  await closeStateDatabaseForTest();
 });
 
 it("retains a late host write failure after cancellation and releases the lock only after settlement", async () => {

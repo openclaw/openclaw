@@ -572,7 +572,7 @@ struct ChatProTab: View {
 
     private var gatewayDisplayState: GatewayDisplayState {
         Self.presentationGatewayState(
-            current: GatewayStatusBuilder.build(appModel: self.appModel),
+            current: GatewayStatusBuilder.buildChat(appModel: self.appModel),
             isAttachmentOwnerPinned: self.isAttachmentOwnerPinned,
             capturedOwnerID: self.appModel.chatPresentation.ownerID,
             currentOwnerID: self.appModel.chatViewModelOwnerID)

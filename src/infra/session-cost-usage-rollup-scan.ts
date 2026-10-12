@@ -41,12 +41,12 @@ function hashUsageCostCheckpointEvent(event: unknown): string {
 
 export function createUsageRollupScan(params: UsageCostRollupScanInput & { appendOnly: boolean }) {
   const previous = params.appendOnly ? params.previous : undefined;
-  // This task exclusively owns the decoded body; publication retains its original envelope for CAS.
+  // This refresh exclusively owns the decoded body until its projection is published.
   const rollup = previous?.rollup ?? createSessionUsageRollupData();
   let countedRecords = 0;
   let parsedRecords = 0;
   return {
-    async addRecords(records: Iterable<Record<string, unknown>>): Promise<void> {
+    async addEntries(entries: Iterable<ParsedTranscriptEntry>): Promise<void> {
       let batch: ParsedTranscriptEntry[] = [];
       const flush = async () => {
         const estimated = batch.filter(needsUsageCostEstimate);
@@ -98,11 +98,8 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
         }
         batch = [];
       };
-      for (const record of records) {
-        const entry = parseUsageCostTranscriptRecord(record);
-        if (entry) {
-          batch.push(entry);
-        }
+      for (const entry of entries) {
+        batch.push(entry);
         if (batch.length === 128) {
           await flush();
         }
@@ -134,7 +131,12 @@ export async function scanMemoryUsageCostRollup(params: {
 }): Promise<UsageCostRollupEntry> {
   const records = params.events.map(({ eventJson }): unknown => JSON.parse(eventJson));
   const scan = createUsageRollupScan({ ...params, appendOnly: false });
-  await scan.addRecords(selectVisibleTranscriptEvents(records).filter(isRecord));
+  await scan.addEntries(
+    selectVisibleTranscriptEvents(records).flatMap((record) => {
+      const entry = isRecord(record) ? parseUsageCostTranscriptRecord(record) : null;
+      return entry ? [entry] : [];
+    }),
+  );
   const visibleLeafId = scanSessionTranscriptTree(records).leafId;
   return scan.finish({
     kind: "sqlite",
