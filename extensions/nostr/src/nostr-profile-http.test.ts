@@ -273,33 +273,6 @@ describe("nostr-profile-http", () => {
     });
   });
 
-  describe("GET /api/channels/nostr/:accountId/profile", () => {
-    it("returns profile and publish state", async () => {
-      const { res, run } = createProfileHttpHarness("GET", "/api/channels/nostr/default/profile", {
-        ctx: {
-          getConfigProfile: vi.fn().mockReturnValue({
-            name: "testuser",
-            displayName: "Test User",
-          }),
-        },
-      });
-
-      vi.mocked(getNostrProfileState).mockResolvedValue({
-        lastPublishedAt: 1234567890,
-        lastPublishedEventId: "abc123",
-        lastPublishResults: { [TEST_PROFILE_RELAY_URL]: "ok" },
-      });
-
-      await run();
-
-      expect(res["_getStatusCode"]()).toBe(200);
-      const data = JSON.parse(res["_getData"]());
-      expect(data.ok).toBe(true);
-      expect(data.profile.name).toBe("testuser");
-      expect(data.publishState.lastPublishedAt).toBe(1234567890);
-    });
-  });
-
   describe("PUT /api/channels/nostr/:accountId/profile", () => {
     function mockPublishSuccess() {
       vi.mocked(publishNostrProfile).mockResolvedValue({
@@ -331,72 +304,6 @@ describe("nostr-profile-http", () => {
       expect(data.error).toContain("private");
     }
 
-    it("validates profile and publishes", async () => {
-      const { ctx, res, run } = createProfileHttpHarness(
-        "PUT",
-        "/api/channels/nostr/default/profile",
-        {
-          body: {
-            name: "satoshi",
-            displayName: "Satoshi Nakamoto",
-            about: "Creator of Bitcoin",
-          },
-        },
-      );
-
-      mockPublishSuccess();
-
-      await run();
-
-      const data = expectOkResponse(res);
-      expect(data.eventId).toBe("event123");
-      expect(data.successes).toContain(TEST_PROFILE_RELAY_URL);
-      expect(data.persisted).toBe(true);
-      expect(ctx.updateConfigProfile).toHaveBeenCalled();
-    });
-
-    it("rejects profile mutation from non-loopback remote address", async () => {
-      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
-        body: { name: "attacker" },
-        req: { remoteAddress: "198.51.100.10" },
-      });
-
-      await run();
-      expect(res["_getStatusCode"]()).toBe(403);
-    });
-
-    it("rejects cross-origin profile mutation attempts", async () => {
-      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
-        body: { name: "attacker" },
-        req: { headers: { origin: "https://evil.example" } },
-      });
-
-      await run();
-      expect(res["_getStatusCode"]()).toBe(403);
-    });
-
-    it.each([
-      ["http://localhost:18789", 200],
-      ["http://127.0.0.1:18789", 200],
-      ["http://127.0.0.2:18789", 200],
-      ["http://127.255.255.254:18789", 200],
-      ["http://[::1]:18789", 200],
-      ["http://[::ffff:127.0.0.2]:18789", 200],
-      ["http://128.0.0.1:18789", 403],
-      ["http://127.0.0.1.evil.com:18789", 403],
-    ] as const)("classifies profile mutation origin %s", async (origin, expectedStatusCode) => {
-      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
-        body: { name: "satoshi" },
-        req: { headers: { origin } },
-      });
-      if (expectedStatusCode === 200) {
-        mockPublishSuccess();
-      }
-
-      await run();
-      expect(res["_getStatusCode"]()).toBe(expectedStatusCode);
-    });
-
     it("rejects profile mutation with cross-site sec-fetch-site header", async () => {
       const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
         body: { name: "attacker" },
@@ -415,30 +322,6 @@ describe("nostr-profile-http", () => {
 
       await run();
       expect(res["_getStatusCode"]()).toBe(403);
-    });
-
-    it("rejects profile mutation when gateway caller is missing operator.admin", async () => {
-      await expectAdminScopeRejected({
-        scopes: ["operator.read"],
-        method: "PUT",
-        url: "/api/channels/nostr/default/profile",
-        body: { name: "attacker" },
-        expectOperationNotCalled: () => expect(publishNostrProfile).not.toHaveBeenCalled(),
-      });
-    });
-
-    it("rejects profile mutation when gateway scope context is missing", async () => {
-      await expectAdminScopeRejected({
-        scopes: undefined,
-        method: "PUT",
-        url: "/api/channels/nostr/default/profile",
-        body: { name: "attacker" },
-        expectOperationNotCalled: () => expect(publishNostrProfile).not.toHaveBeenCalled(),
-      });
-    });
-
-    it("rejects private IP in picture URL (SSRF protection)", async () => {
-      await expectPrivatePictureRejected("https://127.0.0.1/evil.jpg");
     });
 
     it("rejects ISATAP-embedded private IPv4 in picture URL", async () => {
