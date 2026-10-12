@@ -637,7 +637,7 @@ export class SqliteWorkerBroker {
     slot.current = job;
     slot.worker.ref();
     job.observation.started();
-    dispatchSqliteWorkerJob(slot, job, (error, retire) => {
+    void dispatchSqliteWorkerJob(slot, job, (error, retire) => {
       // Slot failure owns settlement after joining preparation and native retirement.
       if (slot.current !== job) {
         return;
