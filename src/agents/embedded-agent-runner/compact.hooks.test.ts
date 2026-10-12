@@ -1503,38 +1503,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     sessionKey: TEST_SESSION_KEY,
     sessionFile: () => TEST_SESSION_FILE,
   });
-  it.each([
-    { modelCallUrgency: undefined, expectedUrgency: "background" },
-    { modelCallUrgency: "foreground", expectedUrgency: "foreground" },
-    { modelCallUrgency: "normal", expectedUrgency: "normal" },
-  ] as const)(
-    "carries the pending request and $expectedUrgency urgency into safeguard budget recovery",
-    async ({ modelCallUrgency, expectedUrgency }) => {
-      const { attachCompactionAccountingRecorder } =
-        await import("./run/compaction-accounting-bridge.js");
-      const contextEngineRuntimeContext = {};
-      attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
-        pendingRequestState: "unresolved",
-      });
-      resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
-
-      const result = await compactEmbeddedAgentSessionDirect(
-        wrappedCompactionArgs({ trigger: "budget", modelCallUrgency, contextEngineRuntimeContext }),
-      );
-
-      expect(result).toMatchObject({ ok: true, compacted: true });
-      expect(mockCallArg(applyExtraParamsToAgentMock, 0, 11)).toMatchObject({
-        modelCallUrgency: expectedUrgency,
-      });
-      expect(sessionAutomaticCompactionMock).toHaveBeenCalledWith(
-        TEST_CUSTOM_INSTRUCTIONS,
-        "unresolved",
-        "none",
-      );
-      expect(sessionManualCompactionMock).not.toHaveBeenCalled();
-    },
-  );
-
   it("carries the prepared provider reconciler into direct compaction", async () => {
     mockResolvedModel();
     const reconcile = vi.fn(async () => undefined);

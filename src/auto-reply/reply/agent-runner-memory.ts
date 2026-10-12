@@ -59,7 +59,6 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   estimatePromptTokensFromSessionTranscript,
   readSessionLogSnapshot,
-  type TranscriptTokenEstimate,
 } from "./agent-runner-memory-transcript-context.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
@@ -86,7 +85,7 @@ import {
   estimatePromptTokensForMemoryFlush,
   hasAlreadyFlushedForCurrentCompaction,
   resolveCompactionThreshold,
-  resolveEffectivePromptTokens,
+  resolveProjectedPromptTokens,
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
@@ -190,24 +189,6 @@ function resolveFollowupContextTokens(
 
 // Leave room for large assistant outputs when checking near-threshold usage.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
-
-function projectPromptTokens(
-  persistedPromptTokens: number | undefined,
-  promptTokenEstimate: number | undefined,
-  transcript: TranscriptTokenEstimate | undefined,
-): number {
-  const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
-    typeof promptTokens === "number"
-      ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
-      : 0;
-  return Math.max(
-    project(persistedPromptTokens, transcript?.outputTokens),
-    project(
-      transcript?.promptTokens,
-      transcript?.promptIncludesOutput ? undefined : transcript?.outputTokens,
-    ),
-  );
-}
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
@@ -394,7 +375,7 @@ export async function runSessionCompactionIfNeeded(params: {
     return entry;
   }
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
-  const projectedTokenCount = projectPromptTokens(
+  const projectedTokenCount = resolveProjectedPromptTokens(
     freshPersistedTokens,
     promptTokenEstimate,
     transcriptUsageTokens,
@@ -902,7 +883,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   }
 
-  const projectedTokenCount = projectPromptTokens(
+  const projectedTokenCount = resolveProjectedPromptTokens(
     asPositiveFiniteNumber(persistedPromptTokens),
     promptTokenEstimate,
     transcriptPromptTokens === 0 ? undefined : transcriptUsageTokens,
