@@ -618,7 +618,7 @@ describe("qa-bus state", () => {
     expect(byAltText.map((message) => message.id)).toContain(outbound.id);
   });
 
-  it("preserves sanitized tool-call traces on bus messages", () => {
+  it("preserves tool-call argument text and returns isolated copies", () => {
     const state = createQaBusState();
 
     const outbound = state.addOutboundMessage({
@@ -626,22 +626,24 @@ describe("qa-bus state", () => {
       text: "used a tool",
       toolCalls: [
         {
-          name: "exec",
+          name: " exec ",
           arguments: {
             command: "pwd",
             apiToken: "secret-token",
+            omitted: undefined,
           },
         },
       ],
     });
 
     const readback = state.readMessage({ messageId: outbound.id });
+    // Payload text stays intact; secret masking belongs to diagnostic output.
     expect(readback.toolCalls).toEqual([
       {
         name: "exec",
         arguments: {
-          command: "[redacted]",
-          apiToken: "[redacted]",
+          command: "pwd",
+          apiToken: "secret-token",
         },
       },
     ]);
@@ -655,7 +657,7 @@ describe("qa-bus state", () => {
     }
     readbackArguments.command = "mutated";
     expect(state.readMessage({ messageId: outbound.id }).toolCalls?.[0]?.arguments?.command).toBe(
-      "[redacted]",
+      "pwd",
     );
   });
 });

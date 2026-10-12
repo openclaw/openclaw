@@ -411,6 +411,9 @@ export class ShellGatewayOwner {
         );
       }
       void connectionBootstrap.run("outbox", () => this.host.outboxStoreImport.load());
+    } else {
+      // A reconnect can retain the client; retire its completed preference read now.
+      void this.ensureRuntimeConfig(snapshot, context?.runtimeConfig);
     }
     if (previousPhase !== "connected" && snapshot.phase === "connected") {
       i18n.retryPendingLocale();
@@ -422,7 +425,7 @@ export class ShellGatewayOwner {
     runtimeConfig = this.host.context?.runtimeConfig,
   ): Promise<void> {
     // Config-gated sidebar routes require the snapshot before any settings page opens.
-    if (snapshot.phase !== "connected" || !snapshot.client || !runtimeConfig) {
+    if (snapshot.phase !== "connected" || !snapshot.client || !runtimeConfig?.state.connected) {
       this.runtimeConfigClient = null;
       this.runtimeConfigProfileId = null;
       this.runtimeConfigReady = null;

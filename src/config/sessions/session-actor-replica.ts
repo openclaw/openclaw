@@ -79,7 +79,7 @@ const pool = resolveGlobalSingleton<ReplicaPool>(
   },
 );
 
-function ensureReplicaSubscription(): void {
+export function ensureReplicaSubscription(): void {
   if (pool.unsubscribe) {
     return;
   }

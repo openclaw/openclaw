@@ -28,7 +28,6 @@ import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
-import { reconcileHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
@@ -108,6 +107,10 @@ import {
   runGatewayCronFailureRepair,
 } from "./server-cron-notifications.js";
 import { toPluginCronJob } from "./server-cron-plugin-job.js";
+import {
+  createGatewayCronSystemJobReconciler,
+  type GatewaySystemJobReconciliationResult,
+} from "./server-cron-system-jobs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   invalidateSessionAutomationIndex,
@@ -116,10 +119,6 @@ import {
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-
-export type GatewaySystemJobReconciliationResult = "converged" | "retry-scheduled" | "superseded";
-
-class GatewaySystemJobReconciliationSupersededError extends Error {}
 
 export type GatewayCronState = {
   cron: GatewayCronServiceContract;
@@ -1164,7 +1163,7 @@ export function buildGatewayCronService(params: {
       } else {
         stopExitWatchers();
       }
-      stopSystemJobReconciliation();
+      systemJobs.stop();
       void stopStreamWatchers().catch((err: unknown) => {
         cronLogger.warn(
           { err: formatErrorMessage(err) },
@@ -1185,8 +1184,7 @@ export function buildGatewayCronService(params: {
     await drainGatewayCron({
       settlements: [
         cron.waitForIdle(),
-        systemJobScopeDrain,
-        systemJobReconcileTail,
+        systemJobs.drain(),
         exitWatchersStopPromise ?? Promise.resolve(),
         stopStreamWatchers(),
       ],
@@ -1196,58 +1194,13 @@ export function buildGatewayCronService(params: {
   cron.stopAndDrain = async () => {
     await stopAndDrainCron();
   };
-  // Serialize accepted-config convergence; newer requests and stop supersede this tail.
-  let systemJobReconcileTail = Promise.resolve<GatewaySystemJobReconciliationResult>("converged");
-  let systemJobScope = params.scheduler.scope();
-  let systemJobScopeDrain = Promise.resolve();
-  const stopSystemJobReconciliation = () => {
-    // A retry can retire its own scope; only external shutdown joins its callback.
-    systemJobScopeDrain = Promise.all([systemJobScopeDrain, systemJobScope.stop()]).then(
-      () => undefined,
-    );
-  };
-  const reconcileSystemJobs = (): Promise<GatewaySystemJobReconciliationResult> => {
-    if (systemJobScope.signal.aborted) {
-      return Promise.resolve("superseded");
-    }
-    stopSystemJobReconciliation();
-    const scope = (systemJobScope = params.scheduler.scope());
-    const isCurrent = () => scope === systemJobScope && !scope.signal.aborted;
-    const pass = async (): Promise<GatewaySystemJobReconciliationResult> => {
-      const cfg = getRuntimeConfig();
-      const assertCurrent = () => {
-        if (!isCurrent() || cfg !== getRuntimeConfig()) {
-          throw new GatewaySystemJobReconciliationSupersededError();
-        }
-      };
-      try {
-        const { ok: converged } = await reconcileHeartbeatMonitorJobs({
-          cron,
-          cfg,
-          logger: cronServiceLogger,
-          commitGuard: assertCurrent,
-        });
-        assertCurrent();
-        if (!converged) {
-          scope.schedule({
-            id: `cron:${storePath}:system-jobs`,
-            delayMs: 30_000,
-            run: reconcileSystemJobs,
-          });
-        }
-        return converged ? "converged" : "retry-scheduled";
-      } catch (error) {
-        if (!(error instanceof GatewaySystemJobReconciliationSupersededError)) {
-          throw error;
-        }
-        // A no-op accepted replacement may not request another pass. Finish
-        // against its config; an explicit newer request or stop owns its own tail.
-        return isCurrent() ? await pass() : "superseded";
-      }
-    };
-    systemJobReconcileTail = systemJobReconcileTail.then(pass, pass);
-    return systemJobReconcileTail;
-  };
+  const systemJobs = createGatewayCronSystemJobReconciler({
+    cron,
+    scheduler: params.scheduler,
+    storePath,
+    getRuntimeConfig,
+    logger: cronServiceLogger,
+  });
   const startCron = cron.start.bind(cron);
   cron.start = async () => {
     if (exitWatcherHandoffReady?.settled) {
@@ -1280,10 +1233,8 @@ export function buildGatewayCronService(params: {
     if (lifecycleChanged()) {
       return;
     }
-    if (systemJobScope.signal.aborted) {
-      systemJobScope = params.scheduler.scope();
-    }
-    await reconcileSystemJobs();
+    systemJobs.resume();
+    await systemJobs.reconcile();
     if (lifecycleChanged()) {
       return;
     }
@@ -1325,7 +1276,7 @@ export function buildGatewayCronService(params: {
     reconcileExitWatchers,
     reconcileStreamWatchers,
     stopStreamWatchers,
-    reconcileSystemJobs,
+    reconcileSystemJobs: systemJobs.reconcile,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
