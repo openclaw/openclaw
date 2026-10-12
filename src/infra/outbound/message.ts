@@ -300,17 +300,19 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
     const resolvedTarget = await resolveDirectMessageTarget(params, cfg, channel, plugin);
 
-    const outboundSession = buildOutboundSessionContext({
-      cfg,
-      agentId: params.agentId,
-      sessionKey: params.requesterSessionKey,
-      conversationType: params.conversationType,
-      requesterAccountId: params.requesterAccountId ?? params.accountId,
-      requesterSenderId: params.requesterSenderId,
-      requesterSenderName: params.requesterSenderName,
-      requesterSenderUsername: params.requesterSenderUsername,
-      requesterSenderE164: params.requesterSenderE164,
-    });
+    const outboundSession =
+      params.session ??
+      buildOutboundSessionContext({
+        cfg,
+        agentId: params.agentId,
+        sessionKey: params.requesterSessionKey,
+        conversationType: params.conversationType,
+        requesterAccountId: params.requesterAccountId ?? params.accountId,
+        requesterSenderId: params.requesterSenderId,
+        requesterSenderName: params.requesterSenderName,
+        requesterSenderUsername: params.requesterSenderUsername,
+        requesterSenderE164: params.requesterSenderE164,
+      });
     // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
     // Lower-level queue-required callers must leave this internal opt-in unset.
     const requireUnknownSendReconciliation =
@@ -344,7 +346,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         cfg,
         channel,
         to: resolvedTarget.to,
-        session: params.session ?? outboundSession,
+        session: outboundSession,
         runId: params.runId,
         executionIdentityToken: params.executionIdentityToken,
         accountId: params.accountId,

@@ -10,7 +10,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
-  type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
@@ -68,7 +67,7 @@ import {
 const AUTOMATION_RESULT_MODEL = "automation-result" as const;
 
 type BackgroundSessionResultCommit =
-  | { ok: true; messageId: string }
+  | { ok: true; messageId?: string; skipped?: boolean; diagnostics?: string }
   | { ok: false; reason: string };
 
 type BackgroundSessionResultProvenance = {
@@ -83,9 +82,8 @@ export async function commitBackgroundResultToSession(params: {
   sessionKey: string;
   /** Pins output to the conversation generation that admitted the background run. */
   expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
-  text: string;
-  prepareDisplayContent?: () => Promise<readonly Record<string, unknown>[] | undefined>;
-  onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+  text?: string;
+  payloads?: ReplyPayload[];
   idempotencyKey: string;
   provenance?: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
@@ -93,134 +91,207 @@ export async function commitBackgroundResultToSession(params: {
   /** Revalidate the producer after preparation and inside the transcript commit. */
   assertCurrent?: () => void;
 }): Promise<BackgroundSessionResultCommit> {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  const text = normalizeOptionalString(params.text);
-  const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
-  if (!sessionKey || !text || !idempotencyKey) {
+  const sessionKey = params.sessionKey;
+  const payloads = params.payloads?.map((payload) => {
+    const spokenText = normalizeOptionalString(payload.spokenText);
+    return spokenText
+      ? copyReplyPayloadMetadata(payload, {
+          ...payload,
+          text: spokenText,
+          spokenText: undefined,
+          audioAsVoice: undefined,
+          mediaUrl: undefined,
+          mediaUrls: [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter(
+            (url): url is string => Boolean(url) && !isAudioFileName(url),
+          ),
+        })
+      : payload;
+  });
+  const mirror =
+    payloads && projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan(payloads));
+  const text =
+    (mirror && resolveMirroredTranscriptText(mirror)) ?? normalizeOptionalString(params.text);
+  if (!text && payloads?.some((payload) => hasReplyChannelData(payload.channelData))) {
+    return {
+      ok: true,
+      skipped: true,
+      diagnostics: "native-only payload not added to conversation",
+    };
+  }
+  const idempotencyKey = params.idempotencyKey;
+  if (!text) {
     return { ok: false, reason: "background session result is missing required data" };
   }
 
   const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
   });
-  const expectedSessionId = normalizeOptionalString(params.expectedGeneration.sessionId);
-  if (!expectedSessionId) {
-    return { ok: false, reason: "background session result has an invalid expected generation" };
-  }
+  const expectedSessionId = params.expectedGeneration.sessionId;
   const expectedLifecycleRevision = normalizeOptionalString(
     params.expectedGeneration.lifecycleRevision,
   );
   const identities = [sessionKey, expectedSessionId];
 
-  params.assertCurrent?.();
-  return await runExclusiveSessionLifecycleMutation("background-result", {
-    scope: storePath,
-    identities,
-    signal: params.signal,
-    prepare: async () => {
-      const released = getSessionWorkAdmissionRelease({ scope: storePath, identities });
-      if (released) {
-        await racePromiseWithAbortSignal(released, params.signal);
-      }
-    },
-    run: async () => {
-      params.assertCurrent?.();
-      const current = loadSessionEntryReadOnly({
-        agentId: params.agentId,
-        sessionKey,
-        storePath,
-        readConsistency: "latest",
-      });
-      if (
-        current?.sessionId !== expectedSessionId ||
-        normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
-      ) {
-        return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
-      }
-      const unavailable = resolveSessionWorkStartError(sessionKey, current, {
-        expectedSessionId,
-        purpose: "accepted-result-settlement",
-      });
-      if (unavailable) {
-        return { ok: false, reason: unavailable };
-      }
-      const scope = {
-        agentId: params.agentId,
-        sessionKey,
-        sessionId: expectedSessionId,
-        storePath,
-      };
-      // A retry owns the original committed payload, including its managed-media IDs.
-      // Restaging media would conflict with the transcript's exact replay contract.
-      const prior = await findTranscriptEvent(scope, { kind: "idempotency", key: idempotencyKey });
-      const priorMessage = prior && readTranscriptEventMessage(prior.event);
-      const priorId = prior && readTranscriptEventId(prior.event);
-      if (prior && (!priorMessage || !priorId)) {
-        return { ok: false, reason: "background result transcript identity is unavailable" };
-      }
-      const displayContent = priorMessage
-        ? undefined
-        : (await params.prepareDisplayContent?.())?.map((block) => Object.assign({}, block));
-      const message = {
-        role: "assistant",
-        content: [{ type: "text", text }],
-        ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
-        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
-        provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
-        model: AUTOMATION_RESULT_MODEL,
-        usage: makeZeroUsageSnapshot(),
-        stopReason: "stop",
-        timestamp: Date.now(),
-        idempotencyKey,
-        ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
-      } satisfies SessionTranscriptAssistantMessage & {
-        idempotencyKey: string;
-        openclawAutomation?: BackgroundSessionResultProvenance;
-      };
-      params.assertCurrent?.();
-      const committed = await persistSessionTranscriptTurn(scope, {
-        cwd: current.spawnedCwd,
-        expectedSessionId,
-        expectedLifecycleRevision: expectedLifecycleRevision ?? null,
-        assertCurrent: () => {
-          params.assertCurrent?.();
-          params.signal?.throwIfAborted();
-        },
-        messages: [
-          {
-            message: priorMessage
-              ? {
-                  ...priorMessage,
-                  content: message.content,
-                  ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
-                }
-              : message,
-            idempotencyLookup: "scan",
-            ...(priorId
-              ? {
-                  eventId: priorId,
-                  predicate: {
-                    kind: "active-entry" as const,
-                    entryId: priorId,
-                    errorMessage: "background result no longer owns the active transcript",
-                  },
-                }
-              : {}),
+  let preparedContent: Record<string, unknown>[] | undefined;
+  let appended = false;
+  try {
+    params.assertCurrent?.();
+    return await runExclusiveSessionLifecycleMutation("background-result", {
+      scope: storePath,
+      identities,
+      signal: params.signal,
+      prepare: async () => {
+        const released = getSessionWorkAdmissionRelease({ scope: storePath, identities });
+        if (released) {
+          await racePromiseWithAbortSignal(released, params.signal);
+        }
+      },
+      run: async () => {
+        params.assertCurrent?.();
+        const current = loadSessionEntryReadOnly({
+          agentId: params.agentId,
+          sessionKey,
+          storePath,
+          readConsistency: "latest",
+        });
+        if (
+          current?.sessionId !== expectedSessionId ||
+          normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
+        ) {
+          return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
+        }
+        const unavailable = resolveSessionWorkStartError(sessionKey, current, {
+          expectedSessionId,
+          purpose: "accepted-result-settlement",
+        });
+        if (unavailable) {
+          return { ok: false, reason: unavailable };
+        }
+        const scope = {
+          agentId: params.agentId,
+          sessionKey,
+          sessionId: expectedSessionId,
+          storePath,
+        };
+        // A retry owns the original committed payload, including its managed-media IDs.
+        // Restaging media would conflict with the transcript's exact replay contract.
+        const prior = await findTranscriptEvent(scope, {
+          kind: "idempotency",
+          key: idempotencyKey,
+        });
+        const priorMessage = prior && readTranscriptEventMessage(prior.event);
+        const priorId = prior && readTranscriptEventId(prior.event);
+        if (prior && (!priorMessage || !priorId)) {
+          return { ok: false, reason: "background result transcript identity is unavailable" };
+        }
+        let displayContent: Record<string, unknown>[] | undefined;
+        if (!priorMessage && payloads && mirror) {
+          const { assistantContent } = await buildAssistantReplyContent({
+            sessionKey,
+            agentId: params.agentId,
+            payloads: payloads.map((payload) =>
+              copyReplyPayloadMetadata(payload, {
+                ...payload,
+                text: resolveOutboundPayloadMirrorText(payload),
+              }),
+            ),
+            managedMediaLocalRoots: getAgentScopedMediaLocalRootsForSources({
+              cfg: params.config,
+              agentId: params.agentId,
+              mediaSources: mirror.mediaUrls,
+            }),
+            includeSensitiveMedia: false,
+            onManagedMediaPrepareError: (message) =>
+              logWarn(`Result media embedding skipped: ${message}`),
+          });
+          preparedContent = assistantContent;
+          displayContent = hasAssistantDisplayMediaContent(assistantContent)
+            ? assistantContent
+            : undefined;
+        }
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
+          api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+          provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+          model: AUTOMATION_RESULT_MODEL,
+          usage: makeZeroUsageSnapshot(),
+          stopReason: "stop",
+          timestamp: Date.now(),
+          idempotencyKey,
+          ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
+        } satisfies SessionTranscriptAssistantMessage & {
+          idempotencyKey: string;
+          openclawAutomation?: BackgroundSessionResultProvenance;
+        };
+        params.assertCurrent?.();
+        const committed = await persistSessionTranscriptTurn(scope, {
+          cwd: current.spawnedCwd,
+          expectedSessionId,
+          expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+          assertCurrent: () => {
+            params.assertCurrent?.();
+            params.signal?.throwIfAborted();
           },
-        ],
-        touchSessionEntry: true,
-        updateMode: "inline",
-        // A retry can finish media ownership after a committed append failed to publish.
-        publishWhen: params.prepareDisplayContent ? "always" : undefined,
-        config: params.config,
-        onMessageCommitted: params.onMessageCommitted,
-      });
-      const appended = committed.messages[0];
-      return appended
-        ? { ok: true, messageId: appended.messageId }
-        : { ok: false, reason: committed.rejectedReason ?? "background result was not committed" };
-    },
-  });
+          messages: [
+            {
+              message: priorMessage
+                ? {
+                    ...priorMessage,
+                    content: message.content,
+                    ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
+                  }
+                : message,
+              idempotencyLookup: "scan",
+              ...(priorId
+                ? {
+                    eventId: priorId,
+                    predicate: {
+                      kind: "active-entry" as const,
+                      entryId: priorId,
+                      errorMessage: "background result no longer owns the active transcript",
+                    },
+                  }
+                : {}),
+            },
+          ],
+          touchSessionEntry: true,
+          updateMode: "inline",
+          // A retry can finish media ownership after a committed append failed to publish.
+          publishWhen: payloads ? "always" : undefined,
+          config: params.config,
+          onMessageCommitted: (result, acceptCompletion) => {
+            appended = result.appended;
+            const blocks = readAssistantDisplayContent(result.message);
+            if (payloads && hasManagedOutgoingAssistantContent(blocks)) {
+              acceptCompletion(async () => {
+                if (
+                  !(await attachManagedOutgoingMediaToMessage({
+                    messageId: result.messageId,
+                    blocks,
+                  }))
+                ) {
+                  throw new Error("Result media ownership could not be persisted");
+                }
+              });
+            }
+          },
+        });
+        const resultMessage = committed.messages[0];
+        return resultMessage
+          ? { ok: true, messageId: resultMessage.messageId }
+          : {
+              ok: false,
+              reason: committed.rejectedReason ?? "background result was not committed",
+            };
+      },
+    });
+  } finally {
+    if (!appended && preparedContent) {
+      await removeManagedOutgoingMediaBlocks({ blocks: preparedContent, messageId: null });
+    }
+  }
 }
 
 export type ConfirmedVisibleMessageParams = {
@@ -235,7 +306,7 @@ export type ConfirmedVisibleMessageParams = {
   deliveryId: string;
   payloadIndex: number;
   signal?: AbortSignal;
-  expectedGeneration?: { sessionId: string; lifecycleRevision?: string };
+  expectedGeneration?: { sessionKey?: string; sessionId: string; lifecycleRevision?: string };
   assertCurrent?: () => void;
   /** Fences new route-discovery I/O, not persistence of an accepted delivery. */
   assertDirectAdapterHandoff?: () => void;
@@ -247,23 +318,14 @@ export async function commitConfirmedVisibleMessage(
 ): Promise<{ ok: true; skipped?: boolean; diagnostics?: string } | { ok: false; reason: string }> {
   const agentId = params.producer?.agentId ?? resolveDefaultAgentId(params.config);
   const storePath = resolveSessionStorePathCore(params.config.session?.store, { agentId });
+  const keyScope = { agentId, mainKey: params.config.session?.mainKey };
   const producerKey = params.producer?.key
-    ? toAgentStoreSessionKey({
-        agentId,
-        requestKey: params.producer.key,
-        mainKey: params.config.session?.mainKey,
-      })
+    ? toAgentStoreSessionKey({ ...keyScope, requestKey: params.producer.key })
     : undefined;
   let route = params.route;
   if (
-    producerKey &&
     route &&
-    producerKey ===
-      toAgentStoreSessionKey({
-        agentId,
-        requestKey: route.sessionKey,
-        mainKey: params.config.session?.mainKey,
-      })
+    producerKey === toAgentStoreSessionKey({ ...keyScope, requestKey: route.sessionKey })
   ) {
     return { ok: true, skipped: true };
   }
@@ -275,25 +337,22 @@ export async function commitConfirmedVisibleMessage(
       })
     : undefined;
   const context = deliveryContextFromSession(producer);
-  const destinationContext = deliveryContextKey({
-    channel: params.channel,
-    to: route?.to ?? params.to,
-    accountId: normalizeAccountId(params.accountId),
-    threadId: route?.threadId ?? params.threadId ?? undefined,
+  const producerContext = deliveryContextKey({
+    ...context,
+    accountId: normalizeAccountId(context?.accountId),
   });
-  if (
-    producerKey &&
-    destinationContext &&
-    destinationContext ===
-      deliveryContextKey({
-        ...context,
-        accountId: normalizeAccountId(context?.accountId),
-      })
-  ) {
+  const matchesProducer = (to: string, threadId: string | number | null | undefined) => {
+    const destinationContext = deliveryContextKey({
+      channel: params.channel,
+      to,
+      accountId: normalizeAccountId(params.accountId),
+      threadId: threadId ?? undefined,
+    });
+    return Boolean(producerKey && destinationContext && destinationContext === producerContext);
+  };
+  if (matchesProducer(route?.to ?? params.to, route?.threadId ?? params.threadId)) {
     return { ok: true, skipped: true };
   }
-  // Ingress already recorded the peer kind and current owner. Reuse those
-  // facts before asking a plugin to discover an address again.
   const localSelection = route
     ? undefined
     : await resolveCurrentConversationByDelivery(
@@ -356,49 +415,30 @@ export async function commitConfirmedVisibleMessage(
     };
   }
   const destinationKey = toAgentStoreSessionKey({
-    agentId,
+    ...keyScope,
     requestKey: destination.sessionKey,
-    mainKey: params.config.session?.mainKey,
   });
   if (producerKey === destinationKey) {
     return { ok: true, skipped: true };
   }
-  if (
-    producerKey &&
-    route &&
-    deliveryContextKey({
-      channel: params.channel,
-      to: route.to,
-      accountId: normalizeAccountId(params.accountId),
-      threadId: route.threadId ?? params.threadId ?? undefined,
-    }) ===
-      deliveryContextKey({
-        ...context,
-        accountId: normalizeAccountId(context?.accountId),
-      })
-  ) {
+  if (route && matchesProducer(route.to, route.threadId ?? params.threadId)) {
     return { ok: true, skipped: true };
   }
 
-  const spokenText = normalizeOptionalString(params.payload.spokenText);
-  const payload = spokenText
-    ? copyReplyPayloadMetadata(params.payload, {
-        ...params.payload,
-        text: spokenText,
-        spokenText: undefined,
-        audioAsVoice: undefined,
-        mediaUrl: undefined,
-        mediaUrls: [params.payload.mediaUrl, ...(params.payload.mediaUrls ?? [])].filter(
-          (url): url is string => Boolean(url) && !isAudioFileName(url),
-        ),
-      })
-    : params.payload;
-  const mirror = projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan([payload]));
-  const text = resolveMirroredTranscriptText(mirror);
-  if (!text) {
-    return hasReplyChannelData(payload.channelData)
-      ? { ok: true, skipped: true, diagnostics: "native-only payload not added to conversation" }
-      : { ok: true, skipped: true };
+  const payload = params.payload;
+  if (
+    !normalizeOptionalString(payload.text) &&
+    !normalizeOptionalString(payload.spokenText) &&
+    !payload.mediaUrl &&
+    !payload.mediaUrls?.length
+  ) {
+    return {
+      ok: true,
+      skipped: true,
+      ...(hasReplyChannelData(payload.channelData)
+        ? { diagnostics: "native-only payload not added to conversation" }
+        : {}),
+    };
   }
   params.assertCurrent?.();
   if (route) {
@@ -419,62 +459,27 @@ export async function commitConfirmedVisibleMessage(
   if (!entry) {
     return { ok: false, reason: "destination conversation is unavailable" };
   }
-  let preparedContent: Record<string, unknown>[] | undefined;
-  let appended = false;
-  try {
-    return await commitBackgroundResultToSession({
-      agentId,
-      sessionKey: destinationKey,
-      expectedGeneration: {
-        sessionId: params.expectedGeneration?.sessionId ?? entry.sessionId,
-        lifecycleRevision: params.expectedGeneration
-          ? params.expectedGeneration.lifecycleRevision
-          : entry.lifecycleRevision,
-      },
-      text,
-      idempotencyKey: `outbound-delivery:${params.deliveryId}:${params.payloadIndex}`,
-      config: params.config,
-      signal: params.signal,
-      assertCurrent: params.assertCurrent,
-      prepareDisplayContent: async () => {
-        const { assistantContent } = await buildAssistantReplyContent({
-          sessionKey: destinationKey,
-          agentId,
-          payloads: [
-            copyReplyPayloadMetadata(payload, {
-              ...payload,
-              text: resolveOutboundPayloadMirrorText(payload),
-            }),
-          ],
-          managedMediaLocalRoots: getAgentScopedMediaLocalRootsForSources({
-            cfg: params.config,
-            agentId,
-            mediaSources: mirror.mediaUrls,
-          }),
-          includeSensitiveMedia: false,
-          onManagedMediaPrepareError: (message) =>
-            logWarn(`Outbound result media embedding skipped: ${message}`),
-        });
-        preparedContent = assistantContent;
-        return hasAssistantDisplayMediaContent(preparedContent) ? preparedContent : undefined;
-      },
-      onMessageCommitted: (result, acceptCompletion) => {
-        appended = result.appended;
-        const blocks = readAssistantDisplayContent(result.message);
-        if (hasManagedOutgoingAssistantContent(blocks)) {
-          acceptCompletion(async () => {
-            if (
-              !(await attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks }))
-            ) {
-              throw new Error("Outbound result media ownership could not be persisted");
-            }
-          });
-        }
-      },
-    });
-  } finally {
-    if (!appended && preparedContent) {
-      await removeManagedOutgoingMediaBlocks({ blocks: preparedContent, messageId: null });
-    }
-  }
+  const expected = params.expectedGeneration;
+  const generationMatches =
+    !expected?.sessionKey ||
+    destinationKey ===
+      toAgentStoreSessionKey({
+        agentId,
+        requestKey: expected.sessionKey,
+        mainKey: params.config.session?.mainKey,
+      });
+  const generation = expected && generationMatches ? expected : entry;
+  return commitBackgroundResultToSession({
+    agentId,
+    sessionKey: destinationKey,
+    expectedGeneration: {
+      sessionId: generation.sessionId,
+      lifecycleRevision: generation.lifecycleRevision,
+    },
+    payloads: [payload],
+    idempotencyKey: `outbound-delivery:${params.deliveryId}:${params.payloadIndex}`,
+    config: params.config,
+    signal: params.signal,
+    assertCurrent: params.assertCurrent,
+  });
 }

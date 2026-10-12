@@ -1,11 +1,8 @@
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { commitConfirmedVisibleMessage } from "../../sessions/background-session-result.js";
 import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import { formatErrorMessage } from "../errors.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
-import { resolveOutboundSessionRoute } from "./outbound-session.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 type RecoveryTranscriptOptions = {
@@ -41,33 +38,6 @@ export async function commitRecoveredVisibleMessages(
     return;
   }
   try {
-    const agentId = entry.session?.agentId ?? resolveDefaultAgentId(opts.cfg);
-    const route = await resolveOutboundSessionRoute({
-      cfg: opts.cfg,
-      channel: entry.channel,
-      agentId,
-      accountId: entry.accountId,
-      target: entry.to,
-      threadId: entry.threadId,
-    });
-    if (!route) {
-      return;
-    }
-    const normalizeSessionKey = (sessionKey: string) =>
-      toAgentStoreSessionKey({
-        agentId,
-        requestKey: sessionKey,
-        mainKey: opts.cfg.session?.mainKey,
-      });
-    const generation = entry.sessionGeneration;
-    const expectedGeneration =
-      generation &&
-      normalizeSessionKey(route.sessionKey) === normalizeSessionKey(generation.sessionKey)
-        ? {
-            sessionId: generation.sessionId,
-            lifecycleRevision: generation.lifecycleRevision ?? undefined,
-          }
-        : undefined;
     const result = await commitConfirmedVisibleMessage({
       config: opts.cfg,
       channel: entry.channel,
@@ -75,12 +45,18 @@ export async function commitRecoveredVisibleMessages(
       accountId: entry.accountId,
       threadId: entry.threadId,
       producer: entry.session,
-      route,
-      expectedGeneration,
+      expectedGeneration: entry.sessionGeneration
+        ? {
+            sessionKey: entry.sessionGeneration.sessionKey,
+            sessionId: entry.sessionGeneration.sessionId,
+            lifecycleRevision: entry.sessionGeneration.lifecycleRevision ?? undefined,
+          }
+        : undefined,
       payload: { text: prepared.payload.text },
       deliveryId: entry.id,
       payloadIndex: prepared.sourceIndex,
       assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
+      assertDirectAdapterHandoff: () => stateContext.workerContext.admission.assertCurrent(),
     });
     const diagnostic = result.ok ? result.diagnostics : result.reason;
     if (diagnostic) {

@@ -104,16 +104,9 @@ export async function resolveCachedGoogleChatSpaceChatType(
   load: () => Promise<GoogleChatSpace>,
 ): Promise<ChatType | undefined> {
   const cache = accountSpaces(account);
-  if (!cache) {
-    return undefined;
-  }
-  const existing = cache.spaces.get(spaceName);
-  if (existing) {
-    return existing.chatType ?? existing.lookup;
-  }
-  const entry = admitSpace(cache, spaceName);
-  if (!entry) {
-    return undefined;
+  const entry = cache && admitSpace(cache, spaceName);
+  if (!entry || entry.chatType || entry.lookup) {
+    return entry?.chatType ?? entry?.lookup;
   }
   entry.lookup = (async () => {
     try {
@@ -142,7 +135,7 @@ export function startGoogleChatSpaceCache(account: ResolvedGoogleChatAccount): (
   const cache = accountSpaces(account);
   return () => {
     const current = store.tryGetRuntime();
-    if (current?.get(account.accountId) === cache) {
+    if (current && current.get(account.accountId) === cache) {
       current.delete(account.accountId);
     }
   };

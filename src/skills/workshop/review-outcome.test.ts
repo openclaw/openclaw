@@ -144,12 +144,9 @@ describe("postWorkshopChangeNotice", () => {
     ]);
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(1);
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledWith(
-      {
-        cfg: {},
+      expect.objectContaining({
         channel: "telegram",
         to: "42",
-        accountId: undefined,
-        threadId: undefined,
         payloads: [
           {
             text: '💾 Learned: updated `actual-budget-operations` (tightened reconciliation step); created `release-notes` (drafting release notes). Say "undo" to revert this skill change.',
@@ -179,7 +176,7 @@ describe("postWorkshopChangeNotice", () => {
           lifecycleRevision: "reviewed-revision",
         },
         bestEffort: true,
-      },
+      }),
       undefined,
       undefined,
       generation("agent:main:telegram:direct:42"),

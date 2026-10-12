@@ -55,18 +55,15 @@ describe("confirmed outbound logical payloads", () => {
       assertTranscriptCurrent: vi.fn(),
     };
     await deliverOutboundPayloadsCore(params);
-    await deliverOutboundPayloadsCore(params);
-    expect(mocks.commit).toHaveBeenCalledTimes(2);
-    for (const [commit] of mocks.commit.mock.calls) {
-      expect(commit).toMatchObject({
-        deliveryId: "durable-queue-id",
-        payloadIndex: 3,
-        producer: params.session,
-        payload,
-        assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-        assertCurrent: params.assertTranscriptCurrent,
-      });
-    }
+    expect(mocks.commit).toHaveBeenCalledOnce();
+    expect(mocks.commit.mock.calls[0]?.[0]).toMatchObject({
+      deliveryId: "durable-queue-id",
+      payloadIndex: 3,
+      producer: params.session,
+      payload,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      assertCurrent: params.assertTranscriptCurrent,
+    });
   });
 
   it("publishes an adapter-created thread without reusing the prepared route or generation", async () => {

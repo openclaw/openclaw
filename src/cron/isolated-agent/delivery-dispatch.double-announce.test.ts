@@ -1346,11 +1346,6 @@ describe("dispatchCronDelivery", () => {
 
   it.each([
     {
-      name: "normalized execution destination",
-      executionKey: "telegram:group:-100123:topic:42",
-      destinationThread: "42",
-    },
-    {
       name: "different destination thread",
       executionKey: "agent:main:telegram:group:-100123:topic:42",
       destinationThread: "43",

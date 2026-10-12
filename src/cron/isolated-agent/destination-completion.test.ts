@@ -9,6 +9,7 @@ import {
   replaceSessionEntry,
   resetSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
+import * as sessionTranscripts from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
   OutboundDeliveryError,
@@ -24,7 +25,6 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import * as backgroundResults from "../../sessions/background-session-result.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -305,7 +305,7 @@ describe("destination-owned completion", () => {
       const commitFailure =
         mode === "commit-failure"
           ? vi
-              .spyOn(backgroundResults, "commitBackgroundResultToSession")
+              .spyOn(sessionTranscripts, "persistSessionTranscriptTurn")
               .mockRejectedValue(new Error("completion commit rejected"))
           : undefined;
       const destination = {

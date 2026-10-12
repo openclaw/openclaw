@@ -393,17 +393,7 @@ export async function dispatchCronDelivery(
     }
   }
   if (conversationError) {
-    if (state.status !== "delivered") {
-      return failTarget(conversationError);
-    }
-    diagnostics = mergeCronRunDiagnostics(
-      diagnostics,
-      createCronRunDiagnosticsFromError(
-        "delivery",
-        `result was delivered but was not added to the conversation: ${conversationError}`,
-        { severity: "warn" },
-      ),
-    );
+    return failTarget(conversationError);
   } else if (conversation) {
     record("delivered");
   }

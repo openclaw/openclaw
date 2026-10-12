@@ -47,6 +47,8 @@ Allowed exceptions, each recorded as a `warn` run diagnostic:
   agent's transcript gets it.
 - The payload is native-only (for example a Discord embed with no text). The
   message is sent; there is no honest text to write.
+- A recovered receipt cannot prove the final delivered content.
+- Route discovery lost its live lookup authority after delivery was accepted.
 
 ### Rule 2: a job runs in a chat, or in the background
 
@@ -70,13 +72,21 @@ announcements. It skips the write only when the send is the reply of a turn that
 runs in the same conversation, because that turn already wrote it. That skip is
 the reason delivery mirrors became transcript-only in
 [#99470](https://github.com/openclaw/openclaw/issues/99470): without it, replay
-showed every answer twice. Cron keeps no external-delivery transcript code of its own.
-Internal-channel publications remain outside this change.
+showed every answer twice. Cron keeps only generation custody and diagnostics;
+the shared writer also owns internal-channel payload and media publication.
+Recovery retains a small adapter because its receipts prove only normalized,
+single-text output, not arbitrary delivered content.
 
 Same-conversation source-reply markers remain transcript-only: the UI and restart
 recovery consume their source-turn and terminal-receipt identities. They do not
 add model-visible conversation content. Dispatch's final-reply bookkeeping also
 remains transcript-only for UI display when the runtime did not persist a final.
+
+Destination lookup uses the carried route, then the producer's matching delivery
+context, then an exact current local binding, and finally the plugin resolver.
+The local query includes account, address, and thread before detecting ambiguous
+owners; conversation-reference lookups and deduplicated listings cannot answer
+that question. It uses existing tables and indexes.
 
 ## Considered options
 

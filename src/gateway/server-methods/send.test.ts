@@ -294,7 +294,7 @@ function mockMutableMessageRouteAccounts(resolveDefaultAccountId: (channel: stri
   }));
 }
 
-describe("gateway send mirroring", () => {
+describe("gateway send conversation ownership", () => {
   let registrySeq = 0;
 
   beforeAll(async () => {

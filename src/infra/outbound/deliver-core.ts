@@ -40,7 +40,6 @@ import {
   planOutboundTextMessageUnits,
   type OutboundMessageSendOverrides,
 } from "./message-plan.js";
-import type { NormalizedOutboundPayload } from "./payloads.js";
 import {
   acceptedPreparedOutboundEntries,
   preparedOutboundSuppressionOutcomes,
@@ -183,14 +182,13 @@ export async function deliverOutboundPayloadsCore(
     params.deliveryIntentId ??
     randomUUID();
   const recordDeliveredPayload = async (
-    payloadSummary: NormalizedOutboundPayload,
     payload: ReplyPayload,
     payloadIndex: number,
   ): Promise<void> => {
     // Post-send observers are bookkeeping only. Never turn an identified
     // platform delivery into a retryable failure if an observer misbehaves.
     try {
-      params.onDeliveredPayload?.(payloadSummary);
+      params.onDeliveredPayload?.(buildPayloadSummary(payload));
     } catch (error) {
       log.warn("Outbound delivered-payload observer failed after platform send.", {
         channel,
@@ -445,11 +443,7 @@ export async function deliverOutboundPayloadsCore(
           results: deliveredResults,
         });
         if (!getSuppressionReason()) {
-          await recordDeliveredPayload(
-            buildPayloadSummary(deliveredPayload),
-            deliveredPayload,
-            payloadIndex,
-          );
+          await recordDeliveredPayload(deliveredPayload, payloadIndex);
         }
       } else {
         recordSuppressedPayload(getSuppressionReason() ?? "adapter_returned_no_identity");
