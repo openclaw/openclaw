@@ -15,6 +15,7 @@ import {
   assertStateDatabaseReadAllowed,
   type StateDatabaseSchemaLease,
 } from "./gateway-state-owner.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
@@ -423,7 +424,9 @@ export function receiveSqliteWorkerReply(
   }
   let value: unknown;
   try {
-    const result = decodeSqliteWorkerReplyValue(job, reply);
+    const result = runWithMainThreadTask("worker:sqlite:reply-decode", () =>
+      decodeSqliteWorkerReplyValue(job, reply),
+    );
     if (result.type === "continue") {
       // Continuations retain the current job and its reserved transport credits through drain.
       slot.worker.postMessage(result.request, []);
