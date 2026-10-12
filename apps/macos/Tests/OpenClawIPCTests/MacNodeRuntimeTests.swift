@@ -1,6 +1,7 @@
 import CoreLocation
 import Dispatch
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -192,6 +193,15 @@ struct MacNodeRuntimeTests {
             owner.setRoute(generation: 1, connected: true, hostingEnabled: false)
             return owner
         }()
+
+        var permissionStates: [Capability: OpenClawPermissionState] = [:]
+
+        func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
+            PermissionManager.missingPermission(capabilities.compactMap { capability in
+                if disabled.contains(capability) { return (capability, .disabledInOpenClaw) }
+                return self.permissionStates[capability].map { (capability, $0) }
+            })
+        }
 
         var snapshotCallCount = 0
         var receivedSnapshotParams: MacNodeScreenSnapshotParams?
@@ -572,7 +582,7 @@ struct MacNodeRuntimeTests {
             let runtime = MacNodeRuntime()
             let response = await self.invoke(runtime, "req-4", OpenClawCameraCommand.list.rawValue)
             #expect(response.ok == false)
-            #expect(response.error?.message.contains("CAMERA_DISABLED") == true)
+            #expect(response.error?.details == .init(capabilities: ["camera"], state: .disabledInOpenClaw))
         }
     }
 
@@ -601,7 +611,7 @@ struct MacNodeRuntimeTests {
 
                 #expect(response.ok == testCase.accepted)
                 if testCase.mode == .off {
-                    #expect(response.error?.message == "LOCATION_DISABLED: enable Location in Settings")
+                    #expect(response.error?.details == .init(capabilities: ["location"], state: .disabledInOpenClaw))
                 }
             }
         }
@@ -720,8 +730,8 @@ struct MacNodeRuntimeTests {
             runtime, "req-computer-disabled", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == false)
-        #expect(response.error?.code == .unavailable)
-        #expect(response.error?.message == "COMPUTER_DISABLED: enable Computer Control in Settings")
+        #expect(response.error?.code == .permissionMissing)
+        #expect(response.error?.details?.capabilities.contains("computerControl") == true)
         let received = await MainActor.run { services.receivedParams }
         #expect(received == nil)
     }
@@ -1190,7 +1200,7 @@ struct MacNodeRuntimeTests {
         #expect(generations.release == [1])
     }
 
-    @Test func `handle invoke maps accessibility denial to unavailable`() async throws {
+    @Test func `handle invoke preserves a late accessibility denial as typed permission missing`() async throws {
         let services = await MainActor.run {
             MainActorServicesProbe(actError: ComputerActionService.ComputerActionError.accessibilityNotTrusted)
         }
@@ -1204,8 +1214,8 @@ struct MacNodeRuntimeTests {
             runtime, "req-computer-ax", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == false)
-        #expect(response.error?.code == .unavailable)
-        #expect(response.error?.message == "ACCESSIBILITY_REQUIRED: grant Accessibility permission to OpenClaw")
+        #expect(response.error?.code == .permissionMissing)
+        #expect(response.error?.details == .init(capabilities: ["accessibility"], state: .notDetermined))
     }
 
     @Test func `handle invoke rejects malformed computer act params`() async {

@@ -42,7 +42,7 @@ function DevicePermissionsPageContent() {
                   t(`configPage.deviceSettings.permissions.${permission().id}.title`);
                 const requestableBinaryPermission = () =>
                   props.snapshot.device.platform === "macos" &&
-                  (permission().id === "screenRecording" || permission().id === "accessibility") &&
+                  ["screenRecording", "accessibility", "eventPosting"].includes(permission().id) &&
                   permission().status === "notDetermined";
                 return (
                   <SettingsRow

@@ -9,6 +9,7 @@ import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import "./chat-skill-learned-notice.tsx";
+import "./chat-permission-card.tsx";
 
 export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null | undefined) {
   const archiveActor = activeSession?.archivedBy;
@@ -97,7 +98,18 @@ export function renderChatDivider(item: Extract<ChatItem, { kind: "divider" }>) 
   `;
 }
 
-export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
+export function renderChatNotice(
+  item: Extract<ChatItem, { kind: "notice" }>,
+  onPermissionRetry?: (message: string) => void,
+) {
+  if (item.permissionMissing) {
+    return html`<div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+      <openclaw-chat-permission-card
+        .request=${item.permissionMissing}
+        .onRetry=${onPermissionRetry}
+      ></openclaw-chat-permission-card>
+    </div>`;
+  }
   if (item.skillChanges) {
     return html`
       <div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>

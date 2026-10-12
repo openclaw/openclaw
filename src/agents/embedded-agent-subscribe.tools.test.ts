@@ -107,6 +107,18 @@ describe("tool errors", () => {
       "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
     );
   });
+
+  it("preserves native permission details through lifecycle error projection", () => {
+    const permissionMissing = {
+      nodeId: "mac-node",
+      command: "screen.snapshot",
+      capabilities: ["screenRecording"],
+      state: "restart-required",
+    };
+    const cause = Object.assign(new Error("Restart OpenClaw"), { details: { permissionMissing } });
+    const result = buildToolLifecycleErrorResult(new Error("Screenshot unavailable", { cause }));
+    expect(result.details.permissionMissing).toEqual(permissionMissing);
+  });
 });
 
 describe("tool sanitization", () => {

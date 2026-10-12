@@ -28,5 +28,5 @@ export type NodeInvokeResult = {
   ok: boolean;
   payload?: unknown;
   payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
+  error?: { code?: string; message?: string; details?: unknown } | null;
 };

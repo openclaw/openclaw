@@ -1152,6 +1152,10 @@ const enSettings = {
           title: "Accessibility",
           hint: "Control UI elements when an action requires it.",
         },
+        eventPosting: {
+          title: "Event Posting",
+          hint: "Send keyboard and pointer input when a computer action requires it.",
+        },
         screenRecording: {
           title: "Screen Recording",
           hint: "Capture the screen for context or screenshots.",

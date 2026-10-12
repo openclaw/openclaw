@@ -10,6 +10,9 @@ extension Capability {
         case .speechRecognition: "Speech Recognition"
         case .camera: "Camera"
         case .location: "Location"
+        case .eventPosting: "Event Posting"
+        case .computerControl: "Computer Control"
+        case .canvas: "Canvas"
         }
     }
 }

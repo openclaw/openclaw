@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import {
   createEffect,
@@ -10,6 +11,7 @@ import {
   type Accessor,
   untrack,
 } from "solid-js";
+import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -34,12 +36,13 @@ import {
 import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import { renderMessageImages } from "./chat-message-images.ts";
-import "./chat-clawhub-card.ts";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
+import "./chat-clawhub-card.ts";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
 import { type AttachmentItem, schedulePairingQrExpiryRefresh } from "./chat-message-media.ts";
 import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
+import { renderChatPermissionCard } from "./chat-permission-card.tsx";
 import { renderReplyLine } from "./chat-reply-attribution.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
@@ -566,6 +569,10 @@ function ToolMessageFallback(props: ContentProps) {
 }
 
 function ToolMessage(props: ContentProps) {
+  const permission = () =>
+    readNodePermissionRequest(
+      asNullableRecord(props.state().singleToolCard?.details)?.permissionMissing,
+    );
   const fallback = solidContent(ToolMessageFallback, {
     get state() {
       return props.state;
@@ -581,17 +588,26 @@ function ToolMessage(props: ContentProps) {
     },
   });
   return (
-    <Show when={props.state().singleToolCard} fallback={<LitContent value={fallback} />}>
-      {(card) => (
-        <openclaw-plugin-view
-          prop:surface="tool-result"
-          prop:props={toolResultSurfaceProps(card(), {
-            ...props.state().toolRenderOptions,
-            expanded: props.state().toolMessageExpanded,
-          })}
-          prop:defaultView={fallback}
-          prop:presented={props.options.presented ?? true}
-        />
+    <Show
+      when={permission()}
+      fallback={
+        <Show when={props.state().singleToolCard} fallback={<LitContent value={fallback} />}>
+          {(card) => (
+            <openclaw-plugin-view
+              prop:surface="tool-result"
+              prop:props={toolResultSurfaceProps(card(), {
+                ...props.state().toolRenderOptions,
+                expanded: props.state().toolMessageExpanded,
+              })}
+              prop:defaultView={fallback}
+              prop:presented={props.options.presented ?? true}
+            />
+          )}
+        </Show>
+      }
+    >
+      {(request) => (
+        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
       )}
     </Show>
   );

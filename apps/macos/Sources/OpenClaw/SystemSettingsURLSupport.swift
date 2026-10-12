@@ -22,7 +22,7 @@ enum SystemSettingsURLSupport {
         }
         let pane = switch capability {
         case .notifications: "Notifications"
-        case .accessibility: "Accessibility"
+        case .accessibility, .eventPosting, .computerControl, .canvas: "Accessibility"
         case .screenRecording: "ScreenCapture"
         case .microphone: "Microphone"
         case .speechRecognition: "SpeechRecognition"

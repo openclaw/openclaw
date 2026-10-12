@@ -193,6 +193,26 @@ struct DeviceSettingsBridgeTests {
         }
     }
 
+    @Test func `permission card requests preserve the node and typed capability state`() throws {
+        let request = try #require(DeviceSettingsRequest(body: [
+            "type": "resolve-permission",
+            "request": [
+                "nodeId": "synthetic-mac",
+                "command": "computer.act",
+                "capabilities": ["accessibility", "computerControl"],
+                "state": "disabled-in-openclaw",
+            ],
+        ]))
+        guard case let .resolvePermission(permission) = request else {
+            Issue.record("Expected the permission grant request")
+            return
+        }
+        #expect(permission.nodeId == "synthetic-mac")
+        #expect(permission.command == "computer.act")
+        #expect(permission.capabilities == ["accessibility", "computerControl"])
+        #expect(permission.state == .disabledInOpenClaw)
+    }
+
     @Test func `malformed actions never select a default native panel or permission`() {
         let invalid: [Any] = [
             "status", NSNull(), [String: Any](), ["type": true], ["type": "unknown"],
@@ -217,10 +237,6 @@ struct DeviceSettingsBridgeTests {
             #expect(mapped.nativeMode == native)
             #expect(try String(decoding: JSONEncoder().encode(mapped), as: UTF8.self) == "\"\(wire)\"")
         }
-        #expect(DeviceSettingsPermissionStatus(.granted) == .granted)
-        #expect(DeviceSettingsPermissionStatus(.notGranted).rawValue == "notDetermined")
-        #expect(DeviceSettingsPermissionStatus(.unknown) == .unavailable)
-        #expect(DeviceSettingsPermissionStatus(nil) == .unavailable)
         let statuses: [DeviceSettingsPermissionStatus] = [
             .granted, .denied, .notDetermined, .unavailable, .limited,
         ]

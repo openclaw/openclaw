@@ -59,14 +59,16 @@ struct CameraPTZRuntimeTests {
     @Test func `PTZ commands use camera enablement gate`() async throws {
         try await TestIsolation.withUserDefaultsValues([cameraEnabledKey: false]) {
             let service = FakePTZService()
-            let runtime = MacNodeRuntime(cameraPTZ: service)
+            let runtime = MacNodeRuntime(
+                cameraPTZ: service,
+                makeMainActorServices: { await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() } })
             let response = try await self.invoke(
                 runtime,
                 command: .ptzStatus,
                 params: OpenClawCameraPTZStatusParams(deviceId: "camera-id"))
 
             #expect(!response.ok)
-            #expect(response.error?.message == "CAMERA_DISABLED: enable Camera in Settings")
+            #expect(response.error?.details == .init(capabilities: ["camera"], state: .disabledInOpenClaw))
             #expect(await service.statusDeviceId == nil)
         }
     }
@@ -74,7 +76,9 @@ struct CameraPTZRuntimeTests {
     @Test func `PTZ status routes explicit device and encodes response`() async throws {
         try await TestIsolation.withUserDefaultsValues([cameraEnabledKey: true]) {
             let service = FakePTZService()
-            let runtime = MacNodeRuntime(cameraPTZ: service)
+            let runtime = MacNodeRuntime(
+                cameraPTZ: service,
+                makeMainActorServices: { await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() } })
             let response = try await self.invoke(
                 runtime,
                 command: .ptzStatus,
@@ -91,7 +95,9 @@ struct CameraPTZRuntimeTests {
     @Test func `PTZ control routes closed operation payload`() async throws {
         try await TestIsolation.withUserDefaultsValues([cameraEnabledKey: true]) {
             let service = FakePTZService()
-            let runtime = MacNodeRuntime(cameraPTZ: service)
+            let runtime = MacNodeRuntime(
+                cameraPTZ: service,
+                makeMainActorServices: { await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() } })
             let params = OpenClawCameraPTZControlParams(
                 deviceId: "camera-id",
                 operation: .move,
@@ -106,7 +112,9 @@ struct CameraPTZRuntimeTests {
 
     @Test func `PTZ malformed payload returns stable invalid request prefix`() async {
         await TestIsolation.withUserDefaultsValues([cameraEnabledKey: true]) {
-            let runtime = MacNodeRuntime(cameraPTZ: FakePTZService())
+            let runtime = MacNodeRuntime(
+                cameraPTZ: FakePTZService(),
+                makeMainActorServices: { await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() } })
             let response = await runtime.handleInvoke(BridgeInvokeRequest(
                 id: "ptz-invalid",
                 command: OpenClawCameraCommand.ptzControl.rawValue,
@@ -125,7 +133,9 @@ struct CameraPTZRuntimeTests {
                 applied: ["panTilt"],
                 state: CameraPTZState(panDegrees: 5, tiltDegrees: 0, zoomPercent: 50),
                 failure: "zoom write failed"))
-            let runtime = MacNodeRuntime(cameraPTZ: service)
+            let runtime = MacNodeRuntime(
+                cameraPTZ: service,
+                makeMainActorServices: { await MainActor.run { MacNodeRuntimeTests.MainActorServicesProbe() } })
             let response = try await self.invoke(
                 runtime,
                 command: .ptzControl,

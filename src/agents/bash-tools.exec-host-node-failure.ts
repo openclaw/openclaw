@@ -1,12 +1,23 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
+import type { NodePermissionRequest } from "../../packages/gateway-protocol/src/node-permissions.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { readNodePermissionError } from "./node-permission-error.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type NodeInvokeFailure =
+  | {
+      reason: "permission-missing";
+      retrySafe: false;
+      code: "PERMISSION_MISSING";
+      message: string;
+      permissionMissing: NodePermissionRequest;
+      nodeCommandDispatched?: boolean;
+      requestSent?: boolean;
+    }
   | {
       reason: "policy-denied";
       retrySafe: false;
@@ -50,6 +61,18 @@ function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
     typeof details?.nodeCommandDispatched === "boolean" ? details.nodeCommandDispatched : undefined;
   const requestSent =
     typeof errorRecord?.requestSent === "boolean" ? errorRecord.requestSent : undefined;
+  const permissionMissing = readNodePermissionError(error);
+  if (code === "PERMISSION_MISSING" && permissionMissing) {
+    return {
+      reason: "permission-missing",
+      retrySafe: false,
+      code,
+      message: error instanceof Error ? error.message : message,
+      permissionMissing,
+      nodeCommandDispatched,
+      requestSent,
+    };
+  }
 
   if (code === "SYSTEM_RUN_DENIED") {
     return { reason: "policy-denied", retrySafe: false, code, message };
@@ -80,20 +103,22 @@ function formatNodeInvokeFailureText(params: {
   command: string;
 }): string {
   const summary =
-    params.failure.reason === "outcome-unknown"
-      ? [
-          `Node command outcome is unknown for ${params.nodeId}.`,
-          "The command may have executed. Do not rerun it automatically.",
-        ]
-      : params.failure.reason === "policy-denied"
+    params.failure.reason === "permission-missing"
+      ? [params.failure.message]
+      : params.failure.reason === "outcome-unknown"
         ? [
-            `Node command was denied before execution on ${params.nodeId}.`,
-            "Resolve the reported refusal before retrying.",
+            `Node command outcome is unknown for ${params.nodeId}.`,
+            "The command may have executed. Do not rerun it automatically.",
           ]
-        : [
-            `Node command was not dispatched to ${params.nodeId}.`,
-            "It can be retried after the node reconnects.",
-          ];
+        : params.failure.reason === "policy-denied"
+          ? [
+              `Node command was denied before execution on ${params.nodeId}.`,
+              "Resolve the reported refusal before retrying.",
+            ]
+          : [
+              `Node command was not dispatched to ${params.nodeId}.`,
+              "It can be retried after the node reconnects.",
+            ];
   return [
     ...summary,
     "",
@@ -111,11 +136,13 @@ export function formatNodeInvokeFailureFollowup(params: {
   command: string;
 }): string {
   const prefix =
-    params.failure.reason === "outcome-unknown"
-      ? `Exec outcome unknown (node=${params.nodeId} id=${params.approvalId}, outcome-unknown)`
-      : params.failure.reason === "policy-denied"
-        ? `Exec denied (node=${params.nodeId} id=${params.approvalId}, policy-denied)`
-        : `Exec not dispatched (node=${params.nodeId} id=${params.approvalId}, not-dispatched)`;
+    params.failure.reason === "permission-missing"
+      ? `Exec needs permission (node=${params.nodeId} id=${params.approvalId})`
+      : params.failure.reason === "outcome-unknown"
+        ? `Exec outcome unknown (node=${params.nodeId} id=${params.approvalId}, outcome-unknown)`
+        : params.failure.reason === "policy-denied"
+          ? `Exec denied (node=${params.nodeId} id=${params.approvalId}, policy-denied)`
+          : `Exec not dispatched (node=${params.nodeId} id=${params.approvalId}, not-dispatched)`;
   return `${prefix}\n${formatNodeInvokeFailureText(params)}`;
 }
 
@@ -140,6 +167,9 @@ export function formatNodeInvokeFailureToolResult(params: {
       exitCode: null,
       failureKind: params.failure.reason,
       reason: params.failure.reason,
+      ...(params.failure.reason === "permission-missing"
+        ? { permissionMissing: params.failure.permissionMissing }
+        : {}),
       nodeInvokeFailure: {
         ...(params.failure.code ? { failureCode: params.failure.code } : {}),
         message: params.failure.message,

@@ -32,6 +32,20 @@ function publish(detail: unknown) {
 }
 
 describe("native device settings wire contract", () => {
+  it("advertises permission resolution when a connecting native node publishes its identity", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const post = installBridge(snapshot);
+    expect(capability?.resolvePermission).toBeUndefined();
+    publish({ ...snapshot, device: { ...snapshot.device, nodeId: "node-mac" } });
+    const request = {
+      nodeId: "node-mac",
+      command: "screen.capture",
+      capabilities: ["screenRecording"],
+      state: "denied" as const,
+    };
+    await capability?.resolvePermission?.(request);
+    expect(post).toHaveBeenCalledWith({ type: "resolve-permission", request });
+  });
   it("uses the shipped installation projection on an older native host without offering new actions", async () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     delete snapshot.browser.chromeSetupActions;

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { ComputerTakeControlParamsSchema } from "../../agents/tools/computer-tool-control.js";
 import { isComputerObservationAction } from "../../agents/tools/computer-tool-shared.js";
@@ -20,6 +22,7 @@ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-comma
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import { publishNodePermissionMissing } from "../server-methods/nodes.permission-missing.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
@@ -328,6 +331,23 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               ? { ...authority, kind: "worker", turnClaim: source.turnClaim }
               : { ...authority, kind: "local" },
         };
+        const permissionError = (error: unknown, command: string) => {
+          const permission = publishNodePermissionMissing({
+            error,
+            nodeId: node.nodeId,
+            nodeName: node.displayName,
+            command,
+            agentRuntimeIdentity: identity,
+            context,
+          });
+          return permission
+            ? new GatewayClientRequestError({
+                code: "UNAVAILABLE",
+                message: permission.message,
+                details: { permissionMissing: permission.permissionMissing },
+              })
+            : undefined;
+        };
         // Tool construction can also build a schema-only projection. Only an actual
         // operation opens a binding; independent projections never retire the active tool.
         let execution: { logicalId: string; physicalId: string } | undefined;
@@ -448,7 +468,10 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
             assertInvocationCurrent();
             if (result) {
               if (!result.ok) {
-                throw new Error(result.message ?? "Session computer action denied");
+                throw (
+                  permissionError(asOptionalObjectRecord(result.details)?.nodeError, command) ??
+                  new Error(result.message ?? "Session computer action denied")
+                );
               }
               return result.payloadJSON ? JSON.parse(result.payloadJSON) : result.payload;
             }
@@ -463,6 +486,12 @@ export function createEnvironmentComputerTransportOwner(options: WorkerComputerO
               isDispatchAuthorized: () => isCurrent() && commandIsAllowed(command),
             });
             assertInvocationCurrent();
+            if (!raw.ok) {
+              throw (
+                permissionError(raw.error, command) ??
+                new Error(raw.error?.message ?? "Session desktop command failed")
+              );
+            }
             return payload(raw);
           } finally {
             inputControllers.delete(controller);

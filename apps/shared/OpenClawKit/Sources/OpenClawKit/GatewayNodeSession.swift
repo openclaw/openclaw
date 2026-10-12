@@ -314,6 +314,11 @@ public actor GatewayNodeSession {
             admissionGeneration: expectedAdmissionGeneration)
     }
 
+    public func connectedDeviceId() async -> String? {
+        guard let channel else { return nil }
+        return await channel.connectedDeviceId()
+    }
+
     public func disconnect() async {
         let detached = self.detachChannel(resetConnectionHistory: true)
         if detached.channel != nil || !self.isExecutingLifecycleCallback() {

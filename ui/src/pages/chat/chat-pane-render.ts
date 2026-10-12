@@ -12,7 +12,6 @@ import {
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
-import { isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -46,6 +45,7 @@ import {
 } from "./chat-pane-sidebar-layout.ts";
 import {
   chatSubmitState,
+  createChatPaneSendActions,
   dismissChatError,
   resolveChatPaneFollowUpMode,
   projectChatPaneTranscript,
@@ -586,20 +586,12 @@ export class ChatPane extends ChatPaneLayoutRender {
       ...this.chatState.attachmentInputProps(state),
       cameraActive: this.conversationPresented,
       onRemoveAttachment: this.removeBrowserAnnotation,
-      onSend: (followUpModeOverride, submissionAction) =>
-        !composerAvailability.canSend ||
-        (modelRequiredReason &&
-          (state.chatAttachments.length > 0 || !isModelIndependentChatCommand(state.chatMessage)))
-          ? undefined
-          : catalogKey
-            ? this.continueCatalogSession(catalogKey)
-            : suggestionViewer
-              ? this.addCurrentSessionSuggestion()
-              : state.handleSendChat(
-                  undefined,
-                  followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
-                  submissionAction,
-                ),
+      ...createChatPaneSendActions(state, {
+        canSend: composerAvailability.canSend,
+        modelRequiredReason,
+        continueSession: catalogKey ? () => this.continueCatalogSession(catalogKey) : undefined,
+        addSuggestion: suggestionViewer ? () => this.addCurrentSessionSuggestion() : undefined,
+      }),
       onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),

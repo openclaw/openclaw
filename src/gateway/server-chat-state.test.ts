@@ -282,6 +282,33 @@ describe("createChatRunState", () => {
     },
   );
 
+  it.each(["full", "summary"] as const)(
+    "retains permission notices for %s reconnect history",
+    (mode) => {
+      const state = createChatRunState();
+      const data = {
+        phase: "warning",
+        kind: "permission_missing",
+        permissionMissing: {
+          nodeId: "mac-node",
+          command: "screen.snapshot",
+          capabilities: ["screenRecording"],
+          state: "not-determined",
+        },
+      };
+      const event = {
+        runId: "run-permission",
+        seq: 1,
+        stream: "notice",
+        ts: 1_000,
+        sessionKey: "main",
+        data,
+      };
+      state.recordProgressEvent("run-permission", event, mode);
+      expect(state.runs.get("run-permission")?.progressSnapshot?.events).toEqual([event]);
+    },
+  );
+
   it("keeps completed owners and standalone notices reconstructable until bounded eviction", () => {
     const state = createChatRunState();
     const event = (seq: number, stream: string, data: Record<string, unknown>) =>

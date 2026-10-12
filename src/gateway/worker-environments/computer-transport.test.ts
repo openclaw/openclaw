@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ComputerToolTransport } from "../../agents/tools/computer-tool.js";
+import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
   claimAgentRunApprovalAuthority,
@@ -130,6 +131,45 @@ describe("session computer transport", () => {
     resetAgentRunRegistryForTest();
     resetPluginRuntimeStateForTest();
   });
+
+  it.each(["snapshot", "type"] as const)(
+    "preserves native permission details for attached %s commands",
+    async (action) => {
+      const h = createHarness(true);
+      const { transport } = await h.prepare();
+      const details = { capabilities: ["screenRecording"], state: "restart-required" };
+      h.publicInvoke.mockResolvedValueOnce({
+        ok: false,
+        error: { code: "PERMISSION_MISSING", message: "Relaunch OpenClaw", details },
+      });
+      const events: AgentEventPayload[] = [];
+      const stop = onAgentEvent((event) => {
+        if (event.data.kind === "permission_missing") {
+          events.push(event);
+        }
+      });
+      try {
+        await expect(transport.invoke(request(action))).rejects.toMatchObject({
+          details: {
+            permissionMissing: {
+              nodeId: "desktop-node",
+              command: action === "snapshot" ? "screen.snapshot" : "computer.act",
+              ...details,
+            },
+          },
+        });
+        expect(events).toEqual([
+          expect.objectContaining({
+            sessionKey: "agent:main:session-1",
+            stream: "notice",
+            data: expect.objectContaining({ kind: "permission_missing" }),
+          }),
+        ]);
+      } finally {
+        stop();
+      }
+    },
+  );
 
   it("refuses computer preparation when the turn closes during its placement read", async () => {
     const h = createHarness();

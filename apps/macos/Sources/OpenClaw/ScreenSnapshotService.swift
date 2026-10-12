@@ -13,12 +13,8 @@ struct ScreenSnapshotResult: Sendable {
 
 @MainActor
 enum ScreenCaptureSupport {
-    static func requirePermission(failure: (String) -> any Error) throws {
-        guard AppLaunchRuntimePlan.current.allowsActivation ||
-            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
-        else {
-            throw failure("Screen Recording permission required; relaunch without --no-activate and retry")
-        }
+    static func requirePermission() async throws {
+        if let error = await PermissionManager.missingPermissions([.screenRecording]) { throw error }
     }
 
     static func display(
@@ -26,7 +22,12 @@ enum ScreenCaptureSupport {
         noDisplays: any Error,
         invalidIndex: (Int) -> any Error) async throws -> SCDisplay
     {
-        let content = try await SCShareableContent.current
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.current
+        } catch {
+            throw PermissionManager.screenCaptureFailure(error)
+        }
         let displays = content.displays.sorted { $0.displayID < $1.displayID }
         guard !displays.isEmpty else { throw noDisplays }
         let index = index ?? 0
@@ -96,7 +97,7 @@ final class ScreenSnapshotService {
         format: OpenClawScreenSnapshotFormat?) async throws
         -> ScreenSnapshotResult
     {
-        try ScreenCaptureSupport.requirePermission(failure: ScreenSnapshotError.captureFailed)
+        try await ScreenCaptureSupport.requirePermission()
         let format = format ?? .jpeg
         let maxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? (format == .png ? 900 : 1600)
         let quality = min(1.0, max(0.05, quality ?? 0.72))
@@ -125,7 +126,7 @@ final class ScreenSnapshotService {
                 contentFilter: filter,
                 configuration: config)
         } catch {
-            throw ScreenSnapshotError.captureFailed("screen capture failed")
+            throw PermissionManager.screenCaptureFailure(error)
         }
         // Geometry is part of the coordinate contract. If it changed while the
         // pixels were captured, no stable frame exists to authorize later input.

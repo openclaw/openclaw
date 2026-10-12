@@ -145,7 +145,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const chatItems = buildCachedChatItems(chatItemsInput);
   const { workingIndicator, activityRunId, activityGroupKey, runOutputTokens } =
     projectTranscriptActivity(chatItems, props);
-  const latestBrowserTabs = props.latestBrowserTabs;
   syncToolCardExpansionState(
     props.sessionKey,
     chatItems,
@@ -168,11 +167,11 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   }
   const { messageRowKeysById, transcriptMessageKeys, loadedReplySources, positionIndex, rows } =
     projectTranscriptIndex(transcriptChain, expandedToolCards, props);
-  const latestBrowserTabsKey = JSON.stringify([...(latestBrowserTabs ?? [])]);
+  const latestBrowserTabsKey = JSON.stringify([...(props.latestBrowserTabs ?? [])]);
   const workPreviews = projectTranscriptWorkPreviews(transcriptChain.workGroups, {
     sessionKey: props.sessionKey,
     expanded: expandedToolCards,
-    latestBrowserTabs,
+    latestBrowserTabs: props.latestBrowserTabs,
     latestBrowserTabsKey,
     bubbleMode: props.chatBubbleMode,
   });
@@ -299,6 +298,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     runActive: props.runActive,
     asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+    onPermissionRetry: props.onPermissionRetry,
     onRequestUpdate: requestUpdate,
     resourceBasePath: props.resourceBasePath,
     mediaPolicyKey,
@@ -352,7 +352,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       messageReactions: props.messageReactions,
       onReact: props.onReact,
       transcriptVisible: props.transcriptVisible,
-      latestBrowserTabs,
+      latestBrowserTabs: props.latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
       activityRunId,
@@ -495,7 +495,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
         return () => renderChatDivider(item);
       }
       if (item.kind === "notice") {
-        return () => renderChatNotice(item);
+        return () => renderChatNotice(item, props.onPermissionRetry);
       }
       if (item.kind === "agent-run-frame") {
         return () =>

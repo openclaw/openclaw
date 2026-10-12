@@ -1,6 +1,7 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import type { NodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import type {
   AgentActivityItem,
   ChatSendIntent,
@@ -138,6 +139,7 @@ export type ChatComposerMemoryFallback = {
 };
 
 export type ChatGuardianNotice = {
+  permissionMissing?: NodePermissionRequest;
   key: string;
   runId: string;
   timestamp: number;
@@ -230,6 +232,7 @@ export type ChatItem =
       handoffBoundary?: true;
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
+      permissionMissing?: NodePermissionRequest;
     }
   | {
       kind: "divider";

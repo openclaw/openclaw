@@ -730,6 +730,7 @@ describe("native device settings pages", () => {
   it.each([
     ["screenRecording", "Screen Recording", "notDetermined", "Not granted", "Grant…"],
     ["accessibility", "Accessibility", "notDetermined", "Not granted", "Grant…"],
+    ["eventPosting", "Event Posting", "notDetermined", "Not granted", "Grant…"],
   ] as const)(
     "requests %s access and retains explicit settings recovery without assuming a prior denial",
     async (id, title, status, label, action) => {

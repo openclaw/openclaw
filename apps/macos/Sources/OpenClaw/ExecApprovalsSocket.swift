@@ -124,6 +124,7 @@ struct ExecHostError: Codable, Error {
     var code: String
     var message: String
     var reason: String?
+    var details: OpenClawPermissionDetails?
 }
 
 struct ExecHostResponse: Codable {
