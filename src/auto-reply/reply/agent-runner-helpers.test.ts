@@ -3,22 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-const hoisted = vi.hoisted(() => {
-  const loadSessionEntryMock = vi.fn();
-  return { loadSessionEntryMock };
-});
-
-vi.mock("../../config/sessions/session-accessor.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
-    "../../config/sessions/session-accessor.js",
-  );
-  return {
-    ...actual,
-    loadSessionEntry: (...args: unknown[]) => hoisted.loadSessionEntryMock(...args),
-    loadSessionEntryReadOnly: (...args: unknown[]) => hoisted.loadSessionEntryMock(...args),
-  };
-});
-
 const {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -29,7 +13,6 @@ const {
 describe("agent runner helpers", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    hoisted.loadSessionEntryMock.mockReset();
   });
 
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
@@ -45,25 +28,24 @@ describe("agent runner helpers", () => {
     expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "full" })()).toBe(true);
   });
 
-  it("falls back when store read fails or session value is invalid", () => {
-    hoisted.loadSessionEntryMock.mockImplementation(() => {
-      throw new Error("boom");
-    });
-    const fallbackOn = createShouldEmitToolResult({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
-      resolvedVerboseLevel: "on",
-    });
-    expect(fallbackOn()).toBe(true);
-
-    hoisted.loadSessionEntryMock.mockClear();
-    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "weird" });
-    const fallbackFull = createShouldEmitToolOutput({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
-      resolvedVerboseLevel: "full",
-    });
-    expect(fallbackFull()).toBe(true);
+  it("reads supplied preferences on each callback while explicit turn choices stay fixed", () => {
+    let level: "off" | "full" | undefined;
+    const options = {
+      readVerboseLevel: () => level,
+      resolvedVerboseLevel: "on" as const,
+    };
+    const result = createShouldEmitToolResult(options);
+    const output = createShouldEmitToolOutput(options);
+    const fixed = createShouldEmitToolOutput({ ...options, verboseLevelOverride: "off" });
+    expect(result()).toBe(true);
+    expect(output()).toBe(false);
+    level = "full";
+    expect(result()).toBe(true);
+    expect(output()).toBe(true);
+    expect(fixed()).toBe(false);
+    level = "off";
+    expect(result()).toBe(false);
+    expect(output()).toBe(false);
   });
 
   it("signals typing only when any payload has text or media", async () => {

@@ -25,9 +25,9 @@ import { applyJobResultAndDrainNotifications } from "./notification.test-helpers
 import { stop as stopCronService } from "./ops-lifecycle.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import type { DeferredCronNotifications } from "./state.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 import { applyTriggerNoFireResult } from "./timer-outcomes.js";
-import { authorCronRunCompletion } from "./timer.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-failure-alert-outcome-" });
 

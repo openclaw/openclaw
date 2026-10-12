@@ -13,7 +13,6 @@ export type ChatRunBufferState = {
   assistantItems?: Map<
     string | symbol | undefined,
     {
-      itemId?: string;
       committed?: true;
       start?: number;
       end?: number | null;
@@ -111,18 +110,6 @@ export const updateBuffer = (
     retireSource(record, source);
   }
   const item = items.get(itemId) ?? {};
-  if (
-    itemId !== undefined &&
-    itemId !== record.assistantOccurrenceId &&
-    item.committed &&
-    (item.end !== undefined ||
-      (bufferVisibleText(record).length > 0 && !(input.replace && input.replaceable)))
-  ) {
-    // Closed occurrences cannot reopen over a newer live owner.
-    item.end ??= null;
-    items.set(itemId, item);
-    return previous;
-  }
   const previousOccurrence = items.get(record.assistantOccurrenceId);
   const anonymous = itemId ? items.get(undefined) : undefined;
   if (anonymous) {
@@ -144,15 +131,6 @@ export const updateBuffer = (
     input,
     "live",
   );
-  if (
-    itemId &&
-    (itemId !== record.assistantOccurrenceId || (input.itemId && !sameItem)) &&
-    typeof item.end === "number"
-  ) {
-    // A returning identity or a new native scope leaves the earlier interval intact.
-    items.set(Symbol("earlier occurrence interval"), { ...item });
-    invalidateRange(item);
-  }
   const resetSource =
     (!itemId && snapshot.appendedText === undefined) ||
     (input.replace && input.replaceable && !sameItem);
@@ -203,51 +181,16 @@ export const updateBuffer = (
       }
     }
   }
-  let scope = sameItem ? (previousOccurrence?.scope ?? scopeOffset) : (scopeOffset ?? sourceOffset);
-  if (!snapshot.scope) {
-    let through = sourceOffset;
-    for (const observed of items.values()) {
-      if (
-        typeof observed.end === "number" &&
-        observed.end > through &&
-        observed.end <= commonEnd &&
-        observed.end > (observed.start ?? 0)
-      ) {
-        through = observed.end;
-        scope = observed.scope;
-      }
-    }
-  }
-  const restoredUnknown =
-    !resetSource &&
-    input.text !== undefined &&
-    sourceOffset < retainedOffset &&
-    [...items.values()].some(
-      (observed) =>
-        (!snapshot.scope || observed.scope === scope) &&
-        typeof observed.end === "number" &&
-        observed.end > (observed.start ?? 0) &&
-        observed.itemId !== itemId,
-    );
-  if (restoredUnknown) {
-    // The cap discards content: identical retained states can require different
-    // ownership even for matching suffixes. Keep this replacement unowned rather
-    // than hiding unsaved text behind a receipt for an unknowable old prefix.
-    for (const observed of items.values()) {
-      if ((!snapshot.scope || observed.scope === scope) && observed.end !== undefined) {
-        invalidateRange(observed);
-      }
-    }
-    items.set(Symbol("restored unknown text"), { start: scopeOffset ?? sourceOffset, end, scope });
-  }
+  const scope = sameItem
+    ? (previousOccurrence?.scope ?? scopeOffset)
+    : (scopeOffset ?? sourceOffset);
   const start = resetSource
     ? (scopeOffset ?? 0)
     : sameItem
       ? Math.max(scopeOffset ?? 0, Math.min(item.start ?? previousEnd, commonEnd))
       : (scopeOffset ?? item.start ?? commonEnd);
-  item.start = restoredUnknown ? end : start;
+  item.start = start;
   item.end = end;
-  item.itemId = itemId;
   item.scope = scope;
   items.set(itemId, item);
   record.assistantScope = snapshot.scope;
@@ -280,12 +223,6 @@ export const retireBuffer = (record: ChatRunBufferState, itemIds: readonly strin
     const item = items.get(itemId);
     changed ||= !item?.committed && typeof item?.end === "number";
     items.set(itemId, { ...item, committed: true });
-    for (const observed of items.values()) {
-      if (observed.itemId === itemId) {
-        changed ||= !observed.committed && typeof observed.end === "number";
-        observed.committed = true;
-      }
-    }
   }
   if (changed && record.display) {
     record.display.reset = true;

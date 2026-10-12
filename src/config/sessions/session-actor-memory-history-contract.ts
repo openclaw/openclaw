@@ -17,6 +17,7 @@ import type {
   PreparedSessionTranscriptHydration,
   SessionModelContextLimits,
   SessionTranscriptModelContext,
+  SessionTranscriptContextSnapshot,
 } from "./session-history-read.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
@@ -34,6 +35,10 @@ export type SessionActorMemoryHistoryReads = ProjectionReads &
     "session.history.hydrate": {
       input: Target & { limits?: { maxBytes: number; maxEvents: number }; maxEventBytes?: number };
       output: PreparedSessionTranscriptHydration;
+    };
+    "session.history.context-messages": {
+      input: Target;
+      output: SessionTranscriptContextSnapshot;
     };
     "session.history.context": {
       input: Target & { through?: TranscriptEntryAnchor; limits?: SessionModelContextLimits };
