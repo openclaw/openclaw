@@ -20,7 +20,13 @@ export class GatewayServiceAuthorityError extends Error {
     cause: unknown,
     readonly outcome?: "unchanged" | "restored" | "recovery-pending",
   ) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    const message = cause instanceof Error ? cause.message : String(cause);
+    super(
+      message.includes("UPDATE_NATIVE_AUTHORITY:")
+        ? message
+        : `UPDATE_NATIVE_AUTHORITY: ${message}`,
+      { cause },
+    );
     this.name = "GatewayServiceAuthorityError";
   }
 }
