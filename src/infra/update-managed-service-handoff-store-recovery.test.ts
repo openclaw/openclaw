@@ -87,9 +87,6 @@ unix("recovers a store owned by another user without adopting it", async () => {
   // is what makes the recovery converge instead of quarantining on every call.
   vi.spyOn(fs, "lstatSync").mockImplementation(((target: fs.PathLike, ...rest: never[]) => {
     const stat = realLstatSync(target, ...rest);
-    if (!stat) {
-      return stat;
-    }
     // Keep the Stats prototype so isFile()/isSymbolicLink() stay real.
     return stat?.ino === foreignIno
       ? Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { uid: stat.uid + 1 })
