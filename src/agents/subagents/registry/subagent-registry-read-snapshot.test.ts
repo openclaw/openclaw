@@ -79,6 +79,40 @@ it("does not retain a removed live-only row as a prepared durable payload", asyn
   });
 });
 
+it.each(["update", "delete"] as const)(
+  "consumes a committed resident %s after preparing its run ID",
+  async (kind) => {
+    await withPersistedReads(async () => {
+      const entry = retainedRun();
+      persistRegistryFixture(new Map([[entry.runId, entry]]));
+      const memory = new Map([[entry.runId, entry]]);
+      const prepared = await prepareSubagentRunsSnapshotForRunIds(memory, ["collector"]);
+      await mutateSubagentRuns(
+        [entry.runId],
+        (rows) => ({
+          value: undefined,
+          postimages: new Map([
+            [
+              entry.runId,
+              kind === "delete"
+                ? null
+                : {
+                    ...rows.get(entry.runId)!,
+                    completion: { required: false, resultText: "committed child result" },
+                  },
+            ],
+          ]),
+        }),
+        { runs: memory },
+      );
+      expect(prepared.consume((runs) => runs.get(entry.runId)?.completion?.resultText)).toEqual({
+        ready: true,
+        value: kind === "delete" ? undefined : "committed child result",
+      });
+    });
+  },
+);
+
 it.each(["preparing caller", "consuming caller", "database"] as const)(
   "rejects a prepared read after its %s loses admission",
   async (owner) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -102,7 +102,11 @@ describe("cron recovery run identity", () => {
 
       await cron.update(job.id, { state: { nextRunAtMs: firstStartedAt } });
       run = cron.run(job.id, "due");
-      await payload.started.promise;
+      await awaitGateBeforeSettlement(
+        payload.started.promise,
+        run,
+        "Cron run settled before its payload started",
+      );
       const first = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
       if (!first) {
         throw new Error("predecessor was not admitted");
@@ -127,7 +131,11 @@ describe("cron recovery run identity", () => {
       await cron.update(job.id, { state: { nextRunAtMs: pendingStartedAt } });
       payload = pendingPayload();
       run = cron.run(job.id, "due");
-      await payload.started.promise;
+      await awaitGateBeforeSettlement(
+        payload.started.promise,
+        run,
+        "Cron run settled before its payload started",
+      );
       const pending = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
       if (!pending) {
         throw new Error("pending run was not admitted");

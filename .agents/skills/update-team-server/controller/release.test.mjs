@@ -1100,6 +1100,73 @@ if (args[0] === 'stat-identity' && args[1] === release) {
     assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)|account\.openclaw-deploy/);
   });
 
+  for (const phase of ["D_VERIFYING", "ROLLBACK_FAILED"]) {
+    for (const state of ["live", "stopped", "unverifiable"]) {
+      test(`native ${phase} recovery: ${state} migrated candidate`, t => {
+        if (state === "unverifiable" && !existsSync("/usr/local/lib/openclaw-team/gateway-suspension-contract.mjs")) {
+          t.skip("live rollback requires the disposable host's installed suspension contract");
+          return;
+        }
+        const f = failedReleaseFixture(t, state !== "stopped", state === "unverifiable" ? "marker-wrong-session" : "success");
+        if (process.env.TEAM_OWNER_TEST_SOURCE) {
+          f.owner = process.env.TEAM_OWNER_TEST_SOURCE;
+        }
+        if (state !== "stopped") {
+          const cwd = join(f.env.OPENCLAW_TEAM_PROC_ROOT, String(f.pid), "cwd");
+          rmSync(cwd);
+          symlinkSync(join(f.serving, "releases", after), cwd);
+        }
+        const backupRoot = join(f.runtime, ".openclaw-update", `update-${after}-${handoffId}`, "native");
+        mkdirSync(backupRoot, { recursive: true });
+        const backup = join(backupRoot, "retained-backup");
+        writeFileSync(backup, "original pre-migration state");
+        const record = JSON.parse(readFileSync(f.journal));
+        record.phase = phase;
+        record.nativeUpdate = { backupRoot };
+        const witness = releaseProof(f, "session-preservation-witness", f.initial, join(f.serving, "releases", after), f.databasePath);
+        const name = `original-${handoffId}.json`, witnessPath = join(f.serving, "journal", name);
+        writeFileSync(witnessPath, witness, { mode: 0o600 });
+        const witnessStat = lstatSync(witnessPath);
+        record.originalWitness = { name, device: witnessStat.dev, inode: witnessStat.ino,
+          sha256: createHash("sha256").update(witness).digest("hex") };
+        const fileIdentity = path => {
+          const { dev, ino } = lstatSync(path);
+          return { path, dev, ino };
+        };
+        // The native owner supplied these identities after migration; its restore command is external I/O.
+        const databases = [f.databasePath, f.agentDatabasePath];
+        const receipt = JSON.stringify({ schemaVersion: 1, status: "migrated", configPath: f.configPath,
+          stateDir: dirname(dirname(f.databasePath)), databases, configIdentity: fileIdentity(f.configPath),
+          databaseIdentities: Object.fromEntries(databases.map(path => [path, fileIdentity(path)])) });
+        writeFileSync(`${backupRoot}.receipt.json`, receipt, { mode: 0o600 });
+        writeFileSync(f.journal, JSON.stringify(record), { mode: 0o600 });
+        const result = runOwner(f, ["--recover"]);
+        assert.ifError(result.error);
+        assert.equal(readFileSync(backup, "utf8"), "original pre-migration state");
+        assert.equal(readFileSync(`${backupRoot}.receipt.json`, "utf8"), receipt);
+        assert.equal(readFileSync(witnessPath, "utf8"), witness);
+        if (state === "live") {
+          assert.equal(result.status, 0, result.stderr + events(f));
+          assert.equal(existsSync(f.journal), false);
+          assert.match(result.stdout, new RegExp(`RECOVERED phase=${phase} action=verified-migrated-candidate-forward`));
+          assert.equal(readFileSync(join(f.serving, "verified", after), "utf8"), after + "\n");
+          assert.equal(readlinkSync(join(f.serving, "current")), join(f.serving, "releases", after));
+          assert.match(events(f), /gateway gateway call channels.status/);
+          assert.match(events(f), /gateway gateway call sessions.list/);
+          assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)|gateway\.suspend\.|gateway update (restore|finish)/);
+        } else {
+          assert.notEqual(result.status, 0);
+          assert.match(result.stderr, /native update restoration failed/);
+          assert.match(events(f), /gateway update restore/);
+          assert.equal(JSON.parse(readFileSync(f.journal)).phase, "ROLLBACK_FAILED");
+          assert.doesNotMatch(result.stdout, /verified-migrated-candidate-forward/);
+          assert.doesNotMatch(events(f), /service\.system\.(start|restart)/);
+          assert.equal(events(f).includes("service.system.stop\n"), state === "unverifiable");
+        }
+      });
+    }
+  }
+
   test("the real recovery guard rejects third-release topology, retaining its exact journal", (t) => {
     const f = failedReleaseFixture(t);
     verificationMarker(f, verifiedTarget);

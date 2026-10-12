@@ -122,6 +122,13 @@ update warning; callers using only the existing synchronous guard remain support
 
 ### SQLite write admission
 
+For runtime storage, use the owning domain's awaited operations or
+`openOpenClawAgentSqliteWorkerStoreV2`; see
+[native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+The following `sqlite-runtime` callback helper is deprecated compatibility until
+the next Plugin SDK major. Awaiting admission does not move its SQL off the
+caller's thread.
+
 `runSqliteImmediateTransaction(db, prepare, options?)` from
 `openclaw/plugin-sdk/sqlite-runtime` waits for write admission without blocking
 the event loop. Its asynchronous `prepare` function may run more than once when
@@ -141,7 +148,8 @@ same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
 database handle and its owning operation alive until the returned promise settles.
 The callback and SQLite calls still run synchronously on the caller's thread.
 
-For a repeated fixed query, `prepareSqliteQuerySync(db, build)` compiles its
+Inside a worker backend, `prepareSqliteQuerySync(db, build)` from
+`openclaw/plugin-sdk/sqlite-worker-runtime` compiles a repeated fixed query's
 Kysely shape once and binds fresh parameters on each call. It uses the normal
 synchronous executor and the connection's bounded statement cache when enabled.
 Keep the prepared function with its database owner and discard it when closing

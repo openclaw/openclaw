@@ -11,7 +11,8 @@ import {
   ChatSessionCompanionThreads,
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
-import { ChatSessionRailElement } from "./components/chat-session-rail.ts";
+import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
+import "./components/chat-session-rail.tsx";
 
 function digest(health: SessionObserverDigest["health"] = "on-track"): SessionObserverDigest {
   return {
@@ -267,6 +268,38 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+  });
+
+  it("retains selected answer text while draft and presentation props update", async () => {
+    const element = await mount({
+      presented: true,
+      companion: {
+        turns: [
+          {
+            question: "What changed?",
+            status: "answered",
+            answer: "**Retained answer**",
+            ts: 300_000,
+          },
+        ],
+        loading: false,
+        draft: "",
+      },
+    });
+    const text = element.querySelector(".chat-session-rail__answer strong")!.firstChild!;
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    element.companion = { ...element.companion, draft: "Follow up" };
+    element.presented = false;
+    await element.updateComplete;
+    element.presented = true;
+    await element.updateComplete;
+    expect(selection.toString()).toBe("Retained answer");
+    expect(selection.anchorNode).toBe(text);
+    selection.removeAllRanges();
   });
 
   it.each([false, true])(

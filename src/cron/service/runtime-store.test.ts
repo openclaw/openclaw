@@ -34,12 +34,10 @@ import {
 } from "../store/run-receipt-store.test-support.js";
 import { mutateCronRuntimeRowsInDatabase } from "../store/runtime-rows.kernel.js";
 import type { CronStoredJob } from "../types.js";
-import { stop } from "./ops-lifecycle.js";
 import {
   applyCronRuntimeRowsToState,
   publishDurableNextRunChanges,
 } from "./runtime-publication.js";
-import { armTimer } from "./timer.js";
 
 const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime-store-" });
 
@@ -378,7 +376,7 @@ describe("cron runtime row publication", () => {
     }
   });
 
-  it("adds a sibling-imported row to memory before arming its timer", () => {
+  it("publishes a sibling-imported row and its durable deadline", () => {
     vi.useFakeTimers();
     const now = Date.parse("2026-08-13T18:00:00.000Z");
     vi.setSystemTime(now);
@@ -401,10 +399,8 @@ describe("cron runtime row publication", () => {
     state.store = { version: 1, jobs: [resident] };
 
     applyCronRuntimeRowsToState(state, [imported]);
-    armTimer(state);
 
     expect(state.store.jobs.map((job) => job.id)).toEqual([resident.id, imported.id]);
-    expect(state.timer).not.toBeNull();
-    stop(state);
+    expect(state.durableNextRunAtMsByJobId.get(imported.id)).toBe(now + 60_000);
   });
 });

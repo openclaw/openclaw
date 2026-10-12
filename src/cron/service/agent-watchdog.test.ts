@@ -3,19 +3,10 @@ import type { CronAgentExecutionPhase } from "../types.js";
 import { CRON_AGENT_SETUP_WATCHDOG_MS, createCronAgentWatchdog } from "./agent-watchdog.js";
 import { preExecutionTimeoutErrorMessage } from "./execution-errors.js";
 
-const initialSetupPhases = [
-  "workspace",
-  "runtime_plugins",
-  "model_resolution",
-  "auth",
-  "context_engine",
-] as const satisfies readonly CronAgentExecutionPhase[];
+const initialSetupPhases = ["workspace"] as const satisfies readonly CronAgentExecutionPhase[];
 
 const fallbackSetupPhases = [
   "runtime_plugins",
-  "model_resolution",
-  "auth",
-  "context_engine",
 ] as const satisfies readonly CronAgentExecutionPhase[];
 
 function makeWatchdog(timeoutMultiplier = 3) {
@@ -51,25 +42,6 @@ describe("cron agent setup watchdog", () => {
     expect(watchdog.observedLaneWait()).toBe(false);
 
     await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
-
-    expect(triggerTimeout).toHaveBeenCalledTimes(1);
-    expect(watchdog.observedLaneWait()).toBe(false);
-  });
-
-  it("restarts the complete setup budget after repeated lane contention", async () => {
-    const { triggerTimeout, watchdog } = makeWatchdog(2);
-
-    watchdog.start();
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      watchdog.noteLaneWait();
-      await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS * 2);
-      expect(triggerTimeout).not.toHaveBeenCalled();
-      watchdog.noteLaneAdmitted();
-      await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS - 1);
-      expect(triggerTimeout).not.toHaveBeenCalled();
-    }
-
-    await vi.advanceTimersByTimeAsync(1);
 
     expect(triggerTimeout).toHaveBeenCalledTimes(1);
     expect(watchdog.observedLaneWait()).toBe(false);

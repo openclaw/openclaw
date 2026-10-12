@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
-import { createRunningCronServiceState } from "../../../src/cron/service.test-harness.js";
 import { stop } from "../../../src/cron/service/ops-lifecycle.js";
 import {
   createCronServiceState,
@@ -113,8 +112,6 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
     },
   };
 }
-
-export { createRunningCronServiceState };
 
 export function topOfHourOffsetMs(jobId: string) {
   const digest = crypto.createHash("sha256").update(jobId).digest();

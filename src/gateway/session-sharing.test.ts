@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -65,6 +66,7 @@ describe("session sharing policy", () => {
       const cfg = rolePolicyConfig();
       const creator = roleClient("write", "communication-creator");
       const peer = roleClient("write", "communication-peer");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const creatorId = creator.authenticatedUserProfile?.profileId;
       if (!creatorId) {
         throw new Error("expected verified creator");
@@ -257,6 +259,7 @@ describe("session sharing policy", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
       const owner = roleClient("none", "owner");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const ownerId = owner.authenticatedUserProfile?.profileId;
       const sessionKey = "agent:main:team-shared";
       await upsertSessionEntryCore(

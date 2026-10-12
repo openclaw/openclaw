@@ -7,12 +7,14 @@ import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
-import { CronService } from "../cron/service.js";
+import { createCronServiceWithStateForTest } from "../cron/service.test-harness.js";
+import { waitForCronRunQueue } from "../cron/service/run-queue.js";
+import { captureCronSchedulerWakeForTest } from "../cron/service/scheduler-actor.test-support.js";
 import { saveCronJobsStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronRows, loadedCronStoreFromRows } from "../cron/store/row-codec.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { mintCronStandingGrantLocked } from "../gateway/operator-approval-standing-grants.js";
+import { mintCronStandingGrantLocked } from "../gateway/operator-approval-standing-grants.worker.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
@@ -95,7 +97,7 @@ function createCron(storePath: string, defaultAgentId?: string) {
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
   const execute = vi.fn(async () => ({ status: "ok" as const }));
-  const cron = new CronService({
+  const { cron, state } = createCronServiceWithStateForTest({
     scheduler,
     storePath,
     cronEnabled: true,
@@ -107,7 +109,7 @@ function createCron(storePath: string, defaultAgentId?: string) {
     requestHeartbeat() {},
     runIsolatedAgentJob: execute,
   });
-  return { cron, scheduler, execute, clock };
+  return { cron, state, scheduler, execute, clock };
 }
 
 it.each(["retains", "removes"])(
@@ -328,7 +330,7 @@ it("preserves a due legacy one-shot through Doctor ownership repair, then runs i
       expect(await backups()).toHaveLength(1);
       const repaired = createCron(storePath, "research");
       try {
-        await repaired.cron.start();
+        const { wake } = await captureCronSchedulerWakeForTest(() => repaired.cron.start());
         expect(repaired.execute).not.toHaveBeenCalled();
         expect(readReceipts()).toEqual([]);
         const nextWakeAtMs = expectDefined(
@@ -336,7 +338,9 @@ it("preserves a due legacy one-shot through Doctor ownership repair, then runs i
           "repaired one-shot catch-up wake",
         );
         expect(nextWakeAtMs).toBeGreaterThan(repaired.clock.clock.now());
-        await repaired.clock.advanceTo(nextWakeAtMs);
+        repaired.clock.setTime(nextWakeAtMs);
+        await wake(repaired.state);
+        await waitForCronRunQueue(repaired.state);
         expect(repaired.execute).toHaveBeenCalledOnce();
         expect(repaired.cron.getJob("pending-one-shot")).toMatchObject({
           agentId: "ops",

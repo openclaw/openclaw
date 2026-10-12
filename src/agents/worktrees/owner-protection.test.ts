@@ -23,9 +23,7 @@ import type { ManagedWorktreeRecord } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   readResolvedSessionEntriesInWorker: vi.fn(),
-  getMany: vi.fn(),
-  listForReconcile: vi.fn(),
-  listAsync: vi.fn(),
+  placementService: vi.fn(),
   isSessionWorkAdmissionActive: vi.fn(),
   isSessionLifecycleMutationActive: vi.fn(),
   runExclusiveSessionLifecycleMutation: vi.fn(),
@@ -45,18 +43,14 @@ const cleanupRecord = {
   lastActiveAt: 1,
 } satisfies ManagedWorktreeRecord;
 
-// mock-isolation: Session reads and placements are synthetic; policy lifecycle and publications stay real.
+// mock-isolation: Session metadata is synthetic unless a test selects the real worker reader.
 vi.mock("../../config/sessions/session-accessor.entry.js", () => ({
   readResolvedSessionEntriesInWorker: mocks.readResolvedSessionEntriesInWorker,
 }));
-// mock-isolation: Keep placement ownership synthetic while exercising real worktree policy.
+// mock-isolation: Tests select the real placement owner or an explicitly empty inventory.
 vi.mock("../../gateway/session-worker-placement-context.js", () => ({
   resolveSessionWorkerPlacementContext: () => ({
-    workerSessionPlacementService: {
-      getMany: mocks.getMany,
-      listForReconcile: mocks.listForReconcile,
-      listAsync: mocks.listAsync,
-    },
+    workerSessionPlacementService: mocks.placementService(),
   }),
 }));
 vi.mock("../../sessions/session-lifecycle-admission.js", async (importOriginal) => ({
@@ -81,9 +75,15 @@ function target(
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.getMany.mockReturnValue(new Map());
-  mocks.listForReconcile.mockReturnValue([]);
-  mocks.listAsync.mockResolvedValue([]);
+  mocks.placementService.mockReturnValue({
+    listAsync: async () => [],
+    prepareMaintenancePlacements: async () => ({
+      placements: [],
+      assertCurrent: () => {},
+      release: () => {},
+    }),
+    prepareSessionPlacement: async () => ({ current: () => undefined, release: () => {} }),
+  });
   mocks.isSessionWorkAdmissionActive.mockReturnValue(false);
   mocks.isSessionLifecycleMutationActive.mockReturnValue(false);
   mocks.runExclusiveSessionLifecycleMutation.mockImplementation(
@@ -136,21 +136,17 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     });
   });
 
-  it("classifies a large worker census without caller-thread SQL and checks live placements at cleanup", async () => {
+  it("classifies a large census off thread and allows archived cleanup until a placement write", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-owner-census-") };
     const store = createWorkerSessionPlacementStore({
       database: openOpenClawStateDatabase({ env }),
     });
+    mocks.placementService.mockReturnValue(store);
     const records = Array.from({ length: 609 }, (_, index) => ({
       ...cleanupRecord,
       id: `worktree-${index}`,
       ownerId: `agent:main:census-${index}`,
     }));
-    const targets = new Map(records.map(({ ownerId }) => [ownerId, target(ownerId)]));
-    mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(targets);
-    mocks.getMany.mockImplementation((ids) => store.getMany(ids));
-    mocks.listForReconcile.mockImplementation((key) => store.listForReconcile(key));
-    mocks.listAsync.mockImplementation(() => store.listAsync());
     const live = records[0]!.ownerId;
     await store.startDispatch({ sessionId: live, sessionKey: live, agentId: "main" });
     const policy = createManagedWorktreeOwnerPolicy({});
@@ -162,18 +158,67 @@ describe("createManagedWorktreeOwnerPolicy", () => {
         expect(census.readOwnerState?.("session", record.ownerId)).toBe("retired");
       }
       expect(sql.queries).toEqual([]);
+      const archived = records[1]!;
+      await policy.withOwnerCleanup(archived, (withOwnerMutation) =>
+        withOwnerMutation(async () => {
+          expect(policy.readOwnerState("session", archived.ownerId)).toBe("retired");
+          await store.startDispatch({
+            sessionId: archived.ownerId,
+            sessionKey: archived.ownerId,
+            agentId: "main",
+          });
+          expect(policy.readOwnerState("session", archived.ownerId)).toBe("active");
+        }),
+      );
+      expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
     }
-    const changed = records[1]!;
-    await store.startDispatch({
-      sessionId: changed.ownerId,
-      sessionKey: changed.ownerId,
-      agentId: "main",
+  });
+
+  it("protects an archived owner when an in-process local turn starts after cleanup preparation", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-owner-local-") };
+    const store = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase({ env }),
     });
-    await policy.withOwnerCleanup(changed, async () => {
-      expect(policy.readOwnerState("session", changed.ownerId)).toBe("active");
+    mocks.placementService.mockReturnValue(store);
+    const key = cleanupRecord.ownerId;
+    const policy = createManagedWorktreeOwnerPolicy({});
+    await policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) =>
+      withOwnerMutation(async () => {
+        expect(policy.readOwnerState("session", key)).toBe("retired");
+        await store.claimTurn({
+          sessionId: key,
+          sessionKey: key,
+          agentId: "main",
+          claimId: "cleanup-local-claim",
+          runId: "cleanup-local-run",
+          owner: { kind: "local" },
+        });
+        expect(policy.readOwnerState("session", key)).toBe("active");
+      }),
+    );
+  });
+
+  it("protects a missing session row with a placement under its canonical key", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-owner-missing-") };
+    const store = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase({ env }),
     });
+    mocks.placementService.mockReturnValue(store);
+    const key = cleanupRecord.ownerId;
+    mocks.readResolvedSessionEntriesInWorker.mockResolvedValue(
+      new Map([[key, { ...target(key), entry: undefined }]]),
+    );
+    await store.startDispatch({ sessionId: "remote-session", sessionKey: key, agentId: "other" });
+    const policy = createManagedWorktreeOwnerPolicy({});
+    const census = await policy.prepareOwners([cleanupRecord]);
+    expect(census.readOwnerState?.("session", key)).toBe("active");
+    await policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) =>
+      withOwnerMutation(async () => {
+        expect(policy.readOwnerState("session", key)).toBe("active");
+      }),
+    );
   });
 
   it("cancels queued cleanup before the preceding session mutation finishes", async ({
@@ -312,77 +357,19 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     },
   );
 
-  it.each(["remote", "claimed", "unknown-placement"])(
-    "preserves live placement protection (%s)",
-    async (kind) => {
-      const key = cleanupRecord.ownerId;
-      if (kind === "unknown-placement") {
-        mocks.getMany.mockImplementation(() => {
-          throw new Error("unreadable placement");
-        });
-      } else {
-        mocks.getMany.mockReturnValue(
-          new Map([
-            [
-              key,
-              {
-                sessionId: key,
-                sessionKey: key,
-                state: kind === "remote" ? "active" : "local",
-                generation: 1,
-                ...(kind === "claimed" ? { turnClaim: { id: "active-turn" } } : {}),
-              },
-            ],
-          ]),
-        );
-      }
-      const policy = createManagedWorktreeOwnerPolicy({});
-      await policy.withOwnerCleanup(cleanupRecord, async () => {
-        expect(policy.readOwnerState("session", key)).toBe("active");
-      });
-    },
-  );
-
-  it.each(["added", "removed", "unreadable"])(
-    "refuses changed related placement custody (%s)",
-    async (change) => {
-      const key = cleanupRecord.ownerId;
-      const placement = {
-        sessionId: "stopped",
-        sessionKey: key,
-        agentId: "other",
-        state: "failed",
-        generation: 1,
-        environmentId: null,
-      };
-      const placements = [placement];
-      mocks.listForReconcile.mockImplementation((selected?: string) =>
-        placements.filter((row) => selected === undefined || row.sessionKey === selected),
-      );
-      mocks.getMany.mockImplementation(
-        (ids: readonly string[]) =>
-          new Map(
-            placements
-              .filter((row) => ids.includes(row.sessionId))
-              .map((row) => [row.sessionId, row]),
-          ),
-      );
-      const policy = createManagedWorktreeOwnerPolicy({});
-      await policy.withOwnerCleanup(cleanupRecord, async () => {
-        expect(policy.readOwnerState("session", key)).toBe("retired");
-        placements.push({ ...placement, sessionId: "unrelated", sessionKey: `${key}:other` });
-        expect(policy.readOwnerState("session", key)).toBe("retired");
-        if (change === "added") {
-          placements.push({ ...placement, sessionId: "new-related" });
-        } else if (change === "removed") {
-          placements.splice(0, 1);
-        } else {
-          mocks.listForReconcile.mockImplementation(() => {
-            throw new Error("unreadable placements");
-          });
-        }
-        expect(policy.readOwnerState("session", key)).toBe("active");
-      });
-    },
-  );
+  it("defers cleanup when placement preparation is unavailable", async () => {
+    mocks.placementService.mockReturnValue({
+      listAsync: async () => [],
+      prepareMaintenancePlacements: async () => {
+        throw new Error("unreadable placement");
+      },
+      prepareSessionPlacement: async () => ({ current: () => undefined, release: () => {} }),
+    });
+    const remove = vi.fn(async () => {});
+    const policy = createManagedWorktreeOwnerPolicy({});
+    await expect(
+      policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) => withOwnerMutation(remove)),
+    ).rejects.toThrow("unreadable placement");
+    expect(remove).not.toHaveBeenCalled();
+  });
 });

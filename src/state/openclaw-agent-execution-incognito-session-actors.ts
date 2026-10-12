@@ -60,7 +60,6 @@ export function createIncognitoSessionActorFactory(params: {
   identity: AgentDatabaseIncognitoIdentity;
   assertBorrowed(this: void): void;
   assertReferenceCurrent(this: void): void;
-  assertRetainedCurrent(this: void): void;
   retain<T>(this: void, operation: () => Promise<T>): Promise<T>;
   run<T>(
     this: void,
@@ -79,7 +78,6 @@ export function createIncognitoSessionActorFactory(params: {
     identity,
     assertBorrowed,
     assertReferenceCurrent,
-    assertRetainedCurrent,
     retain,
     run,
     writeTokens,
@@ -146,7 +144,6 @@ export function createIncognitoSessionActorFactory(params: {
               { assertCurrent: assertActorCurrent },
               (scope) =>
                 operation({
-                  captureGeneration: () => ({ assertCurrent: assertRetainedCurrent }),
                   async execute(command) {
                     try {
                       const result = await scope.execute(command);

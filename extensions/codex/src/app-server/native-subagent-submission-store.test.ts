@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
+import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createNativeSubagentSessionAuthority } from "./native-subagent-assignment-store.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
@@ -40,6 +47,7 @@ import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
@@ -125,6 +133,7 @@ describe("native subagent submission receipts in the binding store", () => {
       };
       const assignmentStore: CodexNativeSubagentAssignmentStore = {
         assertCurrent,
+        assertCurrentAsync: async () => assertCurrent(),
         read: () => store.readNativeSubagentAssignments?.(identity, owner) ?? Promise.resolve([]),
         record: (value, guard) => {
           const recorded = store.mutate(
@@ -157,6 +166,7 @@ describe("native subagent submission receipts in the binding store", () => {
       );
       const submissionStore: CodexNativeSubagentSubmissionStore = {
         assertCurrent,
+        assertCurrentAsync: async () => assertCurrent(),
         read: () => store.readNativeSubagentSubmissions(identity, owner),
         record: (value, guard) => {
           const recorded = store.mutate(
@@ -364,6 +374,45 @@ describe("native subagent submission receipts in the binding store", () => {
       }
     },
   );
+
+  it("refuses receipt persistence after the captured parent lifecycle changes", async () => {
+    const { root, store, owner } = await fixture();
+    const scope = {
+      agentId: identity.agentId,
+      sessionKey: identity.sessionKey,
+      storePath: path.join(root, "agents", identity.agentId, "sessions", "sessions.json"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+    };
+    const entry = {
+      sessionId: identity.sessionId,
+      lifecycleRevision: owner.lifecycleRevision,
+      updatedAt: 1,
+    };
+    await patchSessionEntry({
+      ...scope,
+      fallbackEntry: entry,
+      replaceEntry: true,
+      skipMaintenance: true,
+      update: () => entry,
+    });
+    const parent = await captureSessionEntryCurrentCheckAsync(scope);
+    const authority = createNativeSubagentSessionAuthority(parent);
+    await patchSessionEntry({
+      ...scope,
+      replaceEntry: true,
+      skipMaintenance: true,
+      update: () => ({ ...entry, lifecycleRevision: "replacement-lifecycle" }),
+    });
+    await expect(
+      store.mutate(
+        identity,
+        { kind: "record-native-subagent-submission", owner, receipt },
+        currentAuthority,
+        authority,
+      ),
+    ).rejects.toThrow();
+    expect(await store.readNativeSubagentSubmissions(identity, owner)).toEqual([]);
+  });
 
   it("reopens initial assignment facts across native rotation but not physical adoption", async () => {
     const { root, store, owner } = await fixture();

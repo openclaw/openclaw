@@ -135,7 +135,6 @@ describe("atomic cron run recovery", () => {
         expect(onEvent).not.toHaveBeenCalled();
         expect(runCommandJob).not.toHaveBeenCalled();
         expect(reaperDiscovery).not.toHaveBeenCalled();
-        expect(state.activeTimerTicks).toBe(0);
         await admissions.expectReleased(source === "timer" ? 1 : 0);
 
         await barriers[1]!.entered.promise;

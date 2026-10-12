@@ -318,6 +318,7 @@ async function warmedPluginContext(
       }
     },
   );
+  context.params.timeoutMs = 60_000;
   const close = () => {
     liveHandle?.close("restart");
     admission.close();

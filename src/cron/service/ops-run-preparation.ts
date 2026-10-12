@@ -14,7 +14,8 @@ import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import { recordSkippedCronRuns } from "./scheduler-mutations.js";
+import { refreshCronScheduler } from "./scheduler-actor.js";
+import { recordSkippedCronRuns } from "./skipped-runs.js";
 import type { CronRunMode, CronServiceState } from "./state.js";
 import { isImmediateCronRunMode } from "./state.js";
 import {
@@ -25,7 +26,6 @@ import {
 } from "./store.js";
 import { emitCronRunFinished } from "./timer-outcome-events.js";
 import { isRunnableJob } from "./timer-runnable.js";
-import { armTimer } from "./timer.js";
 
 type ManualRunSkipped = {
   ok: true;
@@ -90,7 +90,7 @@ async function skipInvalidPersistedManualRun(params: {
     async afterCommit(outcome, historySource) {
       const job = outcome.jobs[0];
       if (!job) {
-        armTimer(params.state);
+        refreshCronScheduler(params.state);
         return;
       }
       applyCronRuntimeRowsToState(params.state, [job]);
@@ -123,7 +123,7 @@ async function skipInvalidPersistedManualRun(params: {
         await runPostPersistCronNotifications(params.state, [notification]);
       }
       historySource.assertCurrent();
-      armTimer(params.state);
+      refreshCronScheduler(params.state);
     },
   });
 }

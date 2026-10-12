@@ -282,6 +282,7 @@ export function createSessionHistoryWorkerReaders(
       "a transcript watermark",
       (value) => value.watermark,
     ),
+    readStats: reader("transcript-stats", "transcript statistics", (value) => value.stats),
     readActivitySummarySource: reader(
       "session-activity-summary-source",
       "an Activity recap source",

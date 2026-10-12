@@ -133,7 +133,7 @@ describe("worker placement terminal persistence", () => {
       await closeStateDatabaseForTest();
       database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-      const reopened = store.get(SESSION.sessionId);
+      const reopened = await store.getAsync(SESSION.sessionId);
       expect(reopened).toMatchObject({ state: "failed", terminalAtMs: 2_000 });
       expect(reopened?.terminalReason).toBe(failed.terminalReason);
     },

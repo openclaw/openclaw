@@ -37,6 +37,7 @@ export function finalizeUpdatedJob(params: {
   schedulingInputsRequested: boolean;
   scheduleChanged: boolean;
   explicitTriggerState?: CronJobPatch["state"];
+  isJobActive?: (id: string) => boolean;
 }) {
   const { job, nextJob, now } = params;
   if (params.scheduleChanged && nextJob.schedule.kind === "every") {
@@ -122,7 +123,7 @@ export function finalizeUpdatedJob(params: {
       nextJob.state.queuedAtMs = undefined;
       // Preserve only genuine execution. Queued reservations must clear so a
       // disabled job can accept a later force run with the same timestamp.
-      if (!isCronJobActive(nextJob.id)) {
+      if (!(params.isJobActive ?? isCronJobActive)(nextJob.id)) {
         Object.assign(nextJob.state, { runningAtMs: undefined, runningReceiptId: undefined });
         delete nextJob.state.runningScheduleChangeId;
       }

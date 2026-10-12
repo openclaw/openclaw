@@ -7,7 +7,7 @@ import type { CronRunHistorySource } from "../store/run-history.js";
 import type { CronJob } from "../types.js";
 import { finishCronRun } from "./run-history.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
-import { recordSkippedCronRuns } from "./scheduler-mutations.js";
+import { recordSkippedCronRuns } from "./skipped-runs.js";
 import { emit, type CronEvent, type CronServiceState } from "./state.js";
 import { captureCronServiceMutationSource, runPostPersistCronNotifications } from "./store.js";
 

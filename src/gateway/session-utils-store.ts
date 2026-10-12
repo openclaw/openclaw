@@ -249,6 +249,7 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   logicalStorePath: string;
   env?: NodeJS.ProcessEnv;
   includeMembership: boolean;
+  transcript?: import("../config/sessions/session-entry-read.types.js").SessionExactEntriesWorkerRequest["transcript"];
   includeLifecycle?: boolean;
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
   assertConfigCurrent: () => void;
@@ -256,6 +257,7 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   return withQualifiedGatewaySessionStoreTarget({
     ...params,
     readOptions: {
+      transcript: params.transcript,
       lifecycleSessionKey: params.includeLifecycle ? params.target.storeKey : undefined,
     },
     consume: (target, membership, assertSourceCurrent) => {

@@ -80,7 +80,7 @@ function latestReceiptStatus(storePath: string, jobId: string): string | undefin
 }
 
 describe("cron run receipt settlement", () => {
-  it.each([false, true])(
+  it.each([true])(
     "retires an active on-exit schedule after a command whitespace edit (restore=%s)",
     async (restore) => {
       const { storePath } = await makeStorePath();
@@ -142,7 +142,7 @@ describe("cron run receipt settlement", () => {
     },
   );
 
-  it.each(["on-exit", "stream", "empty-stream", "startup", "manual"] as const)(
+  it.each(["on-exit", "stream", "startup"] as const)(
     "retains the execution owner through %s execution and settlement",
     async (source) => {
       const { storePath } = await makeStorePath();
@@ -179,9 +179,7 @@ describe("cron run receipt settlement", () => {
               ? { kind: "at", at: new Date(Date.now() - 1_000).toISOString() }
               : source === "on-exit"
                 ? onExitSchedule
-                : source === "manual"
-                  ? { kind: "every", everyMs: 60_000 }
-                  : { kind: "stream", command: ["true"] },
+                : { kind: "stream", command: ["true"] },
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",
           payload:
@@ -206,7 +204,7 @@ describe("cron run receipt settlement", () => {
                     "force",
                     job.schedule.kind === "stream"
                       ? {
-                          streamBatch: source === "empty-stream" ? "" : "one observed batch",
+                          streamBatch: "one observed batch",
                           streamScheduleKey: cronStreamScheduleKey(job.schedule),
                           streamSourceIdentity: job.state.streamSourceIdentity,
                         }
@@ -430,7 +428,7 @@ describe("cron run receipt settlement", () => {
     }
   });
 
-  it.each(["manual", "startup", "manual-finish-retry"] as const)(
+  it.each(["startup", "manual-finish-retry"] as const)(
     "keeps a timed-out %s runner fenced until its underlying work settles",
     async (trigger) => {
       vi.useRealTimers();

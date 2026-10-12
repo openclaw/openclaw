@@ -498,7 +498,7 @@ export class ManagedWorktreeService {
           { ...current, retainSources: params.retainSources, prepareBase: params.prepareBase },
           repository,
           destination,
-          publication,
+          publication.id,
         );
         prepared = true;
         return created;
@@ -574,7 +574,7 @@ export class ManagedWorktreeService {
     params: RepositoryCreationParams,
     repository: ResolvedRepository,
     destination: Awaited<ReturnType<typeof prepareWorktreeDestination>>,
-    publication: WorktreeCreationPublication,
+    worktreeId: string,
   ): Promise<MaterializedRepositoryWorktree> {
     const { root, worktreePath, branch } = destination;
     // Default-base resolution fetches remote refs; it is an effect, not just discovery.
@@ -650,7 +650,7 @@ export class ManagedWorktreeService {
           ? {
               onPromptReady: async (commit: string) =>
                 onPromptReady({
-                  id: publication.id,
+                  id: worktreeId,
                   path: worktreePath,
                   branch,
                   repoRoot: repository.repoRoot,
@@ -682,17 +682,6 @@ export class ManagedWorktreeService {
         signal: params.signal,
         commitGuard: () => params.commitGuard?.(),
         rollbackGuard: params.rollbackGuard,
-        deferUnpreparedCleanup: (cleanup) => {
-          publication.cleanup = async (assertCurrent) => {
-            assertCurrent();
-            const live = await readRegistryWorktrees(this.env, { liveOnly: true });
-            assertCurrent();
-            if (live.some((record) => record.path === worktreePath)) {
-              throw new Error("Worktree was published before cleanup; checkout preserved.");
-            }
-            await cleanup(assertCurrent);
-          };
-        },
       });
     };
     const added = await timeWorktreePreparationPhase("checkout", addCheckout);

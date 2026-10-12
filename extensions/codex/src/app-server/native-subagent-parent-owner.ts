@@ -43,6 +43,7 @@ export type NativeParentRegistration = Pick<
     /** Explicit undefined records System; omission leaves model custody unknown. */
     modelSource?: NativeModelSource;
     assertCurrent?: () => void;
+    assertCurrentAsync?: () => Promise<void>;
     unqualifiedModelExecution?: true;
     onUnqualifiedModelCancelled?: (reason: unknown) => void;
   };
@@ -198,6 +199,7 @@ export async function registerNativeSubagentParent(
     owner.completionCustody = params.completionScope
       ? await dependencies.runtime.captureAgentHarnessCompletionCustody(params.completionScope)
       : undefined;
+    await params.assertCurrentAsync?.();
     if (
       !isCurrent() ||
       state.requesterSessionKey !== requesterSessionKey ||

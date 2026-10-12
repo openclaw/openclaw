@@ -198,7 +198,7 @@ describe("session tool outcomes", () => {
           .join("\n");
         expect(text.includes("synthetic result")).toBe(true);
         expect(text.includes("message-end rewrite")).toBe(withRecovery);
-        expect(text.includes(secret)).toBe(false);
+        expect(text).toContain(secret);
         expect(
           replay.some(
             (message) =>

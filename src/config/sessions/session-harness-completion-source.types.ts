@@ -8,6 +8,7 @@ import type { SessionEntry } from "./types.js";
 export type HarnessCompletionSourceSnapshot = {
   entry?: SessionEntry;
   validInput: boolean;
+  writeToken?: string;
   readError?: SessionTranscriptWorkerReadError;
   version?: SessionTranscriptContextVersion;
 };
@@ -18,6 +19,7 @@ export type Input = {
   claim: HarnessCompletionRecovery;
   source: CapturedSessionEntryReadSource;
   admission?: UserTurnTranscriptAdmissionReceipt;
+  mode?: "admission" | "committed";
 };
 export type Value = {
   kind: "session-harness-completion-source";

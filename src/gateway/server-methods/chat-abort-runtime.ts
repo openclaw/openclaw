@@ -216,7 +216,9 @@ export function abortQueuedCollectorSession(
         {
           assertCurrent,
           preparePublication: publication,
-          beforeSessionKill: () => {
+          beforeSessionKill: async () => {
+            await params.beforeAbort?.();
+            assertCurrent();
             // Resolve Gateway owners under the kill runtime's session fence.
             // Signal them only after this collector's FIFO reservation is held.
             const plan = prepareChatSessionAbort(
@@ -408,6 +410,7 @@ function prepareChatSessionAbort(
     }
   };
   const cancelWorker = () => {
+    params.assertCurrent?.();
     workerCancellationPersistence = workerCancellation?.cancel({
       assertCurrent: params.assertCurrent,
       onCancelled: recordRun,
@@ -585,7 +588,6 @@ function prepareChatSessionAbort(
       params.requester.isAdmin &&
       canCancelWorkerSession
     ) {
-      params.assertCurrent?.();
       cancelWorker();
     }
   };
@@ -616,12 +618,11 @@ function prepareChatSessionAbort(
         ...admittedAbortPersistence,
       ]);
       // A captured session failure can also surface through partial persistence.
-      const failures = new Set<unknown>();
-      for (const settled of [worker, partial, exec, embedded, ...admitted]) {
-        if (settled.status === "rejected") {
-          failures.add(settled.reason);
-        }
-      }
+      const failures = new Set<unknown>(
+        [worker, partial, exec, embedded, ...admitted].flatMap((settled) =>
+          settled.status === "rejected" ? [settled.reason] : [],
+        ),
+      );
       if (params.session && !params.session.ok) {
         failures.add(params.session.error);
       }
@@ -669,12 +670,14 @@ export async function abortChatRunsForSessionKeyWithPartials(
         execCancellation: plan.commands,
         sessionOrigin: plan.sessionOrigin,
         assertCurrent: params.assertCurrent,
-        beforeKill: () => {
+        beforeKill: async () => {
+          await params.beforeAbort?.();
           plan.abort();
           return true;
         },
       });
     } else {
+      await params.beforeAbort?.();
       plan.abort();
     }
     if (!result.unauthorized && !result.error) {
@@ -703,9 +706,7 @@ export async function abortChatRunsForSessionKeyWithPartials(
     ...result,
     aborted:
       result.aborted ||
-      Boolean(descendants?.killed) ||
-      Boolean(descendants?.continuationRetired) ||
-      Boolean(descendants?.execAborted),
+      Boolean(descendants?.killed || descendants?.continuationRetired || descendants?.execAborted),
     descendants,
     ...(warning ? { warning } : {}),
   };

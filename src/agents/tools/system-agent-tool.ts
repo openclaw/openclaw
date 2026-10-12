@@ -409,7 +409,7 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
           id: requireParam(params, "envVar"),
         };
       }
-      // Before the proposal exists anywhere, so plans, logs, and transcripts mask it.
+      // Register before creating the proposal so logs and diagnostics mask the value.
       registerSecretValueForRedaction(secret);
       if (readToolStringParam(params, "envVar")) {
         throw new ToolInputError(

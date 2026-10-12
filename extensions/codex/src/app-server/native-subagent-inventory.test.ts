@@ -48,22 +48,24 @@ describe("native pending assignment inventory through registered monitor admissi
       const entered = createDeferred<void>();
       const releaseWrite = createDeferred<void>();
       const mutate = f.store.mutate.bind(f.store);
-      vi.spyOn(f.store, "mutate").mockImplementation(async (identity, mutation, assertCurrent) => {
-        if (
-          mutation.kind === "record-native-subagent-assignment" &&
-          mutation.assignment.nativeTurnId === "child-turn"
-        ) {
-          entered.resolve();
-          await releaseWrite.promise;
-          if (outcome === "failed") {
-            throw new Error("Synthetic binding write failure");
+      vi.spyOn(f.store, "mutate").mockImplementation(
+        async (identity, mutation, assertCurrent, authority) => {
+          if (
+            mutation.kind === "record-native-subagent-assignment" &&
+            mutation.assignment.nativeTurnId === "child-turn"
+          ) {
+            entered.resolve();
+            await releaseWrite.promise;
+            if (outcome === "failed") {
+              throw new Error("Synthetic binding write failure");
+            }
+            if (outcome === "rejected") {
+              return false;
+            }
           }
-          if (outcome === "rejected") {
-            return false;
-          }
-        }
-        return await mutate(identity, mutation, assertCurrent);
-      });
+          return await mutate(identity, mutation, assertCurrent, authority);
+        },
+      );
       const granted = vi.fn();
       const capture = codexNativeSubagentMonitorRuntime
         .captureModelSource({

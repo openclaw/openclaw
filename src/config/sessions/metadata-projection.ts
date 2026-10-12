@@ -34,6 +34,7 @@ export type PreparedSessionMetaPatch = {
   } | null;
   origin: SessionOrigin | undefined;
   internalTurn: boolean;
+  clearAvatar: boolean;
 };
 
 function hasExternalOriginChange(
@@ -72,6 +73,18 @@ export const mergeSessionOrigin = (
     delete merged.avatar;
     delete merged.accountId;
     delete merged.threadId;
+  }
+  // Native portraits cannot follow another peer into a shared main session.
+  if (
+    existing &&
+    next &&
+    ((next.from != null && existing.from != null && next.from !== existing.from) ||
+      (next.chatType != null && existing.chatType != null && next.chatType !== existing.chatType) ||
+      (next.nativeDirectUserId != null &&
+        existing.nativeDirectUserId != null &&
+        next.nativeDirectUserId !== existing.nativeDirectUserId))
+  ) {
+    delete merged.avatar;
   }
   const mergeField = <K extends keyof SessionOrigin>(field: K, value: SessionOrigin[K]) => {
     if (value) {
@@ -194,6 +207,9 @@ export function projectSessionMetaPatch(params: {
 
   const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
   const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
+  if (origin && mergedOrigin && params.prepared.clearAvatar) {
+    delete mergedOrigin.avatar;
+  }
   if (mergedOrigin) {
     if (!patch.chatType && mergedOrigin.chatType) {
       patch.chatType = mergedOrigin.chatType;

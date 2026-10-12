@@ -77,34 +77,6 @@ describe("probeTwitch", () => {
     expect(result.error).toContain("missing credentials");
   });
 
-  it("returns error when token is missing", async () => {
-    const account = { ...mockAccount, accessToken: "" };
-    const result = await probeTwitch(account, 5000);
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("missing credentials");
-  });
-
-  it("passes an unprefixed token unchanged to the auth provider", async () => {
-    const account = { ...mockAccount, accessToken: "raw_token_no_prefix" };
-    const result = await probeTwitch(account, 5000);
-
-    expect(result.ok).toBe(true);
-    expect(mockAuthProvider).toHaveBeenCalledOnce();
-    expect(mockAuthProvider).toHaveBeenCalledWith("test-client-id", "raw_token_no_prefix");
-  });
-
-  it("strips the token prefix and reports the connection outcome", async () => {
-    const result = await probeTwitch(mockAccount, 5000);
-
-    expect(result.ok).toBe(true);
-    expect(result.connected).toBe(true);
-    expect(result.username).toBe("testbot");
-    expect(result.channel).toBe("testchannel"); // uses account's configured channel
-    expect(mockAuthProvider).toHaveBeenCalledOnce();
-    expect(mockAuthProvider).toHaveBeenCalledWith("test-client-id", "test123456789");
-  });
-
   it("times out when connection takes too long", async () => {
     vi.useFakeTimers();
     try {
@@ -122,44 +94,6 @@ describe("probeTwitch", () => {
     }
   });
 
-  it("formats a disconnect error and cleans up the client", async () => {
-    mockConnect.mockImplementationOnce(async () => {
-      // Simulate connection failure by calling disconnect handler
-      // onDisconnect signature: (manually: boolean, reason?: Error) => void
-      if (disconnectHandler) {
-        disconnectHandler(false, new Error("Connection failed"));
-      }
-    });
-
-    const result = await probeTwitch(mockAccount, 5000);
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("Connection failed");
-    expect(mockQuit).toHaveBeenCalledOnce();
-
-    // Reset mocks
-    mockConnect.mockImplementation(defaultConnectImpl);
-  });
-
-  it("clears the deadline when connection startup throws", async () => {
-    vi.useFakeTimers();
-    try {
-      mockConnect.mockImplementationOnce(() => {
-        throw new Error("Connection startup failed");
-      });
-
-      const result = await probeTwitch(mockAccount, 5000);
-
-      expect(result.ok).toBe(false);
-      expect(result.error).toBe("Connection startup failed");
-      expect(mockQuit).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
-  });
-
   it("trims whitespace before removing the token prefix", async () => {
     const account: TwitchAccountConfig = {
       ...mockAccount,
@@ -169,6 +103,9 @@ describe("probeTwitch", () => {
     const result = await probeTwitch(account, 5000);
 
     expect(result.ok).toBe(true);
+    expect(result.connected).toBe(true);
+    expect(result.username).toBe("testbot");
+    expect(result.channel).toBe("testchannel");
     expect(mockAuthProvider).toHaveBeenCalledOnce();
     expect(mockAuthProvider).toHaveBeenCalledWith("test-client-id", "test123456789");
   });

@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   assertDirectoryIdentitySync as assertExactDirectoryIdentitySync,
   sameFileIdentity,
+  type FileIdentityStat,
 } from "@openclaw/fs-safe/advanced";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
@@ -17,7 +18,7 @@ import {
   syncDirectory,
   syncDirectoryIfSupported,
   type DirectoryReceipt,
-  type DurableDirectoryReceipt,
+  type ExactDirectoryReceipt,
   type PinnedDirectory,
 } from "../infra/directory-durability.js";
 import {
@@ -116,7 +117,7 @@ class LocalSqliteSnapshotProvider {
       this.#repositoryPath,
       "SQLite snapshot repository",
     );
-    const repositoryIdentity = repositoryReceipt.identity;
+    const repositoryIdentity = repositoryReceipt.exactIdentity;
     const trustedRepositoryPath = await assertTrustedStagingRoot(
       repositoryIdentity,
       this.#repositoryPath,
@@ -136,14 +137,14 @@ class LocalSqliteSnapshotProvider {
     await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
     await createPrivateSqliteDirectory(stagingDir);
 
-    let stagingIdentity: Stats | undefined;
+    let stagingIdentity: BigIntStats | undefined;
     let publishedDirectory: PinnedDirectory | undefined;
-    let publishedIdentity: Stats | undefined;
-    const publishedEntries = new Map<string, Stats>();
+    let publishedIdentity: FileIdentityStat | undefined;
+    const publishedEntries = new Map<string, FileIdentityStat>();
     let snapshotDirectoryCreated = false;
     try {
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
-      stagingIdentity = await fs.lstat(stagingDir);
+      stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
       applyPrivateModeSync(stagingDir, SNAPSHOT_DIRECTORY_MODE);
       await assertPrivateStagingDirectory(stagingIdentity, stagingDir);
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
@@ -176,15 +177,15 @@ class LocalSqliteSnapshotProvider {
       publishedDirectory = await pinDirectory(snapshotDir, {
         label: "SQLite snapshot directory",
       });
-      publishedIdentity = publishedDirectory.receipt.identity;
+      publishedIdentity = publishedDirectory.receipt.exactIdentity;
       applyPrivateModeSync(snapshotDir, SNAPSHOT_DIRECTORY_MODE);
       await assertPrivateStagingDirectory(publishedIdentity, snapshotDir);
       await publishedDirectory.assertCurrent();
       const pendingPath = path.join(snapshotDir, SNAPSHOT_PENDING_FILENAME);
       const pendingHandle = await fs.open(pendingPath, "wx+", SNAPSHOT_FILE_MODE);
-      let pendingIdentity: Stats;
+      let pendingIdentity: BigIntStats;
       try {
-        pendingIdentity = await pendingHandle.stat();
+        pendingIdentity = await pendingHandle.stat({ bigint: true });
         publishedEntries.set(SNAPSHOT_PENDING_FILENAME, pendingIdentity);
         await pendingHandle.sync();
       } finally {
@@ -227,7 +228,7 @@ class LocalSqliteSnapshotProvider {
       await publishedDirectory?.close().catch(() => undefined);
       publishedDirectory = undefined;
       if (snapshotDirectoryCreated) {
-        publishedIdentity ??= await fs.lstat(snapshotDir).catch(() => undefined);
+        publishedIdentity ??= await fs.lstat(snapshotDir, { bigint: true }).catch(() => undefined);
       }
       if (publishedIdentity) {
         const removed = await removePublishedSnapshotDirectoryIfOwned(
@@ -266,7 +267,7 @@ class LocalSqliteSnapshotProvider {
     assertArtifactMatchesManifest(artifactPath, artifact, manifest);
     await verifySnapshotDatabaseFile(
       artifactPath,
-      artifact.stat,
+      artifact.identity,
       manifest,
       this.#validationRootPath,
     );
@@ -316,8 +317,8 @@ class LocalSqliteSnapshotProvider {
         `SQLite restore target must be outside snapshot repository ${this.#repositoryPath}: ${resolvedTargetPath}`,
       );
     }
-    const restoreParentIdentity = await fs.lstat(trustedRestoreParentPath);
-    if (!sameFileIdentity(restoreParentReceipt.identity, restoreParentIdentity)) {
+    const restoreParentIdentity = await fs.lstat(trustedRestoreParentPath, { bigint: true });
+    if (!sameFileIdentity(restoreParentReceipt.exactIdentity, restoreParentIdentity)) {
       throw new Error(
         `SQLite restore parent changed after durable creation: ${trustedRestoreParentPath}`,
       );
@@ -338,12 +339,12 @@ class LocalSqliteSnapshotProvider {
         await assertSnapshotContents(snapshotDir);
         await verifySnapshotDatabaseFile(
           stagedSourcePath,
-          stagedArtifact.stat,
+          stagedArtifact.identity,
           manifest,
           trustedRestoreParentPath,
         );
         await publishVerifiedSqliteFile({
-          sourceIdentity: stagedArtifact.stat,
+          sourceIdentity: stagedArtifact.identity,
           sourcePath: stagedSourcePath,
           targetPath: trustedTargetPath,
           expectedContent: manifest.artifact,
@@ -491,15 +492,15 @@ function assertAllowedDatabaseRole(
 
 async function verifySnapshotDatabaseFile(
   artifactPath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: FileIdentityStat,
   manifest: SnapshotManifest,
   validationRootPath: string,
 ): Promise<void> {
-  const beforeOpen = await fs.lstat(artifactPath);
+  const beforeOpen = await fs.lstat(artifactPath, { bigint: true });
   if (
     beforeOpen.isSymbolicLink() ||
     !beforeOpen.isFile() ||
-    beforeOpen.nlink > 1 ||
+    beforeOpen.nlink > 1n ||
     !sameFileIdentity(expectedIdentity, beforeOpen)
   ) {
     throw new Error(`Snapshot artifact changed before SQLite verification: ${artifactPath}`);
@@ -518,6 +519,7 @@ async function verifySnapshotDatabaseFile(
       path: canonicalValidationRootPath,
       realPath: canonicalValidationRootPath,
       identity: validationRootIdentity,
+      exactIdentity: validationRootIdentity,
     },
     prefix: ".tmp-verify-",
     allowedEntries: VALIDATION_STAGING_ENTRIES,
@@ -547,23 +549,23 @@ async function verifySnapshotDatabaseFile(
         database.close();
       }
       const validatedArtifact = await hashSnapshotArtifact(validationDir);
-      if (!sameFileIdentity(validationArtifact.stat, validatedArtifact.stat)) {
+      if (!sameFileIdentity(validationArtifact.identity, validatedArtifact.identity)) {
         throw new Error(`Snapshot validation copy changed: ${validationPath}`);
       }
       assertArtifactMatchesManifest(validationPath, validatedArtifact, manifest);
     },
   });
-  const afterOpen = await fs.lstat(artifactPath);
+  const afterOpen = await fs.lstat(artifactPath, { bigint: true });
   if (
     afterOpen.isSymbolicLink() ||
     !afterOpen.isFile() ||
-    afterOpen.nlink > 1 ||
+    afterOpen.nlink > 1n ||
     !sameFileIdentity(expectedIdentity, afterOpen)
   ) {
     throw new Error(`Snapshot artifact changed during SQLite verification: ${artifactPath}`);
   }
   const verifiedArtifact = await hashSnapshotArtifact(path.dirname(artifactPath));
-  if (!sameFileIdentity(expectedIdentity, verifiedArtifact.stat)) {
+  if (!sameFileIdentity(expectedIdentity, verifiedArtifact.identity)) {
     throw new Error(`Snapshot artifact changed after SQLite verification: ${artifactPath}`);
   }
   assertArtifactMatchesManifest(artifactPath, verifiedArtifact, manifest);
@@ -584,10 +586,7 @@ function buildDatabaseManifest(
   return { role: "generic", id: identity.id, basename, userVersion };
 }
 
-async function ensurePrivateDirectory(
-  directoryPath: string,
-  scopeLabel: string,
-): Promise<DurableDirectoryReceipt> {
+async function ensurePrivateDirectory(directoryPath: string, scopeLabel: string) {
   let expectedExistingIdentity: BigIntStats | undefined;
   if (process.platform !== "win32") {
     expectedExistingIdentity = await lstatIfExists(directoryPath, { bigint: true });
@@ -642,9 +641,7 @@ async function ensurePrivateDirectory(
   return receipt;
 }
 
-async function ensureRestoreParentDirectory(
-  directoryPath: string,
-): Promise<DurableDirectoryReceipt> {
+async function ensureRestoreParentDirectory(directoryPath: string) {
   const receipt = await ensureDurableDirectory({
     directoryPath,
     label: "SQLite restore target",
@@ -666,7 +663,7 @@ async function publishSnapshotEntryNoOverwrite(
   sourcePath: string,
   targetPath: string,
   entryName: string,
-  publishedEntries: Map<string, Stats>,
+  publishedEntries: Map<string, FileIdentityStat>,
 ): Promise<void> {
   let publication: Awaited<ReturnType<typeof publishFileNoClobber>>;
   try {
@@ -679,13 +676,13 @@ async function publishSnapshotEntryNoOverwrite(
     const details = getPublishFileExclusiveFailureDetails(error);
     if (details?.targetCreated && details.cleanup !== "removed") {
       const [currentSource, currentTarget] = await Promise.all([
-        fs.lstat(sourcePath).catch(() => undefined),
-        fs.lstat(targetPath).catch(() => undefined),
+        fs.lstat(sourcePath, { bigint: true }).catch(() => undefined),
+        fs.lstat(targetPath, { bigint: true }).catch(() => undefined),
       ]);
       const matchesReceipt =
-        details.targetIdentity &&
+        details.exactTargetIdentity &&
         currentTarget &&
-        sameFileIdentity(details.targetIdentity, currentTarget);
+        sameFileIdentity(details.exactTargetIdentity, currentTarget);
       const matchesSource =
         currentSource && currentTarget && sameFileIdentity(currentSource, currentTarget);
       if (currentTarget && (matchesReceipt || matchesSource)) {
@@ -694,17 +691,16 @@ async function publishSnapshotEntryNoOverwrite(
     }
     throw error;
   }
-  const expectedTargetIdentity = publication.identity;
+  const expectedTargetIdentity = publication.exactIdentity;
   publishedEntries.set(entryName, expectedTargetIdentity);
-  const initialTargetIdentity = await fs.lstat(targetPath);
+  const initialTargetIdentity = await fs.lstat(targetPath, { bigint: true });
   if (!sameFileIdentity(expectedTargetIdentity, initialTargetIdentity)) {
     throw new Error(`SQLite snapshot entry changed during publication: ${targetPath}`);
   }
-  const finalTargetIdentity = await fs.lstat(targetPath);
+  const finalTargetIdentity = await fs.lstat(targetPath, { bigint: true });
   if (!sameFileIdentity(initialTargetIdentity, finalTargetIdentity)) {
     throw new Error(`SQLite snapshot entry changed after publication: ${targetPath}`);
   }
-  publishedEntries.set(entryName, finalTargetIdentity);
 }
 
 async function assertSnapshotContents(snapshotDir: string, allowPending = false): Promise<void> {
@@ -766,12 +762,12 @@ async function classifySnapshotDirectory(snapshotDir: string): Promise<SnapshotD
 
 type PendingSnapshotCommitParams = {
   allowedDatabaseRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined;
-  repositoryIdentity: Stats;
+  repositoryIdentity: FileIdentityStat;
   repositoryPath: string;
   snapshotPath: string;
   validationRootPath: string;
   snapshotDirectory: PinnedDirectory;
-  expected?: { manifest: SnapshotManifest; pendingIdentity: Stats };
+  expected?: { manifest: SnapshotManifest; pendingIdentity: BigIntStats };
 };
 
 async function recoverCompletePendingSnapshot(
@@ -786,7 +782,10 @@ async function recoverCompletePendingSnapshot(
     label: "SQLite pending snapshot directory",
   });
   try {
-    await assertPrivateStagingDirectory(snapshotDirectory.receipt.identity, params.snapshotPath);
+    await assertPrivateStagingDirectory(
+      snapshotDirectory.receipt.exactIdentity,
+      params.snapshotPath,
+    );
     return await commitPendingSnapshot({
       ...params,
       repositoryPath: trustedRepositoryPath,
@@ -814,7 +813,7 @@ async function commitPendingSnapshot(
   assertArtifactMatchesManifest(artifactPath, artifact, manifest);
   await verifySnapshotDatabaseFile(
     artifactPath,
-    artifact.stat,
+    artifact.identity,
     manifest,
     params.validationRootPath,
   );
@@ -860,25 +859,20 @@ async function commitPendingSnapshot(
   return committedManifest;
 }
 
-function readPendingSnapshotIdentity(pendingPath: string): Stats | undefined {
+function readPendingSnapshotIdentity(pendingPath: string): BigIntStats | undefined {
   const identity = lstatIfExistsSync(pendingPath);
-  if (identity && (identity.isSymbolicLink() || !identity.isFile() || identity.nlink > 1)) {
+  if (identity && (identity.isSymbolicLink() || !identity.isFile() || identity.nlink > 1n)) {
     throw new Error(`SQLite snapshot pending marker is unsafe: ${pendingPath}`);
   }
   return identity;
 }
 
-async function lstatIfExists(pathname: string): Promise<Stats | undefined>;
-async function lstatIfExists(
-  pathname: string,
-  options: { bigint: true },
-): Promise<BigIntStats | undefined>;
 async function lstatIfExists(
   pathname: string,
   options?: { bigint: true },
-): Promise<Stats | BigIntStats | undefined> {
+): Promise<BigIntStats | undefined> {
   try {
-    return await fs.lstat(pathname, options);
+    return await fs.lstat(pathname, options ?? { bigint: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -887,9 +881,9 @@ async function lstatIfExists(
   }
 }
 
-function lstatIfExistsSync(pathname: string): Stats | undefined {
+function lstatIfExistsSync(pathname: string): BigIntStats | undefined {
   try {
-    return fsSync.lstatSync(pathname);
+    return fsSync.lstatSync(pathname, { bigint: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -900,7 +894,7 @@ function lstatIfExistsSync(pathname: string): Stats | undefined {
 
 async function removePrivateDirectoryIfOwned(
   directoryPath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: BigIntStats,
   allowedEntries: ReadonlySet<string>,
 ): Promise<boolean> {
   const currentIdentity = await lstatIfExists(directoryPath);
@@ -933,24 +927,24 @@ async function removePrivateDirectoryIfOwned(
 }
 
 async function withPrivateSqliteStagingDirectory<T>(options: {
-  rootReceipt: Omit<DirectoryReceipt, "identity"> & { identity: Stats | BigIntStats };
+  rootReceipt: DirectoryReceipt<Stats | BigIntStats> & Pick<ExactDirectoryReceipt, "exactIdentity">;
   prefix: string;
   allowedEntries: ReadonlySet<string>;
-  operation: (directoryPath: string, directoryIdentity: Stats) => Promise<T>;
+  operation: (directoryPath: string, directoryIdentity: BigIntStats) => Promise<T>;
 }): Promise<T> {
   const trustedRootPath = await assertTrustedStagingRoot(
-    options.rootReceipt.identity,
+    options.rootReceipt.exactIdentity,
     options.rootReceipt.path,
   );
-  await assertDirectoryIdentity(trustedRootPath, options.rootReceipt.identity);
+  await assertDirectoryIdentity(trustedRootPath, options.rootReceipt.exactIdentity);
   const directoryPath = await createPrivateSqliteTempDirectory(trustedRootPath, options.prefix);
-  const directoryIdentity = await fs.lstat(directoryPath);
+  const directoryIdentity = await fs.lstat(directoryPath, { bigint: true });
 
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   try {
     applyPrivateModeSync(directoryPath, SNAPSHOT_DIRECTORY_MODE);
     await assertPrivateStagingDirectory(directoryIdentity, directoryPath);
-    await assertDirectoryIdentity(trustedRootPath, options.rootReceipt.identity);
+    await assertDirectoryIdentity(trustedRootPath, options.rootReceipt.exactIdentity);
     outcome = {
       ok: true,
       value: await options.operation(directoryPath, directoryIdentity),
@@ -995,20 +989,20 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
 /** Create or strictly admit a Git repository through the local snapshot root trust policy. */
 export async function ensurePrivateSnapshotRepositoryRoot(rootPath: string): Promise<string> {
   try {
-    return await assertTrustedStagingRoot(await fs.lstat(rootPath), rootPath);
+    return await assertTrustedStagingRoot(await fs.lstat(rootPath, { bigint: true }), rootPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
   }
   const receipt = await ensurePrivateDirectory(rootPath, "Git backup repository");
-  return await assertTrustedStagingRoot(receipt.identity, rootPath);
+  return await assertTrustedStagingRoot(receipt.exactIdentity, rootPath);
 }
 
 async function removePublishedSnapshotDirectoryIfOwned(
   directoryPath: string,
-  expectedIdentity: Stats,
-  publishedEntries: ReadonlyMap<string, Stats>,
+  expectedIdentity: FileIdentityStat,
+  publishedEntries: ReadonlyMap<string, FileIdentityStat>,
 ): Promise<boolean> {
   const currentIdentity = await lstatIfExists(directoryPath);
   if (
@@ -1026,7 +1020,7 @@ async function removePublishedSnapshotDirectoryIfOwned(
       continue;
     }
     const entryPath = path.join(directoryPath, entry.name);
-    const currentEntryIdentity = await fs.lstat(entryPath);
+    const currentEntryIdentity = await fs.lstat(entryPath, { bigint: true });
     if (sameFileIdentity(currentEntryIdentity, expectedEntryIdentity)) {
       await fs.unlink(entryPath);
     }

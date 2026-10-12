@@ -469,6 +469,7 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
           expect(await settled).toEqual([{ status: "rejected", reason: expect.any(Error) }]);
           if (change === "integrity confirmation") {
             await expect(projection.prepareMembership()).resolves.toBeUndefined();
+            await projection.prepareSelection();
             expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
               "topology",
             ]);
@@ -477,6 +478,7 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
             const successor = await createSessionRowProjection({ cfg, modelCatalog: [] });
             try {
               await successor.prepareMembership();
+              await successor.prepareSelection();
               expect(successor.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
                 "topology",
               ]);
