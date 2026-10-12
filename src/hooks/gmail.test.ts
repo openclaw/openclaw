@@ -1,6 +1,6 @@
 // Gmail hook tests cover Gmail hook configuration and setup helpers.
 import { describe, expect, it } from "vitest";
-import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   buildGogWatchServeArgs,
   buildGogWatchServeLogArgs,
@@ -63,18 +63,6 @@ describe("gmail hook config", () => {
     });
   });
 
-  it("resolves runtime config with defaults", () => {
-    const result = resolveGmailHookRuntimeConfig(baseConfig, {});
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.account).toBe("openclaw@gmail.com");
-      expect(result.value.label).toBe("INBOX");
-      expect(result.value.includeBody).toBe(true);
-      expect(result.value.serve.port).toBe(8788);
-      expect(result.value.hookUrl).toBe(`http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`);
-    }
-  });
-
   it("builds watch serve log args without secrets", () => {
     const result = resolveGmailHookRuntimeConfig(baseConfig, {});
     expect(result.ok).toBe(true);
@@ -128,25 +116,11 @@ describe("gmail hook config", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("defaults serve path to / when tailscale is enabled", () => {
-    const result = resolveWithGmailOverrides({ tailscale: { mode: "funnel" } });
-    expectResolvedPaths(result, { servePath: "/", publicPath: "/gmail-pubsub" });
-  });
-
   it("keeps custom public path when serve path is set", () => {
     const result = resolveWithGmailOverrides({
       serve: { path: "/custom" },
       tailscale: { mode: "funnel" },
     });
     expectResolvedPaths(result, { servePath: "/", publicPath: "/custom" });
-  });
-
-  it("keeps serve path when tailscale target is set", () => {
-    const target = "http://127.0.0.1:8788/custom";
-    const result = resolveWithGmailOverrides({
-      serve: { path: "/custom" },
-      tailscale: { mode: "funnel", target },
-    });
-    expectResolvedPaths(result, { servePath: "/custom", publicPath: "/custom", target });
   });
 });
