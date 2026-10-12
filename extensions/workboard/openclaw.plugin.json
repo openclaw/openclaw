@@ -232,9 +232,9 @@
     "properties": {}
   },
   "controlUi": {
-    "entry": "dist/control-ui/23b4b7282c181ec5c09f688cfb8de9b8ee93e88ae5f62b30cdbaf833bc59618c/index.js",
+    "entry": "dist/control-ui/5709796d92097e7a65e29750969be01ce3e8a18b8dc8ecec491d67568763bcfe/index.js",
     "styles": [
-      "dist/control-ui/23b4b7282c181ec5c09f688cfb8de9b8ee93e88ae5f62b30cdbaf833bc59618c/index.css"
+      "dist/control-ui/5709796d92097e7a65e29750969be01ce3e8a18b8dc8ecec491d67568763bcfe/index.css"
     ]
   }
 }

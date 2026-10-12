@@ -3,10 +3,12 @@ import type { CronRunHistorySource } from "../store/run-history.js";
 import type {
   CronRuntimeMutationContracts,
   CronRuntimeMutationInputs,
+  StartupDeferredJob,
 } from "../store/runtime-worker.types.js";
 import { hasActiveCronRun, isJobEnabled } from "./jobs-scheduling.js";
 import {
   captureCronNotificationRouting,
+  prepareCronNotificationRouting,
   resolveCronNotificationQueueOwner,
 } from "./notification-intents.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
@@ -59,10 +61,7 @@ export async function recordSkippedCronRuns(params: {
           state.deps.defaultAgentId,
         ),
         cronConfig: structuredClone(state.deps.cronConfig),
-        ownership: captureCronScheduleOwnership(
-          state,
-          state.store?.jobs.map((job) => job.id) ?? [],
-        ),
+        ownership: captureCronScheduleOwnership(state.store?.jobs.map((job) => job.id) ?? []),
       },
       publish(outcome) {
         committed = outcome;
@@ -128,7 +127,7 @@ export async function planCronStartup(params: {
       snapshot: {
         nowMs: params.nowMs,
         skipMissedJobs,
-        ownership: captureCronScheduleOwnership(state, params.jobIds),
+        ownership: captureCronScheduleOwnership(params.jobIds),
         notificationRouting: captureCronNotificationRouting(
           notificationNeedsDefault ? state.deps.resolveDefaultAgentId?.() : undefined,
           notificationNeedsDefault ? state.deps.defaultAgentId : undefined,
@@ -174,4 +173,56 @@ export async function planCronStartup(params: {
     throw new Error("Cron startup planning did not publish its committed outcome");
   }
   return committed.missed;
+}
+
+/** Keep startup pacing durable while the host still produces wake deadlines. */
+export async function deferCronStartupJobs(params: {
+  state: CronServiceState;
+  source: SchedulerSource;
+  deferredJobs: readonly StartupDeferredJob[];
+  staggerMs: number;
+}): Promise<void> {
+  const { state, source } = params;
+  if (params.deferredJobs.length === 0) {
+    return;
+  }
+  const deferredJobIds = new Set(params.deferredJobs.map(({ jobId }) => jobId));
+  let notifications: Parameters<typeof runPostPersistCronNotifications>[1];
+  await runCronRuntimeMutation({
+    context: source.context,
+    type: "cron.deferStartupJobs",
+    input: {
+      storeKey: source.storeKey,
+      deferredJobs: structuredClone([...params.deferredJobs]),
+      staggerMs: params.staggerMs,
+    },
+    assertCurrent: () => source.assertCurrent(),
+    snapshot: {
+      nowMs: state.deps.nowMs(),
+      notificationRouting: prepareCronNotificationRouting(
+        state.deps,
+        state.store?.jobs.some(
+          (job) =>
+            deferredJobIds.has(job.id) &&
+            !resolveCronNotificationQueueOwner(job, "auto-disabled").agentId,
+        ) ?? false,
+      ).routing,
+    },
+    onSettled(outcome) {
+      if (outcome === "unknown") {
+        noteCronJobsStoreCommit(source.storeKey);
+      }
+    },
+    publish(outcome) {
+      if (outcome.jobs.length > 0) {
+        noteCronJobsStoreCommit(source.storeKey);
+      }
+      applyCronRuntimeRowsToState(state, outcome.jobs);
+      notifications = outcome.notifications;
+      for (const entry of outcome.logs) {
+        state.deps.log[entry.level](entry.fields, entry.message);
+      }
+    },
+  });
+  await runPostPersistCronNotifications(state, notifications);
 }

@@ -218,7 +218,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       ctx.CommandInterpretationSuppressed ||
       !commandText?.startsWith("/") ||
       !commandId ||
-      metadata?.assistantTranscriptOwned ||
+      Boolean(metadata?.inlineCommandReply || metadata?.assistantTranscriptOwned) ||
       metadata?.assistantMessageIndex !== undefined
     ) {
       return undefined;
@@ -399,7 +399,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       : undefined;
     const hasTranscriptOwner =
       payloadMetadata?.assistantMessageIndex !== undefined ||
-      payloadMetadata?.assistantTranscriptOwned === true;
+      Boolean(payloadMetadata?.inlineCommandReply || payloadMetadata?.assistantTranscriptOwned);
     const hasVisibleFinalContent = hasOutboundReplyContent(payload, { trimText: true });
     if (hasVisibleFinalContent) {
       markInboundDedupeReplayUnsafe();
