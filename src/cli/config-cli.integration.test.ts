@@ -46,6 +46,190 @@ function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
 }
 
 describe("config cli integration", () => {
+  it.each([true, false])(
+    "retains completed validation on a thrown preview refusal (json=%s)",
+    async (json) => {
+      const raw = '{"agents":{"entries":{"main":{}}}}';
+      const refusal =
+        "Config write would drop agent roster entries without an explicit deletion: main.";
+      await withConfig(raw, async ({ configPath, tempDir }) => {
+        const stateDir = path.join(tempDir, "state");
+        fs.mkdirSync(stateDir);
+        const inventory = fs.readdirSync(tempDir).toSorted();
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          await reject(
+            set(
+              "agents.entries",
+              "{}",
+              "--replace",
+              "--strict-json",
+              "--dry-run",
+              ...(json ? ["--json"] : []),
+            ),
+          );
+          if (json) {
+            expect(logs).toHaveLength(1);
+            expect(JSON.parse(logs[0] ?? "")).toEqual({
+              ok: false,
+              operations: 1,
+              configPath,
+              inputModes: ["json"],
+              checks: { schema: true, resolvability: true, resolvabilityComplete: true },
+              refsChecked: 0,
+              skippedExecRefs: 0,
+              errors: [{ kind: "schema", message: refusal }],
+            });
+          } else {
+            expect(logs).toEqual([]);
+            expect(errors).toEqual([refusal]);
+          }
+          expect(read(configPath)).toBe(raw);
+          expect(fs.readdirSync(tempDir).toSorted()).toEqual(inventory);
+        });
+      });
+    },
+  );
+
+  it.each([
+    { name: "large root shrink", include: false, remaining: 2, rejected: true },
+    { name: "moderate root shrink", include: false, remaining: 60, rejected: false },
+    { name: "include-owned shrink", include: true, remaining: 2, rejected: false },
+  ])("previews the writer size guard for $name", async ({ include, remaining, rejected }) => {
+    const models = Array.from({ length: 80 }, (_, index) => ({
+      id: `fixture-model-${index}`,
+      name: `Fixture model ${index}`,
+    }));
+    const provider = {
+      baseUrl: "https://provider.example/v1",
+      api: "openai-completions",
+      models,
+    };
+    const raw = `${JSON.stringify({
+      gateway: { mode: "local" },
+      models: { providers: { example: include ? { $include: "./provider.json" } : provider } },
+    })}\n`;
+    await withConfig(raw, async ({ configPath, tempDir }) => {
+      const ownedPath = include ? path.join(tempDir, "provider.json") : configPath;
+      if (include) {
+        fs.writeFileSync(ownedPath, JSON.stringify(provider));
+      }
+      const before = read(ownedPath);
+      const nextModels = models.slice(0, remaining);
+      const patchPath = path.join(tempDir, "patch.json");
+      fs.writeFileSync(
+        patchPath,
+        JSON.stringify({ models: { providers: { example: { models: nextModels } } } }),
+      );
+      const args = [
+        "patch",
+        "--file",
+        patchPath,
+        "--replace-path",
+        "models.providers.example.models",
+      ];
+      const stateDir = path.join(tempDir, "state");
+      fs.mkdirSync(stateDir);
+      const inventory = fs.readdirSync(tempDir).toSorted();
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const preview = run(...args, "--dry-run", "--json");
+        if (rejected) {
+          await reject(preview);
+        } else {
+          await preview;
+        }
+        expect(logs).toHaveLength(1);
+        const result = JSON.parse(logs[0] ?? "");
+        expect(result).toMatchObject({ ok: !rejected, configPath, operations: 1 });
+        if (rejected) {
+          expect(result.errors).toEqual([
+            { kind: "write-safety", message: expect.stringMatching(/size-drop:\d+->\d+/) },
+          ]);
+          expect(result.errors[0].message).toContain("Correct the proposed update");
+          expect(result.errors[0].message).toContain("openclaw doctor --fix");
+          logs.length = 0;
+          await reject(run(...args, "--dry-run"));
+          expect(errors.join("\n")).toContain(result.errors[0].message);
+        } else {
+          expect(errors).toEqual([]);
+        }
+        expect(read(configPath)).toBe(raw);
+        expect(read(ownedPath)).toBe(before);
+        expect(fs.readdirSync(tempDir).toSorted()).toEqual(inventory);
+        logs.length = 0;
+        errors.length = 0;
+        if (rejected) {
+          await reject(run(...args));
+          expect(errors.join("\n")).toContain("OpenClaw blocked this config update");
+          expect(read(ownedPath)).toBe(before);
+          expect(fs.existsSync(`${ownedPath}.bak`)).toBe(false);
+        } else {
+          await run(...args);
+          const saved = load(ownedPath);
+          expect(include ? saved.models : saved.models.providers.example.models).toEqual(
+            nextModels,
+          );
+          expect(read(`${ownedPath}.bak`)).toBe(before);
+          expect(errors).toEqual([]);
+          if (include) {
+            expect(read(configPath)).toBe(raw);
+          }
+        }
+      });
+    });
+  });
+
+  it.each(["builder", "batch"])(
+    "previews write safety for a prevalidated %s input",
+    async (mode) => {
+      const raw = JSON.stringify({
+        gateway: { mode: "local" },
+        secrets: {
+          providers: {
+            fixture: {
+              source: "env",
+              allowlist: Array.from({ length: 80 }, (_, i) => `FIXTURE_VARIABLE_${i}`),
+            },
+          },
+        },
+      });
+      await withConfig(raw, async ({ configPath, tempDir }) => {
+        const stateDir = path.join(tempDir, "state");
+        fs.mkdirSync(stateDir);
+        const args =
+          mode === "builder"
+            ? [
+                "secrets.providers.fixture",
+                "--provider-source",
+                "env",
+                "--provider-allowlist",
+                "FIXTURE_VARIABLE_0",
+              ]
+            : [
+                "--batch-json",
+                JSON.stringify([
+                  {
+                    path: "secrets.providers.fixture",
+                    provider: { source: "env", allowlist: ["FIXTURE_VARIABLE_0"] },
+                  },
+                ]),
+              ];
+        const inventory = fs.readdirSync(tempDir).toSorted();
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          await reject(set(...args, "--replace", "--dry-run", "--json"));
+          expect(JSON.parse(logs[0] ?? "")).toMatchObject({
+            ok: false,
+            operations: 1,
+            errors: [
+              { kind: "write-safety", message: expect.stringMatching(/size-drop:\d+->\d+/) },
+            ],
+          });
+          expect(read(configPath)).toBe(raw);
+          expect(fs.readdirSync(tempDir).toSorted()).toEqual(inventory);
+        });
+      });
+    },
+  );
+
   it("protects pending plugin inputs while admitting explicit plugin entry removal", async () => {
     const pluginPath = "plugins.entries.sample.config";
     const raw = JSON.stringify({
