@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -24,6 +25,11 @@ import {
 
 const dispatch = vi.hoisted(() => vi.fn());
 vi.mock("./monitor-turn.js", () => ({ dispatchMattermostInboundTurn: dispatch }));
+
+// Real loopback requests can leave Undici timers retaining the retired fake clock.
+const undiciTimers: { reset: () => void } = createRequire(import.meta.url)(
+  "undici/lib/util/timers.js",
+);
 
 describe("Mattermost server thread recovery through the post handler", () => {
   let directory: string;
@@ -389,6 +395,8 @@ describe("Mattermost server thread recovery through the post handler", () => {
   it("bounds the full authorization deadline and retains capacity across marker eviction", async () => {
     const f = await setup("direct");
     f.monitor.account.config.dmPolicy = "pairing";
+    // Keep socket and session-store I/O real; scheduling delay is not recovery time.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     let lookups = 0;
@@ -399,14 +407,17 @@ describe("Mattermost server thread recovery through the post handler", () => {
       await release.promise;
       return ["trusted"];
     };
-    const started = performance.now();
+    const completed = vi.fn();
     const pending = Array.from({ length: 8 }, (_, index) =>
-      f.recover({ ...f.turn, historyKey: `${f.sessionKey}-${index}` }),
+      f.recover({ ...f.turn, historyKey: `${f.sessionKey}-${index}` }).then(completed),
     );
     try {
       await entered.promise;
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(completed).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(completed).toHaveBeenCalledTimes(8);
       await Promise.all(pending);
-      expect(performance.now() - started).toBeLessThan(8_000);
       expect(f.histories.size).toBe(0);
       expect(requests).toHaveLength(8);
       for (let index = 0; index < 1005; index++) {
@@ -417,6 +428,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     } finally {
       release.resolve();
       await Promise.all(pending);
+      undiciTimers.reset();
     }
   }, 15_000);
 

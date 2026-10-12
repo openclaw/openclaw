@@ -171,12 +171,11 @@ transaction. Compaction uses its append receipt instead of rereading the appende
 rows or version. These paths preserve stored bytes, permissions, and update behavior.
 Durable SessionManager calls from the Gateway must use the asynchronous methods.
 The deprecated synchronous SDK methods retain compatibility until the next SDK
-major; bundled transcript archive and model-context readers use workers. Skill Workshop keeps
-one live synchronous context validation immediately before a filesystem effect:
-raw SDK writers do not yet publish complete permission and transcript revocation
-facts. This security boundary remains until those writers are removed and the
-session owner can publish every revocation; ordinary context preparation uses
-the history worker.
+major; bundled transcript archive and model-context readers use workers. Skill Workshop
+validates source permissions, lifecycle, and the accepted anchor through the history
+worker. It reuses those facts until the Gateway's session-key or transcript write
+receipt changes. The final filesystem guard checks the retained receipt without SQL;
+a write during preparation refuses the effect.
 
 Session lifecycle callbacks use the existing worker admission and post-commit
 context. Initialization rollback records its completion through the existing
@@ -1952,16 +1951,16 @@ the cold-storage owner, outside the writer FIFO and before message hooks run.
 
 ## Retained final-authority guards
 
-Preparation uses the existing worker owners. A synchronous guard immediately before
-an effect still reads current SQLite rows when released native or Plugin SDK writers
+Preparation uses the existing worker owners. Some synchronous guards immediately before
+an effect still read current SQLite rows when released native or Plugin SDK writers
 can revoke authority without a complete owner publication.
-Prepared facts and mutation witnesses cannot replace that final read. These guards
+For those owners, prepared facts and mutation witnesses cannot replace that final read. These guards
 reuse admitted schema facts without foreign-commit probes; single-statement guards
 do not add a transaction or another schema check.
 
 | Owner                     | Retained final read and preparation boundary                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Skill Workshop reflection | After awaited file preparation, `fs-safe`'s synchronous `beforeWrite` checks current session permissions, lifecycle, and the accepted transcript anchor in one indexed statement. The query reuses canonical entry validation and transcript-index readiness; it does not load participants or saved prompt snapshots. Context and source preparation use the transcript worker.                                                                                                       |
+| Skill Workshop reflection | The history worker validates session permissions, lifecycle, and the accepted transcript anchor. Unchanged session-key and transcript write receipts reuse those facts. After awaited file preparation, `fs-safe`'s synchronous `beforeWrite` checks the retained receipt without SQL, refusing changes during the effect scope.                                                                                                                                                       |
 | Sandbox dispatch          | The final registry generation check consumes physical-database facts installed by registry reads and committed write receipts, without SQL on the host. Direct remote-shell commands carrying the released synchronous authority callback use the existing in-process transport so the check and native launch share one call stack; unguarded commands keep the broker. Reservation completion and retirement compare the captured generation inside the existing worker transaction. |
 | Worktree GC               | Shared-state commit admission still checks current agent-session authority across databases. One owner-state evaluation serves the final cleanup decision. Registry preparation uses host liveness only; cleanup reuses the worker census's captured target and refuses a changed session or worktree at consumption.                                                                                                                                                                  |
 | ClickClack discussions    | Synchronous visibility and mutation guards retain current binding, revocation, and session-incarnation reads. A tool decision reads its binding once. Binding-index hydration and descriptive service reads use the existing workers; the index never authorizes a stale reverse mapping.                                                                                                                                                                                              |
@@ -5195,18 +5194,16 @@ through the writer after reader custody ends.
 
 Skill Workshop reflection prepares and completes its source context through the
 same anchor reader. Later appends remain valid; reset, rewrite, replacement,
-permission changes, and revocation refuse stale evidence. The retained effect
-guard still reads natively: `@openclaw/fs-safe` requires a synchronous callback
-after awaited file preparation and immediately before mutation. The existing
-connection-local mutation witness alone does not cover every writer, so it cannot
-replace that final guard. Its session-permission, lifecycle, and anchor predicates share
-one statement; the released detached-context validators share the same read
-admission owner. CLI history's synchronous execution guard retains the same
-contract. Synchronous SDK writers bypass the FIFO, and a second connection can
-commit without changing the first connection's native mutation revision.
-As with the credential-send fence, these final checks remain explicit debt.
-A candidate replacement is a cross-connection mutation generation published by
-the writer owner after synchronous SDK writers retire at the next SDK major.
+permission changes, and revocation refuse stale evidence. The review caches the
+worker's authority result against existing Gateway write receipts for the session
+key and transcript. Membership changes invalidate the session-key receipt too.
+Each asynchronous effect scope refreshes changed facts; `@openclaw/fs-safe`'s
+synchronous callback checks its retained receipt immediately before mutation,
+without opening SQLite. A benign write during an effect scope or before an
+unprepared liveness check can conservatively cancel the review; a later review
+can retry. Writers outside the Gateway must use the Gateway or obtain exclusive
+ownership while it is stopped. CLI history's released synchronous execution
+guard remains a separate compatibility contract.
 It must cover every supported writer before replacing live authority reads. See
 [retained final-authority guards](#retained-final-authority-guards).
 

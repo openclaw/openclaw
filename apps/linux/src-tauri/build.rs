@@ -37,7 +37,7 @@ fn main() {
 }
 
 fn prepare_runtime_manifest() {
-    // The Tauri hooks fetch verified Linux resources. Plain Cargo tests stay offline and
+    // The Tauri hooks fetch verified resources. Plain Cargo tests stay offline and
     // compile a sentinel that makes local installation fail with an actionable error.
     let directory = std::path::Path::new("target/desktop-runtime");
     std::fs::create_dir_all(directory).expect("runtime resource directory");
@@ -47,9 +47,12 @@ fn prepare_runtime_manifest() {
     }
     println!("cargo:rerun-if-changed={}", manifest.display());
     let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output"));
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+    if !matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("linux" | "windows")
+    ) {
         std::fs::write(output.join("desktop-runtime.json"), "{}\n")
-            .expect("non-Linux runtime sentinel");
+            .expect("unbundled runtime sentinel");
         return;
     }
     std::fs::copy(manifest, output.join("desktop-runtime.json")).expect("compile runtime identity");

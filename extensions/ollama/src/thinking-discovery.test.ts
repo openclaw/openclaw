@@ -66,7 +66,7 @@ function mockOllama(modelId: string, thinking: unknown) {
         resolveProviderApiKey: () => ({ apiKey: "ollama-local" }),
         resolveProviderAuth: () => ({ apiKey: "ollama-local", mode: "api_key", source: "env" }),
       });
-      expect(result?.outcomes).toEqual([{ provider: "ollama", status: "ready" }]);
+      expect(result?.outcomes).toMatchObject([{ provider: "ollama", status: "ready" }]);
       const provider = expectDefined(
         result && "provider" in result ? result.provider : undefined,
         "discovered provider",

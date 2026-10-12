@@ -1,7 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
-import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
+import {
+  hasNonStrictSqliteTables,
+  migrateSqliteSchemaToStrictInTransaction,
+} from "../infra/sqlite-strict.js";
 import { getSqliteWorkerStateIntegrityAdmission } from "../infra/sqlite-worker-state-context.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
@@ -165,7 +168,10 @@ export function ensureOpenClawStateRuntimeSchema(
           includeAgentDeletionJournal,
         });
         migrateLegacyCronRunLogsToTaskRuns(db);
-        if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
+        if (
+          previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION &&
+          hasNonStrictSqliteTables(db)
+        ) {
           repairLegacyGatewayRestartHandoffsForStrictMigration(db);
           ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
           const strict = migrateSqliteSchemaToStrictInTransaction(

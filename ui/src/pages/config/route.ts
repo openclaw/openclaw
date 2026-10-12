@@ -82,7 +82,7 @@ function configPage(id: ConfigPageId) {
     },
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
     component: () =>
-      import("./config-page.ts").then(() => ({
+      import("./config-page.tsx").then(() => ({
         header: true,
         render: (data: ConfigRouteData | undefined) => html`
           <openclaw-config-page .pageId=${id} .routeData=${data ?? null}></openclaw-config-page>

@@ -52,6 +52,7 @@ import {
   registerGatewayCronStreamMutationTests,
 } from "./server-cron.mutation-lifecycle.test-support.js";
 import { registerGatewayCronQueueTests } from "./server-cron.queue.test-support.js";
+import { registerGatewayCronSystemJobTests } from "./server-cron.system-jobs.test-support.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
@@ -567,182 +568,12 @@ describe("buildGatewayCronService", () => {
     });
   });
 
-  it("finishes an accepted config replacement without a second reconciliation request", async () => {
-    const cfg = {
-      ...createCronConfig("server-cron-accepted-replacement"),
-      agents: { entries: { main: { heartbeat: { every: "1h" } } } },
-    } satisfies OpenClawConfig;
-    const state = loadCronService(cfg);
-    const inventoryStarted = createDeferred();
-    const releaseInventory = createDeferred();
-    const listJobs = state.cron.list.bind(state.cron);
-    try {
-      await state.reconcileSystemJobs();
-      vi.spyOn(state.cron, "list").mockImplementationOnce(async (options) => {
-        inventoryStarted.resolve();
-        await releaseInventory.promise;
-        return await listJobs(options);
-      });
-      const reconcile = state.reconcileSystemJobs();
-      await inventoryStarted.promise;
-      loadConfigMock.mockReturnValue({
-        ...cfg,
-        agents: { entries: { main: { heartbeat: { every: "2h" } } } },
-      });
-      releaseInventory.resolve();
-      await expect(reconcile).resolves.toBe("converged");
-      expect(await listJobs({ includeDisabled: true })).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            payload: { kind: "heartbeat" },
-            schedule: expect.objectContaining({ everyMs: 7_200_000 }),
-          }),
-        ]),
-      );
-    } finally {
-      releaseInventory.resolve();
-      state.cron.stop();
-    }
-  });
-
-  it("supersedes an in-flight heartbeat monitor reconciliation before mutation", async () => {
-    const autoConfig = {
-      ...createCronConfig("server-cron-monitor-reconcile-auto"),
-      agents: { defaults: { heartbeat: { every: "1h" } } },
-    } satisfies OpenClawConfig;
-    const offConfig = {
-      ...autoConfig,
-      agents: { defaults: { heartbeat: { every: "0m" } } },
-    } satisfies OpenClawConfig;
-    await withCronService(autoConfig, async (state) => {
-      await expect(state.reconcileSystemJobs()).resolves.toBe("converged");
-      const inventoryStarted = createDeferred();
-      const releaseInventory = createDeferred();
-      const listJobs = state.cron.list.bind(state.cron);
-      let inventoryCall = 0;
-      vi.spyOn(state.cron, "list").mockImplementation(async (options) => {
-        inventoryCall += 1;
-        if (inventoryCall === 1) {
-          inventoryStarted.resolve();
-          await releaseInventory.promise;
-        }
-        return await listJobs(options);
-      });
-      const addJob = vi.spyOn(state.cron, "add");
-      const removeJob = vi.spyOn(state.cron, "remove");
-
-      loadConfigMock.mockReturnValue(offConfig);
-      const disable = state.reconcileSystemJobs();
-      await inventoryStarted.promise;
-      loadConfigMock.mockReturnValue(autoConfig);
-      const reenable = state.reconcileSystemJobs();
-      releaseInventory.resolve();
-
-      await expect(disable).resolves.toBe("superseded");
-      await expect(reenable).resolves.toBe("converged");
-      expect(addJob).not.toHaveBeenCalledWith(
-        expect.objectContaining({ enabled: false }),
-        expect.anything(),
-      );
-      expect(removeJob).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each(["stop", "replace", "supersede"] as const)(
-    "observes %s between committed heartbeat monitor mutations",
-    async (action) => {
-      const baseConfig = createCronConfig(`server-cron-fairness-heartbeat-${action}`);
-      const cfg = {
-        ...baseConfig,
-        cron: { ...baseConfig.cron, enabled: false },
-        agents: {
-          ownership: "explicit",
-          defaults: { heartbeat: { every: "1h" } },
-          entries: { a: {}, b: {} },
-        },
-      } satisfies OpenClawConfig;
-      const replacement = {
-        ...cfg,
-        agents: { ...cfg.agents, defaults: { heartbeat: { every: "2h" } } },
-      } satisfies OpenClawConfig;
-      const state = loadCronService(cfg);
-      const addJob = state.cron.add.bind(state.cron);
-      let checkpoint: Promise<void> | undefined;
-      let nextPass: ReturnType<typeof state.reconcileSystemJobs> | undefined;
-      const committed: Array<{ agentId?: string; everyMs?: number }> = [];
-      vi.spyOn(state.cron, "add").mockImplementation(async (input, options) => {
-        const result = await addJob(input, options);
-        if (input.declarationKey?.startsWith("heartbeat:")) {
-          committed.push({
-            agentId: input.agentId,
-            everyMs: input.schedule.kind === "every" ? input.schedule.everyMs : undefined,
-          });
-          checkpoint ??= new Promise((resolve) => {
-            setImmediate(() => {
-              if (action === "stop") {
-                state.cron.stop();
-              } else {
-                loadConfigMock.mockReturnValue(replacement);
-                if (action === "supersede") {
-                  nextPass = state.reconcileSystemJobs();
-                }
-              }
-              resolve();
-            });
-          });
-        }
-        return result;
-      });
-      try {
-        const result = await state.reconcileSystemJobs();
-        await checkpoint;
-        if (action === "stop") {
-          expect(result).toBe("superseded");
-          expect(committed.map(({ agentId }) => agentId)).toEqual(["a"]);
-        } else {
-          expect(result).toBe(action === "replace" ? "converged" : "superseded");
-          if (nextPass) {
-            await expect(nextPass).resolves.toBe("converged");
-          }
-          expect(committed).not.toContainEqual({ agentId: "b", everyMs: 3_600_000 });
-          const jobs = (await state.cron.list({ includeDisabled: true })).filter((job) =>
-            job.declarationKey?.startsWith("heartbeat:"),
-          );
-          expect(
-            jobs.map((job) => job.agentId).toSorted((a, b) => String(a).localeCompare(String(b))),
-          ).toEqual(["a", "b"]);
-          for (const job of jobs) {
-            expect(job).toMatchObject({ schedule: { everyMs: 7_200_000 } });
-          }
-        }
-      } finally {
-        try {
-          await checkpoint;
-          await nextPass;
-        } finally {
-          state.cron.stop();
-        }
-      }
-    },
-  );
-
-  it("schedules a retry after a heartbeat inventory failure and cancels it on stop", async () => {
-    const clock = createGatewaySchedulerClock(Date.now());
-    const cfg = createCronConfig("server-cron-monitor-partial-failure");
-    const state = loadCronService(cfg, { scheduler: createTestGatewayScheduler(clock.clock) });
-    const inventory = vi
-      .spyOn(state.cron, "list")
-      .mockRejectedValueOnce(new Error("inventory failed"));
-
-    try {
-      await expect(state.reconcileSystemJobs()).resolves.toBe("retry-scheduled");
-      state.cron.stop();
-      const callsBeforeStop = inventory.mock.calls.length;
-      await clock.advanceBy(30_000);
-      expect(inventory).toHaveBeenCalledTimes(callsBeforeStop);
-    } finally {
-      state.cron.stop();
-    }
+  registerGatewayCronSystemJobTests({
+    createCronConfig,
+    loadCronService,
+    withCronService,
+    setRuntimeConfig: (cfg) => loadConfigMock.mockReturnValue(cfg),
+    addAgentTurnJob,
   });
 
   registerGatewayCronMutationAuthorityTests({

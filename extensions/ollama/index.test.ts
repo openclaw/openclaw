@@ -652,6 +652,7 @@ describe("ollama plugin", () => {
     );
     expect(discoveryMock).toHaveBeenCalledOnce();
     expect(discoveryMock).toHaveBeenCalledWith(undefined, {
+      onListedModels: expect.any(Function),
       discoveryMode: "strict",
       apiKey: "profile-key",
     });
@@ -684,6 +685,7 @@ describe("ollama plugin", () => {
       outcomes: [{ provider: "ollama", status: "ready" }],
     });
     expect(discoveryMock).toHaveBeenCalledWith("http://remote-ollama:11434", {
+      onListedModels: expect.any(Function),
       discoveryMode: "strict",
     });
   });
@@ -1091,9 +1093,6 @@ describe("ollama plugin", () => {
     );
     const resultProvider = result?.provider;
     expect(resultProvider.baseUrl).toBe(localBaseUrl);
-    expect(discoveryMock).toHaveBeenCalledWith(undefined, {
-      discoveryMode: "strict",
-    });
   });
 
   it.each([

@@ -6,7 +6,7 @@ import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { describeUnavailableCronAgent } from "../agent-availability.js";
+import { CronAgentDeletionBlockedError } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
@@ -166,7 +166,7 @@ export function mutateCronJobsInWorker(
           const receiptSchema = prepareCronRunReceiptWriteSchema(db);
           const previous = loadCronMutationStore(db, input.storeKey);
           if (input.agentId !== undefined && isAgentDeletionBlocked(input.agentId, {}, db)) {
-            throw new Error(describeUnavailableCronAgent(input.agentId));
+            throw new CronAgentDeletionBlockedError(input.agentId);
           }
           const expected = input.expectedJob;
           const expectedCurrent = expected

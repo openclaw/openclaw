@@ -10,11 +10,14 @@ import {
   createConfigCapabilityHarness,
   createDeferredSetServerMock,
   createConfigServerMock,
+  createGatewayHarness,
 } from "../lib/config/config-test-harness.ts";
+import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createProfileAppearanceGateway } from "./app-shell-gateway.test-support.ts";
+import { createGatewayMetadataObserver } from "./gateway-observers.ts";
 import { UI_NAVIGATION_PREFERENCE_KEYS } from "./server-prefs-state.ts";
-import { resetServerUiPrefsSync } from "./server-prefs.ts";
+import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 function createShellConfig(request: GatewayBrowserClient["request"]) {
@@ -34,6 +37,51 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     resetServerUiPrefsSync();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("replays offline preferences when hello precedes the config owner's connection publication", async () => {
+    let config = { ui: { prefs: { accent: "#112233" } } };
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.patch") {
+        config = JSON.parse((params as { raw: string }).raw);
+        return { config, hash: "patched" };
+      }
+      return { config, raw: JSON.stringify(config), hash: "initial", valid: true, issues: [] };
+    });
+    const { context, owner, snapshot } = createProfileAppearanceGateway(null);
+    const client = { gatewayUrl: "ws://profile.test", request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    publish(false);
+    // Shell listeners can observe hello before the config owner adopts its transport.
+    const stopGateway = gateway.subscribe((next) => {
+      Object.assign(snapshot, next);
+      void owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    });
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    Object.assign(context, { runtimeConfig });
+    const stopConfig = runtimeConfig.subscribe(() => {
+      void owner.ensureRuntimeConfig(snapshot, runtimeConfig);
+    });
+    try {
+      pushServerUiPrefs(runtimeConfig, { accent: "#336699" });
+      publish(true);
+      await vi.dynamicImportSettled();
+      await owner.ensureRuntimeConfig(snapshot, runtimeConfig);
+      expect(request.mock.calls.filter(([method]) => method === "config.patch")).toEqual([
+        [
+          "config.patch",
+          {
+            raw: JSON.stringify({ ui: { prefs: { accent: "#336699" } } }),
+            note: "control-ui prefs sync",
+          },
+        ],
+      ]);
+      expect(config.ui.prefs.accent).toBe("#336699");
+    } finally {
+      stopConfig();
+      stopGateway();
+      runtimeConfig.dispose();
+    }
   });
 
   it.each(["context", "client", "profile", "config", "source", "offline", "reset"])(
@@ -95,6 +143,30 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     await ready;
     expect(complete).toBe(true);
     expect(loadSettings().accent).toBe("#336699");
+  });
+
+  it("reads fresh profile appearance after reconnecting with the same client", async () => {
+    const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
+    request.mockResolvedValue({
+      status: "ok",
+      entries: { "ui.accent": "#336699", "ui.railShortcuts": [] },
+    });
+    owner.synchronizeGateway(snapshot);
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(loadSettings().accent).toBe("#336699");
+
+    const connected = { ...snapshot };
+    snapshot.phase = "reconnecting";
+    createGatewayMetadataObserver(() => true).synchronize(connected, snapshot);
+    owner.synchronizeGateway(snapshot);
+    request.mockResolvedValue({
+      status: "ok",
+      entries: { "ui.accent": "#445566", "ui.railShortcuts": [] },
+    });
+    snapshot.phase = "connected";
+    owner.synchronizeGateway(snapshot);
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(loadSettings().accent).toBe("#445566");
   });
 
   it("refuses profile hydration from a superseded config snapshot", async () => {

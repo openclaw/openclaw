@@ -83,6 +83,9 @@ export function createApplicationUpdateOverlays(
   let activeHello = gateway.snapshot.hello;
   let connectedSource: NonNullable<typeof activeClient> | null = null;
   let connectedEpoch = 0;
+  // connectedEpoch also fences scope changes, so it cannot tell a first
+  // connection from a reconnect; legacy version-only skew needs that fact.
+  let connectedBefore = false;
   let operatorAccess = readGatewayOperatorAccess(gateway.snapshot);
   let updateGatewayScope = gatewayCredentialScope(gateway.connection.gatewayUrl);
   let profileId = gateway.snapshot.selfUser?.id ?? null;
@@ -467,6 +470,7 @@ export function createApplicationUpdateOverlays(
         snapshot = { ...snapshot, controlUiRefreshRequired: true };
       } else if (!next.client) {
         connectedEpoch = 0;
+        connectedBefore = false;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
       } else if (next.hello) {
         snapshot = { ...snapshot, controlUiRefreshRequired: true };
@@ -487,10 +491,11 @@ export function createApplicationUpdateOverlays(
       // Vite owns this document; reloading cannot adopt its proxied Gateway's build.
       controlUiRefreshRequired: connectedSourceChanged
         ? !isConfiguredUiDevGateway(gateway.connection.gatewayUrl) &&
-          (Boolean(serverBuildIdentity.buildId?.trim()) || connectedEpoch > 1) &&
+          (Boolean(serverBuildIdentity.buildId?.trim()) || connectedBefore) &&
           controlUiBuildDiffersFrom(serverBuildIdentity)
         : snapshot.controlUiRefreshRequired,
     };
+    connectedBefore = true;
     publish(true);
     if ((connectedSourceChanged || scopeChanged || accessGranted) && operatorAccess.canAdmin) {
       void runConnectionBootstrap("update-run", () =>

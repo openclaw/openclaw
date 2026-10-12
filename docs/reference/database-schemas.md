@@ -153,6 +153,13 @@ publish a schema that did not commit. Ordinary connection replacement and data
 commits do not repeat schema validation. Schemas, stored bytes, and update behavior
 are unchanged.
 
+Shared-state bootstrap checks native table options once after installing the
+canonical schema. When every ordinary table is already STRICT, it skips legacy
+STRICT rebuild planning and duplicate schema installation. Existing non-STRICT
+tables still use the transactional migration, and final canonical table and index
+validation remains mandatory. Doctor's explicit repair and version refusal are
+unchanged; this changes no stored format or upgrade/downgrade contract.
+
 Admitted schema facts survive data-only transaction settlement. Committed write
 receipts invalidate cached row facts. A settled write releases its receipt fence
 even when an independent read cursor remains open on the same connection. Active

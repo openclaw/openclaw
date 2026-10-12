@@ -21,6 +21,7 @@ export { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/
 
 export type {
   ProviderCatalogContext,
+  ProviderConfiguredModelRef,
   ProviderCatalogOutcome,
   ProviderCatalogResult,
 } from "../plugins/types.js";

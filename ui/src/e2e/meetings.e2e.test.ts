@@ -1,7 +1,12 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { TranscriptSessionSummary, TranscriptsGetResult } from "@openclaw/gateway-protocol";
+import type {
+  TranscriptSessionSummary,
+  TranscriptsGetResult,
+  TranscriptsStatusResult,
+} from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -53,6 +58,14 @@ suite.define(() => {
           methodResponses: {
             "transcripts.list": { sessions: [meeting], nextCursor: null },
             "transcripts.get": detail,
+            "transcripts.status": {
+              enabled: true,
+              providers: [],
+              configuredSources: [],
+              active: [],
+              latestTranscript: meeting,
+              omitted: { providers: 0, configuredSources: 0, active: 0 },
+            } satisfies TranscriptsStatusResult,
           },
         });
         const meetingUrl = `${suite.server.baseUrl}meetings?query=design&selector=${encodeURIComponent(meeting.selector)}`;
@@ -70,7 +83,52 @@ suite.define(() => {
         await page.getByRole("button", { name: "Back to app", exact: true }).click();
         await page.waitForURL(meetingUrl);
         expect(page.url()).toBe(meetingUrl);
-        await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        try {
+          await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        } catch (error) {
+          // This navigation failure otherwise retains only generic route readiness in CI.
+          const diagnostic = await page
+            .evaluate(
+              ({ selector, search }) => {
+                const hosts = [...document.querySelectorAll("openclaw-meetings-page")];
+                const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+                const reads = gateway?.findRequests("transcripts.get") ?? [];
+                return {
+                  hostCount: hosts.length,
+                  hosts: hosts.slice(0, 2).map((host) => ({
+                    routeSearch:
+                      Reflect.get(host, "routeSearch") === search
+                        ? search
+                        : Reflect.get(host, "routeSearch") === ""
+                          ? ""
+                          : "other",
+                    headings: [...host.querySelectorAll("h1, h2, h3")]
+                      .slice(0, 8)
+                      .map((heading) => {
+                        const text = heading.textContent?.trim();
+                        return text === "Design review" || text === "Meetings" ? text : "other";
+                      }),
+                    readerPresent: host.querySelector(".transcripts-reader") !== null,
+                    alertCount: host.querySelectorAll('[role="alert"]').length,
+                  })),
+                  mainClass: document.querySelector("main.content")?.className ?? null,
+                  listRequests: gateway?.findRequests("transcripts.list").length ?? 0,
+                  getRequests: reads.length,
+                  requestedSelectors: reads.slice(-6).map((request) => {
+                    const requested =
+                      request.params && typeof request.params === "object"
+                        ? Reflect.get(request.params, "selector")
+                        : undefined;
+                    return requested === selector ? selector : requested == null ? null : "other";
+                  }),
+                };
+              },
+              { selector: meeting.selector, search: new URL(meetingUrl).search },
+            )
+            .catch(() => ({ unavailable: true }));
+          console.error("[meetings] capture return diagnostics", diagnostic);
+          throw error;
+        }
         expect(
           await view.getByRole("searchbox", { name: "Search meetings", exact: true }).inputValue(),
         ).toBe("design");

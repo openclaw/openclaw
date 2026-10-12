@@ -1,14 +1,24 @@
 /* @vitest-environment jsdom */
 
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import type { ApplicationContext, ApplicationThemeServerSelection } from "../../app/context.ts";
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import { createImportedCustomThemeFixture } from "../../test-helpers/custom-theme.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ConfigPage } from "./config-page.ts";
+import { completeConfigContext } from "./config-page.test-support.ts";
+import { ConfigPageController } from "./config-page.ts";
+import { ConfigPage } from "./config-page.tsx";
 import type { CustomThemeImportOwner } from "./custom-theme-import-owner.ts";
 import * as customTheme from "./custom-theme-import.ts";
 
@@ -27,11 +37,10 @@ type CustomThemeImportState = {
   customThemeImportOwner: CustomThemeImportOwner;
   retireCustomThemeImportForConfigMutation: () => void;
   synchronizeCustomThemeGatewayScope: (scope: string) => void;
-  willUpdate: (changed: Map<PropertyKey, unknown>) => void;
 };
 
 function createCustomThemePage(settings: Partial<UiSettings> = {}) {
-  const page = new ConfigPage();
+  const page = new ConfigPageController({} as ApplicationContext, () => {});
   const state = page as unknown as CustomThemeImportState;
   const gatewayUrl = "ws://gateway.test";
   state.context = {
@@ -159,43 +168,74 @@ describe("ConfigPage custom theme import ownership", () => {
   it("revokes activation when server intent changes but the local mirror is equal", async () => {
     const pending = deferred<ImportedCustomTheme>();
     importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
-    const { state } = createCustomThemePage();
-    let serverSelection: ApplicationThemeServerSelection | null = null;
-    state.context = {
-      ...state.context,
-      theme: {
-        ...state.context.theme,
-        get serverSelection() {
-          return serverSelection;
+    const { gateway } = createApplicationGateway();
+    patchSettings({ gatewayUrl: gateway.connection.gatewayUrl, theme: "claw" });
+    const theme = createApplicationTheme(loadSettings(), gateway);
+    const context: ApplicationContext = {
+      ...completeConfigContext({
+        gateway,
+        runtimeConfig: {
+          state: {
+            connected: true,
+            configSnapshot: { config: {}, valid: true, issues: [] },
+          },
         },
-      },
-    } as ApplicationContext;
-    state.setCustomThemeImportUrl("first");
-    const pendingImport = state.importCustomTheme();
-
-    serverSelection = {
-      revision: 1,
-      scope: "ws://gateway.test",
-      theme: "claw",
+      } as unknown as ApplicationContext),
+      theme,
     };
-    state.adoptThemeSettings();
-    pending.resolve(customThemeFixture("First", "first"));
-    await pendingImport;
+    const provider = createSolidApplicationContextProvider(context);
+    const view = mountSolid(
+      () => createComponent(ConfigPage, { pageId: "appearance", routeData: null }),
+      { wrapper: provider.wrapper },
+    );
+    try {
+      flush();
+      view.container.querySelector<HTMLButtonElement>(".settings-theme-card--custom")!.click();
+      flush();
+      const input = view.container.querySelector<HTMLInputElement>(
+        "[data-custom-theme-import-input]",
+      )!;
+      input.scrollIntoView = vi.fn();
+      input.value = "first";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      view.container
+        .querySelector<HTMLButtonElement>(".settings-theme-import__actions .primary")!
+        .click();
+      expect(importCustomThemeFromUrl).toHaveBeenCalledWith("first");
 
-    expect(state.settings.theme).toBe("claw");
-    expect(state.settings.customTheme?.themeId).toBe("first");
+      theme.recordServerSelection("claw", gateway.connection.gatewayUrl);
+      flush();
+      pending.resolve(customThemeFixture("First", "first"));
+      await waitForSolid(() =>
+        expect(
+          view.container.querySelector(".settings-theme-import__message--success"),
+        ).toBeTruthy(),
+      );
+
+      expect(loadSettings().customTheme?.themeId).toBe("first");
+      expect(loadSettings().theme).toBe("claw");
+      expect(
+        view.container.querySelector(".settings-theme-card--claw")?.getAttribute("aria-pressed"),
+      ).toBe("true");
+      expect(
+        view.container.querySelector(".settings-theme-card--custom")?.getAttribute("aria-pressed"),
+      ).toBe("false");
+    } finally {
+      view.unmount();
+      theme.dispose();
+    }
   });
 
   it("retires an import when navigation leaves Appearance", async () => {
     const pending = deferred<ImportedCustomTheme>();
     importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
-    const { state } = createCustomThemePage();
+    const { page, state } = createCustomThemePage();
     state.pageId = "appearance";
     state.setCustomThemeImportUrl("first");
     const pendingImport = state.importCustomTheme();
 
-    state.pageId = "security";
-    state.willUpdate(new Map([["pageId", "appearance"]]));
+    page.updateRoute("security", null);
     pending.resolve(customThemeFixture("First", "first"));
     await pendingImport;
 
@@ -344,7 +384,7 @@ describe("ConfigPage custom theme import ownership", () => {
     state.setCustomThemeImportUrl("first");
     const pendingImport = state.importCustomTheme();
 
-    page.disconnectedCallback();
+    page.dispose();
     first.resolve(customThemeFixture("First", "first"));
     await pendingImport;
 
