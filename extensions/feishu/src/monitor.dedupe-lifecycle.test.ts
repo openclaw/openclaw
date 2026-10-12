@@ -418,10 +418,14 @@ describe("Feishu account replay work ownership", () => {
     const firstController = new AbortController();
     const secondController = new AbortController();
     const releases: Array<ReturnType<typeof createDeferred<void>>> = [];
+    const transportStarted = [createDeferred<void>(), createDeferred<void>()];
     const firstTransportClosed = createDeferred<void>();
     mocks.transport.mockImplementation(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
       const release = createDeferred<void>();
       const index = releases.push(release) - 1;
+      // Reaching the transport means this account's binding manager is already
+      // registered; the replacement has adopted the shared manager by then.
+      transportStarted[index]?.resolve();
       await new Promise<void>((resolve) => {
         if (abortSignal.aborted) {
           resolve();
@@ -444,7 +448,7 @@ describe("Feishu account replay work ownership", () => {
     let second: Promise<void> | undefined;
     try {
       void first.catch(() => {});
-      await vi.waitFor(() => expect(mocks.createBindings).toHaveBeenCalledTimes(1));
+      await transportStarted[0].promise;
       const binding = await getSessionBindingService().bind({
         targetSessionKey: "agent:codex:acp:binding:feishu:test:reload",
         targetKind: "session",
@@ -458,7 +462,7 @@ describe("Feishu account replay work ownership", () => {
       await firstTransportClosed.promise;
       second = startAccount(secondController);
       void second.catch(() => {});
-      await vi.waitFor(() => expect(mocks.createBindings).toHaveBeenCalledTimes(2));
+      await transportStarted[1].promise;
 
       releases[0]?.resolve();
       await first;
