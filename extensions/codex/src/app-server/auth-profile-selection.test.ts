@@ -34,4 +34,22 @@ describe("Codex auth profile selection", () => {
     ).resolves.toBe("openai:work");
     expect(ensureAuthProfileStoreAsync).not.toHaveBeenCalled();
   });
+
+  it("reads the current profile store synchronously for effect-time checks", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const ensureAuthProfileStore = vi.fn().mockReturnValue(store);
+    const selection = createCodexAuthProfileSelection({
+      ensureAuthProfileStore,
+      ensureAuthProfileStoreAsync: vi.fn(),
+      resolveAuthProfileOrder,
+    });
+
+    expect(selection.resolveCodexAppServerAuthProfileStoreAtEffect({ agentDir: "/agent" })).toBe(
+      store,
+    );
+    expect(ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/agent",
+      expect.objectContaining({ allowKeychainPrompt: false }),
+    );
+  });
 });

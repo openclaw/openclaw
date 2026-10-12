@@ -72,6 +72,7 @@ export type ModelCatalogDecisionParams = {
   preferredProfileId?: string;
   pinnedProfileId?: string;
   profileProvider?: string;
+  nativeAuthProfileId?: string;
   runtimeOverride?: string;
   accountCatalog?: import("./prepared-model-runtime-auth.js").PreparedAccountCatalogAccess;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;

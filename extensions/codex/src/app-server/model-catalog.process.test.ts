@@ -192,11 +192,17 @@ process.stdin.on("end", () => process.exit(0));
                 ? "chatgpt"
                 : "apiKey";
           expect.soft(readiness?.accountType, mode).toBe(accountType);
-          expect
-            .soft(result.outcomes, mode)
-            .toEqual([
-              { provider: "openai", status: mode === "absent-key" ? "unavailable" : "ready" },
-            ]);
+          const expectedProfileId =
+            mode === "api-key-profile" || mode === "subscription-profile"
+              ? "openai:catalog"
+              : undefined;
+          expect.soft(result.outcomes, mode).toEqual([
+            {
+              provider: "openai",
+              ...(expectedProfileId ? { profileId: expectedProfileId } : {}),
+              status: mode === "absent-key" ? "unavailable" : "ready",
+            },
+          ]);
           expect
             .soft(result.entries, mode)
             .toContainEqual(expect.objectContaining({ id: "synthetic-model" }));

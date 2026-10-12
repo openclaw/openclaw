@@ -60,8 +60,19 @@ export function createCodexAuthProfileSelection({
       return requested;
     }
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-    const store = params.authProfileStore ?? ensureAuthProfileStore(agentDir, storeOptions(params));
+    const store = resolveCodexAppServerAuthProfileStoreAtEffect({ ...params, agentDir });
     return resolveCodexAppServerAuthProfileId({ ...params, store });
+  }
+
+  /** Current store snapshot for synchronous native-effect authority checks. */
+  function resolveCodexAppServerAuthProfileStoreAtEffect(
+    params: CodexAppServerAuthProfileLookup,
+  ): AuthProfileStore {
+    if (params.authProfileStore) {
+      return params.authProfileStore;
+    }
+    const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
+    return ensureAuthProfileStore(agentDir, storeOptions(params));
   }
 
   function storeOptions(params: CodexAppServerAuthProfileLookup) {
@@ -87,5 +98,6 @@ export function createCodexAuthProfileSelection({
     resolveCodexAppServerAuthProfileIdForAgent,
     resolveCodexAppServerAuthProfileIdAtEffect,
     resolveCodexAppServerAuthProfileStore,
+    resolveCodexAppServerAuthProfileStoreAtEffect,
   };
 }

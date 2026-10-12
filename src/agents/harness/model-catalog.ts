@@ -210,6 +210,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         configuredModelRefs,
+        ...(params.nativeSelection?.authProfileId
+          ? { authProfileId: params.nativeSelection.authProfileId }
+          : {}),
       });
       // v2026.9.5 plugins return plain rows; structured results also own discovery outcomes.
       if (isCatalogRowList(loaded)) {
@@ -342,6 +345,13 @@ export function isPreparedNativeModelCatalogReady(params: {
   catalogAcquired?: boolean;
 }): boolean {
   const { selection, snapshot, pluginGeneration } = params;
+  if (
+    !selection &&
+    snapshot.refreshFailed &&
+    !hasPreparedNativeModelCatalogReadiness({ pluginGeneration, snapshot })
+  ) {
+    return true;
+  }
   if (!selection) {
     return (
       params.catalogAcquired === true &&
@@ -375,20 +385,54 @@ export function isPreparedNativeModelCatalogReady(params: {
   const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
     (registration) => registration.harness.id === selection.runtime,
   )?.harness;
+  const selectedProvider = normalizeProviderId(selection.provider);
+  const runtimeOutcomes =
+    snapshot.nativeProviderOutcomes &&
+    Object.hasOwn(snapshot.nativeProviderOutcomes, selection.runtime)
+      ? snapshot.nativeProviderOutcomes[selection.runtime]
+      : undefined;
+  if (
+    runtimeOutcomes?.some(
+      (outcome) =>
+        normalizeProviderId(outcome.provider) === selectedProvider && outcome.status !== "ready",
+    )
+  ) {
+    return false;
+  }
   return (
-    !harness?.readModelCatalogReadiness ||
-    withPluginRuntimeGenerationScope(
-      {
-        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-        pluginRegistry: pluginGeneration.pluginRegistry,
-      },
-      () =>
-        harness.readModelCatalogReadiness?.({
-          ...preparedHarnessCatalogScope(params.input),
-          provider: selection.provider,
-          modelId: selection.modelId,
-        }),
-    ) !== undefined
+    (snapshot.authoritative !== false ||
+      typeof harness?.readModelCatalogReadiness === "function") &&
+    (!harness?.readModelCatalogReadiness ||
+      withPluginRuntimeGenerationScope(
+        {
+          metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+          pluginRegistry: pluginGeneration.pluginRegistry,
+        },
+        () =>
+          harness.readModelCatalogReadiness?.({
+            ...preparedHarnessCatalogScope(params.input),
+            provider: selection.provider,
+            modelId: selection.modelId,
+            ...(selection.authProfileId ? { authProfileId: selection.authProfileId } : {}),
+          }),
+      ) !== undefined)
+  );
+}
+
+export function hasPreparedNativeModelCatalogReadiness(params: {
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  snapshot: ModelCatalogSnapshot;
+}): boolean {
+  const runtimes = new Set(
+    params.snapshot.routeVariants
+      .map((entry) => entry.nativeRuntime)
+      .filter((runtime): runtime is string => Boolean(runtime)),
+  );
+  return Boolean(
+    params.pluginGeneration.pluginRegistry?.agentHarnesses.some(
+      ({ harness }) =>
+        runtimes.has(harness.id) && typeof harness.readModelCatalogReadiness === "function",
+    ),
   );
 }
 

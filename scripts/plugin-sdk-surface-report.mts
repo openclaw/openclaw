@@ -230,6 +230,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async upstream-link writes with released sync compatibility.
       // -8: retired Skill Workshop proposal hook types.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
+      // +1: ready native first-turn model selection resolver (PR #156531).
       // +7: approved prepared/data-only session patches and their authority contracts.
       // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
       // +1: requester-bound transport effects for owner-routed plugin commands.
@@ -247,7 +248,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved PreparedAgentRunStart contract.
       // +1: deprecated createSessionHeaderLink retained from shipped 2026.10.1.
       // +10: shared database-engine contracts and operations after the SQLite export cutover.
-      3710,
+      // +1: async model-auth mode lookup alongside its synchronous compatibility export (PR #156531).
+      3711,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -261,6 +263,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: resolve the controller from the current invocation registry.
       // +2: approved async upstream-link writes with released sync compatibility.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
+      // +1: ready native first-turn model selection resolver (PR #156531).
       // +3: approved prepared/data-only session patches and authority-bound routes.
       // +4: the same four CLI state-owner and transport functions.
       // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
@@ -275,7 +278,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: the same transcript read replacement pairs.
       // +1: the same deprecated createSessionHeaderLink.
       // +5: shared database-engine host and worker operations.
-      2165,
+      // +1: resolveModelAuthModeAsync alongside its synchronous compatibility export (PR #156531).
+      2166,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

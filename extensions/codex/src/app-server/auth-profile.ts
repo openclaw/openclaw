@@ -25,6 +25,7 @@ export const {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore,
+  resolveCodexAppServerAuthProfileStoreAtEffect,
 } = createCodexAuthProfileSelection({
   ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,

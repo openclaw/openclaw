@@ -210,6 +210,7 @@ export type ModelCatalogViewFacts = {
   preferredProfileId?: string;
   pinnedProfileId?: string;
   profileProvider?: string;
+  nativeAuthProfileId?: string;
   view?: ModelCatalogBrowseView;
   retainedModel?: ModelRef;
 };
@@ -328,9 +329,6 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           Object.keys(params.cfg.auth?.order ?? {}).some(
             (id) => normalizeProviderId(id) === provider,
           ) ||
-          Object.values(params.cfg.auth?.profiles ?? {}).some(
-            (profile) => normalizeProviderId(profile.provider) === provider,
-          ) ||
           createModelProviderRouteOverrideResolver({
             authoredConfig: params.cfg,
             provider,
@@ -346,6 +344,10 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       // Native account evidence cannot replace an authored host binding or live host credentials.
       if (
         prepared.hostConfigured ||
+        (!observedNative &&
+          Object.values(params.cfg.auth?.profiles ?? {}).some(
+            (profile) => normalizeProviderId(profile.provider) === provider,
+          )) ||
         (host.selectedAuthMode && (host.evidence !== "runtime" || !observedNative))
       ) {
         return host;
@@ -391,6 +393,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
               workspaceDir: params.workspaceDir,
               provider,
               modelId: entry.id,
+              ...(params.nativeAuthProfileId ? { authProfileId: params.nativeAuthProfileId } : {}),
             })
           : undefined;
         ready =

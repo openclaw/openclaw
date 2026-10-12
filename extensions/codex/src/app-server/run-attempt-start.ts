@@ -88,6 +88,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       pluginConfig,
       computerUseConfig,
       clientOptions,
+      assertNativeModelSelectionCurrent: params.assertNativeModelSelectionCurrent,
       ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,

@@ -41,8 +41,12 @@ app-server client. An API-key account remains API-key authentication; model
 listing does not imply a ChatGPT transport or endpoint. Picker readiness is
 valid only while that native owner and its account/config observation remain
 current. A missing account, failed refresh, account/config mutation, or retired
-client leaves native models unavailable until discovery succeeds again. The next
-picker/catalog request or native execution reacquires retired observations.
+client leaves native models unavailable until discovery succeeds again.
+If the first model list is empty or its account/config observation changes while
+the response is being read, discovery repeats the paired reads once on the same
+current client. A second empty or stale observation remains unavailable.
+The next picker/catalog request or native execution reacquires retired
+observations.
 
 A client with no owned work retires after 30 idle seconds. Requests in that grace
 period reuse it. Active requests, turns, retained or releasing threads, native
