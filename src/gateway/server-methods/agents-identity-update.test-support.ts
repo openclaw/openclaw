@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import { FsSafeError } from "../../infra/fs-safe.js";
+import { FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import {
   expectRecordFields,
   expectRespondErrorContaining,
@@ -18,13 +18,7 @@ type IdentityUpdateHarness = {
     ensureAgentWorkspace: Mock<
       (params?: { dir?: string }) => Promise<{ dir: string; identityPathCreated: boolean }>
     >;
-    rootRead: Mock<
-      (params: { rootDir: string; relativePath: string }) => Promise<{
-        buffer: Buffer;
-        realPath: string;
-        stat: { size: number; mtimeMs: number };
-      }>
-    >;
+    rootRead: Mock<(params: { rootDir: string; relativePath: string }) => Promise<ReadResult>>;
     rootWrite: Mock<(params?: unknown) => Promise<void>>;
     writeConfigFile: Mock<(nextConfig?: unknown, writeOptions?: unknown) => Promise<void>>;
     fsMkdir: unknown;
@@ -121,8 +115,10 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
         });
         return {
           buffer: Buffer.from("# Identity\n\n- Name: Current Agent\n\nOriginal notes.\n"),
+          containment: "best-effort",
           realPath: `${rootDir}/${relativePath}`,
           stat: makeFileStat(),
+          exactIdentity: { dev: 1n, ino: 1n },
         };
       });
       try {
@@ -202,6 +198,8 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
             ),
             realPath: filePath,
             stat: makeFileStat(),
+            containment: "best-effort",
+            exactIdentity: { dev: 1n, ino: 1n },
           };
         }
         if (filePath === "/resolved/new/workspace/IDENTITY.md") {
@@ -221,6 +219,8 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
             ),
             realPath: filePath,
             stat: makeFileStat(),
+            containment: "best-effort",
+            exactIdentity: { dev: 1n, ino: 1n },
           };
         }
         throw createEnoentError();
@@ -266,6 +266,8 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
             ),
             realPath: filePath,
             stat: makeFileStat(),
+            containment: "best-effort",
+            exactIdentity: { dev: 1n, ino: 1n },
           };
         }
         if (filePath === "/resolved/new/workspace/IDENTITY.md") {
@@ -285,6 +287,8 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
             ),
             realPath: filePath,
             stat: makeFileStat(),
+            containment: "best-effort",
+            exactIdentity: { dev: 1n, ino: 1n },
           };
         }
         throw createEnoentError();

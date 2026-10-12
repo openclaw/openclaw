@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { ObservationRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMedia } from "./delivery.resolve-media.js";
@@ -34,7 +38,15 @@ const saveRemoteMedia = vi.fn(async (...args: unknown[]) => {
       : undefined,
   );
 });
-const rootRead = vi.fn();
+const rootRead =
+  vi.fn<
+    (params: {
+      rootDir: string;
+      relativePath: string;
+      maxBytes?: number;
+    }) => ReturnType<ObservationRoot["read"]>
+  >();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("openclaw/plugin-sdk/file-access-runtime", () => ({
   root: async (rootDir: string) => ({
@@ -142,14 +154,20 @@ describe("resolveMedia local Bot API container paths", () => {
 
   it("accepts the colon-to-tilde token directory used on restricted filesystems", async () => {
     const token = "123:secret";
+    const fixturePath = path.join(tempDirs.make("telegram-local-media-"), "file_9.pdf");
+    const buffer = Buffer.from("pdf-data");
+    fs.writeFileSync(fixturePath, buffer);
+    const identity = fs.statSync(fixturePath, { bigint: true });
     const getFile = vi.fn().mockResolvedValue({
       file_path: "/var/lib/telegram-bot-api/123~secret/documents/file_9.pdf",
     });
     rootRead.mockRejectedValueOnce(createFileAccessError("not-found", "file not found"));
     rootRead.mockResolvedValueOnce({
-      buffer: Buffer.from("pdf-data"),
+      buffer,
+      containment: "kernel-atomic",
       realPath: "/host/telegram-bot-api/token/documents/file_9.pdf",
-      stat: { size: 8 },
+      stat: fs.statSync(fixturePath),
+      exactIdentity: { dev: identity.dev, ino: identity.ino },
     });
     saveMediaBuffer.mockResolvedValueOnce({
       path: "/tmp/inbound/file_9.pdf",
