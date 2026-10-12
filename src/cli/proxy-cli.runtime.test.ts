@@ -30,6 +30,7 @@ vi.mock("../proxy-capture/proxy-server.js", () => ({
 
 // mock-isolation: Proxy runtime fixtures control config without preparing a real config owner.
 vi.mock("../config/config.js", () => ({
+  loadConfig: getRuntimeConfigMock,
   getRuntimeConfig: getRuntimeConfigMock,
   captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
 }));

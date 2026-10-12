@@ -25,6 +25,7 @@ import {
 import type { CronRunHistoryWrite } from "../../cron/store/run-history.types.js";
 import { prepareCronRunReceiptWriteSchema } from "../../cron/store/run-receipt-write-admission.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -275,6 +276,7 @@ it("pages the exact archived Cron generation for a limited caller without main-t
         cronStorePath: storePath,
         getRuntimeConfig: () => cfg,
       });
+      await resolvePluginMetadataSnapshotAsync({ config: cfg });
       const options = {
         client: sharingPolicyClient({ scopes: ["operator.read"], user: profile.id }),
       };

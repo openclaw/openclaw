@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
@@ -217,6 +218,7 @@ describe("sessions_send child coordination", () => {
       dmScope: "main",
       store: state.path("configured", "agents", "{agentId}", "sessions", "sessions.json"),
     };
+    setRuntimeConfigSnapshot(config);
     resetGatewayWorkAdmission();
     callGatewayMock.mockReset();
     calls.length = 0;

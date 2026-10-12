@@ -108,7 +108,13 @@ beforeEach(() => {
     }),
   );
   vi.spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader").mockReturnValue(
-    Object.assign(async () => cfg, { assertCurrent() {} }),
+    Object.assign(
+      async () => {
+        runtimeConfig.setRuntimeConfigSnapshot(cfg, cfg);
+        return cfg;
+      },
+      { assertCurrent() {} },
+    ),
   );
   vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
     sourceConfig: cfg,
@@ -128,7 +134,10 @@ beforeEach(() => {
     async (_params, read) => await read(createOwner()),
   );
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  runtimeConfig.clearRuntimeConfigSnapshot();
+});
 
 async function list(options: Parameters<typeof modelsListCommand>[0]) {
   return withEnvAsync({ OPENCLAW_GATEWAY_PORT: undefined }, () =>

@@ -590,7 +590,10 @@ test.each(["ready", "cleared-selection"] as const)(
     await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
 
     if (catalogMode === "cleared-selection") {
-      await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({ thinkingLevel: "off" }));
+      await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({
+        thinkingLevel: "off",
+        contextWindow: "extended",
+      }));
     }
     const restore = vi.spyOn(ManagedWorktreeService.prototype, "restore");
     const restored = patch(false);

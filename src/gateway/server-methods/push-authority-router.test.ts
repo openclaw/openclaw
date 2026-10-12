@@ -155,8 +155,8 @@ describe("Web Push router authority at the worker grant", () => {
     };
     const isConnectionActive = vi.fn(() => true);
     const getClientConnIds = vi.fn(() => new Set(["original-connection"]));
+    setRuntimeConfigSnapshot({});
     const context = createDirectChatContext({ isConnectionActive, getClientConnIds });
-    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     onTestFinished(() => {
       closeGatewayDeviceRevocation(context);
       clearRuntimeConfigSnapshot();

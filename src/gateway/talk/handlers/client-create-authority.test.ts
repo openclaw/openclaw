@@ -41,6 +41,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
 import { readVoiceSessionRecordInTransaction } from "../../../talk/client-voice-session-store.js";
 import * as voiceWriters from "../../../talk/client-voice-session-write.js";
@@ -110,6 +111,7 @@ function configureDelegatedBrowserProvider(
 }
 async function invokeCreate(options: GatewayRequestHandlerOptions) {
   setRuntimeConfigSnapshot(options.context.getRuntimeConfig());
+  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
   const admission = resolveSessionMutationAuthorization({
     method: "talk.client.create",
     requestParams: options.params,

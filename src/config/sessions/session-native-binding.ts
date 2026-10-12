@@ -273,9 +273,11 @@ export function runSessionNativeBindingWorkerOperation<
         let rollbackRefreshFailure: { cause: unknown } | undefined;
         if (rolledBack && readinessAuthorized) {
           try {
-            // Compound rollback records phases, not postimages; reload the restored lease once.
-            for (const { participant } of members) {
-              await participant.refreshCommittedFacts?.();
+            // Only compensation changes lease facts; pending and absent bindings were untouched.
+            for (const [index, { participant }] of members.entries()) {
+              if (receipt.bindings[index] === "restored") {
+                await participant.refreshCommittedFacts?.();
+              }
             }
           } catch (cause) {
             rollbackRefreshFailure = { cause };

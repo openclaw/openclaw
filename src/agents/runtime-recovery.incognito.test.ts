@@ -88,6 +88,7 @@ function recoveryRuntime(
 }
 
 it("resolves partial markers and store/SID targets within the selected physical actor", async () => {
+  const config = { session: { store: path.join(env.OPENCLAW_STATE_DIR!, "sessions.json") } };
   const target = await create("partial-target");
   await create("different-key", { sessionId: target.sessionId }, sibling);
   await withIncognitoSessionActor(actor, async () => {
@@ -98,6 +99,7 @@ it("resolves partial markers and store/SID targets within the selected physical 
       await expect(
         resolveAgentRunSessionTarget({
           ...partial,
+          config,
           sessionId: target.sessionId,
           missingSessionKey: "resolve-existing",
         }),
@@ -105,6 +107,7 @@ it("resolves partial markers and store/SID targets within the selected physical 
     }
     await expect(
       resolveAgentRunSessionTarget({
+        config,
         sessionFile: formatSqliteSessionFileMarker({ ...target, storePath: sibling.path }),
         sessionId: target.sessionId,
         missingSessionKey: "resolve-existing",
@@ -121,6 +124,7 @@ it("keeps selected absence missing without discovering a durable or successor ow
     async () => {
       await expect(
         resolveAgentRunSessionTarget({
+          config: { session: { store: path.join(absentEnv.OPENCLAW_STATE_DIR, "sessions.json") } },
           sessionFile: formatSqliteSessionFileMarker({
             agentId: "main",
             sessionId: "missing",

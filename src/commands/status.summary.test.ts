@@ -103,6 +103,9 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  captureRuntimeConfigAsyncReader: vi.fn(() =>
+    Object.assign(async () => ({}), { assertCurrent() {} }),
+  ),
   projectConfigOntoRuntimeSourceSnapshot: vi.fn((config) => config),
 }));
 

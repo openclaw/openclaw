@@ -6,6 +6,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
@@ -93,6 +94,7 @@ describe("swarm tools integration", () => {
     swarmSchedulerTesting.reset();
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
     tempDirs.cleanup();
     vi.unstubAllEnvs();
     vi.resetAllMocks();
@@ -103,6 +105,7 @@ describe("swarm tools integration", () => {
     const waitsStarted = createDeferred();
     const stateDir = tempDirs.make("openclaw-swarm-tools-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    setRuntimeConfigSnapshot(config);
     const publicToGateway = new Map<string, string>();
     const resultTextBySession = new Map<string, string>();
     const modelStructuredCalls: number[] = [];

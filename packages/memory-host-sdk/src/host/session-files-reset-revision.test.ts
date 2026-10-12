@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -440,6 +441,7 @@ describe("SQLite session snapshots and reset content revision", () => {
   });
 
   it("accepts a transcript append but invalidates its prefix hash after reset", async () => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:chat:reset-revision";

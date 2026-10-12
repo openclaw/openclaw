@@ -5,6 +5,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   loadTranscriptEvents,
@@ -700,6 +701,7 @@ describe("runAgentHarnessAttempt", () => {
         sessionTarget: target,
         userTurnTranscriptRecorder: recorder,
       };
+      setRuntimeConfigSnapshot(params.config);
       try {
         await recorder.withPendingInput?.(() => runAgentHarnessAttempt(params));
         const admission = recorder.getAdmissionReceipt();

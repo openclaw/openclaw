@@ -1453,6 +1453,9 @@ describe("agents.delete", () => {
   });
 
   it("settles recovery without touching a journaled directory claimed by another agent", async () => {
+    mocks.resolveOpenClawAgentSqlitePath.mockImplementation(
+      (params) => params?.path ?? "/journal/agent/openclaw-agent.sqlite",
+    );
     const directoryOwners = new Map([["/journal/agent", "other-agent"]]);
     const databaseRows = [
       { agentId: "test-agent", path: "/journal/agent/openclaw-agent.sqlite" },
@@ -1534,6 +1537,9 @@ describe("agents.delete", () => {
   });
 
   it("protects every journaled path claimed as a surviving agent workspace", async () => {
+    mocks.resolveOpenClawAgentSqlitePath.mockImplementation(
+      (params) => params?.path ?? "/journal/agent/openclaw-agent.sqlite",
+    );
     mocks.loadConfigReturn = {
       agents: { entries: { "other-agent": { workspace: "/journal" } } },
     };

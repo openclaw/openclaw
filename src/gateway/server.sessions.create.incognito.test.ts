@@ -326,6 +326,7 @@ test("createGatewaySession rechecks admin scope after incognito inheritance reso
 });
 
 test("incognito operator RPCs treat identityless connections as owner-equivalent", async () => {
+  testState.agentsConfig = { entries: { main: {} } };
   const { dir } = await createSessionStoreDir();
   const admin = await openClient({
     scopes: ["operator.admin"],

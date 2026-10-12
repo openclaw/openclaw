@@ -16,7 +16,10 @@ import * as configLoader from "./load-config.js";
 const providerId = "refresh-completion-fixture";
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  runtimeConfig.clearRuntimeConfigSnapshot();
+});
 
 describe("standalone models list refresh", () => {
   it("persists a slow offline refresh once before printing its discovered rows", async () => {
@@ -108,7 +111,13 @@ module.exports = {
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
     });
     vi.spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader").mockReturnValue(
-      Object.assign(async () => config, { assertCurrent() {} }),
+      Object.assign(
+        async () => {
+          runtimeConfig.setRuntimeConfigSnapshot(config, config);
+          return config;
+        },
+        { assertCurrent() {} },
+      ),
     );
     vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
       sourceConfig: config,

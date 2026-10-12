@@ -4,6 +4,7 @@ import type { Worker } from "node:worker_threads";
 import { afterAll, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "../config/sessions/session-accessor.sqlite-initial-entry.js";
@@ -47,6 +48,7 @@ afterAll(async () => {
 installGatewayTestHooks();
 
 test("joins a direct history projection's accepted read before retiring the Gateway home", async () => {
+  setRuntimeConfigSnapshot({});
   const scope = { agentId: "main", sessionKey: "agent:main:fixture-history" };
   ensureSessionEntrySync(scope, { sessionId: "fixture-history", updatedAt: 1 });
   const shared = openOpenClawStateDatabase();

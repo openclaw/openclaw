@@ -15,6 +15,7 @@ import {
   acquireAuthProfileReadDatabase,
   closeAuthProfileReadPool,
 } from "../agents/auth-profiles/sqlite-read-pool.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
@@ -278,6 +279,7 @@ describe("agent deletion database cleanup authority", () => {
           },
         },
       });
+      await captureRuntimeConfigAsyncReader()();
       const warnings = createWarnLogCapture("retirement-maintenance");
       try {
         await withAgentDeletion(

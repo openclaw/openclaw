@@ -93,7 +93,6 @@ export async function callQuestionRpc(
   const calls: Parameters<RespondFn>[] = [];
   const respond: RespondFn = (...args) => calls.push(args);
   const cfg = options?.cfg ?? {};
-  setRuntimeConfigSnapshot(cfg);
   const request = {
     req: { type: "req" as const, id: "request-1", method, params },
     params,

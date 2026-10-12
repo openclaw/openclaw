@@ -22,6 +22,7 @@ import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -966,13 +967,14 @@ describe("createGatewayKernel", () => {
       } finally {
         try {
           flushDiagnosticsTimeline();
-          await state.cleanup();
-        } finally {
           if (capturedLoadedPluginRegistry) {
             restoreActivePluginRegistrySnapshot(capturedLoadedPluginRegistry);
           }
           prematureCleanupCalls = capturedRegistryCleanup.mock.calls.length;
           restoreActivePluginRegistrySnapshot(originalPluginRegistry);
+          await waitForPluginRegistryRetirement(ambientRegistry);
+        } finally {
+          await state.cleanup();
         }
       }
     }
