@@ -19,14 +19,15 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { readSessionTranscriptWatermark, type TranscriptEvent } from "./session-accessor.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
@@ -57,6 +58,7 @@ type TestPaths = { stateDir: string; tempDir: string };
 let paths: TestPaths;
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-search-"));
   paths = {
     stateDir: path.join(tempDir, "state"),
@@ -85,7 +87,7 @@ async function appendUserMessage(sessionId: string, sessionKey: string, text: st
 
 // Keep projection fixtures deterministic; the worker suite covers host scheduling.
 function searchSessionTranscripts(params: SessionTranscriptSearchParams) {
-  const { found, revision: _revision, ...result } = searchSessionTranscriptsReadOnlySync(params);
+  const { found, ...result } = searchSessionTranscriptsReadOnlySync(params);
   const indexing =
     found &&
     listSessionsNeedingTranscriptIndexReconcile(
@@ -124,6 +126,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   fs.rmSync(paths.tempDir, { recursive: true, force: true });
+  resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
 

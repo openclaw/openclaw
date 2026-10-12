@@ -4,6 +4,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { captureSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
 import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   placementTurnOwner,
@@ -41,13 +42,24 @@ export function createRepositoryWorkspaceMutationService(options: {
         mutate: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>;
       },
     ): Promise<T> {
+      const scope = {
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        storePath: resolveSessionStorePathForScope(params),
+      };
+      const source = captureSessionEntryMetadataRead(scope);
+      const assertCallerCurrent = () => {
+        source?.assertCurrent();
+        params.assertCurrent();
+      };
       const placement = await placements.getAsync(params.sessionId);
-      params.assertCurrent();
+      assertCallerCurrent();
       if (placement?.state !== "active") {
         throw new Error("Repository workspace editing requires an active cloud placement");
       }
       return await options.workspaceOperations.run(placement.environmentId, async () => {
-        params.assertCurrent();
+        assertCallerCurrent();
         const workspace = await options.resolveWorkspace(params);
         if (workspace.kind !== "repository") {
           throw new Error("Session no longer owns a cloud repository workspace");
@@ -56,13 +68,6 @@ export function createRepositoryWorkspaceMutationService(options: {
         if (!isCurrentActiveWorkerEnvironment(placement, environment)) {
           throw new Error("Repository workspace environment is no longer current");
         }
-        const storePath = resolveSessionStorePathForScope(params);
-        const scope = {
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          storePath,
-        };
         const assertEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) => {
           params.assertEntryCurrent?.(entry);
           if (
@@ -76,7 +81,7 @@ export function createRepositoryWorkspaceMutationService(options: {
         };
         const currentEntry = await withSessionEntryReadOnlyInWorker(
           scope,
-          params.assertCurrent,
+          assertCallerCurrent,
           async (read, owner) => {
             if (!read.ok) {
               throw toErrorObject(read.error, "Repository workspace session read failed");
@@ -102,7 +107,7 @@ export function createRepositoryWorkspaceMutationService(options: {
           }
         };
         const assertWorkerCurrent = () => {
-          params.assertCurrent();
+          assertCallerCurrent();
           currentEntry.assertSourceCurrent();
           // Native entries have a commit projection; FILE rows come from the worker's grant.
           if (currentEntry.kind !== "file") {
@@ -117,7 +122,9 @@ export function createRepositoryWorkspaceMutationService(options: {
         };
         const assertOwner = () => {
           assertWorkerCurrent();
-          assertEntryCurrent(loadSessionEntryReadOnly(scope));
+          if (currentEntry.kind !== "incognito") {
+            assertEntryCurrent(loadSessionEntryReadOnly(scope));
+          }
           assertPlacementCurrent(placements.get(params.sessionId));
         };
         assertOwner();
@@ -182,11 +189,11 @@ export function createRepositoryWorkspaceMutationService(options: {
                 journal: journal.adapter,
                 stagedResult: {
                   ref: stagedResultRef,
-                  record: (ref) =>
+                  record: (ref, workspaceId) =>
                     placements.recordStagedWorkspaceResult(
                       claim,
                       ref,
-                      workspace.repository.workspaceId,
+                      workspaceId,
                       assertWorkerCurrent,
                       currentCheck,
                     ),

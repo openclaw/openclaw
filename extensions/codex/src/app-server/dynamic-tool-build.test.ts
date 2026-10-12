@@ -47,7 +47,7 @@ import {
   createCodexTestHostCapabilities,
   setCodexTestToolFactory,
 } from "./host-capability.test-support.js";
-import * as nativeExecutionPolicy from "./native-execution-policy.js";
+import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   flattenCodexDynamicToolFunctions,
@@ -1319,20 +1319,11 @@ describe("Codex app-server dynamic tool build", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
-    const resolveExecutionPolicy = vi.spyOn(
-      nativeExecutionPolicy,
-      "resolveCodexNativeExecutionPolicy",
-    );
-
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       sandbox: null,
       nativeToolSurfaceEnabled: true,
     });
 
-    expect(resolveExecutionPolicy).toHaveBeenCalledOnce();
-    expect(resolveExecutionPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ sandboxAvailable: false }),
-    );
     expect(shellTestToolNames(tools)).toEqual([
       "message",
       "gateway_exec",
@@ -1748,36 +1739,40 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it.each([
-    { label: "unresolved", sandbox: undefined, sandboxAvailable: undefined },
-    { label: "resolved absent", sandbox: null, sandboxAvailable: false },
-  ])("disables native tools for restricted allowlists with $label sandbox", (testCase) => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    const resolveExecutionPolicy = vi.spyOn(
-      nativeExecutionPolicy,
-      "resolveCodexNativeExecutionPolicy",
-    );
-
-    expect(shouldEnableCodexAppServerNativeToolSurface(params, testCase.sandbox)).toBe(true);
-    expect(resolveExecutionPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ sandboxAvailable: testCase.sandboxAvailable }),
-    );
-
-    params.toolsAllow = ["*"];
-    expect(shouldEnableCodexAppServerNativeToolSurface(params, testCase.sandbox)).toBe(true);
-
-    params.toolsAllow = [];
-    expect(shouldEnableCodexAppServerNativeToolSurface(params, testCase.sandbox)).toBe(false);
-
-    params.toolsAllow = ["message"];
-    expect(shouldEnableCodexAppServerNativeToolSurface(params, testCase.sandbox)).toBe(false);
-  });
+    { label: "unresolved", sandbox: undefined, expectedExecHost: "sandbox" },
+    { label: "resolved absent", sandbox: null, expectedExecHost: "gateway" },
+  ])(
+    "preserves prepared execution policy and restricted allowlists with $label sandbox",
+    async ({ sandbox, expectedExecHost }) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.config = { agents: { defaults: { sandbox: { mode: "all" } } } };
+      const prepared = await prepareCodexNativeExecutionPolicyForRun(params, { sandbox });
+      expect(prepared.policy.effectiveExecHost).toBe(expectedExecHost);
+      const nodePolicy = await prepareCodexNativeExecutionPolicyForRun(
+        { ...params, execOverrides: { host: "node", node: "synthetic-node" } },
+        { sandbox },
+      );
+      const cases: Array<[string[] | undefined, typeof prepared, boolean]> = [
+        [undefined, prepared, true],
+        [["*"], prepared, true],
+        [[], prepared, false],
+        [["message"], prepared, false],
+        [["*"], nodePolicy, false],
+      ];
+      for (const [toolsAllow, nativeExecutionPolicy, enabled] of cases) {
+        params.toolsAllow = toolsAllow;
+        expect(
+          shouldEnableCodexAppServerNativeToolSurface(params, sandbox, { nativeExecutionPolicy }),
+        ).toBe(enabled);
+      }
+    },
+  );
 
   it("disables Codex native tool surfaces when all tools are disabled", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = true;
-    params.toolsAllow = undefined;
 
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });

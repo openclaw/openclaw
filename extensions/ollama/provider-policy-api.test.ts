@@ -135,6 +135,25 @@ describe("ollama provider policy public artifact", () => {
     },
   );
 
+  it.each([undefined, null])("uses the implicit native API for discovered tiers (%s)", (api) => {
+    const profile = resolveThinkingProfile({
+      provider: "ollama",
+      modelId: "custom-thinking-model",
+      api,
+      reasoning: true,
+      thinkingLevelMap: { minimal: "minimal", xhigh: "xhigh" },
+    });
+    expect(profile.levels.map(({ id }) => id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
   it.each(["minimax-m2.7", "custom-thinking-model"])(
     "does not invent effort levels for catalog-light cloud model %s",
     (modelId) => {

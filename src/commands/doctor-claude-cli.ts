@@ -77,22 +77,6 @@ function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
   return "present";
 }
 
-function formatDirectoryProblemLine(
-  dirPath: string,
-  health: ClaudeCliDirHealth,
-  label: string,
-): string | null {
-  const display = shortenHomePath(dirPath);
-  if (health === "present" || health === "missing") {
-    return null;
-  }
-  const problem =
-    health === "not_directory"
-      ? "exists but is not a directory."
-      : `is not ${health === "unreadable" ? "readable" : "writable"} by this user.`;
-  return `- ${label}: ${display} ${problem}`;
-}
-
 function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
   const agentIds = listAgentIds(cfg);
   const runtimeAgentIds = agentIds.filter(
@@ -200,16 +184,21 @@ export function noteClaudeCliHealth(
         : workspace
           ? "Workspace"
           : subject;
-      const problem = formatDirectoryProblemLine(dirPath, health, label);
-      if (problem) {
-        lines.push(problem);
-        if (workspace || health !== "readonly") {
-          const targetLabel = agentLabel ? `agent ${agentLabel}'s ${subject}` : `the ${subject}`;
-          const remedy = workspace
-            ? "a readable, writable directory for the gateway user."
-            : "readable, or remove the broken path and let Claude recreate it.";
-          fixHints.push(`- Fix: make ${targetLabel} ${remedy}`);
-        }
+      const display = shortenHomePath(dirPath);
+      if (health === "present" || health === "missing") {
+        continue;
+      }
+      const problem =
+        health === "not_directory"
+          ? "exists but is not a directory."
+          : `is not ${health === "unreadable" ? "readable" : "writable"} by this user.`;
+      lines.push(`- ${label}: ${display} ${problem}`);
+      if (workspace || health !== "readonly") {
+        const targetLabel = agentLabel ? `agent ${agentLabel}'s ${subject}` : `the ${subject}`;
+        const remedy = workspace
+          ? "a readable, writable directory for the gateway user."
+          : "readable, or remove the broken path and let Claude recreate it.";
+        fixHints.push(`- Fix: make ${targetLabel} ${remedy}`);
       }
     }
   }
@@ -223,12 +212,9 @@ export function noteClaudeCliHealth(
     );
   }
 
-  if (lines.length === 0 && fixHints.length === 0) {
+  if (lines.length === 0) {
     return;
   }
-  if (fixHints.length > 0) {
-    lines.push(...fixHints);
-  }
 
-  (deps?.noteFn ?? note)(lines.join("\n"), "Claude CLI");
+  (deps?.noteFn ?? note)([...lines, ...fixHints].join("\n"), "Claude CLI");
 }

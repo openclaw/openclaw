@@ -151,17 +151,20 @@ export function normalizeMemoryHostEventRecordForStorage(
     return null;
   }
   const event = parsed.data;
-  const timestamp = truncateUtf8(event.timestamp, 128);
-  let truncated = timestamp.truncated || event.storageTruncated === true;
+  let truncated = event.storageTruncated === true;
+  const boundText = (text: string, maxBytes: number) => {
+    const bounded = truncateUtf8(text, maxBytes);
+    truncated ||= bounded.truncated;
+    return bounded.value;
+  };
+  const timestamp = boundText(event.timestamp, 128);
 
   if (event.type === "memory.recall.recorded" || event.type === "memory.recall.skipped") {
-    const query = truncateUtf8(event.query, MAX_MEMORY_HOST_EVENT_TEXT_BYTES);
-    truncated ||= query.truncated || event.results.truncated;
+    const query = boundText(event.query, MAX_MEMORY_HOST_EVENT_TEXT_BYTES);
+    truncated ||= event.results.truncated;
     const results = event.results.items.map((result) => {
-      const resultPath = truncateUtf8(result.path, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
-      truncated ||= resultPath.truncated;
       return {
-        path: resultPath.value,
+        path: boundText(result.path, MAX_MEMORY_HOST_EVENT_PATH_BYTES),
         startLine: result.startLine,
         endLine: result.endLine,
         score: result.score,
@@ -171,16 +174,16 @@ export function normalizeMemoryHostEventRecordForStorage(
       event.type === "memory.recall.recorded"
         ? {
             type: "memory.recall.recorded" as const,
-            timestamp: timestamp.value,
-            query: query.value,
+            timestamp,
+            query,
             resultCount: event.resultCount,
             results,
             ...(truncated ? { storageTruncated: true as const } : {}),
           }
         : {
             type: "memory.recall.skipped" as const,
-            timestamp: timestamp.value,
-            query: query.value,
+            timestamp,
+            query,
             reason: "non-short-term-memory-path" as const,
             eligibleResultCount: event.eligibleResultCount,
             skippedResultCount: event.skippedResultCount,
@@ -195,15 +198,12 @@ export function normalizeMemoryHostEventRecordForStorage(
   }
 
   if (event.type === "memory.promotion.applied") {
-    const memoryPath = truncateUtf8(event.memoryPath, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
-    truncated ||= memoryPath.truncated || event.candidates.truncated;
+    const memoryPath = boundText(event.memoryPath, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
+    truncated ||= event.candidates.truncated;
     const candidates = event.candidates.items.map((candidate) => {
-      const key = truncateUtf8(candidate.key, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
-      const candidatePath = truncateUtf8(candidate.path, MAX_MEMORY_HOST_EVENT_PATH_BYTES);
-      truncated ||= key.truncated || candidatePath.truncated;
       return {
-        key: key.value,
-        path: candidatePath.value,
+        key: boundText(candidate.key, MAX_MEMORY_HOST_EVENT_PATH_BYTES),
+        path: boundText(candidate.path, MAX_MEMORY_HOST_EVENT_PATH_BYTES),
         startLine: candidate.startLine,
         endLine: candidate.endLine,
         score: candidate.score,
@@ -212,8 +212,8 @@ export function normalizeMemoryHostEventRecordForStorage(
     });
     const normalized = {
       type: "memory.promotion.applied" as const,
-      timestamp: timestamp.value,
-      memoryPath: memoryPath.value,
+      timestamp,
+      memoryPath,
       applied: event.applied,
       candidates,
       ...(truncated ? { storageTruncated: true as const } : {}),
@@ -223,32 +223,25 @@ export function normalizeMemoryHostEventRecordForStorage(
       : { ...normalized, candidates: [], storageTruncated: true as const };
   }
 
-  if (event.type === "memory.dream.completed") {
-    const error = event.error
-      ? truncateUtf8(event.error, MAX_MEMORY_HOST_EVENT_TEXT_BYTES)
-      : undefined;
-    const inlinePath = event.inlinePath
-      ? truncateUtf8(event.inlinePath, MAX_MEMORY_HOST_EVENT_PATH_BYTES)
-      : undefined;
-    const reportPath = event.reportPath
-      ? truncateUtf8(event.reportPath, MAX_MEMORY_HOST_EVENT_PATH_BYTES)
-      : undefined;
-    truncated ||= Boolean(error?.truncated || inlinePath?.truncated || reportPath?.truncated);
-    return {
-      type: event.type,
-      timestamp: timestamp.value,
-      phase: event.phase,
-      ...(event.outcome ? { outcome: event.outcome } : {}),
-      ...(error ? { error: error.value } : {}),
-      ...(inlinePath ? { inlinePath: inlinePath.value } : {}),
-      ...(reportPath ? { reportPath: reportPath.value } : {}),
-      lineCount: event.lineCount,
-      storageMode: event.storageMode,
-      ...(truncated ? { storageTruncated: true } : {}),
-    };
-  }
-
-  return null;
+  const error = event.error ? boundText(event.error, MAX_MEMORY_HOST_EVENT_TEXT_BYTES) : undefined;
+  const inlinePath = event.inlinePath
+    ? boundText(event.inlinePath, MAX_MEMORY_HOST_EVENT_PATH_BYTES)
+    : undefined;
+  const reportPath = event.reportPath
+    ? boundText(event.reportPath, MAX_MEMORY_HOST_EVENT_PATH_BYTES)
+    : undefined;
+  return {
+    type: event.type,
+    timestamp,
+    phase: event.phase,
+    ...(event.outcome ? { outcome: event.outcome } : {}),
+    ...(error ? { error } : {}),
+    ...(inlinePath ? { inlinePath } : {}),
+    ...(reportPath ? { reportPath } : {}),
+    lineCount: event.lineCount,
+    storageMode: event.storageMode,
+    ...(truncated ? { storageTruncated: true } : {}),
+  };
 }
 
 export async function registerMemoryHostEvent(params: {

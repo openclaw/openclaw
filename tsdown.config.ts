@@ -20,6 +20,7 @@ import {
   productionPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
+import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-session-card-assets.mts";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
@@ -228,6 +229,9 @@ function nodeBuildConfig(
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
         : createBashParserAssetsPlugin(),
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
+        : createPublicSessionCardAssetsPlugin(),
       config.plugins,
     ],
     env,
@@ -376,8 +380,9 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
-    // Its native loader resolves optional platform packages from the package scope.
+    // Native loaders resolve optional platform packages from their package scopes.
     "@openclaw/fs-safe",
+    "@openclaw/proc-safe",
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",
@@ -459,6 +464,7 @@ function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "gateway-prewarm": "src/gateway/server-start.ts",
     "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
     "commands/doctor-update-schema-guard": "src/commands/doctor-update-schema-guard.ts",
     "crabbox-wrapper": "scripts/crabbox-wrapper.mts",
@@ -478,8 +484,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
-    "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
-    "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "config/sessions/session-transcript-reconcile":
       "src/config/sessions/session-transcript-reconcile.ts",
     ...runtimeProcessBuildEntries,
@@ -951,10 +955,16 @@ const configs: UserConfig[] = [
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),
   workerDeployBuildConfig({
+    "worker/file-tool-read.worker": "src/worker/worker-deploy-file-tool-read.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
   }),
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/sqlite-source-revision.worker": "src/worker/worker-deploy-sqlite-source-revision.ts",
   }),
   workerDeployBuildConfig({
     "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts",

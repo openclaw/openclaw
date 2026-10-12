@@ -2,7 +2,6 @@ import path from "node:path";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveAgentWorkspaceDir,
-  resolveStateDir,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -17,9 +16,8 @@ import {
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
-  borrowOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseWrite,
+  captureOpenClawAgentDatabaseExecution,
+  type OpenClawAgentDatabaseExecution,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
 import { DREAMS_FILENAMES } from "./dreaming-dreams-file.js";
@@ -33,6 +31,7 @@ import {
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { captureMemoryAgentDatabaseOptions } from "./memory-agent-database.js";
 import {
   selectedMemoryLineageIdentity,
   type MemoryForgetLineageResult,
@@ -71,8 +70,8 @@ type MemoryForgetParams = {
 
 type MemoryForgetContext = {
   targets: Awaited<ReturnType<typeof resolveMemorySessionTargetsAsync>>;
-  databaseOptions: Parameters<typeof withOpenClawAgentDatabaseWrite>[0];
-  database?: ReturnType<typeof borrowOpenClawAgentDatabase>;
+  databaseOptions: ReturnType<typeof captureMemoryAgentDatabaseOptions>;
+  database?: OpenClawAgentDatabaseExecution;
   origins?: MemoryEntryOrigin[];
   selectedEntryKeys: Set<string>;
   tombstoned: boolean;
@@ -86,12 +85,7 @@ export async function forgetMemoryEntries(params: MemoryForgetParams): Promise<M
   }
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const run = async (): Promise<MemoryForgetReport> => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir(process.env) };
-    const databaseOptions = {
-      agentId: params.agentId,
-      env,
-      path: resolveOpenClawAgentSqlitePath({ agentId: params.agentId, env }),
-    };
+    const databaseOptions = captureMemoryAgentDatabaseOptions(params.agentId);
     const context: MemoryForgetContext = {
       targets: await resolveMemorySessionTargetsAsync({
         agentId: params.agentId,
@@ -113,7 +107,7 @@ export async function forgetMemoryEntries(params: MemoryForgetParams): Promise<M
         }
       }
     } finally {
-      context.database?.release();
+      await context.database?.release();
     }
   };
   // Replanning retains this workspace owner and, once acquired, its exact database borrow.
@@ -350,7 +344,6 @@ async function forgetWorkspaceMemory(
   );
   const indexPlan = await planMemoryIndex(
     {
-      agentId: params.agentId,
       changedPaths,
       removedPaths: new Set(
         corpusRewrites
@@ -404,10 +397,8 @@ async function forgetWorkspaceMemory(
     return { kind: "complete", report };
   }
 
-  context.database ??= await withOpenClawAgentDatabaseWrite(context.databaseOptions, () =>
-    borrowOpenClawAgentDatabase(context.databaseOptions),
-  );
-  const { db } = context.database;
+  context.database ??= captureOpenClawAgentDatabaseExecution(context.databaseOptions);
+  const execution = context.database;
   const acceptLineage = (lineage: MemoryForgetLineageResult): boolean => {
     if (lineage.current) {
       return true;
@@ -429,7 +420,7 @@ async function forgetWorkspaceMemory(
   };
   const purged = await withMemoryForgetWorker(
     context.databaseOptions,
-    db,
+    execution,
     { kind: "forget", prepareTombstones: !context.tombstoned, extensionPath },
     async (scope) => {
       if (!context.tombstoned) {
@@ -503,7 +494,7 @@ async function forgetWorkspaceMemory(
   }
   await withMemoryForgetWorker(
     context.databaseOptions,
-    db,
+    execution,
     { kind: "forget", prepareTombstones: false },
     (scope) =>
       scope.execute({

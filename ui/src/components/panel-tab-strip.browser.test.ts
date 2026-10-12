@@ -12,9 +12,8 @@ type RenderedTab = HTMLElement & {
   panel: string;
 };
 
-type RenderedTabGroup = HTMLElement & {
-  active: string;
-};
+type PanelBridge = HTMLElement & { updateComplete: Promise<boolean> };
+const mountedBridges = new Set<PanelBridge>();
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -27,7 +26,7 @@ function tab(id: string): PanelTabStripTab {
   };
 }
 
-function renderControlledStrip(params: {
+async function renderControlledStrip(params: {
   container: HTMLElement | DocumentFragment;
   tabs: PanelTabStripTab[];
   activeId: string;
@@ -47,16 +46,46 @@ function renderControlledStrip(params: {
     }),
     params.container,
   );
+  const bridge = params.container.querySelector<PanelBridge>("openclaw-panel-tab-strip")!;
+  mountedBridges.add(bridge);
+  await bridge.updateComplete;
 }
 
 function renderedTabs(container: ParentNode): RenderedTab[] {
-  return [...container.querySelectorAll<RenderedTab>("wa-tab")];
+  return [...container.querySelectorAll<RenderedTab>(".tabstrip-tab")];
+}
+
+function tabWithId(container: ParentNode, id: string): RenderedTab | undefined {
+  return renderedTabs(container).find((candidate) => candidate.panel === id);
+}
+
+async function settleTabLayout(container: ParentNode) {
+  await container.querySelector<PanelBridge>("openclaw-panel-tab-strip")?.updateComplete;
+  await container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(".tabstrip")
+    ?.updateComplete;
+  await new Promise(requestAnimationFrame);
+}
+
+async function expectOverflowTabVisible(container: ParentNode, selectedTab: HTMLElement) {
+  await settleTabLayout(container);
+  const viewport = container
+    .querySelector(".tabstrip")
+    ?.shadowRoot?.querySelector<HTMLElement>(".nav");
+  if (!viewport) {
+    throw new Error("expected rendered tab strip viewport");
+  }
+  const viewportRect = viewport.getBoundingClientRect();
+  const tabRect = selectedTab.getBoundingClientRect();
+  expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);
+  expect(tabRect.left).toBeGreaterThanOrEqual(viewportRect.left - 1);
+  expect(tabRect.right).toBeLessThanOrEqual(viewportRect.right + 1);
 }
 
 async function expectControlledSelection(
   container: ParentNode,
   activeId: string,
 ): Promise<RenderedTab> {
+  await container.querySelector<PanelBridge>("openclaw-panel-tab-strip")?.updateComplete;
   let active: RenderedTab | undefined;
   await vi.waitFor(() => {
     const tabs = renderedTabs(container);
@@ -66,20 +95,22 @@ async function expectControlledSelection(
         candidate.hasAttribute("active") ||
         candidate.getAttribute("aria-selected") === "true",
     );
-    active = tabs.find((candidate) => candidate.panel === activeId);
+    active = tabWithId(container, activeId);
     expect(selected).toEqual([active]);
     expect(active?.tabIndex).toBe(0);
     expect(
       tabs
-        .filter((candidate) => candidate.panel !== activeId)
+        .filter((candidate) => candidate !== active)
         .every((candidate) => candidate.tabIndex === -1),
     ).toBe(true);
   });
   return active!;
 }
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.all([...mountedBridges].map((bridge) => bridge.updateComplete));
+  mountedBridges.clear();
   document.querySelector("#panel-tab-strip-browser-test-styles")?.remove();
 });
 
@@ -89,25 +120,26 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     const container = host.attachShadow({ mode: "open" });
     document.body.append(host);
     const tabs = [tab("a"), tab("b"), tab("c")];
-    renderControlledStrip({ container, tabs, activeId: "b", onSelect: vi.fn() });
+    await renderControlledStrip({ container, tabs, activeId: "b", onSelect: vi.fn() });
     const initialActive = await expectControlledSelection(container, "b");
     initialActive.focus();
     expect(document.activeElement).toBe(host);
     expect(container.activeElement).toBe(initialActive);
 
-    queueMicrotask(() => initialActive.blur());
-    renderControlledStrip({
+    const reordered = renderControlledStrip({
       container,
       tabs: [tabs[2]!, { ...tabs[1]!, label: "Tab B navigated" }, tabs[0]!],
       activeId: "b",
       onSelect: vi.fn(),
     });
+    queueMicrotask(() => initialActive.blur());
+    await reordered;
     const reorderedActive = await expectControlledSelection(container, "b");
 
     expect(reorderedActive).toBe(initialActive);
     await vi.waitFor(() => expect(container.activeElement).toBe(initialActive));
 
-    renderControlledStrip({
+    await renderControlledStrip({
       container,
       tabs: [tabs[2]!, tab("d"), tabs[1]!, tabs[0]!],
       activeId: "b",
@@ -121,17 +153,14 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     unrelated.textContent = "Unrelated action";
     document.body.append(unrelated);
     unrelated.focus();
-    renderControlledStrip({
+    await renderControlledStrip({
       container,
       tabs: [tabs[0]!, tabs[1]!, tabs[2]!],
       activeId: "b",
       onSelect: vi.fn(),
     });
     expect(await expectControlledSelection(container, "b")).toBe(initialActive);
-    await container.querySelector<RenderedTabGroup & { updateComplete: Promise<boolean> }>(
-      "wa-tab-group",
-    )?.updateComplete;
-    await new Promise(requestAnimationFrame);
+    await settleTabLayout(container);
     expect(document.activeElement).toBe(unrelated);
   });
 
@@ -147,9 +176,9 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     let activeId = "4";
     const onSelect = vi.fn((nextId: string) => {
       activeId = nextId;
-      renderControlledStrip({ container, tabs, activeId, onSelect });
+      void renderControlledStrip({ container, tabs, activeId, onSelect });
     });
-    renderControlledStrip({ container, tabs, activeId, onSelect });
+    await renderControlledStrip({ container, tabs, activeId, onSelect });
     const initialActive = await expectControlledSelection(container, activeId);
     initialActive.focus();
     initialActive.dispatchEvent(
@@ -163,22 +192,11 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     const arrowActive = await expectControlledSelection(container, activeId);
     expect(document.activeElement).toBe(arrowActive);
 
-    const last = renderedTabs(container).find((candidate) => candidate.panel === "8");
+    const last = tabWithId(container, "8");
     last?.click();
     await vi.waitFor(() => expect(activeId).toBe("8"));
     const lastActive = await expectControlledSelection(container, activeId);
-    const group = container.querySelector<RenderedTabGroup>("wa-tab-group");
-    const nav = group?.shadowRoot?.querySelector<HTMLElement>(".nav");
-    if (!group || !nav) {
-      throw new Error("expected rendered tab group navigation");
-    }
-    await new Promise(requestAnimationFrame);
-    const navRect = nav.getBoundingClientRect();
-    const activeRect = lastActive.getBoundingClientRect();
-
-    expect(nav.scrollWidth).toBeGreaterThan(nav.clientWidth);
-    expect(activeRect.left).toBeGreaterThanOrEqual(navRect.left - 1);
-    expect(activeRect.right).toBeLessThanOrEqual(navRect.right + 1);
+    await expectOverflowTabVisible(container, lastActive);
   });
 
   it.each(["shared", "per-tab"])(
@@ -186,7 +204,7 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     async (targets) => {
       const neighbor = document.createElement("div");
       document.body.append(neighbor);
-      renderControlledStrip({
+      await renderControlledStrip({
         container: neighbor,
         tabs: [
           { ...tab("a"), domId: "neighbor-a" },
@@ -208,17 +226,24 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
           ? "browser-test-panel"
           : (entry: PanelTabStripTab) => `panel-${entry.id}`;
       const onClose = vi.fn((closedId: string) =>
-        close.promise.then(() => {
+        close.promise.then(async () => {
           (document.activeElement as HTMLElement | null)?.blur();
           tabs = tabs.filter((entry) => entry.id !== closedId);
           activeId = tabs[0]?.id ?? "";
           const replacement = document.createElement("div");
           container.replaceWith(replacement);
           container = replacement;
-          renderControlledStrip({ container, tabs, activeId, ariaControls, onSelect, onClose });
+          await renderControlledStrip({
+            container,
+            tabs,
+            activeId,
+            ariaControls,
+            onSelect,
+            onClose,
+          });
         }),
       );
-      renderControlledStrip({ container, tabs, activeId, ariaControls, onSelect, onClose });
+      await renderControlledStrip({ container, tabs, activeId, ariaControls, onSelect, onClose });
       await expectControlledSelection(container, activeId);
       expect(renderedTabs(container).map((entry) => entry.getAttribute("aria-controls"))).toEqual(
         targets === "shared"
@@ -234,14 +259,9 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       closeButton?.click();
       close.resolve();
       await close.promise;
-      await Promise.resolve();
 
       const fallback = await expectControlledSelection(container, activeId);
-      const group = container.querySelector<
-        RenderedTabGroup & { updateComplete: Promise<boolean> }
-      >("wa-tab-group");
-      await group?.updateComplete;
-      await new Promise(requestAnimationFrame);
+      await settleTabLayout(container);
       expect(document.activeElement).toBe(fallback);
     },
   );

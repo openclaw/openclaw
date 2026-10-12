@@ -18,7 +18,7 @@ import {
 } from "../../utils/delivery-context.read.js";
 import type { ReplyPayload } from "../types.js";
 import { formatCommandExecResult, formatCommandExecText } from "./command-exec-result.js";
-import { commandReply, rejectNonOwnerCommand } from "./command-gates.js";
+import { commandReply, matchCommandPrefix, rejectNonOwnerCommand } from "./command-gates.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
@@ -54,7 +54,13 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
   if (!allowTextCommands) {
     return null;
   }
-  const args = parseDiagnosticsArgs(params.command.commandBodyNormalized);
+  const args = matchCommandPrefix(
+    params.command.commandBodyNormalized.trim(),
+    DIAGNOSTICS_COMMAND,
+    {
+      allowColon: true,
+    },
+  );
   if (args == null) {
     return null;
   }
@@ -93,10 +99,7 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
     if (commandParams.isGroup) {
       return await deliverGroupDiagnosticsReplyPrivately(commandParams, reply);
     }
-    return {
-      shouldContinue: false,
-      reply,
-    };
+    return commandReply(reply);
   }
 
   if (commandParams.isGroup) {
@@ -117,7 +120,7 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
   }
 
   const reply = await buildDiagnosticsReply(commandParams, args);
-  return reply ? { shouldContinue: false, reply } : { shouldContinue: false };
+  return reply ? commandReply(reply) : { shouldContinue: false };
 };
 
 async function deliverGroupDiagnosticsReplyPrivately(
@@ -135,20 +138,6 @@ async function deliverGroupDiagnosticsReplyPrivately(
     reply,
   });
   return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_REPLIES[outcome]);
-}
-
-function parseDiagnosticsArgs(commandBody: string): string | undefined {
-  const trimmed = commandBody.trim();
-  if (trimmed === DIAGNOSTICS_COMMAND) {
-    return "";
-  }
-  if (
-    trimmed.startsWith(`${DIAGNOSTICS_COMMAND} `) ||
-    trimmed.startsWith(`${DIAGNOSTICS_COMMAND}:`)
-  ) {
-    return trimmed.slice(DIAGNOSTICS_COMMAND.length + 1).trim();
-  }
-  return undefined;
 }
 
 function buildDiagnosticsPreamble(): string[] {

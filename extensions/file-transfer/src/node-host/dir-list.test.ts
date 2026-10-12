@@ -135,10 +135,13 @@ describe("handleDirList — happy path", () => {
         maxEntries: 10,
         offset: 0,
       });
+      const drained = path.join(tmpRoot, "worker-drained");
       // Retarget after the real chdir, before the unchanged worker checks and
       // enumerates its bound directory. Polling /proc can miss the entire child.
+      // beforeExit also distinguishes natural settlement from any forced-exit alias.
       const retargetAfterBinding = `(() => {
         const fs = require("node:fs");
+        process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "settled"));
         const chdir = process.chdir;
         process.chdir = (directory) => {
           chdir(directory);
@@ -164,6 +167,7 @@ describe("handleDirList — happy path", () => {
       });
       try {
         expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
+        expect(await fs.readFile(drained, "utf8")).toBe("settled");
         expect(await fs.readlink(current)).toBe(replacement);
         const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
           entries: Array<{ name: string }>;
@@ -199,9 +203,13 @@ describe("handleDirList — happy path", () => {
         maxEntries: 10,
         offset: 0,
       });
-      const child = spawn(command[0]!, command.slice(1), {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const drained = path.join(tmpRoot, "rejected-worker-drained");
+      const observeNaturalExit = `process.once("beforeExit", () => require("node:fs").writeFileSync(${JSON.stringify(drained)}, "settled"));`;
+      const child = spawn(
+        command[0]!,
+        [command[1]!, observeNaturalExit + command[2]!, ...command.slice(3)],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
       const stdout: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
       const exit = await new Promise<number | null>((resolve, reject) => {
@@ -210,6 +218,7 @@ describe("handleDirList — happy path", () => {
       });
 
       expect(exit).toBe(78);
+      expect(await fs.readFile(drained, "utf8")).toBe("settled");
       expect(Buffer.concat(stdout)).toHaveLength(0);
     },
   );

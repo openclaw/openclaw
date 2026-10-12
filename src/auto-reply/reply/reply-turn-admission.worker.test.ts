@@ -13,6 +13,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -25,6 +26,10 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "./reply-run-registry.state.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -42,22 +47,17 @@ type Admission = Awaited<ReturnType<typeof admitReplyTurn>>;
 
 function observeNativeOpen(databasePath: string, agentId: string) {
   const entered = createDeferred();
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const observed = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        admit(request, grant);
-        if (
-          request.stage === "open" &&
-          isRecord(request.facts) &&
-          request.facts.databasePath === databasePath &&
-          request.facts.agentId === agentId
-        ) {
-          entered.resolve();
-        }
-      }, attachment),
-    );
+  const observed = probe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    if (
+      request.stage === "open" &&
+      isRecord(request.facts) &&
+      request.facts.databasePath === databasePath &&
+      request.facts.agentId === agentId
+    ) {
+      entered.resolve();
+    }
+  });
   return { entered: entered.promise, restore: () => observed.mockRestore() };
 }
 
@@ -114,7 +114,7 @@ it("creates a missing persistent store through reply admission without main-thre
   });
 });
 
-it("admits cold and reopened persistent replies without main-thread SQLite while a shared writer is held", async ({
+it("retains one actor per cold/reopened reply admission and drains it without main-thread SQLite", async ({
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -157,6 +157,8 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
         },
       );
       let result: Admission | undefined;
+      const releaseActorPhase = createDeferred();
+      let actorPhase: Promise<void> | undefined;
       try {
         await withinTest(
           awaitGateBeforeSettlement(
@@ -183,15 +185,72 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
           expect(result.databaseClaim.incarnation).not.toBe(previousIncarnation);
         }
         previousIncarnation = result.databaseClaim.incarnation;
-        await completeAdmission(result, sessionKey);
+        const { operation, databaseClaim } = result;
+        const [actor, sibling] = await Promise.all([
+          acquireReplyOperationSessionActor(operation),
+          acquireReplyOperationSessionActor(operation),
+        ]);
+        if (!actor || !sibling) {
+          throw new Error("Persistent admission must acquire a session actor");
+        }
+        expect(sibling).toBe(actor);
+        const authority = {
+          assertCurrent: () => databaseClaim.assertCurrent(),
+          authorize() {},
+        };
+        const before = await actor.read(authority);
+        expect(before.entry).toMatchObject({
+          sessionId,
+          updatedAt: phase === "cold" ? 1 : 543,
+        });
+        const updatedAt = phase === "cold" ? 543 : 987;
+        const patched = await actor.patch(
+          {
+            commandId: `${phase}-activity`,
+            phaseId: "reply-admission",
+            expected: before.version,
+            reducers: [{ kind: "activity", updatedAt }],
+          },
+          authority,
+        );
+        expect(patched.kind).toBe("committed");
+        expect(sibling.snapshot(authority)?.entry).toMatchObject({ sessionId, updatedAt });
+
+        const phaseEntered = createDeferred();
+        actorPhase = actor.withPhase("retained-reply", authority, async () => {
+          phaseEntered.resolve();
+          await releaseActorPhase.promise;
+        });
+        await withinTest(phaseEntered.promise, signal);
+        operation.complete();
+        expect(() => actor.snapshot(authority)).toThrow();
+        expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
+        let successorSettled = false;
+        const successor = waitForReplyRunSuccessorAdmission(sessionKey, null).then((next) => {
+          successorSettled = true;
+          return next;
+        });
+        await setImmediate();
+        expect(successorSettled).toBe(false);
+        expect(databaseClaim.isCurrent()).toBe(true);
+        releaseActorPhase.resolve();
+        await withinTest(actorPhase, signal);
+        expect(await withinTest(successor, signal)).toMatchObject({ settled: true });
+        expect(databaseClaim.isCurrent()).toBe(false);
         expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
         sql.expectIdle();
         expect(opened).not.toHaveBeenCalled();
       } finally {
         try {
+          releaseActorPhase.resolve();
+          await Promise.allSettled([actorPhase]);
           controller.abort();
           await releaseWriter();
           result ??= await pending.catch(() => undefined);
+          if (result?.status === "owned") {
+            result.operation.complete();
+            await waitForReplyRunSuccessorAdmission(sessionKey, null);
+          }
           await completeAdmission(result, sessionKey);
           await settlement;
         } finally {
@@ -390,10 +449,13 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
               cancel() {},
             });
             if (ending === "frozen-restart") {
-              active.operation.freezeAbort();
-              work.beginClose(createAgentRunRestartAbortError());
-              expect(active.operation.abortForRestart()).toBe(false);
-              expect(active.operation.abortSignal.aborted).toBe(false);
+              const operation = active.operation;
+              operation.freezeAbort();
+              const restartReason = createAgentRunRestartAbortError();
+              work.beginClose(restartReason);
+              expect(operation.abortForRestart()).toBe(false);
+              expect(operation.abortSignal.aborted).toBe(false);
+              expect(() => getReplyOperationSessionTarget(operation)).toThrow(restartReason);
             } else {
               expect(
                 ending === "restart-abort"

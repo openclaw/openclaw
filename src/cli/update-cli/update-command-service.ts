@@ -17,6 +17,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -39,6 +40,7 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 import {
   recordServiceReconciliationWarning,
   recordServiceReconciliationWarnings,
+  recordServiceTimedStep,
 } from "./update-command-result.js";
 import {
   DEFINITION_DENIAL,
@@ -226,6 +228,7 @@ export async function maybeRestartService(params: {
     assertCurrent,
     onWarnings: (warnings: string[]) =>
       recordServiceReconciliationWarnings(params.result, warnings, run, assertCurrent),
+    onTimedStep: (step: UpdateStepResult) => recordServiceTimedStep(params.result, step, run),
   };
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =

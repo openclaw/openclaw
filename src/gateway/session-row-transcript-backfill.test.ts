@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -19,7 +20,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
-import { readSessionRowTranscriptFields } from "./session-row-transcript-backfill.kernel.js";
+import { readSessionRowTranscriptFields } from "./session-row-transcript-backfill.worker.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -92,6 +93,7 @@ async function withSession(
   entry: Partial<InternalSessionEntry> = {},
 ) {
   await withOpenClawTestState({ label: "session-row-backfill" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const params = {
       agentId: "main",
       storePath: state.statePath("sessions.json"),

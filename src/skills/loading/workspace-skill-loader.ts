@@ -6,10 +6,9 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import {
-  captureSkillLibrarySelection,
+  captureSkillLibraryPreparation,
   loadSkillLibrarySelection,
   prepareSkillLibrarySelection,
 } from "../library/selection.js";
@@ -19,7 +18,7 @@ import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-finge
 import { recordSkillFileHost } from "../skill-file-host.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { hasBinary, prepareSkillBinaryProbe } from "./config.js";
+import { hasBinary, prepareSkillBinaryProbe, resolveSkillRequiredBins } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { loadSingleSkillDirectory } from "./local-loader.js";
 import type { Skill } from "./skill-contract.js";
@@ -121,11 +120,7 @@ export function readWorkspaceSkillSources(
       "uv",
       "go",
       ...request.additionalBins,
-      ...entries
-        .concat(executionEntries)
-        .flatMap((entry) =>
-          (entry.metadata?.requires?.bins ?? []).concat(entry.metadata?.requires?.anyBins ?? []),
-        ),
+      ...entries.concat(executionEntries).flatMap(resolveSkillRequiredBins),
     ]),
   ]
     .filter(hasBinary)
@@ -307,19 +302,10 @@ function captureWorkspaceSkillPreparation(
     opts?.bundledSkillName === undefined &&
     (opts?.entries === undefined ||
       Boolean(getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills));
-  const librarySelections = captureSkillLibrarySelection(
+  return captureSkillLibraryPreparation(
     needsLibrary ? (opts?.librarySelections ?? []) : [],
+    assertCurrent,
   );
-  const libraryContext = librarySelections.length ? captureOpenClawStateWorkerContext() : undefined;
-  return {
-    librarySelections,
-    libraryContext,
-    assertCurrent: () => {
-      assertCurrent?.();
-      libraryContext?.maintenanceScope?.assertAdmission();
-      libraryContext?.admission.assertCurrent();
-    },
-  };
 }
 
 async function prepareCapturedWorkspaceSkillEntries(
@@ -390,9 +376,7 @@ async function prepareCapturedWorkspaceSkillEntries(
         libraryEntries
           .concat(gatewayEntries, gatewayExecutionEntries)
           .concat(opts?.entries ?? [])
-          .flatMap((entry) =>
-            (entry.metadata?.requires?.bins ?? []).concat(entry.metadata?.requires?.anyBins ?? []),
-          ),
+          .flatMap(resolveSkillRequiredBins),
       ),
     ],
     status: opts?.status,

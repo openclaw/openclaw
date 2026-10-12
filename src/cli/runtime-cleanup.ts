@@ -84,6 +84,10 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
     const scheduledWork = cleanup.scheduler.stop();
     await runCliDisposer("scheduled-work", () => scheduledWork, runCleanup);
     await scheduledWork;
+    await cleanup.pluginResources?.settleWork();
+    if (cleanup.releaseManagedProxy) {
+      await runCliDisposer("managed-proxy", cleanup.releaseManagedProxy, runCleanup);
+    }
   }
   const finalizers: Record<string, () => Promise<void>> = {
     "agent-harnesses": async () => {
@@ -111,6 +115,12 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         }
         cleanup.harnesses.clear();
         cleanup.registries.clear();
+      }
+    },
+    "skills-watchers": async () => {
+      if (cleanup) {
+        // Only the executable owner retires process-wide skill observation.
+        await cleanup.closeSkillsWatchers();
       }
     },
     "provider-local-services": stopActiveManagedProviderLocalServices,

@@ -1,5 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -11,6 +11,7 @@ import { resolveContextEngine } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
@@ -380,17 +381,6 @@ export async function runCliTurnCompactionLifecycle(
         ? AbortSignal.any([input.abortSignal, sourceSignal])
         : (input.abortSignal ?? sourceSignal);
     const params = { ...input, abortSignal };
-    const capturedEntry = loadSessionEntryReadOnly({
-      agentId: params.sessionAgentId,
-      sessionKey: params.sessionKey,
-      storePath,
-      readConsistency: "latest",
-    });
-    const expectedEntry = {
-      sessionId: params.sessionId,
-      lifecycleRevision: capturedEntry?.lifecycleRevision,
-      activeWriterRunId: capturedEntry?.activeWriterRunId,
-    };
     const assertActive = composeSessionSourceAssertion(
       [assertSourceActive, operatorAuthority?.assertCurrent, host.assertActive],
       (assertSources) => {
@@ -399,6 +389,20 @@ export async function runCliTurnCompactionLifecycle(
       },
     );
     assertActive();
+    const capturedEntry = await readSessionEntryReadOnlyInWorker(
+      {
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey,
+        storePath,
+        readConsistency: "latest",
+      },
+      assertActive,
+    );
+    const expectedEntry = {
+      sessionId: params.sessionId,
+      lifecycleRevision: capturedEntry?.lifecycleRevision,
+      activeWriterRunId: capturedEntry?.activeWriterRunId,
+    };
     const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
       if (params.sessionStore) {
         params.sessionStore[params.sessionKey] = accepted.entry;
@@ -414,9 +418,17 @@ export async function runCliTurnCompactionLifecycle(
     assertActive();
     const sessionFile = params.sessionKey;
     const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      sessionId: params.sessionId,
       cwd: params.cwd ?? params.workspaceDir,
       agentDir: params.agentDir,
       cfg: params.cfg,
+      pluginMetadataSnapshot:
+        params.pluginGeneration?.pluginMetadataSnapshot ??
+        getCurrentPluginMetadataSnapshot({
+          config: params.cfg,
+          env: process.env,
+          workspaceDir: params.workspaceDir,
+        }),
       contextTokenBudget,
     });
     assertActive();

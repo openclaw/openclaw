@@ -1,13 +1,8 @@
 import { createServer, type AddressInfo, type Server } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover-error.js";
-import {
-  createAgentRunDirectAbortError,
-  createAgentRunRestartAbortError,
-  createAgentRunSupersededAbortError,
-} from "../agents/run-termination.js";
+import { createAgentRunSupersededAbortError } from "../agents/run-termination.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -181,13 +176,15 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
         status: "skipped",
         provider: "ollama",
         model: "diagnostic-model",
-        error: expect.stringContaining("unavailable"),
+        error: expect.stringContaining(
+          "Start the local provider or correct its configured endpoint",
+        ),
         diagnostics: {
           entries: expect.arrayContaining([
             expect.objectContaining({
               source: "model-preflight",
               severity: "warn",
-              message: expect.stringContaining("unavailable"),
+              message: expect.stringContaining("the local provider preflight failed"),
             }),
           ]),
         },
@@ -261,33 +258,31 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
     expect(history.errorReason).toBe("model_not_found");
   });
 
-  it.each([
-    ["direct abort", createAgentRunDirectAbortError],
-    ["gateway restart", createAgentRunRestartAbortError],
-    ["superseded run", createAgentRunSupersededAbortError],
-    ["stale gateway lifecycle", createAgentRunStaleLifecycleError],
-  ])("persists the coded %s reason instead of reporting a timeout", async (name, createError) => {
-    const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
-    const rejection = createError() as Error & { code: string };
-    runWithModelFallbackMock.mockRejectedValueOnce(rejection);
+  it.each([["superseded run", createAgentRunSupersededAbortError]])(
+    "persists the coded %s reason instead of reporting a timeout",
+    async (name, createError) => {
+      const modelRef = { provider: "openai", model: "gpt-5.4" };
+      resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+      const rejection = createError() as Error & { code: string };
+      runWithModelFallbackMock.mockRejectedValueOnce(rejection);
 
-    const { finished, history, lastError } = await runPersistedDiagnosticCase({
-      cfg: configFor(modelRef),
-      modelRef,
-      name,
-    });
-    const expected = `${rejection.message} | ${rejection.code}`;
-
-    for (const outcome of [finished, history]) {
-      expect(outcome).toMatchObject({
-        status: "error",
-        error: expected,
+      const { finished, history, lastError } = await runPersistedDiagnosticCase({
+        cfg: configFor(modelRef),
+        modelRef,
+        name,
       });
-      expect(outcome.error).not.toContain("timed out");
-    }
-    expect(lastError).toBe(expected);
-  });
+      const expected = `${rejection.message} | ${rejection.code}`;
+
+      for (const outcome of [finished, history]) {
+        expect(outcome).toMatchObject({
+          status: "error",
+          error: expected,
+        });
+        expect(outcome.error).not.toContain("timed out");
+      }
+      expect(lastError).toBe(expected);
+    },
+  );
 
   it("persists and emits a fatal execution-denial diagnostic", async () => {
     const modelRef = { provider: "openai", model: "gpt-5.4" };

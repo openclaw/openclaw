@@ -205,6 +205,13 @@ export function createSqliteAuditRecordKernel<T>(
 ) {
   const scope = options.scope;
   const maxEntries = options.maxEntries;
+  const prune = (count: number, protectedKey?: string) =>
+    pruneAuditRecords({ database, scope, maxEntries, count, protectedKey });
+  const selectEntries = () =>
+    getAuditRecordKysely(database)
+      .selectFrom("diagnostic_events")
+      .select(["event_key", "payload_json", "created_at", "sequence"])
+      .where("scope", "=", scope);
   function insertRecord(record: DiagnosticEventRow): number {
     return Number(auditRecordInsert(database)({ ...record, scope }).numAffectedRows ?? 0);
   }
@@ -230,13 +237,7 @@ export function createSqliteAuditRecordKernel<T>(
           }),
         ),
     );
-    pruneAuditRecords({
-      database,
-      scope,
-      maxEntries,
-      count: state.count + (state.keyExists ? 0 : 1),
-      protectedKey: record.event_key,
-    });
+    prune(state.count + (state.keyExists ? 0 : 1), record.event_key);
   }
 
   function deleteRecord(key: string): void {
@@ -257,13 +258,7 @@ export function createSqliteAuditRecordKernel<T>(
         sequence: state.nextSequence,
       });
       // Keep the just-addressed key while pruning the oldest rows in this scope.
-      pruneAuditRecords({
-        database,
-        scope,
-        maxEntries,
-        count: state.count + inserted,
-        protectedKey: record.event_key,
-      });
+      prune(state.count + inserted, record.event_key);
     },
     upsert: upsertPreparedRecord,
     delete: deleteRecord,
@@ -298,29 +293,21 @@ export function createSqliteAuditRecordKernel<T>(
         count += insertRecord({ ...record, sequence });
         sequence += 1;
       }
-      pruneAuditRecords({ database, scope, maxEntries, count });
+      prune(count);
     },
     entries(): SqliteAuditRecordEntry<T>[] {
-      return executeSqliteQuerySync(
-        database,
-        getAuditRecordKysely(database)
-          .selectFrom("diagnostic_events")
-          .select(["event_key", "payload_json", "created_at", "sequence"])
-          .where("scope", "=", scope)
-          .orderBy("sequence", "asc"),
-      ).rows.map((row) => {
-        const { sequence: _sequence, ...entry } = parseAuditRecord<T>(row);
-        return entry;
-      });
+      return executeSqliteQuerySync(database, selectEntries().orderBy("sequence", "asc")).rows.map(
+        (row) => {
+          const { sequence: _sequence, ...entry } = parseAuditRecord<T>(row);
+          return entry;
+        },
+      );
     },
     latest(params: {
       limit: number;
       beforeSequence?: number;
     }): SequencedSqliteAuditRecordEntry<T>[] {
-      const baseQuery = getAuditRecordKysely(database)
-        .selectFrom("diagnostic_events")
-        .select(["event_key", "payload_json", "created_at", "sequence"])
-        .where("scope", "=", scope);
+      const baseQuery = selectEntries();
       const query =
         params.beforeSequence === undefined
           ? baseQuery

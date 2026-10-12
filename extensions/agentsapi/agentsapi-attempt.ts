@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   buildCurrentInboundPrompt,
   createAgentHarnessAttemptCancellation,
@@ -17,7 +16,6 @@ import {
   formatErrorMessage,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAgentExecutorController,
-  sanitizeToolArgs,
   setActiveEmbeddedRun,
   type AgentHarnessAttemptParamsV2,
   type EmbeddedRunAttemptResult,
@@ -43,9 +41,14 @@ import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 import {
   bindAgentsApiTranscriptAuthority,
-  recordAgentsApiNativeToolTranscript,
+  recordAgentsApiNativeHistory,
 } from "./agentsapi-transcript.js";
-import { agentsApiConfigSchema, resolveAgentsApiEnvironment } from "./config.js";
+import {
+  agentsApiConfigSchema,
+  requireAgentsApiSessionFingerprint,
+  resolveAgentsApiNativeToolPolicy,
+  resolveAgentsApiEnvironment,
+} from "./config.js";
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
@@ -147,6 +150,7 @@ export async function runAgentsApiAttempt(
   const saveBinding = async (next: AgentsApiBinding) => {
     await bind(next);
     activeBinding = next;
+    prepareNativeCleanup?.(next, params.resolvedApiKey!);
   };
   let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
   let reply: AgentsApiMessageProjection["reply"] | undefined;
@@ -216,11 +220,15 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
-    if (binding?.executor) {
+    if (binding) {
       // Even rejected configuration changes must leave authenticated cleanup available.
       prepareNativeCleanup?.(binding, params.resolvedApiKey!);
     }
     const pluginConfig = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
+    const { webSearchEnabled, nativeTools } = resolveAgentsApiNativeToolPolicy(
+      params,
+      pluginConfig,
+    );
     const environment = resolveAgentsApiEnvironment(pluginConfig, params.workspaceDir);
     if (
       binding &&
@@ -249,18 +257,13 @@ export async function runAgentsApiAttempt(
     toolSurface = surface;
     const mcpTools = await buildAgentsApiMcpTools(params);
     assertCurrent();
-    const sessionIdentity = [
-      params.model.id,
-      // Preserve existing hosted identities only when no network policy is configured.
-      ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
-      ...(mcpTools.length ? [mcpTools] : []),
-    ];
-    const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
-    if (binding && binding.configFingerprint !== fingerprint) {
-      throw new Error(
-        "Agents API model, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
-      );
-    }
+    const fingerprint = requireAgentsApiSessionFingerprint({
+      existingFingerprint: binding?.configFingerprint,
+      model: params.model.id,
+      environment,
+      mcpTools,
+      webSearchEnabled,
+    });
     const inputMedia =
       environment.type === "openai_hosted" && params.hostCapabilities.resolveInputAttachmentMedia
         ? await params.hostCapabilities.resolveInputAttachmentMedia()
@@ -339,7 +342,7 @@ export async function runAgentsApiAttempt(
         promptBuild.developerInstructions,
         params.model.id,
         {
-          nativeTools: pluginConfig.nativeTools,
+          nativeTools,
           functions: surface.declarations,
           mcpTools,
           files: inputs.files,
@@ -369,7 +372,6 @@ export async function runAgentsApiAttempt(
       if (!selfHostedBinding) {
         throw new Error("Agents API self-hosted session is missing its canonical binding");
       }
-      prepareNativeCleanup?.(selfHostedBinding, params.resolvedApiKey!);
       connectEnvironment = async (environmentId) => {
         const currentBinding = activeBinding;
         if (!currentBinding) {
@@ -437,23 +439,8 @@ export async function runAgentsApiAttempt(
         projection!.reconcile(turn, items, { presentation: !finalizingProjection }),
       onUsageError: (error) => logFailure("Agents API token accounting unavailable", error),
       onTranscriptOrderingGap: () => projection!.reportTranscriptOrderingGap(),
-      onReconcileHistory: async (entries) => {
-        for (const { turn, items } of entries) {
-          for (const item of items) {
-            assertProjectionCurrent();
-            await recordAgentsApiNativeToolTranscript(
-              runParams,
-              remoteSessionId!,
-              turn.id,
-              item,
-              assertProjectionCurrent,
-              Date.now,
-              { enclosingStatus: turn.status },
-            );
-            assertProjectionCurrent();
-          }
-        }
-      },
+      onReconcileHistory: (entries) =>
+        recordAgentsApiNativeHistory(runParams, remoteSessionId!, entries, assertProjectionCurrent),
       connectEnvironment,
       onSessionFailed: async () => {
         if (activeBinding) {
@@ -468,7 +455,7 @@ export async function runAgentsApiAttempt(
             phase: "start",
             name: call.name,
             toolCallId: call.call_id,
-            args: asOptionalRecord(sanitizeToolArgs(call.arguments)),
+            args: asOptionalRecord(call.arguments),
           },
         });
         assertCurrent();

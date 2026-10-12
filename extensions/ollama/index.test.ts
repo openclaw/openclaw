@@ -652,6 +652,7 @@ describe("ollama plugin", () => {
     );
     expect(discoveryMock).toHaveBeenCalledOnce();
     expect(discoveryMock).toHaveBeenCalledWith(undefined, {
+      onListedModels: expect.any(Function),
       discoveryMode: "strict",
       apiKey: "profile-key",
     });
@@ -684,6 +685,7 @@ describe("ollama plugin", () => {
       outcomes: [{ provider: "ollama", status: "ready" }],
     });
     expect(discoveryMock).toHaveBeenCalledWith("http://remote-ollama:11434", {
+      onListedModels: expect.any(Function),
       discoveryMode: "strict",
     });
   });
@@ -1091,9 +1093,6 @@ describe("ollama plugin", () => {
     );
     const resultProvider = result?.provider;
     expect(resultProvider.baseUrl).toBe(localBaseUrl);
-    expect(discoveryMock).toHaveBeenCalledWith(undefined, {
-      discoveryMode: "strict",
-    });
   });
 
   it.each([
@@ -1269,7 +1268,7 @@ describe("ollama plugin", () => {
     if (!wrapped) {
       throw new Error("expected Ollama OpenAI-compatible stream wrapper");
     }
-    await wrapped({} as never, {} as never, { onPayload });
+    await wrapped({} as never, { messages: [] }, { onPayload });
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(onPayload).toHaveBeenCalledOnce();
   });
@@ -1312,22 +1311,20 @@ describe("ollama plugin", () => {
     expect(streamFn).not.toHaveBeenCalled();
   });
 
-  it("owns replay policy for OpenAI-compatible and native Ollama routes", () => {
-    const provider = registerProvider();
-    const replay = (modelApi: "ollama" | "openai-completions") =>
-      provider.buildReplayPolicy?.({
+  it.each(["ollama", "openai-completions"] as const)(
+    "owns replay policy for %s routes",
+    (modelApi) => {
+      const provider = registerProvider();
+      const policy = provider.buildReplayPolicy?.({
         provider: "ollama",
         modelApi,
         modelId: "qwen3:32b",
       });
-    expect(replay("openai-completions")).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-    });
-    const nativePolicy = replay("ollama");
-    expect(nativePolicy?.sanitizeToolCallIds).toBe(false);
-    expect(nativePolicy?.toolCallIdMode).toBeUndefined();
-  });
+      expect(policy?.sanitizeToolCallIds).toBe(modelApi !== "ollama");
+      expect(policy?.toolCallIdMode).toBe(modelApi === "ollama" ? undefined : "strict");
+      expect(policy?.dropReasoningFromHistory ?? false).toBe(modelApi !== "ollama");
+    },
+  );
 
   it("selects cloud native transport with the default URL only for api=ollama", () => {
     const provider = registerOllamaCloudProvider();

@@ -59,6 +59,11 @@ export class PortaledHovercardController {
     private readonly dismiss: () => void = close,
   ) {}
 
+  readonly handleCardPointerLeave = () => {
+    this.pointerOverCard = false;
+    this.scheduleClose();
+  };
+
   readonly handleTriggerKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       this.dismiss();
@@ -256,6 +261,7 @@ export class PortaledHovercardController {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
+    card.addEventListener("keydown", this.handleCardKeyDown);
     card.addEventListener("pointerenter", this.handleCardPointerEnter);
     card.addEventListener("focusin", this.handleCardFocusIn);
     card.addEventListener("focusout", this.handleCardFocusOut);

@@ -1,20 +1,22 @@
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import "../../styles.css";
 import "../../styles/settings.css";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
-import { renderAgentFiles } from "./panels-files.ts";
+import { AgentFiles } from "./panels-files.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
+let mounted: ReturnType<typeof mountSolid<Parameters<typeof AgentFiles>[0]>> | undefined;
 let tooltipProvider: HTMLElement;
 let viewport: { width: number; height: number };
 
 beforeEach(() => {
+  mounted = undefined;
   viewport = { width: window.innerWidth, height: window.innerHeight };
   container = document.createElement("div");
   container.className = "settings-page";
@@ -24,7 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  render(nothing, container);
+  mounted?.dispose();
   tooltipProvider.remove();
   await i18n.setLocale("en");
   if (browserMode) {
@@ -61,44 +63,46 @@ function requireButton(selector: string): HTMLButtonElement {
 function renderPreview(
   draft: string,
   onChange = (_name: string, _content: string) => {},
-  overrides: Partial<Parameters<typeof renderAgentFiles>[0]> = {},
+  overrides: Partial<Parameters<typeof AgentFiles>[0]> = {},
 ) {
-  render(
-    renderAgentFiles({
+  const props: Parameters<typeof AgentFiles>[0] = {
+    agentId: "main",
+    agentFilesList: {
       agentId: "main",
-      agentFilesList: {
-        agentId: "main",
-        workspace: "/synthetic/workspace",
-        files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
-      },
-      agentFilesLoading: false,
-      agentFilesError: null,
-      agentFileActive: "AGENTS.md",
+      workspace: "/synthetic/workspace",
+      files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
+    },
+    agentFilesLoading: false,
+    agentFilesError: null,
+    agentFileActive: "AGENTS.md",
 
-      agentFileSaving: false,
-      agentFileConflict: null,
-      canWrite: true,
-      onLoadFiles: () => undefined,
-      onSelectFile: () => undefined,
-      onFileDraftChange: (name, content) => {
-        onChange(name, content);
-        renderPreview(content, onChange, overrides);
+    agentFileSaving: false,
+    agentFileConflict: null,
+    canWrite: true,
+    onLoadFiles: () => undefined,
+    onSelectFile: () => undefined,
+    onFileDraftChange: (name, content) => {
+      onChange(name, content);
+      renderPreview(content, onChange, overrides);
+    },
+    onFileReset: () => undefined,
+    onFileSave: () => undefined,
+    onFileReload: () => undefined,
+    onFileOverwrite: () => undefined,
+    ...overrides,
+    agentFileEditors: {
+      "AGENTS.md": {
+        content: "Saved instructions",
+        draft,
+        ...overrides.agentFileEditors?.["AGENTS.md"],
       },
-      onFileReset: () => undefined,
-      onFileSave: () => undefined,
-      onFileReload: () => undefined,
-      onFileOverwrite: () => undefined,
-      ...overrides,
-      agentFileEditors: {
-        "AGENTS.md": {
-          content: "Saved instructions",
-          draft,
-          ...overrides.agentFileEditors?.["AGENTS.md"],
-        },
-      },
-    }),
-    container,
-  );
+    },
+  };
+  if (mounted) {
+    mounted.update(props);
+  } else {
+    mounted = mountSolid(AgentFiles, props, container);
+  }
 }
 
 describe.runIf(browserMode)("agent file preview", () => {

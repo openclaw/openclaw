@@ -3,6 +3,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   interruptSessionWorkAdmissions,
+  isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
   startSessionWorkAdmissionInterruption,
@@ -26,6 +27,7 @@ export async function runWorkerPlacementHandoff<T>(
   params: WorkerPlacementHandoffParams,
   request: WorkerSessionPlacementIdentity & {
     action: "dispatch" | "move";
+    requiredProfile?: string;
     sourceDisposition?: "reconcile" | "abandon";
     signal?: AbortSignal;
   },
@@ -55,7 +57,20 @@ export async function runWorkerPlacementHandoff<T>(
         errorMessage: `Session ${sessionKey} changed before ${action === "dispatch" ? "cloud worker dispatch" : "placement move"}. Retry.`,
       });
       resolved.assertCurrent(getRuntimeConfig());
+      if (
+        action === "dispatch" &&
+        isCompetingSessionWorkAdmissionActive(target.storePath, lifecycleIdentities)
+      ) {
+        throw new Error(
+          `Session ${sessionKey} is busy with active work; wait for the turn to finish and retry dispatch.`,
+        );
+      }
       begun = await begin(resolved);
+      if (action === "dispatch" && request.requiredProfile) {
+        // Initial required placement belongs to this held input; there is no local
+        // turn to revoke, and clearing its queues would discard the first message.
+        return;
+      }
       clearSessionLifecycleQueues({
         keys: lifecycleIdentities,
         agentId: resolved.target.agentId,

@@ -7,6 +7,7 @@ import {
   runCodexAppServerAttempt,
 } from "./run-attempt-test-harness.js";
 import type { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import { createCodexTestOAuthProfile } from "./test-support.js";
 
 type FastModeFixtures = {
   createRunPaths: () => { sessionFile: string; workspaceDir: string };
@@ -224,4 +225,56 @@ export function registerCodexFastModeTests({
       );
     },
   );
+
+  it("keeps explicit Ultrafast when a ChatGPT sign-in thread resumes", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    // ChatGPT sign-in bindings store no provider; Codex owns the native provider.
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      model: "gpt-5.2",
+      modelProvider: undefined,
+      authProfileId: "openai:work",
+    });
+    const harness = createResumeHarness("thread-existing", async (method) =>
+      method === "model/list"
+        ? {
+            data: [
+              {
+                id: "gpt-5.4-codex",
+                model: "gpt-5.4-codex",
+                displayName: "Test model",
+                description: "Test model",
+                hidden: false,
+                isDefault: false,
+                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "medium",
+                serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
+              },
+            ],
+            nextCursor: null,
+          }
+        : undefined,
+    );
+    // Turn 1 resumes the stored thread; turn 2 reuses the warm thread.
+    for (let turn = 0; turn < 2; turn += 1) {
+      const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
+      params.fastMode = "ultrafast";
+      params.authProfileId = "openai:work";
+      params.authProfileStore = {
+        version: 1,
+        profiles: { "openai:work": createCodexTestOAuthProfile("account-work") },
+      };
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+      await run;
+    }
+    expect(harness.requests.filter((request) => request.method === "thread/resume")).toHaveLength(
+      1,
+    );
+    expect(
+      harness.requests
+        .filter((request) => request.method === "turn/start")
+        .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
+    ).toEqual(["ultrafast", "ultrafast"]);
+  });
 }

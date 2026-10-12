@@ -3,6 +3,7 @@ import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
+  formatEmbeddingTaskText,
   normalizeEmbeddingModelWithPrefixes,
   resolveEmbeddingEndpointUrl,
   sanitizeAndNormalizeEmbedding,
@@ -57,15 +58,6 @@ const GOOGLE_RETRY_DELAY_RE = /^(\d+)(?:\.(\d{1,9}))?s$/u;
 // Mirrors core's own error-body read limit (extractProviderErrorInfo in
 // provider-http-errors.ts) so the clone read below stays bounded like core's.
 const GOOGLE_RETRY_INFO_BODY_LIMIT_BYTES = 16 * 1024;
-const GEMINI_EMBEDDING_2_TASK_PREFIXES: Record<GeminiTaskType, string> = {
-  RETRIEVAL_QUERY: "task: search result | query:",
-  RETRIEVAL_DOCUMENT: "title: none | text:",
-  SEMANTIC_SIMILARITY: "task: sentence similarity | query:",
-  CLASSIFICATION: "task: classification | query:",
-  CLUSTERING: "task: clustering | query:",
-  QUESTION_ANSWERING: "task: question answering | query:",
-  FACT_VERIFICATION: "task: fact checking | query:",
-};
 
 export type GeminiEmbeddingRequest = {
   content: { parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> };
@@ -118,7 +110,7 @@ export function buildGeminiEmbeddingRequest(params: {
   modelPath?: string;
 }): GeminiEmbeddingRequest {
   const input = typeof params.input === "string" ? { text: params.input } : params.input;
-  const parts = input.parts?.map((part) =>
+  const parts: GeminiEmbeddingRequest["content"]["parts"] = input.parts?.map((part) =>
     part.type === "text"
       ? { text: part.text }
       : {
@@ -137,7 +129,7 @@ export function buildGeminiEmbeddingRequest(params: {
           params.taskType === "FACT_VERIFICATION")
           ? "RETRIEVAL_DOCUMENT"
           : params.taskType;
-      first.text = `${GEMINI_EMBEDDING_2_TASK_PREFIXES[taskType]} ${first.text}`;
+      first.text = formatEmbeddingTaskText(first.text, taskType);
     }
   } else if (!isStableEmbedding2) {
     request.taskType = params.taskType;
@@ -446,11 +438,19 @@ async function resolveGeminiEmbeddingClient(
   }
 
   const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
-  const headerOverrides = Object.assign(
-    {},
-    providerOwnsDestination ? providerConfig?.headers : undefined,
-    remote?.headers,
-  );
+  const headerOverrides: Record<string, string> = {};
+  for (const [path, source] of [
+    [
+      "models.providers.google.headers",
+      providerOwnsDestination ? providerConfig?.headers : undefined,
+    ],
+    ["memory.search.remote.headers", remote?.headers],
+  ] as const) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      headerOverrides[name] =
+        resolveMemorySecretInputString({ value: value ?? null, path: `${path}.${name}` }) ?? "";
+    }
+  }
   const headers: Record<string, string> = {
     ...headerOverrides,
     ...resolveGoogleApiClientHeaders({

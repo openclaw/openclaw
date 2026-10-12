@@ -388,11 +388,16 @@ describe("Claw exec approvals removal", () => {
           expect(cleanup).not.toHaveBeenCalled();
           await child.close();
           const database = await deletion.runDatabaseCleanup(target, cleanup);
-          expect(database.db.isOpen).toBe(false);
+          expect(database.db.isOpen).toBe(true);
           await deletion.rollback();
+          expect(openOpenClawAgentDatabase(target)).toBe(database);
         });
       } finally {
-        await child.dispose();
+        try {
+          closeOpenClawAgentDatabaseByPath(target.path, target.agentId);
+        } finally {
+          await child.dispose();
+        }
       }
     });
   });

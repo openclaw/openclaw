@@ -5,12 +5,13 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readLoggingConfig } from "../../logging/config.js";
 import { applyLoggingConfig } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -80,6 +81,7 @@ async function withImportedHistory(
   incognito = false,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionKey: incognito
@@ -335,6 +337,7 @@ describe("CLI-imported history pages", () => {
 
   it("retains metadata-only imports on anchored history reads", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:cli-history-metadata-anchor",
@@ -384,6 +387,7 @@ describe("CLI-imported history pages", () => {
 
   it("advances offset pages when imports only add metadata", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:cli-history-metadata-pages",
@@ -437,6 +441,7 @@ describe("CLI-imported history pages", () => {
 
   it("preserves recovered-failure filtering on metadata-only offset pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:cli-history-metadata-recovery",
@@ -551,7 +556,7 @@ describe("CLI-imported history pages", () => {
     );
   });
 
-  it("redacts before worker dedupe and invalidates unchanged native history when policy changes", async () => {
+  it("deduplicates original native history independently of log redaction policy", async () => {
     await withImportedHistory(
       "chat.history",
       2,
@@ -572,21 +577,21 @@ describe("CLI-imported history pages", () => {
           expect(initial.totalMessages).toBe(4);
           expect(initial.messages).toContainEqual(
             expect.objectContaining({
-              content: "Imported 0: *** *** laterRegV7 laterCfgV8",
+              content: "Imported 0: opaqueSeedQ customMask7 laterRegV7 laterCfgV8",
               __openclaw: expect.objectContaining({
                 id: local.messageId,
                 externalId: importedIds[0],
               }),
             }),
           );
-          expect(JSON.stringify(initial.messages)).not.toContain("opaqueSeedQ");
-          expect(JSON.stringify(initial.messages)).not.toContain("customMask7");
+          expect(JSON.stringify(initial.messages)).toContain("opaqueSeedQ");
+          expect(JSON.stringify(initial.messages)).toContain("customMask7");
           registerSecretValueForRedaction("laterRegV7");
           applyLoggingConfig({ redactPatterns: ["customMask7", "laterCfgV8"] });
           const refreshed = await read({ limit: 1 });
           expect(refreshed.messages).toEqual([
             expect.objectContaining({
-              content: "Imported 1: *** *** *** ***",
+              content: "Imported 1: opaqueSeedQ customMask7 laterRegV7 laterCfgV8",
               __openclaw: expect.objectContaining({ id: importedIds[1] }),
             }),
           ]);
@@ -667,6 +672,7 @@ describe("CLI-imported history pages", () => {
     run: (read: (params: HistoryRequest) => Promise<HistoryPage>) => Promise<void>,
   ) {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: `agent:main:cli-history-pre-reset-${randomUUID()}`,
@@ -724,25 +730,6 @@ describe("CLI-imported history pages", () => {
 
   const ids = (page: HistoryPage) => page.messages.map(readChatHistoryMessageId);
 
-  it("reopens a pre-reset local anchor while a post-reset CLI import is bound", async () => {
-    await withPreResetCliHistory(false, true, async (read) => {
-      const current = await read({ messageId: "fresh-question", limit: 2 });
-      expect(ids(current)).toContain("cli-only-answer");
-
-      const reopened = await read({ messageId: "old-answer", limit: 2 });
-      expect(ids(reopened)).toContain("old-answer");
-      expect(ids(reopened)).not.toContain("fresh-question");
-      expect(ids(reopened)).not.toContain("cli-only-answer");
-
-      // The reopened page keeps its own reset-interval sequence for paging.
-      const reopenedTail = await read({ messageId: "old-answer", limit: 1 });
-      expect(ids(reopenedTail)).toEqual(["old-answer"]);
-      expect(reopenedTail.olderCursor).toEqual(expect.any(String));
-
-      expectMissingAnchor(await read({ messageId: "nonexistent-anchor", limit: 2 }));
-    });
-  });
-
   it("keeps reopened-interval cursors on the closed interval across its reset marker", async () => {
     // Walk old-answer -> newer (closing reset marker) -> older. The marker is also
     // indexed in the current window; the bound walk must match the unbound one.
@@ -784,6 +771,7 @@ describe("CLI-imported history pages", () => {
 
   it("keeps a current-window failure hidden when an imported answer recovers it", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:cli-history-hidden-recovered-failure",
@@ -845,6 +833,7 @@ describe("CLI-imported history pages", () => {
 
   it("does not substitute nearby SQLite messages for a filtered anchor", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:hidden-history-anchor",

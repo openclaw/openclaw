@@ -1,0 +1,69 @@
+.chat-subagent-activity {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 6px;
+}
+
+.chat-subagent-activity__row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1.5fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  text-align: start;
+}
+
+button.chat-subagent-activity__row:is(:hover, :focus-visible) {
+  background: var(--bg-hover);
+}
+
+.chat-subagent-activity__icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  color: var(--accent);
+}
+
+.chat-subagent-activity__icon > svg,
+.chat-subagent-activity__icon > openclaw-theme-brand-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-subagent-activity__name,
+.chat-subagent-activity__status {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-subagent-activity__name {
+  font-weight: 500;
+}
+
+.chat-subagent-activity__status {
+  color: var(--muted);
+}
+
+@media (max-width: 560px) {
+  .chat-subagent-activity__row {
+    grid-template-columns: 18px minmax(0, 1fr);
+    row-gap: 1px;
+  }
+
+  .chat-subagent-activity__status {
+    grid-column: 2;
+  }
+}

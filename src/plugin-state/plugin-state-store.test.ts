@@ -670,10 +670,14 @@ describe("plugin-state-store.errors", () => {
           const options = { namespace: "corrupt", maxEntries: 10, env: state.env };
           const sync = createPluginStateSyncKeyedStore("discord", options);
           const store = createPluginStateKeyedStore("discord", options);
-          sync.register("key", "custom");
           const database = openOpenClawStateDatabase({ env: state.env });
           expect(database.path).not.toBe(resolveOpenClawStateSqlitePath());
-          database.db.prepare("UPDATE plugin_state_entries SET value_json = ?").run("invalid JSON");
+          // Seed corrupt storage before any keyed receipt can cache the row.
+          database.db
+            .prepare(
+              "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, NULL)",
+            )
+            .run("discord", "corrupt", "key", "invalid JSON", Date.now());
           const expected = {
             code: "PLUGIN_STATE_CORRUPT",
             path: database.path,

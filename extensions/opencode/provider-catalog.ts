@@ -1,8 +1,10 @@
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  buildOpenAICompatibleLiveModels,
   createUpstreamProviderCatalog,
   listProviderCatalogSnapshotEntries,
+  projectProviderCatalogSnapshotRows,
   type LiveModelCatalogFetchGuard,
   type ProviderCatalogSnapshot,
   type ProjectedUpstreamProviderCatalogModel as OpencodeZenModelDefinition,
@@ -43,6 +45,10 @@ const OPENCODE_ZEN_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
     ];
   }),
 );
+const OPENCODE_ZEN_PROVIDER_ROUTE = {
+  api: "openai-completions",
+  baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+} as const;
 const opencodeZenCatalog = createUpstreamProviderCatalog({
   providerId: PROVIDER_ID,
   seed: OPENCODE_ZEN_SEED_CATALOG,
@@ -50,7 +56,21 @@ const opencodeZenCatalog = createUpstreamProviderCatalog({
   upstreamSeed: new Map(
     Array.from(OPENCODE_ZEN_SEED_CATALOG, ([id, { model }]) => [id, { model }]),
   ),
-  providerConfig: { api: "openai-completions", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL },
+  providerConfig: OPENCODE_ZEN_PROVIDER_ROUTE,
+  projectRows: (rows, snapshot) => [
+    ...projectProviderCatalogSnapshotRows(rows, snapshot),
+    ...buildOpenAICompatibleLiveModels(rows, { ...OPENCODE_ZEN_PROVIDER_ROUTE, models: [] })
+      .filter((model) => !snapshot.has(model.id.toLowerCase()))
+      .map((model): OpencodeZenModelDefinition => {
+        const input: OpencodeZenModelDefinition["input"] = model.input.includes("image")
+          ? ["text", "image"]
+          : ["text"];
+        return Object.assign(model, OPENCODE_ZEN_PROVIDER_ROUTE, {
+          provider: PROVIDER_ID,
+          input,
+        });
+      }),
+  ],
   metadataEndpoint: OPENCODE_UPSTREAM_CATALOG_ENDPOINT,
   modelsEndpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
   anthropicBaseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,

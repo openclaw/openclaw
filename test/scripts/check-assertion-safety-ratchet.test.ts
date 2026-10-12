@@ -138,6 +138,8 @@ describe("check-assertion-safety-ratchet", () => {
 
   it("counts only governed assertions without a SAFETY invariant", () => {
     const source = [
+      "const label = `count ${total} items`;",
+      "const half = total / 2;",
       "const frozen = value as const;",
       "const checked = value satisfies Shape;",
       "// SAFETY: the schema parser established Shape.",
@@ -171,21 +173,6 @@ describe("check-assertion-safety-ratchet", () => {
     expect(isGovernedAssertionSourcePath("src/example.test.ts")).toBe(false);
     expect(isGovernedAssertionSourcePath("packages/example/test-utils/value.ts")).toBe(false);
     expect(isGovernedAssertionSourcePath("scripts/example.ts")).toBe(false);
-  });
-
-  it("recognizes SAFETY comments after template substitutions and division", () => {
-    // A raw skipTrivia scanner never re-scans the `}` ending a template
-    // substitution, so the closing backtick opened a phantom template that
-    // swallowed every later comment; this pins the line-text approach.
-    const source = [
-      "const label = `count ${total} items`;",
-      "const half = total / 2;",
-      "// SAFETY: the schema parser established Shape.",
-      "const safe = value as Shape;",
-      "const unsafe = value as Shape;",
-    ].join("\n");
-
-    expect(countUnsafeAssertions(...parseFixture(source, "src/example.ts"))).toBe(1);
   });
 
   it("blocks new debt, accepts SAFETY comments, and prunes reduced counts", () => {
@@ -269,30 +256,6 @@ describe("check-assertion-safety-ratchet", () => {
     expect(
       parseRatchetCounts(fs.readFileSync(baselinePath, "utf8"), path.relative(root, baselinePath)),
     ).toEqual(new Map([["src/example.ts", 2]]));
-  });
-
-  it("compares an explicit moving base at the branch fork", () => {
-    const root = tempDirs.make("openclaw-assertion-safety-diverged-");
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.writeFileSync(
-      path.join(root, "config/assertion-safety-baseline.txt"),
-      "src/a.ts\t1\nsrc/b.ts\t1\n",
-    );
-    fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = value as string;\n");
-    fs.writeFileSync(path.join(root, "src/b.ts"), "export const b = value as string;\n");
-    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"], ["branch", "release"]]) {
-      git(root, args);
-    }
-
-    fs.writeFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "src/a.ts\t1\n");
-    fs.rmSync(path.join(root, "src/b.ts"));
-    git(root, ["add", "."]);
-    git(root, ["commit", "-m", "shrink main debt"]);
-    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    git(root, ["checkout", "release"]);
-
-    expect(main(root, ["--base", "origin/main"])).toBe(0);
   });
 
   it("reports frozen sites, policy exemptions, unused allowances, and ambiguous fingerprints", () => {

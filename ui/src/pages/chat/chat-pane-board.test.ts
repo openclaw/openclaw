@@ -78,6 +78,7 @@ type TestChatPane = HTMLElement & {
   commitSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
+  willUpdate: (changes: Map<PropertyKey, unknown>) => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   showDashboard: (expanded: boolean) => void;
   resolveBoardProvider: () => BoardProvider;
@@ -336,6 +337,7 @@ describe("chat pane board shell", () => {
       pane.state.sidebarLayout = savedLayout;
       patchSettings({ sidebarSessionLayouts: { [pane.sessionKey]: savedLayout } });
 
+      pane.willUpdate(new Map());
       pane.updated();
       expect(pane.conversationPresented).toBe(false);
       expect(pane.state.sidebarLayout.expanded).toBe(true);
@@ -346,6 +348,7 @@ describe("chat pane board shell", () => {
       );
 
       pane.state.sidebarLayout = { ...pane.state.sidebarLayout, expanded: false };
+      pane.willUpdate(new Map());
       pane.updated();
       expect(pane.state.sidebarLayout.expanded).toBe(false);
       expect(pane.conversationPresented).toBe(slot === "dashboard");
@@ -825,7 +828,8 @@ describe("chat pane board shell", () => {
           pane.state.sessionKey = "replacement-notes";
           const replacement = pane.resolveBoardProvider();
           draw();
-          expect(target()).toBeUndefined();
+          expect(target()).toEqual({ sessionKey: "replacement-notes", agentId: undefined });
+          expect(container.querySelector("openclaw-board-view")?.snapshot).toBeUndefined();
           complete({ ...snapshot, sessionKey: "agent:work:replacement-notes" });
           await vi.waitFor(() => expect(replacement.hasLoadedSnapshot).toBe(true));
           draw();

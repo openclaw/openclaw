@@ -9,7 +9,7 @@ import type { ChatState } from "./chat-state-contract.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   ChatComposerPersistence,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
   markChatComposerEdit,
   persistChatComposerState,
 } from "./composer-persistence.ts";
@@ -72,8 +72,10 @@ describe("rewind composer ownership", () => {
       if (outcome === "accepted") {
         expect(state.chatGoalDraftMode).toBeNull();
         expect(state.chatReplyTarget).toBeNull();
-        expect(loadChatComposerSnapshot(state, state.sessionKey)?.replyTarget).toBeUndefined();
-        expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toBeUndefined();
+        expect(
+          loadChatComposerState(state, state.sessionKey).snapshot?.replyTarget,
+        ).toBeUndefined();
+        expect(loadChatComposerState(state, state.sessionKey).snapshot?.goalMode).toBeUndefined();
         const replacementSignal = reads.readSignal;
         reads.updatePending(replacementSignal, 1);
         reads.updatePending(originalSignal, -1);
@@ -168,7 +170,9 @@ describe("rewind composer ownership", () => {
         persistence.persistNow();
 
         expect(peer.chatMessage).toBe("newer peer draft");
-        expect(loadChatComposerSnapshot(peer, peer.sessionKey)?.draft).toBe("newer peer draft");
+        expect(loadChatComposerState(peer, peer.sessionKey).snapshot?.draft).toBe(
+          "newer peer draft",
+        );
         expect(source.chatMessage).toBe(session === "same" ? "" : "original prompt");
       } finally {
         persistence.stop();
@@ -199,7 +203,9 @@ describe("rewind composer ownership", () => {
 
     expect(firstDraft).toBe("");
     expect(second.chatMessage).toBe("selected rewind");
-    expect(loadChatComposerSnapshot(second, second.sessionKey)?.draft).toBe("selected rewind");
+    expect(loadChatComposerState(second, second.sessionKey).snapshot?.draft).toBe(
+      "selected rewind",
+    );
   });
 
   it.each([{ edit: "attachments" }, { edit: "reply" }])(

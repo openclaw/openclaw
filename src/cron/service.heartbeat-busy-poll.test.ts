@@ -46,7 +46,9 @@ import {
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
 import { writeCronJobScratch } from "./scratch-store.js";
 import { CronService, type CronEvent } from "./service.js";
+import * as cronServiceState from "./service/state.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { loadCronJobsStore, resolveCronJobsStorePath } from "./store.js";
 
 installHeartbeatRunnerTestRuntime();
@@ -64,6 +66,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
   let runner: ReturnType<typeof startHeartbeatRunner> | undefined;
   let cron: CronService | undefined;
   const releases: Array<() => void> = [];
+  const scheduledRuns: Promise<void>[] = [];
   async function close() {
     for (const release of releases) {
       release();
@@ -80,6 +83,8 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       if (vi.isFakeTimers()) {
         await vi.advanceTimersByTimeAsync(1_000);
       }
+      await Promise.allSettled(scheduledRuns);
+      await cron?.waitForIdle();
       await vi.waitFor(() => expect(getActiveCronJobCount()).toBe(0));
       await scheduler.stop();
     } finally {
@@ -170,6 +175,14 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
         await completed.promise;
       }
     }
+    let ownedState: ReturnType<typeof cronServiceState.createCronServiceState> | undefined;
+    const createState = cronServiceState.createCronServiceState;
+    const captureState = vi.spyOn(cronServiceState, "createCronServiceState");
+    captureState.mockImplementationOnce((serviceDeps) => {
+      captureState.mockRestore();
+      ownedState = createState(serviceDeps);
+      return ownedState;
+    });
     cron = new CronService({
       scheduler,
       storePath,
@@ -244,6 +257,14 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       finished,
       waitForFinished,
       holdLane,
+      tick: () => {
+        if (!ownedState) {
+          throw new Error("Expected the constructed cron state");
+        }
+        const pending = onTimer(ownedState);
+        scheduledRuns.push(pending);
+        return pending;
+      },
       close,
     };
   } catch (error) {
@@ -278,10 +299,12 @@ describe("native heartbeat busy poll settlement", () => {
         finished,
         waitForFinished,
         holdLane,
+        tick,
       }) => {
         const releaseMain = await holdLane(CommandLane.Main);
         const firstTick = monitor.state.nextRunAtMs!;
         await vi.advanceTimersByTimeAsync(firstTick - Date.now());
+        const firstRun = tick();
         await waitForRequest(1);
         expect(request).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(250);
@@ -291,6 +314,7 @@ describe("native heartbeat busy poll settlement", () => {
         // unfixed scheduler records a timeout; the fixed poll settled promptly.
         await vi.advanceTimersByTimeAsync(600_001 - 250);
         await waitForFinished(1);
+        await firstRun;
         expect(finished()).toHaveLength(1);
         // Finished precedes schedule maintenance and release of the active marker.
         await expect(waitForActiveCronJobs(0)).resolves.toEqual({ drained: true, active: 0 });
@@ -341,6 +365,7 @@ describe("native heartbeat busy poll settlement", () => {
         await vi.advanceTimersByTimeAsync(nextTick - Date.now() - 1);
         expect(runOnce).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(1);
+        const nextRun = tick();
         await waitForRequest(2);
         await vi.advanceTimersByTimeAsync(250);
         expect(runOnce).toHaveBeenCalledTimes(2);
@@ -348,6 +373,7 @@ describe("native heartbeat busy poll settlement", () => {
         // its first lazy-loaded reply path is preparing under fake timers.
         await runOnce.mock.results[1]?.value;
         await waitForFinished(2);
+        await nextRun;
         expect(finished()).toHaveLength(2);
         expect(finished()[1]).toMatchObject({ status: "ok", completionStatus: "succeeded" });
         expect(reply).toHaveBeenCalledOnce();

@@ -56,10 +56,6 @@ vi.mock("../runtime.js", () => ({
   })),
 }));
 
-vi.mock("./download.js", () => ({
-  downloadMSTeamsAttachments: vi.fn(async () => []),
-}));
-
 vi.mock("./remote-media.js", () => ({
   downloadAndStoreMSTeamsRemoteMedia: vi.fn(),
 }));

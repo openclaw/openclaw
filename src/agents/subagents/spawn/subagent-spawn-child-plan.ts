@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { inheritSessionCreationPolicy } from "../../../config/sessions/session-entry-provenance.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -19,8 +20,8 @@ import {
 } from "./subagent-spawn-contract.js";
 import { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
 import {
-  readRequesterFastMode,
-  readRequesterPreferences,
+  resolveRequesterFastMode,
+  resolveRequesterPreferences,
 } from "./subagent-spawn-requester-prefs.js";
 import {
   normalizeDeliveryContext,
@@ -34,6 +35,7 @@ export async function resolveSubagentChildPlan(params: {
   cfg: OpenClawConfig;
   requesterInternalKey: string;
   requesterAgentId: string;
+  requesterEntry: SessionEntry | undefined;
   targetAgentId: string;
   sandboxMode: "require" | "inherit";
   swarmEnabled: boolean;
@@ -95,6 +97,7 @@ export async function resolveSubagentChildPlan(params: {
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
     agentId: params.requesterAgentId,
+    preparedSessionEntry: params.requesterEntry ?? null,
   });
   const creationPolicy = inheritSessionCreationPolicy(
     {
@@ -106,7 +109,11 @@ export async function resolveSubagentChildPlan(params: {
   // A fresh child has no stored row yet; admission must include its inherited isolation.
   const childRuntimeSandboxed =
     creationPolicy.sandbox === "required" ||
-    resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey: childSessionKey }).sandboxed;
+    resolveSandboxRuntimeStatus({
+      cfg: params.cfg,
+      sessionKey: childSessionKey,
+      preparedSessionEntry: null,
+    }).sandboxed;
   const childCwd =
     requestedCwd ?? (senderRestricted && !childRuntimeSandboxed ? requesterRoot : undefined);
   const spawnedCwd = childCwd ? resolveUserPath(childCwd) : undefined;
@@ -137,10 +144,7 @@ export async function resolveSubagentChildPlan(params: {
   const requesterPreferences =
     params.ctx.requesterThinkingLevel === undefined ||
     (params.targetAgentId === params.requesterAgentId && !params.ctx.requesterModel)
-      ? await readRequesterPreferences({
-          ...params,
-          assertActive: params.ctx.assertActive,
-        })
+      ? resolveRequesterPreferences(params)
       : undefined;
   params.ctx.assertActive?.();
   // The active turn owns inherited effort; saved preferences may already describe
@@ -176,13 +180,11 @@ export async function resolveSubagentChildPlan(params: {
   }
   const { resolvedModel } = modelPlan;
   if (params.swarmEnabled && params.request.fastMode === undefined) {
-    const fastMode = await readRequesterFastMode({
+    const fastMode = resolveRequesterFastMode({
       ...params,
       requesterModel: params.ctx.requesterModel,
       childModel: resolvedModel,
-      assertActive: params.ctx.assertActive,
     });
-    params.ctx.assertActive?.();
     if (fastMode !== undefined) {
       modelPlan.initialSessionPatch.fastMode = fastMode;
     }

@@ -159,6 +159,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
   }
 
   function makeOpenAiCompatibleReasoningModel(
@@ -455,7 +456,7 @@ describe("resolveTranscriptPolicy", () => {
         },
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(api === "openai-completions" || expected);
     }
   });
 
@@ -562,7 +563,7 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "ollama",
     });
     expect(policy.preserveSignatures).toBe(false);
-    expect(policy.appendOnlyRuntimeContext).toBe(false);
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
   });
 
   it.each([

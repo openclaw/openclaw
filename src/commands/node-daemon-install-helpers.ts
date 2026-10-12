@@ -1,6 +1,13 @@
 /** Managed node-host install plan builder. */
+import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { resolveDurableNodeEntrypoint } from "../daemon/npx-service-install.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
+import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadNodeHostConfig } from "../node-host/config.js";
+import { canReuseNodeHostDeviceToken } from "../node-host/gateway-auth.js";
+import { VERSION } from "../version.js";
 import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonRuntimeBinDir,
@@ -25,6 +32,7 @@ export async function buildNodeInstallPlan(params: {
   installedAppsSharing?: boolean;
   commands?: string[];
   allCommands?: boolean;
+  gatewayAuthFromEnv?: boolean;
   runtime: GatewayDaemonRuntime;
   runtimeExplicit?: boolean;
   devMode?: boolean;
@@ -32,13 +40,18 @@ export async function buildNodeInstallPlan(params: {
   pinnedRuntimePath?: string;
   wrapperPath?: string;
   warn?: DaemonInstallWarnFn;
-}): Promise<Omit<GatewayInstallPlan, "runtime"> & { description?: string }> {
+}): Promise<
+  Omit<GatewayInstallPlan, "runtime"> & { description?: string; installationMessage?: string }
+> {
   const wrapperPath = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     ...params,
     wrapperPath,
   });
+  const cliEntrypoint =
+    !devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(params.env) : undefined;
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
+    cliEntrypoint,
     host: params.host,
     port: params.port,
     contextPath: params.contextPath,
@@ -54,6 +67,9 @@ export async function buildNodeInstallPlan(params: {
     runtimePath,
     wrapperPath,
   });
+  if (params.gatewayAuthFromEnv) {
+    programArguments.push("--auth-from-env");
+  }
 
   await emitNodeRuntimeWarning({
     env: params.env,
@@ -70,8 +86,37 @@ export async function buildNodeInstallPlan(params: {
     // runtime toolchain on PATH for sibling binaries when needed.
     extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),
   });
+  if (!params.gatewayAuthFromEnv) {
+    const savedGateway = (await loadNodeHostConfig(params.env))?.gateway;
+    const identity = savedGateway ? loadDeviceIdentityIfPresent({ env: params.env }) : null;
+    if (
+      identity &&
+      (await canReuseNodeHostDeviceToken({
+        savedGateway,
+        gatewayCandidates: [
+          {
+            host: params.host,
+            port: params.port,
+            contextPath: params.contextPath,
+            tls: params.tls,
+          },
+        ],
+        deviceId: identity.deviceId,
+        env: params.env,
+      }))
+    ) {
+      delete environment.OPENCLAW_GATEWAY_TOKEN;
+      delete environment.OPENCLAW_GATEWAY_PASSWORD;
+    }
+  }
   return {
     programArguments,
+    installationMessage: [
+      `OpenClaw ${VERSION}`,
+      `Runtime: ${runtime} (${programArguments[0]})`,
+      `Service command: ${programArguments.map(quoteCliArg).join(" ")}`,
+      `Update this node: ${formatCliCommand("openclaw node install --force", params.env).replace("openclaw", "npx -y openclaw@latest")}`,
+    ].join("\n"),
     workingDirectory,
     environment,
     environmentValueSources: {

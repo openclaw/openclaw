@@ -28,6 +28,11 @@ export type UserProfileAuthority = {
   display: UserProfileDisplay;
 };
 
+export type UserProfileRoleAuthority = Pick<
+  UserProfileAuthority,
+  "profileId" | "role" | "githubLogin"
+>;
+
 export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
 
 /** A sign-in binding verified earlier: Access email + immutable account ID, or a GitHub login alias. */

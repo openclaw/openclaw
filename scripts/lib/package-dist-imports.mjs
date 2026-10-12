@@ -124,12 +124,12 @@ function appendImportEdges(source, importerPath, imports, sourceType) {
           kind === "require" ? specifier : stripSpecifierSuffix(specifier),
         ),
       );
-      // stageManagedHandoffRuntime copies this entry and stages its private Koffi
+      // stageManagedHandoffRuntime copies this entry and stages its private proc-safe
       // closure before launch; this URL belongs to that runtime, not the tarball.
       const stagedNativeUrl =
         kind === "import-meta-url" &&
         importerPath === "dist/managed-handoff-runtime.mjs" &&
-        importedPath === "dist/node_modules/koffi/indirect.cjs";
+        importedPath === "dist/node_modules/@openclaw/proc-safe/dist/identity.js";
       if (!stagedNativeUrl && (kind !== "import-meta-url" || importedPath.startsWith("dist/"))) {
         imports.push({ importerPath, importedPath, ...(kind === "require" ? { kind } : {}) });
       }

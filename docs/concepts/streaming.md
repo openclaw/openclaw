@@ -79,17 +79,37 @@ the nested shape before starting the Gateway. See the
   output. Still uses the chunker if the buffered text exceeds `maxChars`, so it
   can emit multiple chunks at the end.
 
-### Pending text phases
+<a id="pending-text-phases" />
 
-Transports that resolve commentary at the tool boundary withhold durable block
-replies until the phase is known. Chat Completions and native Ollama (`api:
-"ollama"`, `/api/chat`) wait until the assistant message finishes, including with
-`blockStreamingBreak: "text_end"`: earlier text can still become tool narration.
-A long tool-free answer therefore produces no durable chunks during generation.
+### Text phases and final replies
 
-Ordinary final answers and length-limited partial answers remain deliverable.
-The independent live assistant/preview stream can still update while generating
-when enabled and supported by the channel.
+Providers that do not declare text phases, including ordinary Chat Completions
+and native Ollama (`api: "ollama"`, `/api/chat`), stream visible model text as it
+arrives. A later tool call or reasoning continuation does not reclassify earlier
+text as commentary. Content before reasoning remains visible, and text after
+reasoning continues streaming. ACP and the Control UI preserve that visible
+text in order without retroactively rewriting it.
+
+For these providers, channels with block streaming off select their final text
+reply at turn end from the assistant text after the last tool call. When there
+are no tool calls, the visible assistant text is the final reply. This selection
+does not retract text already shown in a live surface or channel preview. With
+block streaming on, durable blocks follow the configured chunking and flush
+boundaries.
+
+If a successfully settled tool batch intentionally ends the turn, any unphased
+narration remains the reply. OpenClaw does not replace that narration with a
+missing-answer error or require another model response.
+
+Explicit provider phases still apply: OpenAI Responses `phase` and Harmony
+commentary/final channels distinguish narration from final answers. Reasoning
+visibility settings and private-tag filtering also continue to apply; preserving
+visible text does not expose hidden reasoning.
+
+Provider plugins should omit `openclawDelivery.textPhaseRequiresTerminal`.
+This field, shipped in `v2026.10.1`, is now ignored. Its optional SDK type remains
+source-compatible until the next Plugin SDK major; removal also requires explicit
+breaking-release approval. It cannot enable retroactive phase inference.
 
 ### Media delivery with block streaming
 
@@ -467,6 +487,10 @@ in the draft:
   the same preamble supplies the status headline even when this optional lane
   is off; other channels keep their existing progress behavior. See
   [Progress drafts](/concepts/progress-drafts#status-headline).
+
+When verbose logging owns standalone commentary, each preamble is sent once.
+Buffered commentary and tool summaries settle before the answer preview;
+text-only progress arriving after final delivery starts is suppressed.
 
 ```json
 {

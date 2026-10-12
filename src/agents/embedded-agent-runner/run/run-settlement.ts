@@ -62,6 +62,7 @@ export async function settleEmbeddedRun(input: {
           ...(committed?.previousSessionId !== undefined
             ? { previousSessionId: committed.previousSessionId }
             : {}),
+          ...(committed ? { hostCompactionCommitted: true } : {}),
           target: {
             agentId: target.agentId,
             sessionId: committed?.entry.sessionId ?? target.sessionId,
@@ -87,6 +88,7 @@ export async function settleEmbeddedRun(input: {
         expectedSession: fact.target,
         amount: fact.count,
         tokensAfter: fact.currentContextSnapshot?.tokens,
+        transcriptByteCompactionLatch: fact.hostCompactionCommitted ? null : undefined,
         // Cancellation preserves bookkeeping, but a reused run id cannot lend a new admission.
         authorize: () =>
           compaction.authority !== undefined &&

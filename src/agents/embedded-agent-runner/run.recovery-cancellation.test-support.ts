@@ -53,8 +53,10 @@ describe("recovery cancellation through the public run owner", () => {
     const { resolveContextEngine } = await import("../../context-engine/registry.js");
     contextEngine = await resolveContextEngine();
   });
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     contextEngine.info.ownsCompaction = true;
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (name) => name === "before_compaction" || name === "after_compaction",
@@ -66,6 +68,8 @@ describe("recovery cancellation through the public run owner", () => {
     contextEngine.info.ownsCompaction = false;
     await session?.cleanup();
     session = undefined;
+    const { clearRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    clearRuntimeConfigSnapshot();
   });
 
   it("fences retired foreground budget observers across physical retries", async () => {
@@ -594,6 +598,8 @@ describe("recovery cancellation through the public run owner", () => {
     const { SessionManager: PersistentSessionManager } =
       await import("../sessions/session-manager.js");
     const state = await createOpenClawTestState({ label: "fresh-persistent-recovery" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     let manager: Awaited<ReturnType<typeof PersistentSessionManager.openAsync>> | undefined;
     let firstKeptEntryId: string | undefined;
     const runParams = {

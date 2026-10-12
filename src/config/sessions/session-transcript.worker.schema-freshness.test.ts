@@ -66,6 +66,7 @@ it("borrows canonical writer proof without a native reader and still fences fore
     const validation = {
       agentId: retained.agentId,
       identity: retained.identity,
+      birthtime: retained.birthtime,
       receiptId: retained.receiptId,
       valid: retained.valid,
       canonicalReady: retained.canonicalReady,
@@ -210,7 +211,7 @@ it("transfers bounded history JSON without retaining the worker buffer", async (
 });
 
 it.for([
-  { change: "newer schema", sql: "PRAGMA user_version = 999", error: /newer schema version/ },
+  { change: "newer schema", sql: "PRAGMA user_version = 999", error: undefined },
   {
     change: "missing table",
     sql: "DROP TABLE session_nodes",
@@ -222,7 +223,7 @@ it.for([
     error: undefined,
   },
 ])(
-  "revalidates a warm worker listing after a foreign $change",
+  "keeps admitted format and observes row availability after a foreign $change",
   async ({ sql, error }, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
@@ -280,7 +281,7 @@ it.for([
         } else {
           expect(result).toMatchObject(expected);
         }
-        // Refresh the retained admission, rather than hiding the bug with a cold reader.
+        // The same retained reader handles the changed file.
         expect(countOpens()).toBe(1);
         if (!error) {
           const receipt = getOpenClawAgentDatabaseValidationForTransfer(database);

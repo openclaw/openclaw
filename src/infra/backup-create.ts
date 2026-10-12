@@ -304,6 +304,16 @@ async function createConsistentStateSnapshotPlan(params: {
   tempDir: string;
   onlyConfig: boolean;
 }): Promise<ConsistentStateSnapshotPlan> {
+  const captureSqlite = (
+    tempDir: string,
+    audit?: Awaited<ReturnType<typeof createLegacyAuditBackupCapture>>,
+  ) =>
+    createBackupSqliteSnapshotPlan({
+      resources: params.resources,
+      tempDir,
+      legacyAuditSnapshots: audit?.snapshots ?? [],
+      ...(audit ? { legacyAuditDatabaseWitness: audit.databaseWitness } : {}),
+    });
   if (params.onlyConfig || !params.stateDir) {
     return {
       legacyAuditSnapshots: [],
@@ -313,11 +323,7 @@ async function createConsistentStateSnapshotPlan(params: {
             snapshots: [],
             discoveredSourcePaths: new Set<string>(),
           }
-        : await createBackupSqliteSnapshotPlan({
-            resources: params.resources,
-            tempDir: params.tempDir,
-            legacyAuditSnapshots: [],
-          }),
+        : await captureSqlite(params.tempDir),
     };
   }
 
@@ -325,11 +331,7 @@ async function createConsistentStateSnapshotPlan(params: {
   if (!(await hasLegacyAuditBackupSources(stateDir))) {
     const fastAttemptDir = path.join(params.tempDir, "state-snapshot-no-legacy");
     await fs.mkdir(fastAttemptDir, { recursive: true });
-    const stateSqliteBackup = await createBackupSqliteSnapshotPlan({
-      resources: params.resources,
-      tempDir: fastAttemptDir,
-      legacyAuditSnapshots: [],
-    });
+    const stateSqliteBackup = await captureSqlite(fastAttemptDir);
     if (!(await hasLegacyAuditBackupSources(stateDir))) {
       return { legacyAuditSnapshots: [], stateSqliteBackup };
     }
@@ -345,12 +347,7 @@ async function createConsistentStateSnapshotPlan(params: {
       const firstCapture = await withLegacyAuditMigrationLease(stateDir, () =>
         createLegacyAuditBackupCapture({ stateDir, tempDir: attemptDir }),
       );
-      const stateSqliteBackup = await createBackupSqliteSnapshotPlan({
-        resources: params.resources,
-        tempDir: attemptDir,
-        legacyAuditSnapshots: firstCapture.snapshots,
-        legacyAuditDatabaseWitness: firstCapture.databaseWitness,
-      });
+      const stateSqliteBackup = await captureSqlite(attemptDir, firstCapture);
       await fs.mkdir(verificationDir, { recursive: true });
       const secondCapture = await withLegacyAuditMigrationLease(stateDir, () =>
         createLegacyAuditBackupCapture({ stateDir, tempDir: verificationDir }),
@@ -501,18 +498,13 @@ export async function createBackupArchive(
     const opaqueSqliteSourcePaths = new Map<string, "archived" | "skipped">();
     const tarFilter = (entryPath: string, entryStat: import("node:fs").Stats): boolean => {
       const resolvedEntryPath = path.resolve(entryPath);
-      if (
-        isUpdateCapturePath(
-          sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath,
-          plan.stateDir,
-        )
-      ) {
+      const inventoryPath = sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath;
+      if (isUpdateCapturePath(inventoryPath, plan.stateDir)) {
         return false;
       }
       const isDirectory = entryStat.isDirectory();
       // Staged images retain the sealed source's policy, even when scratch lives
       // beside the archive in an excluded update-capture directory.
-      const inventoryPath = sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath;
       if (
         !onlyConfig &&
         !(isDirectory || entryStat.isSymbolicLink()
@@ -681,20 +673,18 @@ export async function createBackupArchive(
     const vanishedWarnings = [...skippedEntries]
       .filter(([, reason]) => reason === "vanished")
       .map(([sourcePath]) => `Skipped vanished entry (ENOENT): ${sourcePath}`);
-    if (opaqueSqliteSourcePaths.size) {
-      result.warnings = [
-        ...(result.warnings ?? []),
-        ...[...opaqueSqliteSourcePaths]
-          .toSorted(([left], [right]) => left.localeCompare(right))
-          .map(([sourcePath, action]) =>
-            action === "skipped"
-              ? `Skipped unresolvable opaque SQLite link: ${sourcePath}`
-              : `SQLite file archived as opaque bytes without a live snapshot or integrity checks: ${sourcePath}`,
-          ),
-      ];
-    }
-    if (vanishedWarnings.length) {
-      result.warnings = [...(result.warnings ?? []), ...vanishedWarnings];
+    const archiveWarnings = [
+      ...[...opaqueSqliteSourcePaths]
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([sourcePath, action]) =>
+          action === "skipped"
+            ? `Skipped unresolvable opaque SQLite link: ${sourcePath}`
+            : `SQLite file archived as opaque bytes without a live snapshot or integrity checks: ${sourcePath}`,
+        ),
+      ...vanishedWarnings,
+    ];
+    if (archiveWarnings.length) {
+      result.warnings = [...(result.warnings ?? []), ...archiveWarnings];
     }
     if (externalSymbolicLinks.length) {
       result.externalSymbolicLinks = externalSymbolicLinks;

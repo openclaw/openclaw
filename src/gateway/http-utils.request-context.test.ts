@@ -2,8 +2,12 @@
  * Tests HTTP request context extraction for gateway auth and routing.
  */
 import type { IncomingMessage } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
@@ -45,6 +49,9 @@ beforeEach(() => {
 });
 
 describe("resolveGatewayRequestContext", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(clearRuntimeConfigSnapshot);
+
   it("uses normalized x-openclaw-message-channel", () => {
     const result = resolveGatewayRequestContext({
       req: createReq({ "x-openclaw-message-channel": " Custom-Channel " }),

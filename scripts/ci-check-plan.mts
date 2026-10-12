@@ -305,7 +305,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     (hosted ? coreRows.length + coreLint.length : 0) +
     (input.runnerProfile === "hybrid" ? extensionLint.length : 0);
   if (checkJobCount > 400) {
-    throw new Error("Check planning exceeds the observer's 400-job inventory bound");
+    throw new Error("Check planning exceeds the 400-job inventory bound");
   }
   if (typePlan) {
     console.log(
@@ -313,7 +313,6 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     );
   }
   return {
-    check_job_count: checkJobCount,
     check_matrix: { include: checkRows },
     core_type_matrix: { include: coreRows },
     lint_core_matrix: { include: coreLint },

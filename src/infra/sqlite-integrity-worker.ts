@@ -5,6 +5,7 @@ import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { restoreNativeErrorResponse } from "./native-error-response.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
@@ -299,14 +300,7 @@ function assertSqliteIntegrityWithProcess(
         }
         readSqliteIntegrityFileIdentity(pathname, identity);
         if (!result.ok) {
-          const cause = result.error.cause
-            ? Object.assign(new Error(result.error.cause.message), result.error.cause)
-            : undefined;
-          throw Object.assign(new Error(result.error.message, cause ? { cause } : undefined), {
-            name: result.error.name,
-            code: result.error.code,
-            errcode: result.error.errcode,
-          });
+          throw restoreNativeErrorResponse(result.error);
         }
         resolve();
       } catch (error) {

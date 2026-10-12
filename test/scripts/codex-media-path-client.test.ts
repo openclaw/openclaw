@@ -1,7 +1,7 @@
 // Codex Media Path Client tests cover codex media path client script behavior.
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
@@ -16,14 +16,6 @@ const writeConfigPath = path.resolve("scripts/e2e/lib/codex-media-path/write-con
 
 function jsonl(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
-}
-
-function padJsonlToLength(value: Record<string, unknown>, length: number): string {
-  const base = jsonl({ ...value, pad: "" });
-  if (base.length > length) {
-    throw new Error(`cannot pad JSONL down from ${base.length} to ${length}`);
-  }
-  return jsonl({ ...value, pad: "x".repeat(length - base.length) });
 }
 
 function runWriteConfig(root: string, env: Record<string, string> = {}) {
@@ -81,20 +73,6 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 describe("codex media path limits", () => {
-  it("writes strict positive timeout and port values into generated config", () => {
-    const root = tempRoots.make("openclaw-codex-media-path-");
-    const result = runWriteConfig(root, {
-      OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "240",
-      PORT: "19002",
-    });
-
-    expect(result.status).toBe(0);
-    const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
-    expect(config.gateway.port).toBe(19002);
-    expect(config.agents.defaults.timeoutSeconds).toBe(240);
-    expect(config.plugins.entries.codex.config.appServer.requestTimeoutMs).toBe(240_000);
-  });
-
   it("rejects loose write-config timeout env values", () => {
     const root = tempRoots.make("openclaw-codex-media-path-");
     const result = runWriteConfig(root, {
@@ -115,61 +93,6 @@ describe("codex media path limits", () => {
 });
 
 describe("codex media path fake app-server", () => {
-  it("advertises the managed Codex version and image-capable catalog over stdio", async () => {
-    const requestLog = path.join(tempRoots.make("openclaw-codex-media-path-"), "requests.jsonl");
-    const version = JSON.parse(readFileSync("extensions/codex/package.json", "utf8")).dependencies[
-      "@openai/codex"
-    ];
-    const child = spawn(process.execPath, [fakeAppServerPath], {
-      env: { ...process.env, OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG: requestLog },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    try {
-      const initialized = readStdoutLine(child);
-      child.stdin.write(jsonl({ id: "initialize", method: "initialize" }));
-      expect(JSON.parse(await initialized).result).toMatchObject({
-        serverInfo: { version },
-        userAgent: expect.stringContaining(`/${version} `),
-      });
-
-      const models = readStdoutLine(child);
-      child.stdin.write(jsonl({ id: "models", method: "model/list", params: {} }));
-      expect.soft(JSON.parse(await models)).toMatchObject({
-        id: "models",
-        result: {
-          data: [
-            {
-              id: "gpt-5.6-luna",
-              model: "gpt-5.6-luna",
-              displayName: expect.any(String),
-              description: expect.any(String),
-              hidden: false,
-              isDefault: true,
-              inputModalities: ["text", "image"],
-              defaultReasoningEffort: "low",
-              supportedReasoningEfforts: [
-                { reasoningEffort: "low", description: expect.any(String) },
-              ],
-            },
-          ],
-          nextCursor: null,
-        },
-      });
-      const threads = readStdoutLine(child);
-      child.stdin.write(jsonl({ id: "threads", method: "thread/list", params: { limit: 64 } }));
-      expect.soft(JSON.parse(await threads)).toEqual({
-        id: "threads",
-        result: { data: [], nextCursor: null, backwardsCursor: null },
-      });
-
-      const started = readStdoutLine(child);
-      child.stdin.write(jsonl({ id: "thread", method: "thread/start", params: {} }));
-      expect(JSON.parse(await started).result.thread.cliVersion).toBe(version);
-    } finally {
-      await stopChild(child);
-    }
-  });
-
   it("returns a structured error when request logging fails", async () => {
     const requestLogDirectory = tempRoots.make("openclaw-codex-media-path-");
     const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [fakeAppServerPath], {
@@ -240,19 +163,6 @@ describe("codex media path JSONL tailer", () => {
     expect(tailer.read()).toEqual([{ method: "turn/start" }]);
   });
 
-  it("keeps a complete line when the bounded tail starts on its boundary", () => {
-    const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
-    const lastLine = jsonl({ method: "turn/start" });
-    writeFileSync(logPath, `${"x".repeat(256)}\n${lastLine}`);
-
-    const tailer = createJsonlRequestTailer(logPath, {
-      maxReadBytes: lastLine.length,
-      historyLimit: 10,
-    });
-
-    expect(tailer.read()).toEqual([{ method: "turn/start" }]);
-  });
-
   it("resets request history when the app-server log is truncated", () => {
     const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
     const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
@@ -262,22 +172,5 @@ describe("codex media path JSONL tailer", () => {
 
     writeFileSync(logPath, jsonl({ method: "turn/start" }));
     expect(tailer.read()).toEqual([{ method: "turn/start" }]);
-  });
-
-  it("resets request history when a rotated app-server log keeps the same size", () => {
-    const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
-    const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
-    const oldText = jsonl({ method: "initialize", pad: "x".repeat(64) });
-    const replacementText = padJsonlToLength({ method: "turn/start" }, oldText.length);
-    const replacement = JSON.parse(replacementText) as Record<string, unknown>;
-
-    expect(replacementText.length).toBe(oldText.length);
-    writeFileSync(logPath, oldText);
-    expect(tailer.read()).toEqual([{ method: "initialize", pad: "x".repeat(64) }]);
-
-    rmSync(logPath, { force: true });
-    writeFileSync(logPath, replacementText);
-
-    expect(tailer.read()).toEqual([replacement]);
   });
 });

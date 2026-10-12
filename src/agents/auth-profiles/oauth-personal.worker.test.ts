@@ -2,7 +2,6 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
@@ -29,34 +28,6 @@ import { withPersonalAuthProfileStore } from "./personal-store.js";
 import type { OAuthCredential } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-it("refreshes a personal credential with no caller-thread data SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId, credential, replacement: refreshed } = fixture();
-    const manager = createOAuthManager({
-      buildApiKey: async (_provider, value) => value.access,
-      canRefreshCredential: async () => true,
-      refreshCredential: async () => refreshed,
-      readBootstrapCredential: () => null,
-    });
-    const sql = observeHostDataSql();
-    let queries: string[];
-    try {
-      const result = await manager.resolveOAuthAccess({
-        store: { version: 1, profiles: { [profileId]: credential } },
-        profileId,
-        credential,
-      });
-      expect(result?.credential).toEqual(refreshed);
-      queries = [...sql.queries];
-    } finally {
-      sql.restore();
-    }
-    expect(readUserModelAuthProfile(profileId)?.credential).toEqual(refreshed);
-    console.info(`personal OAuth MAIN data SQL: ${queries.length}`);
-    expect(queries).toEqual([]);
-  });
-});
 
 function fixture() {
   const owner = ensureProfileForEmail("personal-race@example.test");

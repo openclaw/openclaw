@@ -101,7 +101,7 @@ const imessageApprovalReactionTargets =
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
-    openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStore(params),
+    openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStoreV2(params),
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget: readApprovalReactionTargetRecord,
   });

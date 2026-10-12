@@ -40,6 +40,10 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 vi.mock("../../config/sessions/session-store-owner.js", () => ({
   resolvePersistedSessionStoreOwnerForTarget: () => ({ kind: "none" }),
 }));
+// mock-isolation: This native admission fixture has no actor; actor paths use real-worker coverage.
+vi.mock("../../config/sessions/session-incognito-binding.js", () => ({
+  captureIncognitoSessionBinding: () => undefined,
+}));
 vi.mock("../../config/sessions/transcript.js", () => ({
   appendExactAssistantMessageToSessionTranscript: vi.fn(),
 }));
@@ -75,9 +79,10 @@ vi.mock("../../routing/session-key.js", () => ({
 }));
 vi.mock("../agent-scope.js", () => ({ resolveSessionAgentId: () => "logical" }));
 vi.mock("../bootstrap-mode.js", () => ({ isHeartbeatLifecycleRunKind: vi.fn() }));
+// mock-isolation: Transcript admission controls persistence directly; unrelated agent-end effects stay inert.
 vi.mock("../harness/agent-end-side-effects.js", () => ({
   awaitAgentEndSideEffects: vi.fn(),
-  runAgentEndSideEffects: vi.fn(),
+  runAgentEndSideEffectsAsync: vi.fn(),
 }));
 vi.mock("../harness/context-engine-lifecycle.js", () => ({
   finalizeHarnessContextEngineTurn: vi.fn(),
@@ -273,13 +278,6 @@ it.each(["native", "supplied"] as const)(
     }
   },
 );
-
-it("leaves supplied initial-writer creation with the session manager", async () => {
-  current = undefined;
-  await run("supplied").result;
-  expect(mocks.read).not.toHaveBeenCalled();
-  expect(mocks.append).toHaveBeenCalledOnce();
-});
 
 it("keeps a supplied detached manager targetless", async () => {
   mocks.getTarget.mockReturnValue(undefined);

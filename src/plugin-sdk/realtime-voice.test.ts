@@ -1,12 +1,7 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   createRealtimeVoiceAudioQueue,
-  normalizeRealtimeVoiceResponseOutcome,
-  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
-  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-  realtimeVoiceAudioDurationMs,
   RealtimeVoiceSessionLifecycle,
-  toOpenAICompatibleRealtimeAudioFormat,
   type RealtimeVoiceBrowserSessionCreateRequest,
   type RealtimeVoiceGatewayControl,
   type RealtimeVoiceSessionConnection,
@@ -28,29 +23,6 @@ describe("RealtimeVoiceBrowserSessionCreateRequest", () => {
     expectTypeOf<Controlled>().toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
     expectTypeOf<Base & Claim>().not.toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
     expectTypeOf<Legacy & Claim>().not.toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
-  });
-});
-
-describe("realtimeVoiceAudioDurationMs", () => {
-  it.each([
-    ["PCM16 24 kHz mono", REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, 48_000, 1_000],
-    [
-      "one G.711 μ-law sample without rounding",
-      REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
-      1,
-      0.125,
-    ],
-  ] as const)("calculates %s", (_name, format, byteLength, durationMs) => {
-    expect(realtimeVoiceAudioDurationMs(format, byteLength)).toBe(durationMs);
-  });
-});
-
-describe("toOpenAICompatibleRealtimeAudioFormat", () => {
-  it.each([
-    ["G.711 μ-law", REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ, { type: "audio/pcmu" }],
-    ["PCM16", REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, { type: "audio/pcm", rate: 24000 }],
-  ] as const)("maps %s", (_name, format, expected) => {
-    expect(toOpenAICompatibleRealtimeAudioFormat(format)).toEqual(expected);
   });
 });
 
@@ -303,73 +275,6 @@ describe("RealtimeVoiceSessionLifecycle", () => {
       lifecycle.enqueuePendingAudio(Buffer.from([index % 256]));
     }
     expect(onPendingAudioOverflow).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("normalizeRealtimeVoiceResponseOutcome", () => {
-  it.each([
-    [
-      { id: "resp-complete", status: "completed" },
-      { responseId: "resp-complete", status: "completed" },
-    ],
-    [
-      { id: "resp-cancel", status: "cancelled", status_details: { reason: "client_cancelled" } },
-      { responseId: "resp-cancel", status: "cancelled", reason: "client_cancelled" },
-    ],
-    [
-      {
-        id: "resp-failed",
-        status: "failed",
-        status_details: {
-          reason: "provider_error",
-          error: { code: "rate_limit", type: "server_error", message: "slow down" },
-        },
-      },
-      {
-        responseId: "resp-failed",
-        status: "failed",
-        reason: "provider_error",
-        error: { code: "rate_limit", type: "server_error", message: "slow down" },
-        message: "Test response failed: provider_error: slow down",
-      },
-    ],
-    [
-      { status: "incomplete", status_details: { reason: "max_output_tokens" } },
-      {
-        responseId: "resp-fallback",
-        status: "incomplete",
-        reason: "max_output_tokens",
-        message: "Test response incomplete: max_output_tokens",
-      },
-    ],
-    [
-      { id: "", status: "unexpected" },
-      {
-        responseId: "resp-fallback",
-        status: "failed",
-        reason: "invalid_response_status",
-        error: { type: "invalid_response_status", message: "invalid status unexpected" },
-        message: "Test response failed: invalid status unexpected",
-      },
-    ],
-    [
-      undefined,
-      {
-        responseId: "resp-fallback",
-        status: "failed",
-        reason: "invalid_response_status",
-        error: { type: "invalid_response_status", message: "missing terminal status" },
-        message: "Test response failed: missing terminal status",
-      },
-    ],
-  ])("normalizes %#", (response, expected) => {
-    expect(
-      normalizeRealtimeVoiceResponseOutcome({
-        providerLabel: "Test",
-        response,
-        responseId: "resp-fallback",
-      }),
-    ).toEqual(expected);
   });
 });
 

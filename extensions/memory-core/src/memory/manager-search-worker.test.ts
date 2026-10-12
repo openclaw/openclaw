@@ -7,7 +7,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { forgetMemoryEntries } from "../memory-forget.js";
 import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const fixture = createManagerIndexFixture({ getMemorySearchManager, closeAllMemorySearchManagers });
@@ -230,7 +233,7 @@ it("keeps the owner's SQLite writer lock across worker reads and reader close", 
   if (!databasePath) {
     throw new Error("Expected a persistent memory database");
   }
-  const db = Reflect.get(manager, "db") as DatabaseSync;
+  const db = memoryIndexFixtureWriter(manager);
   db.exec("BEGIN IMMEDIATE");
   try {
     expect(await tryIndependentWriter(databasePath)).toBe("busy");

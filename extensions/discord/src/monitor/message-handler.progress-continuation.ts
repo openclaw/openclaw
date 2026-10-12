@@ -40,6 +40,7 @@ export function retainDiscordProgressDraft(params: {
     active: true,
     seed: params.seed,
     reasoningGate: false,
+    toolIcons: true,
     initialSnapshot: params.snapshot,
     update: async (text, options) => {
       if (retired) {

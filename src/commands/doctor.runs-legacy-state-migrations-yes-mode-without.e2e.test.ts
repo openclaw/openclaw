@@ -64,6 +64,12 @@ describe("doctor command", () => {
       };
     });
     vi.doUnmock("../flows/doctor-health-contributions.js");
+    // Prepare the real owners and nested check descriptors as fixture code;
+    // detectors and repairs still run inside the unchanged command deadline.
+    await import("./doctor-maintenance.js");
+    const { resolveDoctorContributionHealthChecks } =
+      await import("../flows/doctor-health-contributions.js");
+    await resolveDoctorContributionHealthChecks();
     ({ doctorCommand } = await import("./doctor.js"));
     ({ healthCommand } = await import("./health.js"));
     vi.clearAllMocks();

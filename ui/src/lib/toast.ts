@@ -134,13 +134,11 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   }
 
   private clearDismissTimer() {
-    if (this.dismissTimer !== null) {
-      globalThis.clearTimeout(this.dismissTimer);
-      this.dismissTimer = null;
-    }
-    if (this.exitTimer !== null) {
-      globalThis.clearTimeout(this.exitTimer);
-      this.exitTimer = null;
+    for (const key of ["dismissTimer", "exitTimer"] as const) {
+      if (this[key] !== null) {
+        globalThis.clearTimeout(this[key]);
+        this[key] = null;
+      }
     }
   }
 

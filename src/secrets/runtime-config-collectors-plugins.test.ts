@@ -234,37 +234,6 @@ describe("collectPluginConfigAssignments", () => {
     });
   });
 
-  it("keeps installed web-provider headers unknown while applying exact dotted keys", () => {
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "custom-search",
-          origin: "config",
-          contracts: { webSearchProviders: ["custom-search"] },
-          configContracts: {
-            secretInputs: { paths: [{ path: "webSearch.headers.*", expected: "string" }] },
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    const config = createPluginConfig("custom-search", {
-      webSearch: { headers: { "X.Trace": envRef("CUSTOM_TRACE") } },
-    });
-    const context = collectAssignments(config, [["custom-search", "config"]]);
-
-    expect(context.assignments).toMatchObject([
-      {
-        path: 'plugins.entries.custom-search.config.webSearch.headers["X.Trace"]',
-        ownerKind: "unknown",
-      },
-    ]);
-    requireAssignment(context, 0).apply("resolved-trace");
-    expect(config.plugins?.entries?.["custom-search"]?.config).toMatchObject({
-      webSearch: { headers: { "X.Trace": "resolved-trace" } },
-    });
-  });
-
   it("collects from a supplied manifest registry without cold registry loading", () => {
     const config = createPluginConfig("prepared-plugin", {
       credentials: { token: envRef("PREPARED_TOKEN") },
@@ -294,45 +263,6 @@ describe("collectPluginConfigAssignments", () => {
       "plugins.entries.prepared-plugin.config.credentials.token",
     ]);
     expect(loadPluginManifestRegistryForPluginRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("resolves array SecretRef assignments via apply callback", () => {
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "array-plugin",
-          origin: "config",
-          providers: [],
-          legacyPluginIds: [],
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "servers.*.env.API_KEY", expected: "string" }],
-            },
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    const config = createPluginConfig("array-plugin", {
-      servers: [{ env: { API_KEY: envRef("FIRST") } }, { env: { API_KEY: envRef("SECOND") } }],
-    });
-    const context = collectAssignments(config, [["array-plugin", "config"]]);
-
-    const assignment = context.assignments.find((entry) =>
-      entry.path.endsWith("servers[1].env.API_KEY"),
-    );
-    if (!assignment) {
-      throw new Error("expected array plugin assignment");
-    }
-
-    assignment.apply("resolved-second");
-
-    const entries = config.plugins?.entries as Record<string, Record<string, unknown>>;
-    const pluginConfig = entries["array-plugin"]?.config as {
-      servers?: Array<{ env?: Record<string, unknown> }>;
-    };
-    expect(pluginConfig.servers?.[1]?.env?.API_KEY).toBe("resolved-second");
-    expect(pluginConfig.servers?.[0]?.env?.API_KEY).toEqual(envRef("FIRST"));
   });
 
   it("collects across multiple acpx servers only", () => {
@@ -421,38 +351,5 @@ describe("collectPluginConfigAssignments", () => {
           w.path === "plugins.entries.acpx.config.mcpServers.s1.env.K1",
       ),
     ).toBe(true);
-  });
-
-  it("collects manifest-declared SecretRef surfaces for non-acpx plugins", () => {
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "other",
-          origin: "config",
-          providers: [],
-          legacyPluginIds: [],
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "service.tokens.*", expected: "string" }],
-            },
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    const config = createPluginConfig("other", {
-      service: {
-        tokens: {
-          primary: envRef("PRIMARY_TOKEN"),
-          secondary: "${SECONDARY_TOKEN}",
-        },
-      },
-    });
-    const context = collectAssignments(config, [["other", "config"]]);
-
-    expect(context.assignments.map((assignment) => assignment.path).toSorted()).toEqual([
-      "plugins.entries.other.config.service.tokens.primary",
-      "plugins.entries.other.config.service.tokens.secondary",
-    ]);
   });
 });

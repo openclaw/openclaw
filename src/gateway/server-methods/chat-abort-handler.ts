@@ -40,6 +40,7 @@ import {
 } from "./chat-abort-authorization.js";
 import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
 import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
+import type { ChatAbortLifecycle } from "./chat-abort-runtime.types.js";
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
@@ -51,12 +52,6 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-type ChatAbortLifecycle = {
-  onAuthorizedAfterQueuedAbort?: () => boolean;
-  onDescendantsCancelled?: () => void;
-  cascadeDescendants?: true;
-};
 
 type ChatAbortTarget = Pick<
   ChatAbortControllerEntry | QueuedChatTurnEntry,
@@ -207,7 +202,9 @@ export async function handleChatAbortRequestWithLifecycle(
       stopReason: "rpc",
       requester,
       assertCurrent,
+      stopEmbeddedRun: true,
       preserveSideRuns,
+      onAuthorizedBeforeEmbeddedAbort: lifecycle.onAuthorizedBeforeEmbeddedAbort,
       onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
       cascadeDescendants: lifecycle.cascadeDescendants,
     });
@@ -215,8 +212,8 @@ export async function handleChatAbortRequestWithLifecycle(
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
       return;
     }
-    if (res.descendants?.killed) {
-      lifecycle.onDescendantsCancelled?.();
+    if (res.descendants?.killed || res.descendants?.continuationRetired) {
+      lifecycle.onDescendantsCancelled?.(res.descendants);
     }
     const error = res.error ?? descendantAbortError(res.descendants, "Session");
     if (error) {
@@ -444,6 +441,8 @@ export async function handleChatAbortRequestWithLifecycle(
         sessionKey: pendingAgentMatch.sessionKey ?? canonicalAbortSessionKey,
         agentId: abortAgentId,
         requesterTurnRunId: runId,
+        sessionId: abortSessionEntry?.sessionId,
+        lifecycleRevision: abortSessionEntry?.lifecycleRevision,
         assertCurrent,
         beforeKill: () => {
           assertCurrent();
@@ -540,6 +539,7 @@ export async function handleChatAbortRequestWithLifecycle(
         agentId: abortAgentId,
         sessionId: abortSessionEntry?.sessionId,
         requesterTurnRunId: runId,
+        lifecycleRevision: abortSessionEntry?.lifecycleRevision,
         execCancellation: commands,
         assertCurrent,
         beforeKill: () => {
@@ -621,6 +621,11 @@ export async function handleChatAbortRequestWithLifecycle(
         sessionKey,
         agentId,
         requesterTurnRunId: runId,
+        sessionId,
+        lifecycleRevision:
+          abortSessionEntry?.sessionId === sessionId
+            ? abortSessionEntry.lifecycleRevision
+            : undefined,
         assertCurrent,
         beforeKill: () => {
           // The descendant owner can await a reservation even when no child survives.

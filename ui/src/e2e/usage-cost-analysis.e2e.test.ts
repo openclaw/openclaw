@@ -2,8 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage cost analysis mocked Gateway E2E",
@@ -189,6 +189,13 @@ suite.define(() => {
           await page
             .getByRole("combobox", { name: "Time zone", exact: true })
             .selectOption(timeZone);
+          await expect
+            .poll(() =>
+              page
+                .locator("main.content")
+                .evaluate((content) => getComputedStyle(content).paddingTop),
+            )
+            .toBe("0px");
           const dateInputs = await page.locator(".usage-date-input").all();
           expect(dateInputs).toHaveLength(2);
           for (const input of dateInputs) {
@@ -646,6 +653,8 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
+            "sessions.usage.timeseries": { points: [] },
+            "sessions.usage.logs": { logs: [] },
             "agents.list": {
               agents: [
                 { id: "main", name: "Main" },

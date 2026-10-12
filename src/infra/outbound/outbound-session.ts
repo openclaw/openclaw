@@ -21,15 +21,19 @@ import {
   updateSessionLastRouteInScope,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntryPatchGuard } from "../../config/sessions/session-entry-patch.types.js";
-import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
+import {
+  buildInboundSessionCreationStamp,
+  inheritSessionCreationPolicy,
+} from "../../config/sessions/session-entry-provenance.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -229,6 +233,8 @@ type OutboundSessionEntryParams = {
   channel: ChannelId;
   accountId?: string | null;
   route: OutboundSessionRoute;
+  /** A distinct transcript needs an identity, never the destination delivery route. */
+  mirrorSessionKey?: string;
   creation?: MsgContext["SessionCreation"];
   sourceSessionKey?: string;
   /** Revalidates caller-owned route authority at the final persistence boundary. */
@@ -354,12 +360,35 @@ async function persistOutboundSessionEntry(
     ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
     ...(params.workerGuard ? { workerGuard: params.workerGuard } : {}),
   };
-  return prepared
+  const entry = prepared
     ? await updateSessionLastRouteInScope(
         { ...prepared.destination, sessionKey: params.route.sessionKey },
         update,
       )
     : await updateSessionLastRoute(update);
+  if (entry && params.mirrorSessionKey && params.mirrorSessionKey !== params.route.sessionKey) {
+    const fallbackEntry = mergeSessionEntry(undefined, {});
+    await applySessionEntryOperation(
+      {
+        sessionKey: params.mirrorSessionKey,
+        storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+          agentId: resolveAgentIdFromSessionKey(params.mirrorSessionKey),
+        }),
+      },
+      {
+        kind: "ensure-identity",
+        sessionId: fallbackEntry.sessionId,
+        creation: buildInboundSessionCreationStamp({ SessionCreation: creation }),
+      },
+      {
+        fallbackEntry,
+        preserveActivity: true,
+        workerGuard: params.workerGuard ?? {},
+        assertCommitAllowed: params.assertCommitAllowed,
+      },
+    );
+  }
+  return entry;
 }
 
 /** Persists best-effort session metadata for an outbound-only route. */

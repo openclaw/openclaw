@@ -102,7 +102,7 @@ export async function withWorktreeGitConfig<T>(
       "--includes",
       "--null",
       "--get-regexp",
-      "^core\\.(symlinks|ignorecase|precomposeunicode|excludesfile|autocrlf|eol)$",
+      "^core\\.(symlinks|ignorecase|precomposeunicode|excludesfile|autocrlf|eol|sparsecheckout|sparsecheckoutcone)$",
     ],
     guard,
   );

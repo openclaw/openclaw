@@ -132,10 +132,8 @@ record({
 });
 const gatewayAttempts = fs.readFileSync(recordPath, "utf8").trim().split("\\n")
   .map((line) => JSON.parse(line)).filter((entry) => entry.kind === "gateway").length;
-if (gatewayAttempts === 1 && process.env.QA_STARTUP_RETRY) {
-  process.stderr.write(process.env.QA_STARTUP_RETRY === "migration"
-    ? "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness."
-    : "listen EADDRINUSE: address already in use");
+if (gatewayAttempts === 1 && process.env.QA_STARTUP_RETRY === "migration") {
+  process.stderr.write("OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.");
   process.exit(18);
 }
 process.stderr.write("fixture gateway exit");

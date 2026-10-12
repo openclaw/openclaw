@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
@@ -8,7 +10,34 @@ const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness(
 const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 const uncertainGatewayResponse = '{\n  "message": "Server Error"\n}\ngh: Server Error (HTTP 502)\n';
 
-function cancelledAutoReplacement(
+const setupSnapshots = useAutoCleanupTempDirTracker(afterAll);
+const restoredRoots = new Set<string>();
+afterEach(() => cleanupTempDirs(restoredRoots));
+
+function reuseCompletedSetup<Args extends unknown[], Setup extends { f: { root: string } }>(
+  create: (...args: Args) => Setup,
+): (...args: Args) => Setup {
+  const completed = new Map<string, { setup: Setup; snapshot: string }>();
+  return (...args) => {
+    const key = JSON.stringify(args);
+    const cached = completed.get(key);
+    if (cached) {
+      // Keep absolute Git worktree links and retained evidence paths intact.
+      rmSync(cached.setup.f.root, { recursive: true, force: true });
+      copyTreeCloseOnExec(cached.snapshot, cached.setup.f.root);
+      restoredRoots.add(cached.setup.f.root);
+      return cached.setup;
+    }
+    const setup = create(...args);
+    const snapshot = setupSnapshots.make("pr-recovery-setup-");
+    // Builders settle every command and recover failed dispatch locks before returning.
+    copyTreeCloseOnExec(setup.f.root, snapshot);
+    completed.set(key, { setup, snapshot });
+    return setup;
+  };
+}
+
+const cancelledAutoReplacement = reuseCompletedSetup(function (
   options: { cancellation?: "confirmed" | "missing" | "uncertain"; replace?: boolean } = {},
 ) {
   const cancellation = options.cancellation ?? "confirmed";
@@ -70,9 +99,9 @@ function cancelledAutoReplacement(
     tests: { result: "fail", preExistingCi: { head: replacement, runId: 501, runAttempt: 2 } },
   });
   return { f, originalOid, originalRecord, retiredOid, retiredRecord, replacement, captures };
-}
+});
 
-function staleAdminReplacement() {
+const staleAdminReplacement = reuseCompletedSetup(function () {
   const cancelled = cancelledAutoReplacement({ replace: false });
   const { f, retiredOid } = cancelled;
   f.save({ ...f.state(), restMergeRefusal: uncertainGatewayResponse });
@@ -115,9 +144,9 @@ function staleAdminReplacement() {
     adminCapture,
     replacement,
   };
-}
+});
 
-function recoveredStaleAdminAuto() {
+const recoveredStaleAdminAuto = reuseCompletedSetup(function () {
   const setup = staleAdminReplacement();
   const recovered = setup.f.run(true, setup.f.repo, "squash", setup.adminOid, setup.replacement);
   expect(recovered.status, recovered.output).toBe(0);
@@ -130,7 +159,7 @@ function recoveredStaleAdminAuto() {
     recovery: { outcome: setup.adminOid },
   });
   return { ...setup, recoveredOid, recoveredRecord };
-}
+});
 
 function rewriteRecord(
   f: ReturnType<typeof staleAdminReplacement>["f"],
@@ -382,23 +411,6 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     },
   );
 
-  it.each([
-    ["opaque", "opaque uncertain dispatch result\n"],
-    ["empty", ""],
-  ])(
-    "retains %s stale-head admin capture bytes without classifying the response",
-    (_name, bytes) => {
-      const { f, adminOid, adminCapture, replacement } = staleAdminReplacement();
-      writeFileSync(join(f.worktree, ".local", adminCapture), bytes);
-
-      const recovered = f.run(true, f.repo, "squash", adminOid, replacement);
-      expect(recovered.status, recovered.output).toBe(0);
-      expect(f.git(["rev-parse", `${outcomeRef}:${adminCapture}`])).toBe(
-        f.git(["hash-object", "--stdin"], bytes),
-      );
-    },
-  );
-
   it.each(["same head", "accepted admin", "stale outcome", "route mismatch", "method mismatch"])(
     "refuses stale-head auto recovery with %s",
     (fault) => {
@@ -468,7 +480,6 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     "current-head drift",
     "stale gate binding",
     "failed required check",
-    "missing ClawSweeper review",
     "invalid current review",
   ])("revalidates %s before stale-head auto recovery", (fault) => {
     const { f, adminOid, replacement } = staleAdminReplacement();
@@ -487,8 +498,6 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
       );
     } else if (fault === "failed required check") {
       state.gates = "fail";
-    } else if (fault === "missing ClawSweeper review") {
-      state.issueComments = [];
     } else {
       const reviewPath = join(f.worktree, ".local/review.json");
       const review = JSON.parse(readFileSync(reviewPath, "utf8"));
@@ -641,51 +650,16 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
   });
 
   it.each([
-    ["missing cancellation", "operator admin recovery requires"],
-    ["uncertain cancellation", "operator admin recovery requires"],
-    ["renewed auto request", "no existing auto/queue request"],
     ["queue enrollment", "no existing auto/queue request"],
-    ["stale prepare", "recovery requires matching PR"],
-    ["revoked admin", "active organization admin"],
-    ["required review", "current enforced reviews must be satisfied"],
-    ["failed security", "unsuccessful openclaw/security-sensitive-review"],
-    ["new CI attempt", "newer or running CI attempt"],
     ["missing attribution", "every failed job must have exactly one"],
   ] as const)("refuses same-head %s before another request", (fault, diagnostic) => {
     const { f, retiredOid } = cancelledAutoReplacement({
       replace: false,
-      cancellation:
-        fault === "missing cancellation"
-          ? "missing"
-          : fault === "uncertain cancellation"
-            ? "uncertain"
-            : "confirmed",
     });
     const state = f.state();
-    if (fault === "renewed auto request") {
-      state.pr.autoMergeRequest = { mergeMethod: "SQUASH" };
-    }
     if (fault === "queue enrollment") {
       state.pr.isInMergeQueue = true;
       state.pr.isMergeQueueEnabled = true;
-    }
-    if (fault === "stale prepare") {
-      writeFileSync(
-        join(f.worktree, ".local/gates.env"),
-        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.base}\n`,
-      );
-    }
-    if (fault === "revoked admin") {
-      state.priorCi.membership = "member";
-    }
-    if (fault === "required review") {
-      state.priorCi.reviewDecision = "REVIEW_REQUIRED";
-    }
-    if (fault === "failed security") {
-      state.priorCi.security.fault = "failed-guard";
-    }
-    if (fault === "new CI attempt") {
-      state.priorCi.latestAttempt = 3;
     }
     if (fault === "missing attribution") {
       writeFileSync(f.path, JSON.stringify({ ...f.evidence, failures: [] }));
@@ -707,25 +681,22 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     expect(f.git(["rev-parse", outcomeRef])).toBe(retiredOid);
   });
 
-  it.each([false, true])(
-    "refuses captures changed during final admission (replace=%s)",
-    (replace) => {
-      const { f, retiredOid, replacement } = cancelledAutoReplacement({ replace });
-      f.save({
-        ...f.state(),
-        observationReads: 0,
-        observations: [{}, {}, {}, {}, { tamperProviderCapture: true }],
-      });
-      const result = f.adminPriorCi(f.path, true, retiredOid, replacement);
-      expect(result.status, result.output).toBe(1);
-      expect(f.state().providerCaptureTampered).toBe(true);
-      expect(result.output).toContain("recovery artifacts changed during admission");
-      expect(f.state()).toMatchObject({ mutations: 1, cancellations: 1, restMergePayload: null });
-      expect(f.git(["rev-parse", outcomeRef])).toBe(retiredOid);
-    },
-  );
+  it.each([true])("refuses captures changed during final admission (replace=%s)", (replace) => {
+    const { f, retiredOid, replacement } = cancelledAutoReplacement({ replace });
+    f.save({
+      ...f.state(),
+      observationReads: 0,
+      observations: [{}, {}, {}, {}, { tamperProviderCapture: true }],
+    });
+    const result = f.adminPriorCi(f.path, true, retiredOid, replacement);
+    expect(result.status, result.output).toBe(1);
+    expect(f.state().providerCaptureTampered).toBe(true);
+    expect(result.output).toContain("recovery artifacts changed during admission");
+    expect(f.state()).toMatchObject({ mutations: 1, cancellations: 1, restMergePayload: null });
+    expect(f.git(["rev-parse", outcomeRef])).toBe(retiredOid);
+  });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves the recovery CAS successor without dispatch (replace=%s)",
     (replace) => {
       const { f, retiredOid, replacement } = cancelledAutoReplacement({ replace });

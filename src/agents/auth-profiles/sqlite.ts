@@ -9,6 +9,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   assertExistingAgentSchemaOwner,
@@ -363,6 +364,14 @@ type AuthProfileWriteOptions = {
   sharedStoreWrite?: boolean;
   stateDir?: string;
   assertEnvironment?: (env: NodeJS.ProcessEnv) => void;
+  existingDatabaseTarget?: {
+    kind: "agent";
+    agentId: string;
+    path: string;
+    env: NodeJS.ProcessEnv;
+    identity: DatabaseFileIdentity;
+    assertCurrent: () => void;
+  };
 };
 
 export function prepareAuthProfileWriteEnvironment(
@@ -425,7 +434,10 @@ export function runAuthProfileWriteTransaction<T>(
   operation: (database: AuthProfileDatabase, owner: PreparedAuthProfileStoreOwner) => T,
   options: AuthProfileWriteOptions = {},
 ): T {
-  const { databaseTarget, sharedOwner } = prepareAuthProfileWriteTransaction(agentDir, options);
+  const existing = options.existingDatabaseTarget;
+  const { databaseTarget, sharedOwner } = existing
+    ? { databaseTarget: existing, sharedOwner: prepareAuthProfileSharedOwner(existing.env) }
+    : prepareAuthProfileWriteTransaction(agentDir, options);
   const run = (database: AuthProfileDatabase) => {
     const previous = authProfileTransactions.get(database);
     const owner = previous ?? { ...sharedOwner, databasePath: database.path };
@@ -441,6 +453,14 @@ export function runAuthProfileWriteTransaction<T>(
   if (databaseTarget.kind === "agent") {
     return runOpenClawAgentWriteTransaction(run, databaseTarget, {
       operationLabel: "auth-profiles.write",
+      ...(existing
+        ? {
+            repairAdmission: {
+              expectedIdentity: existing.identity,
+              assertCurrent: existing.assertCurrent,
+            },
+          }
+        : {}),
     });
   }
   const { env } = databaseTarget;

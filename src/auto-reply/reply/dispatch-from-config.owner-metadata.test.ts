@@ -132,7 +132,7 @@ it.each([
       return;
     }
     const prepared = await prepareDispatchDelivery(gathered.state);
-    expect(prepared.state.suppressAcpChildUserDelivery).toBe(
+    expect(prepared.suppressAcpChildUserDelivery).toBe(
       scenario === "read-recovery" || scenario === "replacement-parent",
     );
   } finally {

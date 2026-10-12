@@ -147,6 +147,43 @@ it("discovers a newly created root and keeps observing edits and deletion", asyn
   expect(read()).toEqual([]);
 });
 
+it("re-admits a replaced workspace and observes subsequent skill edits and removal", async () => {
+  const write = (description: string) =>
+    writeSkill({
+      dir: path.join(fixture.workspaceDir, "skills", "guide"),
+      name: "guide",
+      description,
+    });
+  await write("Original workspace");
+  await ensure();
+  expect(read()).toEqual(["Original workspace"]);
+
+  await fs.rename(fixture.workspaceDir, path.join(fixture.root, "retired-workspace"));
+  await write("Replacement workspace");
+  // The old Root may fail closed; its automatic retry joins retirement before
+  // admitting the replacement. The broader previous authority can reconcile in place.
+  await Promise.allSettled(subscriptions.map((subscription) => subscription.reconcile()));
+  await Promise.all(
+    [...pathWatchers.values()].filter((state) => state.replacing).map((state) => state.close()),
+  );
+  await ready();
+  await advance(500);
+  expect(
+    refresh.reconcileSkillsWatcherCoverage({
+      workspaceDir: fixture.workspaceDir,
+      sourcePlan: resolveWorkspaceSkillSourcePlan(fixture.workspaceDir, { workspaceOnly: true }),
+    }),
+  ).toBe(true);
+  expect(read()).toEqual(["Replacement workspace"]);
+
+  await write("Edited replacement");
+  await reconcile();
+  expect(read()).toEqual(["Edited replacement"]);
+  await fs.rm(path.join(fixture.workspaceDir, "skills"), { recursive: true });
+  await reconcile();
+  expect(read()).toEqual([]);
+});
+
 it("keeps admitted symlink coverage available after unchanged overflow", async () => {
   const root = path.join(fixture.workspaceDir, "skills");
   const target = await fixture.createFixtureDirectory("linked-target");

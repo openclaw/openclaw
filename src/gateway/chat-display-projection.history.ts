@@ -352,6 +352,14 @@ function shouldHideProjectedHistoryMessage(
   if (!roleContent) {
     return false;
   }
+  const provenance = normalizeInputProvenance(message.provenance);
+  if (
+    roleContent.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "exec"
+  ) {
+    return true;
+  }
   if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
     return true;
   }
@@ -481,6 +489,7 @@ export function filterVisibleProjectedHistoryMessages(
   let pendingTurnBoundary = turnBoundaryPending;
   let changed = false;
   const visible: Array<Record<string, unknown>> = [];
+  const assistantSources = new Map<string, Record<string, unknown>>();
   for (let i = 0; i < messages.length; i++) {
     const current = messages[i];
     if (!current) {
@@ -508,7 +517,10 @@ export function filterVisibleProjectedHistoryMessages(
       pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
       continue;
     }
-    if (isDuplicateAssistantDelivery(current, messages[i - 1])) {
+    const mirrorSourceId = readRecord(current.openclawDeliveryMirror)?.sourceAssistantMessageId;
+    const source =
+      typeof mirrorSourceId === "string" ? assistantSources.get(mirrorSourceId) : messages[i - 1];
+    if (isDuplicateAssistantDelivery(current, source)) {
       changed = true;
       continue;
     }
@@ -518,6 +530,10 @@ export function filterVisibleProjectedHistoryMessages(
       changed = true;
     } else {
       visible.push(current);
+    }
+    const sourceId = readRecord(current["__openclaw"])?.id;
+    if (currentRoleContent?.role === "assistant" && typeof sourceId === "string") {
+      assistantSources.set(sourceId, current);
     }
   }
   return {

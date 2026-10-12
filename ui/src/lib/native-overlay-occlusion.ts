@@ -7,9 +7,7 @@ let activeOverlays = 0;
 let frame: number | null = null;
 
 function notify() {
-  for (const listener of listeners) {
-    listener();
-  }
+  listeners.forEach((listener) => listener());
 }
 
 function trackSurfaceLayout() {

@@ -7,9 +7,9 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sqlite-parent-session.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as storeTargetRuntime from "./session-store-target-runtime.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-parent-fork-worker-");
 

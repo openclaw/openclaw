@@ -197,6 +197,7 @@ export async function resumeCodexCliSessionOnNode(params: {
   sessionId: string;
   agentId?: string;
   sessionKey?: string;
+  storePath?: string;
   prompt: string;
   cwd?: string;
   timeoutMs?: number;
@@ -204,9 +205,14 @@ export async function resumeCodexCliSessionOnNode(params: {
   let catalogAgentId: string | undefined;
   let catalogHomeId: string | undefined;
   if (params.sessionKey) {
+    const storePath =
+      params.storePath ??
+      params.runtime.agent.session.resolveStorePath(undefined, { agentId: params.agentId });
     const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
       await import("./session-catalog-node-adoption.js");
-    const entry = params.runtime.agent.session.getSessionEntry({
+    const entry = await params.runtime.agent.session.getSessionEntryAsync({
+      agentId: params.agentId,
+      storePath,
       sessionKey: params.sessionKey,
       readConsistency: "latest",
     });

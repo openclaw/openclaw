@@ -1,9 +1,14 @@
 // Chat widgets size to their content: the in-frame reporter drives the host
 // frame, so a tall document must not end up scrolling inside its own row.
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
+import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -19,9 +24,278 @@ const documentPath = `/__openclaw__/canvas/documents/${documentId}/index.html`;
 const rowCount = 90;
 const rowHeight = 28;
 const video = readFileSync(new URL("./fixtures/video-poster.mp4", import.meta.url));
+const trailer = `<div id="primetime-trailer"><video aria-label="Primetime official trailer" controls playsinline preload="auto" style="display:block;width:100%;aspect-ratio:16/9;background:#000;border-radius:12px"><source src="data:video/mp4;base64,${video.toString("base64")}" type="video/mp4"></video><p id="trailer-status" style="font:13px var(--font-body);color:var(--muted)">Press play. <a href="https://www.youtube.com/watch?v=synthetic" target="_blank" rel="noopener noreferrer">Watch on YouTube</a></p></div>`;
+// Stored pre-fix shell and body reporter, independent of the current wrapper.
+const legacyTrailer = `<!doctype html><html><head><style>
+  :root{color-scheme:dark;--font-body:Arial,sans-serif;--muted:#8b8b94}
+  html,body{margin:0}body{font:14px/1.5 var(--font-body)}p{margin:0 0 8px}
+  a{color:#ff5c5c}
+  </style></head><body><script>(()=>{
+    const post=window.parent.postMessage.bind(window.parent);
+    let last=0;const report=()=>{const b=document.body;if(!b)return;
+      const h=Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height));
+      if(h&&h!==last){last=h;post({type:"openclaw:widget-size",height:h},"*");}};
+    addEventListener("load",report);new ResizeObserver(report).observe(document.body);
+    setTimeout(report,50);setTimeout(report,500);
+  })();</script>${trailer}</body></html>`;
+
+type WidgetReloadFrame = {
+  scrollTop: number;
+  endGap: number;
+  previewHeight: number;
+  anchorTop: number;
+};
+
+declare global {
+  interface Window {
+    widgetReloadFrames?: WidgetReloadFrame[];
+    widgetReloadRecording?: boolean;
+  }
+}
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
+  it("reserves a learned widget height from the first reload frame through delayed content", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const sessionKey = "agent:main:dashboard:widget-reload";
+      const html = buildWidgetDocument(
+        "Synthetic dashboard preview",
+        `<main style="height:700px;box-sizing:border-box;padding:24px;display:grid;grid-template-rows:repeat(7,1fr);background:#e8f0f7;color:#243b53">${Array.from(
+          { length: 7 },
+          (_, index) =>
+            `<div style="display:flex;align-items:center;border-bottom:1px solid #bcccdc">Synthetic dashboard row ${index + 1}${index === 6 ? ": All data in this preview is synthetic." : ""}</div>`,
+        ).join("")}</main>`,
+      );
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        authMethod: "trusted-proxy",
+        authMode: "trusted-proxy",
+        heldMethods: ["connect", "canvas.document.view"],
+        methodResponses: { "canvas.document.view": canvasView(html) },
+        historyMessages: [
+          ...Array.from({ length: 12 }, (_, index) => ({
+            role: index % 2 ? "assistant" : "user",
+            content: `Synthetic context ${index}: ${"Dashboard detail. ".repeat(20)}`,
+            timestamp: 1_800_000_000_000 + index * 1000,
+            __openclaw: { id: `widget-context-${index}`, seq: index + 1 },
+          })),
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: `[embed ref="${documentId}" title="Synthetic dashboard preview" /]`,
+              },
+            ],
+            timestamp: 1_800_000_012_000,
+            __openclaw: { id: "widget-preview", seq: 13 },
+          },
+          {
+            role: "user",
+            content: "Keep this reply in place while the preview loads.",
+            timestamp: 1_800_000_013_000,
+            __openclaw: { id: "widget-reload-anchor", seq: 14 },
+          },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
+      await gateway.waitForRequest("canvas.document.view");
+      await gateway.resolveDeferred("canvas.document.view");
+      const frame = page.locator(".chat-tool-card__preview-frame");
+      await frame
+        .contentFrame()
+        .frameLocator("iframe")
+        .getByText("All data in this preview is synthetic.", { exact: false })
+        .waitFor();
+      await page.waitForFunction(
+        () =>
+          document.querySelector(".chat-tool-card__preview-frame")?.getBoundingClientRect()
+            .height === 700,
+        undefined,
+        { polling: "raf" },
+      );
+      const preview = page.locator('.chat-tool-card__preview[data-content-kind="canvas-html"]');
+      const learnedHeight = (await preview.boundingBox())!.height;
+      const savedHeight = await page
+        .locator(".chat-pane-cache__pane--active")
+        .evaluate(async (element, widgetKey) => {
+          const pane = element as HTMLElement & {
+            sessionSnapshotStore?: SessionSnapshotStore;
+            chatMessagesBySession?: ChatMessageCache;
+          };
+          const entry = [...(pane.chatMessagesBySession ?? [])].find(
+            ([, value]) => value.snapshot.widgetHeights?.[widgetKey] === 700,
+          );
+          if (!pane.sessionSnapshotStore || !entry) {
+            throw new Error("Missing measured widget snapshot");
+          }
+          await pane.sessionSnapshotStore.flush();
+          return (await pane.sessionSnapshotStore.read(entry[0]))?.widgetHeights?.[widgetKey];
+        }, `canvas:${documentId}`);
+      expect(savedHeight).toBe(700);
+      await page.addInitScript(() => {
+        window.widgetReloadFrames = [];
+        window.widgetReloadRecording = true;
+        const sample = () => {
+          if (!window.widgetReloadRecording) {
+            return;
+          }
+          const pane = document.querySelector(".chat-pane-cache__pane--active");
+          const thread = pane?.querySelector<HTMLElement>(".chat-thread");
+          const widget = thread?.querySelector(
+            '.chat-tool-card__preview[data-content-kind="canvas-html"]',
+          );
+          const anchor = thread?.querySelector('[data-entry-id="widget-reload-anchor"]');
+          if (thread?.clientHeight && widget && anchor) {
+            window.widgetReloadFrames!.push({
+              scrollTop: thread.scrollTop,
+              endGap: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
+              previewHeight: widget.getBoundingClientRect().height,
+              anchorTop: anchor.getBoundingClientRect().top,
+            });
+          }
+          requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
+      await page.reload();
+      await gateway.waitForRequest("connect");
+      await preview.waitFor();
+      await gateway.resolveDeferred("connect");
+      await gateway.waitForRequest("canvas.document.view");
+      await page.waitForFunction(() => (window.widgetReloadFrames?.length ?? 0) >= 20, undefined, {
+        polling: "raf",
+      });
+      await page.waitForFunction(
+        () => {
+          const sample = window.widgetReloadFrames?.at(-1);
+          return sample && sample.scrollTop > 0 && Math.abs(sample.endGap) <= 1;
+        },
+        undefined,
+        { polling: "raf" },
+      );
+      const loadedStart = await page.evaluate(() => window.widgetReloadFrames!.length - 1);
+      const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
+        ? createControlUiE2eArtifactDir("widget-reload")
+        : undefined;
+      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      const anchor = thread.locator('[data-entry-id="widget-reload-anchor"]');
+      if (artifacts) {
+        const capture = await takeControlUiScreenshotFrame(page, thread, [anchor], {
+          animations: "disabled",
+        });
+        writeFileSync(path.join(artifacts, "waiting.png"), capture.png);
+      }
+      await gateway.resolveDeferred("canvas.document.view");
+      await frame
+        .contentFrame()
+        .frameLocator("iframe")
+        .getByText("All data in this preview is synthetic.", { exact: false })
+        .waitFor();
+      const samples = await page.evaluate(async () => {
+        for (let index = 0; index < 20; index += 1) {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        }
+        window.widgetReloadRecording = false;
+        return window.widgetReloadFrames ?? [];
+      });
+      if (artifacts) {
+        const capture = await takeControlUiScreenshotFrame(page, thread, [anchor], {
+          animations: "disabled",
+        });
+        writeFileSync(path.join(artifacts, "loaded.png"), capture.png);
+        writeFileSync(path.join(artifacts, "frames.json"), JSON.stringify(samples));
+      }
+      expect(samples.length).toBeGreaterThanOrEqual(40);
+      for (const sample of samples) {
+        expect(Math.abs(sample.previewHeight - learnedHeight)).toBeLessThanOrEqual(1);
+      }
+      const anchored = samples[loadedStart]!;
+      for (const sample of samples.slice(loadedStart)) {
+        expect(Math.abs(sample.endGap)).toBeLessThanOrEqual(1);
+        expect(Math.abs(sample.scrollTop - anchored.scrollTop)).toBeLessThanOrEqual(1);
+        expect(Math.abs(sample.anchorTop - anchored.anchorTop)).toBeLessThanOrEqual(1);
+      }
+    });
+  });
+  it("fits trailer captions and enables fullscreen for new and saved widget documents", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 800 }, colorScheme: "dark" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "canvas.document.view": canvasView(buildWidgetDocument("Primetime trailer", trailer)),
+          },
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: `[embed ref="${documentId}" title="Primetime trailer" /]` },
+              ],
+              timestamp: 100,
+            },
+          ],
+        });
+        const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
+          ? createControlUiE2eArtifactDir("trailer")
+          : undefined;
+        for (const saved of [false, true]) {
+          if (saved) {
+            await gateway.setMethodResponse("canvas.document.view", canvasView(legacyTrailer));
+          }
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const frame = page.locator(".chat-tool-card__preview-frame");
+          const widget = frame.contentFrame().frameLocator("iframe");
+          const player = widget.getByLabel("Primetime official trailer");
+          await expect
+            .poll(() => player.evaluate((element: HTMLVideoElement) => element.readyState))
+            .toBeGreaterThanOrEqual(2);
+          await expect
+            .poll(() =>
+              widget
+                .locator("body")
+                .evaluate((body) =>
+                  Math.abs(Math.ceil(body.getBoundingClientRect().height) - innerHeight),
+                ),
+            )
+            .toBe(0);
+          if (artifacts) {
+            const preview = page.locator(
+              '.chat-tool-card__preview[data-content-kind="canvas-html"]',
+            );
+            const capture = await takeControlUiScreenshotFrame(page, preview, [frame], {
+              elements: [preview],
+              scrollTo: preview,
+              animations: "disabled",
+            });
+            const name = saved ? "saved" : "new";
+            writeFileSync(path.join(artifacts, `${name}.png`), capture.png);
+            writeFileSync(path.join(artifacts, `${name}-widget.png`), capture.elements[0]!.png);
+          }
+          const measurements = await widget.locator("body").evaluate(() => ({
+            overflow: document.scrollingElement!.scrollHeight - innerHeight,
+            fullscreenEnabled: document.fullscreenEnabled,
+          }));
+          expect
+            .soft(
+              measurements.overflow,
+              saved ? "saved document overflow" : "new document overflow",
+            )
+            .toBeLessThanOrEqual(0);
+          expect
+            .soft(
+              measurements.fullscreenEnabled,
+              saved ? "saved document fullscreen" : "new document fullscreen",
+            )
+            .toBe(true);
+        }
+      },
+    );
+  });
   it("fits tall widgets and passes media wheel input to chat without taking nested scrolls", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       await installMockGateway(page, {
@@ -36,6 +310,12 @@ suite.define(() => {
                   if (data?.type === "openclaw:widget-board-host") window.stolenScrollNonce = data.nonce;
                   return data;
                 }});
+                const steal = () => {
+                  const data = window.event?.data;
+                  if (data?.type === "openclaw:widget-board-host") window.stolenScrollNonce = data.nonce;
+                };
+                document.head.prepend = () => { steal(); throw new Error("Authored DOM override"); };
+                new MutationObserver(steal).observe(document, { childList: true, subtree: true });
               </script><div style="display:grid">${Array.from(
                 { length: rowCount },
                 (_, index) =>

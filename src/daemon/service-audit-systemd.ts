@@ -16,6 +16,7 @@ import type {
   ServiceConfigIssue,
   ServiceDefinitionDrift,
 } from "./service-audit-types.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import { resolveManagedGatewayServiceCommand } from "./service-types.js";
 import { execSystemctlUser } from "./systemd-exec.js";
 import {
@@ -163,16 +164,18 @@ export async function auditSystemdUnit(
   // to the base unit only when its bounded effective-state query fails.
   // `systemctl show` still exits 0 for masked and not-found units, with empty
   // After/Wants and RestartUSec=100ms defaults. Those are not loaded settings.
-  const manager = await execSystemctlUser(
-    env,
-    [
-      "show",
-      `${resolveSystemdServiceName(env)}.service`,
-      "--no-page",
-      "--property",
-      "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
-    ],
-    timeoutMs && timeoutMs > 0 ? timeoutMs : SYSTEMD_AUDIT_TIMEOUT_MS,
+  const manager = await withServiceInspectionBudget(() =>
+    execSystemctlUser(
+      env,
+      [
+        "show",
+        `${resolveSystemdServiceName(env)}.service`,
+        "--no-page",
+        "--property",
+        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
+      ],
+      timeoutMs && timeoutMs > 0 ? timeoutMs : SYSTEMD_AUDIT_TIMEOUT_MS,
+    ),
   );
   const entries = manager.code === 0 ? parseKeyValueOutput(manager.stdout, "=") : undefined;
   const loadState = normalizeLowercaseStringOrEmpty(entries?.loadstate);

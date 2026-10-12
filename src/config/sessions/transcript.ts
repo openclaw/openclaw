@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -11,10 +12,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
-import {
-  extractAssistantPhaseText,
-  extractFirstTextBlock,
-} from "../../shared/chat-message-content.js";
+import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -22,29 +20,30 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "./legacy-sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import {
-  loadSessionEntryReadOnly,
+  createSessionEntryWithTranscript,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
-  readLatestTranscriptAssistantText,
-  readSessionTranscriptMessageEventPage,
-  resolveSessionEntrySelection,
   updateSessionEntry,
   waitForSessionTranscriptProjection,
   type SessionTranscriptTurnPersistOptions,
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
   type TranscriptEntryAnchor,
-  type TranscriptEvent,
 } from "./session-accessor.js";
-import type { LatestTranscriptAssistantText } from "./session-accessor.types.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
+import type {
+  LatestTranscriptAssistantText,
+  SessionTranscriptReadScope,
+} from "./session-accessor.types.js";
+import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { readActiveTranscriptEntryAnchorAsync } from "./session-transcript-anchor-read.js";
+import { readLatestTranscriptAssistantTextAsync } from "./session-transcript-assistant-read.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import type {
   SessionLifecycleRevisionExpectation,
@@ -62,12 +61,10 @@ import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
 } from "./transcript-mirror.js";
-import {
-  isWithinTranscriptWindow,
-  normalizeRecentTranscriptLimit,
-  normalizeTranscriptTimestamp,
-  readPreferredUpstreamUserText,
-} from "./transcript-recent-window.js";
+import type {
+  ReadRecentSessionConversationTextOptions,
+  SessionRecentConversationText,
+} from "./transcript-recent-text.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -103,29 +100,15 @@ type InternalSessionTranscriptDeliveryMirror =
     }
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
-    };
+    }
+  | SkillWorkshopChangeNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
   [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
 };
 
-export type SessionRecentConversationText = {
-  id?: string;
-  role: "user" | "assistant";
-  text: string;
-  timestamp?: number;
-  sourceChannel?: string;
-};
-
-type ReadRecentSessionConversationTextOptions = {
-  beforeTimestampMs?: number;
-  includeCronDirectDeliveryContext?: boolean;
-  limit?: number;
-  minTimestampMs?: number;
-  role?: "user" | "assistant";
-  preferUpstreamUserText?: boolean;
-};
+export type { SessionRecentConversationText } from "./transcript-recent-text.js";
 
 type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
   agentId: string;
@@ -160,112 +143,20 @@ function parseAssistantTranscriptText(line: string): LatestAssistantTranscriptTe
   return projectAssistantTranscriptText(message, id);
 }
 
-function extractRecentConversationText(
-  event: TranscriptEvent,
-  options: ReadRecentSessionConversationTextOptions = {},
-): SessionRecentConversationText | undefined {
-  const parsed = event as {
-    id?: unknown;
-    message?: unknown;
-  };
-  const message = parsed.message as
-    | {
-        role?: unknown;
-        timestamp?: unknown;
-        provenance?: unknown;
-        provider?: unknown;
-        model?: unknown;
-        openclawDeliveryMirror?: unknown;
-        __openclaw?: unknown;
-      }
-    | undefined;
-  if (
-    !message ||
-    (message.role !== "user" && message.role !== "assistant") ||
-    (options.role && message.role !== options.role)
-  ) {
-    return undefined;
-  }
-  const deliveryMirror = message.openclawDeliveryMirror;
-  const includeCronDirectDeliveryContext =
-    options.includeCronDirectDeliveryContext === true &&
-    deliveryMirror !== null &&
-    typeof deliveryMirror === "object" &&
-    !Array.isArray(deliveryMirror) &&
-    "kind" in deliveryMirror &&
-    deliveryMirror.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND;
-  if (
-    message.role === "assistant" &&
-    isTranscriptOnlyOpenClawAssistantMessage(message) &&
-    !includeCronDirectDeliveryContext
-  ) {
-    return undefined;
-  }
-  const upstreamUserText =
-    options.preferUpstreamUserText && message.role === "user"
-      ? readPreferredUpstreamUserText(message)
-      : undefined;
-  if (upstreamUserText === null) {
-    return undefined;
-  }
-  const text =
-    message.role === "assistant"
-      ? extractAssistantPhaseText(message)
-      : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
-  if (!text) {
-    return undefined;
-  }
-  const provenance =
-    message.provenance && typeof message.provenance === "object"
-      ? (message.provenance as { sourceChannel?: unknown })
-      : undefined;
-  const timestamp = normalizeTranscriptTimestamp(message.timestamp);
-  return {
-    ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
-    role: message.role,
-    text,
-    ...(timestamp !== undefined ? { timestamp } : {}),
-    ...(typeof provenance?.sourceChannel === "string" && provenance.sourceChannel.trim()
-      ? { sourceChannel: provenance.sourceChannel.trim() }
-      : {}),
-  };
-}
-
 async function readRecentUserAssistantTextFromSqliteTranscript(
-  scope: SqliteSessionFileMarker,
+  scope: SessionTranscriptReadScope,
+  assertCurrent: () => void,
   options: ReadRecentSessionConversationTextOptions = {},
 ): Promise<SessionRecentConversationText[]> {
-  const limit = normalizeRecentTranscriptLimit(options.limit);
-  const pageSize = 250;
   try {
-    const readScope = {
-      agentId: scope.agentId,
-      sessionId: scope.sessionId,
-      storePath: scope.storePath,
-    };
+    const { readRecentSessionConversationTextAsync } =
+      await import("../../gateway/session-transcript-readers.js");
     const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
-    return await readRestoredSessionTranscript(readScope, () => {
-      const recent: SessionRecentConversationText[] = [];
-      for (let offset = 0; recent.length < limit; offset += pageSize) {
-        const page = readSessionTranscriptMessageEventPage(readScope, {
-          maxMessages: pageSize,
-          offset,
-        });
-        if (page.events.length === 0) {
-          break;
-        }
-        for (const event of page.events.toReversed()) {
-          const entry = extractRecentConversationText(event.event, options);
-          if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
-            recent.push(entry);
-            if (recent.length >= limit) {
-              break;
-            }
-          }
-        }
-      }
-      return recent.toReversed();
-    });
+    return await readRestoredSessionTranscript(
+      scope,
+      () => readRecentSessionConversationTextAsync(scope, options),
+      { assertCurrent },
+    );
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       return [];
@@ -274,14 +165,12 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
   }
 }
 
-function resolveSessionConversationTranscriptScope(params: {
-  agentId?: string;
-  sessionKey: string;
-  storePath?: string;
-}): SqliteSessionFileMarker | undefined {
+export async function readRecentUserAssistantTextForSession(
+  params: ReadRecentSessionConversationTextParams,
+): Promise<SessionRecentConversationText[]> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
-    return undefined;
+    return [];
   }
   const explicitAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
   const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -295,22 +184,31 @@ function resolveSessionConversationTranscriptScope(params: {
   const agentId = explicitAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const scopedSessionKey = scopeLegacySessionKeyToAgent({ agentId, sessionKey }) ?? sessionKey;
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(agentId);
-  const entry = loadSessionEntryReadOnly({ agentId, sessionKey: scopedSessionKey, storePath });
-  if (!entry?.sessionId) {
-    return undefined;
-  }
-  return {
-    agentId,
-    sessionId: entry.sessionId,
-    storePath,
-  };
-}
-
-export async function readRecentUserAssistantTextForSession(
-  params: ReadRecentSessionConversationTextParams,
-): Promise<SessionRecentConversationText[]> {
-  const scope = resolveSessionConversationTranscriptScope(params);
-  return scope ? await readRecentUserAssistantTextFromSqliteTranscript(scope, params) : [];
+  return withSessionEntryReadOnlyInWorker(
+    { agentId, sessionKey: scopedSessionKey, storePath },
+    () => {},
+    async (read, owner) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      if (!read.value?.sessionId) {
+        return [];
+      }
+      const result = await readRecentUserAssistantTextFromSqliteTranscript(
+        {
+          agentId,
+          sessionKey: scopedSessionKey,
+          sessionId: read.value.sessionId,
+          storePath: owner.incognito?.actor.path ?? owner.scope?.storePath ?? storePath,
+          env: owner.scope?.env,
+        },
+        owner.assertCurrent,
+        params,
+      );
+      owner.assertCurrent();
+      return result;
+    },
+  );
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(
@@ -327,10 +225,7 @@ export async function readLatestAssistantTextFromSessionTranscript(
   const sqliteScope =
     target && typeof target === "object" ? target : parseSqliteSessionFileMarker(target);
   if (sqliteScope) {
-    const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
-    return readRestoredSessionTranscript(sqliteScope, () =>
-      readLatestTranscriptAssistantText(sqliteScope),
-    );
+    return readLatestTranscriptAssistantTextAsync(sqliteScope);
   }
   const sessionFile = typeof target === "string" ? target : undefined;
   if (!sessionFile?.trim()) {
@@ -368,6 +263,8 @@ type SessionTranscriptAssistantAppendOptions = {
   beforeMessageWrite?: AssistantBeforeMessageWrite;
   assertCurrent?: () => void;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+  /** Delivered command exchanges are replayable conversation, not delivery bookkeeping. */
+  command?: { text: string; idempotencyKey: string };
 };
 
 export async function appendAssistantMessageToSessionTranscript(
@@ -410,11 +307,13 @@ export async function appendAssistantMessageToSessionTranscript(
       ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
       api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
       provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
-      model: OPENCLAW_DELIVERY_MIRROR_MODEL,
+      model: params.command ? "command" : OPENCLAW_DELIVERY_MIRROR_MODEL,
       usage: makeZeroUsageSnapshot(),
       stopReason: "stop" as const,
       timestamp: Date.now(),
-      ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
+      ...(!params.command && params.deliveryMirror
+        ? { openclawDeliveryMirror: params.deliveryMirror }
+        : {}),
     },
   });
 }
@@ -423,6 +322,18 @@ export async function appendExactAssistantMessageToSessionTranscript(
   params: SessionTranscriptAssistantAppendOptions & {
     message: SessionTranscriptAssistantMessage;
   },
+): Promise<SessionTranscriptAppendResult> {
+  const incognito = captureIncognitoSessionOperation(params);
+  return incognito
+    ? incognito.actor.sessions.withSharedState(() =>
+        appendExactAssistantMessageWithSource(params, incognito),
+      )
+    : appendExactAssistantMessageWithSource(params);
+}
+
+async function appendExactAssistantMessageWithSource(
+  params: Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0],
+  incognito?: ReturnType<typeof captureIncognitoSessionOperation>,
 ): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -440,14 +351,47 @@ export async function appendExactAssistantMessageToSessionTranscript(
   const storeAgentId =
     transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
   const storePath =
+    incognito?.actor.path ??
     params.storePath ??
     resolveSessionStorePathCore(params.config?.session?.store, { agentId: storeAgentId });
-  const resolved = resolveSessionEntrySelection({
-    ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
-    sessionKey,
-    storePath,
-  });
-  const entry = resolved.existing;
+  const actorKey = incognito
+    ? resolveSqliteSessionKey(sessionKey, incognito.actor.agentId)
+    : undefined;
+  const resolved =
+    incognito && actorKey
+      ? {
+          existing: (
+            await incognito.actor.sessions.read(
+              incognito.authority,
+              { sessionKey: actorKey },
+              incognito.admissionSignal,
+            )
+          ).entry,
+          normalizedKey: actorKey,
+        }
+      : await withSessionEntryReadOnlyInWorker(
+          {
+            ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
+            sessionKey,
+            storePath,
+          },
+          () => params.assertCurrent?.(),
+          async (read, owner) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            return {
+              existing: read.value,
+              normalizedKey: resolveSqliteSessionKey(
+                sessionKey,
+                owner.scope?.agentId ?? storeAgentId,
+              ),
+            };
+          },
+        );
+  incognito?.authority.assertCurrent();
+  params.assertCurrent?.();
+  let entry = resolved.existing;
   if (
     (params.expectedSessionId && entry?.sessionId !== params.expectedSessionId) ||
     (params.expectedLifecycleRevision !== undefined &&
@@ -460,6 +404,20 @@ export async function appendExactAssistantMessageToSessionTranscript(
       code: "session-rebound",
       reason: `session rebound for sessionKey: ${sessionKey}`,
     };
+  }
+  if (!entry && params.command) {
+    const created = await createSessionEntryWithTranscript(
+      { agentId: storeAgentId, sessionKey: resolved.normalizedKey, storePath },
+      ({ existingEntry }) => ({
+        ok: true,
+        entry: existingEntry ?? { sessionId: randomUUID(), updatedAt: Date.now() },
+      }),
+      { commitGuard: params.assertCurrent },
+    );
+    if (!created.ok) {
+      return { ok: false, reason: created.error };
+    }
+    entry = created.entry;
   }
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
@@ -522,6 +480,19 @@ export async function appendExactAssistantMessageToSessionTranscript(
     onMessageCommitted: params.onMessageCommitted,
     touchSessionEntry: true,
     messages: [
+      ...(params.command
+        ? [
+            {
+              message: {
+                role: "user" as const,
+                content: [{ type: "text" as const, text: params.command.text }],
+                timestamp: Date.now(),
+                idempotencyKey: params.command.idempotencyKey,
+              },
+              idempotencyLookup: "scan" as const,
+            },
+          ]
+        : []),
       {
         message: preparedUnkeyedMessage,
         ...(params.eventId ? { eventId: params.eventId } : {}),
@@ -546,7 +517,6 @@ export async function appendExactAssistantMessageToSessionTranscript(
               ? await findLatestEquivalentAssistantMessageId(
                   appendTarget,
                   preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
-                  params.config,
                 )
               : undefined;
           equivalentAssistant = messageId
@@ -578,7 +548,13 @@ export async function appendExactAssistantMessageToSessionTranscript(
       ...(anchor ? { anchor } : {}),
     };
   }
-  const appendedResult = turn.messages[0];
+  const appendedResult = turn.messages.find(
+    ({ message: persistedMessage }) =>
+      typeof persistedMessage === "object" &&
+      persistedMessage !== null &&
+      "role" in persistedMessage &&
+      persistedMessage.role === "assistant",
+  );
   if (!appendedResult) {
     return {
       ok: false,
@@ -601,6 +577,7 @@ export async function appendExactAssistantMessageToSessionTranscript(
               },
       );
     } catch (err) {
+      rethrowIncognitoSessionError(err);
       return {
         ok: false,
         reason: formatErrorMessage(err),
@@ -636,7 +613,8 @@ async function readLatestVisibleTranscriptMessage(scope: {
       ...(typeof record.id === "string" ? { id: record.id } : {}),
       message: record.message,
     };
-  } catch {
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
     // Mirror deduplication remains best-effort when transcript reads are unavailable.
     return undefined;
   }
@@ -664,9 +642,8 @@ function extractAssistantMessageText(message: AgentMessage): string | null {
 async function findLatestEquivalentAssistantMessageId(
   target: SessionTranscriptTurnWriteContext,
   message: SessionTranscriptAssistantMessage,
-  config?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(redactTranscriptMessage(message, config));
+  const expectedText = extractAssistantMessageText(sanitizeTranscriptMessage(message));
   if (!expectedText) {
     return undefined;
   }
@@ -683,7 +660,7 @@ async function findLatestEquivalentAssistantMessageId(
       return undefined;
     }
     const candidateText = latest
-      ? extractAssistantMessageText(redactTranscriptMessage(latest.message as AgentMessage, config))
+      ? extractAssistantMessageText(sanitizeTranscriptMessage(latest.message as AgentMessage))
       : undefined;
     return candidateText === expectedText ? latest?.id : undefined;
   }

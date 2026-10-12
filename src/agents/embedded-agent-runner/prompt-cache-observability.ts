@@ -10,12 +10,10 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
+import type { ProviderPromptCachePrefix } from "./provider-prompt-serialization.js";
+import type { ProviderPromptState } from "./provider-prompt-state.js";
 
-type PromptHistoryRewriteReason =
-  | "compaction"
-  | "pruning"
-  | "runtimeContextCarrier"
-  | "imageCleanup";
+type PromptHistoryRewriteReason = "compaction" | "pruning" | "runtimeContextCarrier";
 type PromptCacheIdentity = { sessionId: string; promptCacheKey?: string; sessionKey?: string };
 
 export type { PromptCacheChange };
@@ -77,12 +75,21 @@ type PromptCacheTracker = {
   lastCacheRead: number | null;
   /** Missing usage must not bind an older hit to a new request fingerprint. */
   lastCacheReadSnapshot?: PromptCacheSnapshot;
+  lastProviderPrompt?: ProviderPromptState["lastAttempt"];
+  requestedAt: number;
   pendingChanges: PromptCacheChange[] | null;
+  unmeasuredChanges?: PromptCacheChange[] | null;
 };
 
 type PromptHistoryFingerprint = {
   digest: string;
   role: string;
+  envelopeFields: Map<string, string>;
+  contentDigest: string;
+  contentKind: "string" | "blocks";
+  blockCount: number;
+  blocks: string[];
+  remainingBlocksDigest?: string;
   stringBlock?: WeakRef<PromptStringFingerprint>;
 };
 
@@ -98,6 +105,78 @@ const blockFingerprints = new WeakMap<
 const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
 const historyRewriteWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
+const MAX_HISTORY_DIFF_FIELDS = 8;
+// Only these static names may enter diagnostics; extension keys can contain user data.
+const HISTORY_ENVELOPE_FIELDS = new Set([
+  "role",
+  "timestamp",
+  "idempotencyKey",
+  "__openclaw",
+  "usage",
+  "api",
+  "provider",
+  "model",
+  "stopReason",
+  "errorMessage",
+  "toolCallId",
+  "toolName",
+  "isError",
+  "runtimeContext",
+  "runtimeContextCarrier",
+  "operatorMessage",
+]);
+
+function fingerprintEnvelope(envelope: object): Map<string, string> {
+  const fields = new Map<string, string>();
+  const other: [string, unknown][] = [];
+  for (const [key, value] of Object.entries(envelope)) {
+    if (HISTORY_ENVELOPE_FIELDS.has(key)) {
+      fields.set(key, sha256Hex(stableStringify({ [key]: value })));
+    } else {
+      other.push([key, value]);
+    }
+  }
+  if (other.length) {
+    fields.set("other", sha256Hex(stableStringify(Object.fromEntries(other))));
+  }
+  return fields;
+}
+
+function describeHistoryChange(
+  previous: PromptHistoryFingerprint,
+  next: PromptHistoryFingerprint | undefined,
+): string {
+  if (!next) {
+    return "message removed";
+  }
+  const fields: string[] = [];
+  if (previous.contentKind !== next.contentKind) {
+    fields.push("content.type");
+  }
+  if (previous.contentDigest !== next.contentDigest) {
+    if (previous.contentKind === "string" || next.contentKind === "string") {
+      fields.push("content");
+    } else {
+      if (previous.blockCount !== next.blockCount) {
+        fields.push("content.length");
+      }
+      for (let index = 0; index < Math.max(previous.blocks.length, next.blocks.length); index++) {
+        if (previous.blocks[index] !== next.blocks[index]) {
+          fields.push(`content[${index}]`);
+        }
+      }
+      if (previous.remainingBlocksDigest !== next.remainingBlocksDigest) {
+        fields.push("content[remaining]");
+      }
+    }
+  }
+  for (const key of new Set([...previous.envelopeFields.keys(), ...next.envelopeFields.keys()])) {
+    if (previous.envelopeFields.get(key) !== next.envelopeFields.get(key)) {
+      fields.push(`envelope.${key}`);
+    }
+  }
+  return `changed fields: ${fields.slice(0, MAX_HISTORY_DIFF_FIELDS).join(", ")}${fields.length > MAX_HISTORY_DIFF_FIELDS ? ", …" : ""}`;
+}
 
 function fingerprintBlock(block: object): string {
   const primitives: [string, unknown][] = [];
@@ -148,9 +227,19 @@ function fingerprintMessage(
     stringFingerprints.delete(message);
     blocks = content.map(fingerprintBlock);
   }
+  const envelopeFields = fingerprintEnvelope(envelope);
+  const contentDigest = sha256Hex(stableStringify(blocks));
   return {
-    digest: sha256Hex(stableStringify([envelope, blocks])),
+    digest: sha256Hex(stableStringify([Object.fromEntries(envelopeFields), contentDigest])),
     role: message.role,
+    envelopeFields,
+    contentDigest,
+    contentKind: typeof content === "string" ? "string" : "blocks",
+    blockCount: blocks.length,
+    blocks: blocks.slice(0, MAX_HISTORY_DIFF_FIELDS),
+    ...(blocks.length > MAX_HISTORY_DIFF_FIELDS
+      ? { remainingBlocksDigest: sha256Hex(stableStringify(blocks.slice(MAX_HISTORY_DIFF_FIELDS))) }
+      : {}),
     stringBlock,
   };
 }
@@ -159,7 +248,76 @@ const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
 const MAX_STABLE_CACHE_READ_RATIO = 0.95;
 
 function buildTrackerKey(params: PromptCacheIdentity): string {
-  return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+  // Background reviews share provider affinity, but never diagnostic request ownership.
+  return JSON.stringify([
+    params.sessionId,
+    params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId,
+  ]);
+}
+
+function describeProviderFields(
+  before: ProviderPromptCachePrefix["parameters"],
+  after: ProviderPromptCachePrefix["parameters"] | undefined,
+): string {
+  if (!after) {
+    return "removed";
+  }
+  const beforeFields = before.fields ?? {};
+  const afterFields = after.fields ?? {};
+  const changed = [...new Set([...Object.keys(beforeFields), ...Object.keys(afterFields)])].filter(
+    (key) => beforeFields[key] !== afterFields[key],
+  );
+  return changed.length
+    ? changed.slice(0, MAX_HISTORY_DIFF_FIELDS).join("+") +
+        (changed.length > MAX_HISTORY_DIFF_FIELDS ? "+remaining" : "")
+    : Object.keys(beforeFields).length || Object.keys(afterFields).length
+      ? "order"
+      : "value";
+}
+
+function describeProviderPrefix(
+  previous: ProviderPromptState["lastAttempt"],
+  next: ProviderPromptState["lastAttempt"],
+): string {
+  if (!previous?.cachePrefix || !next?.cachePrefix) {
+    return "unavailable";
+  }
+  const before = previous.cachePrefix;
+  const after = next.cachePrefix;
+  if (previous.scopeDigest !== next.scopeDigest) {
+    return "provider-scope";
+  }
+  const continuation = before.continuation || after.continuation;
+  const segment = (["system", "tools"] as const).find((key) => before[key] !== after[key]);
+  const index = before.messages.findIndex((item, i) => item.digest !== after.messages[i]?.digest);
+  let prefix = segment ?? (continuation ? "wire-prefix-match" : "prefix-match");
+  if (!segment && index >= 0) {
+    const item = before.messages[index]!;
+    const fields = item.fields ? `.${describeProviderFields(item, after.messages[index])}` : "";
+    prefix = `${continuation ? "wire-input" : "message"}:${index}${fields}`;
+  } else if (!segment && before.tail !== undefined) {
+    // A growing tail cannot establish equality of its earlier messages from one digest.
+    prefix =
+      before.messageCount !== after.messageCount
+        ? `unverified-after:${before.messages.length}`
+        : before.tail !== after.tail
+          ? `message-tail:${before.messages.length}`
+          : prefix;
+  }
+  const parameters =
+    before.parameters.digest !== after.parameters.digest
+      ? `parameters:${describeProviderFields(before.parameters, after.parameters)}`
+      : undefined;
+  const format = before.messageField !== after.messageField ? "input-format" : undefined;
+  const details = [
+    prefix.endsWith("prefix-match") && (parameters || format) ? undefined : prefix,
+    format,
+    parameters,
+  ]
+    .filter(Boolean)
+    .join(",");
+  // A delta request's wire input is not its logical conversation prefix.
+  return `${continuation ? "continuation:" : ""}${details}`;
 }
 
 function describeToolChanges(previous: PromptCacheSnapshot, next: PromptCacheSnapshot): string {
@@ -333,8 +491,8 @@ export function beginPromptCacheObservation(
   },
 ) {
   const key = buildTrackerKey(params);
-  const cached = trackers.get(key);
-  const previous = cached?.sessionId === params.sessionId ? cached : undefined;
+  const previous = trackers.get(key);
+  const requestedAt = Date.now();
   const tools = sortPromptCacheToolsByName(params.tools);
   const splitSystemPrompt = splitSystemPromptCacheBoundary(params.systemPrompt);
   const prefix = splitSystemPrompt?.stablePrefix ?? params.systemPrompt;
@@ -376,6 +534,7 @@ export function beginPromptCacheObservation(
   );
   const changes = previous
     ? [
+        ...(previous.unmeasuredChanges ?? []),
         ...(previous.pendingChanges?.filter(
           (change) => change.code === "aggregateToolResultTruncation",
         ) ?? []),
@@ -388,20 +547,20 @@ export function beginPromptCacheObservation(
   const restarted = changes.some(
     ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
   );
-  const divergence =
-    previous && !restarted && !previous.declaredRewrites?.size
-      ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
-      : -1;
+  const divergence = previous
+    ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
+    : -1;
   const violation =
-    divergence < 0
+    divergence < 0 || restarted || previous?.declaredRewrites?.size
       ? undefined
       : {
           code: "historyRewrite" as const,
-          detail: `message ${divergence} (${history[divergence]?.role ?? previous!.history[divergence]!.role}) differs from the previous request; history must be append-only`,
+          detail: `message ${divergence} (${history[divergence]?.role ?? previous!.history[divergence]!.role}) differs from the previous request; history must be append-only; ${describeHistoryChange(previous!.history[divergence]!, history[divergence])}`,
         };
   if (violation) {
     changes.push(violation);
   }
+  const pendingChanges = [...new Map(changes.map((change) => [change.code, change])).values()];
   const tracker: PromptCacheTracker = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey?.trim(),
@@ -409,7 +568,9 @@ export function beginPromptCacheObservation(
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
-    pendingChanges: changes.length > 0 ? changes : null,
+    lastProviderPrompt: previous?.lastProviderPrompt,
+    requestedAt,
+    pendingChanges: pendingChanges.length > 0 ? pendingChanges : null,
   };
   trackers.delete(key);
   pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
@@ -424,8 +585,10 @@ export function beginPromptCacheObservation(
   }
   return {
     snapshot,
-    changes: changes.length > 0 ? changes : null,
+    prefixUnchanged: previous !== undefined && divergence < 0,
+    changes: tracker.pendingChanges,
     previousCacheRead: previous?.lastCacheRead ?? null,
+    requestGapMs: previous ? Math.max(0, requestedAt - previous.requestedAt) : undefined,
   };
 }
 
@@ -459,6 +622,7 @@ export function recordAggregateTruncation(params: PromptCacheIdentity): void {
 export function completePromptCacheObservation(
   params: PromptCacheIdentity & {
     usage?: NormalizedUsage;
+    providerPrompt?: ProviderPromptState["lastAttempt"];
   },
 ) {
   const key = buildTrackerKey(params);
@@ -470,13 +634,22 @@ export function completePromptCacheObservation(
   tracker.pendingChanges = null;
 
   const cacheRead = params.usage?.cacheRead;
-  if (typeof cacheRead !== "number" || !Number.isFinite(cacheRead)) {
+  if (
+    params.usage?.cacheTelemetry?.state === "unavailable" ||
+    typeof cacheRead !== "number" ||
+    !Number.isFinite(cacheRead)
+  ) {
+    // Keep cause evidence paired with the last measured cache hit, not a usage-less request.
+    tracker.unmeasuredChanges = changes;
     return null;
   }
+  tracker.unmeasuredChanges = null;
   const previousCacheRead = tracker.lastCacheRead;
   const previousSnapshot = tracker.lastCacheReadSnapshot;
+  const previousProviderPrompt = tracker.lastProviderPrompt;
   tracker.lastCacheRead = cacheRead;
   tracker.lastCacheReadSnapshot = tracker.snapshot;
+  tracker.lastProviderPrompt = params.providerPrompt;
 
   if (previousCacheRead == null || previousCacheRead <= 0) {
     return null;
@@ -496,6 +669,19 @@ export function completePromptCacheObservation(
         previousCacheRead,
         cacheRead,
         changes,
+        ...(previousProviderPrompt?.wire || params.providerPrompt?.wire
+          ? {
+              requests: {
+                previous: previousProviderPrompt?.wire,
+                current: params.providerPrompt?.wire,
+              },
+            }
+          : {}),
+        ...(params.providerPrompt
+          ? {
+              providerPrefix: describeProviderPrefix(previousProviderPrompt, params.providerPrompt),
+            }
+          : {}),
       }
     : null;
 }

@@ -584,10 +584,8 @@ export function defaultValue(schema?: JsonSchema, depth = 0): unknown {
     case "boolean":
       return validatedDefaultCandidate(schema, false);
     case "number":
-    case "integer": {
-      const value = defaultNumericValue(schema);
-      return validatedDefaultCandidate(schema, value);
-    }
+    case "integer":
+      return validatedDefaultCandidate(schema, defaultNumericValue(schema));
     case "string":
       return validatedDefaultCandidate(schema, defaultStringValue(schema));
     case "null":

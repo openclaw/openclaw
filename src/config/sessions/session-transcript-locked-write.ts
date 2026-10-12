@@ -17,7 +17,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareTranscriptMessageAppendForWorker } from "./session-accessor.sqlite-transcript-message-append.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   LockedTranscriptMessageAppendOptions,
   SessionTranscriptWriteLockAccessorContext,
@@ -40,6 +40,7 @@ import {
 } from "./session-source-authority.js";
 import { withLockedSessionTranscriptReads } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
+import { assertLegacyTranscriptPreparation } from "./session-transcript-preparation.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";
@@ -272,19 +273,43 @@ export async function withWorkerTranscriptWriteLock<T>(
             }
             return receipt;
           };
+          // Source authority and message preparation can both read this writer.
+          // Settle their reads before commit without queuing behind the append itself.
+          const prepareWithLockedReads = <R>(prepare: () => Promise<R>) =>
+            withTranscriptLockSettlement((queueRead) =>
+              withLockedSessionTranscriptReads(
+                {
+                  canonicalPath: identity.canonicalPath,
+                  claim,
+                  worker,
+                  assertCurrent,
+                  queue: queueRead,
+                },
+                prepare,
+              ),
+            );
           const append = async <TMessage>(
             options: LockedTranscriptMessageAppendOptions<TMessage>,
             sequenced: boolean,
           ) => {
+            assertLegacyTranscriptPreparation(fenced, options);
             const {
               config,
               message: originalMessage,
+              preparation,
               prepareMessageAfterIdempotencyCheck: legacyPrepare,
-              prepareMessageAfterIdempotencyCheckAsync: prepare,
+              prepareMessageAfterIdempotencyCheckAsync,
               beforeFreshMessageCommit,
               ...serializable
             } = options;
-            const freshGuard = captureExternalSessionCommitGuard(beforeFreshMessageCommit);
+            if (preparation && (legacyPrepare || beforeFreshMessageCommit)) {
+              throw new Error(
+                "Choose preparation or the legacy transcript callback form, not both.",
+              );
+            }
+            const prepare = preparation?.prepareMessage ?? prepareMessageAfterIdempotencyCheckAsync;
+            const source = preparation?.source ?? beforeFreshMessageCommit;
+            const freshGuard = captureExternalSessionCommitGuard(source);
             const input = {
               ...target,
               options: {
@@ -313,7 +338,7 @@ export async function withWorkerTranscriptWriteLock<T>(
             };
             const expected =
               prepare ||
-              beforeFreshMessageCommit ||
+              source ||
               (custody &&
                 input.options.message?.role === "user" &&
                 typeof input.options.message.idempotencyKey === "string")
@@ -322,8 +347,10 @@ export async function withWorkerTranscriptWriteLock<T>(
                     input,
                   })
                 : undefined;
-            const authority = await prepareSessionSourceAuthority(
-              expected?.pending || expected?.existing ? undefined : freshGuard,
+            const authority = await prepareWithLockedReads(() =>
+              prepareSessionSourceAuthority(
+                expected?.pending || expected?.existing ? undefined : freshGuard,
+              ),
             );
             if (freshGuard?.nativeSource || authority.nativeSource || (legacyPrepare && !prepare)) {
               // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
@@ -350,19 +377,7 @@ export async function withWorkerTranscriptWriteLock<T>(
             try {
               let message: TMessage | undefined = originalMessage;
               if (prepare && expected && !expected.pending && !expected.existing) {
-                // Preparation may await a delta read; settle it before this append commits.
-                message = await withTranscriptLockSettlement((queueRead) =>
-                  withLockedSessionTranscriptReads(
-                    {
-                      canonicalPath: identity.canonicalPath,
-                      claim,
-                      worker,
-                      assertCurrent,
-                      queue: queueRead,
-                    },
-                    () => prepare(originalMessage),
-                  ),
-                );
+                message = await prepareWithLockedReads(() => prepare(originalMessage));
               }
               assertCurrent();
               const preparedMessageJson =
@@ -370,13 +385,12 @@ export async function withWorkerTranscriptWriteLock<T>(
                   ? undefined
                   : isRecord(message)
                     ? prepareTranscriptMessageAppendForWorker({ message, config }).messageJson
-                    : JSON.stringify(redactTranscriptMessageForStorage(message, { config }));
+                    : JSON.stringify(sanitizeTranscriptMessageForStorage(message));
               const receipt = await mutate({
                 ...input,
                 kind: "message",
                 freshSources: authority.checks.map((check) => check.predicate),
-                freshAuthorityPrepared:
-                  !beforeFreshMessageCommit || (!expected?.pending && !expected?.existing),
+                freshAuthorityPrepared: !source || (!expected?.pending && !expected?.existing),
                 sequenced,
                 preparedMessageJson,
                 ...(prepare && expected
@@ -430,7 +444,14 @@ export async function withWorkerTranscriptWriteLock<T>(
                     const facts = await executeSessionMessageRewriteOperation(
                       worker,
                       database.agentId,
-                      { type: "session.transcript.lock.facts", input: { ...target, ...params } },
+                      {
+                        type: "session.transcript.lock.facts",
+                        input: {
+                          ...target,
+                          idempotencyKeys: params.idempotencyKeys,
+                          sourceRunId: params.sourceRunId,
+                        },
+                      },
                     );
                     assertCurrent();
                     for (const anchor of facts.anchorsByIdempotencyKey.values()) {

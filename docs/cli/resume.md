@@ -61,7 +61,7 @@ configured or default `gateway.port`.
 An explicit target normally requires an explicit `--token` or `--password`;
 OpenClaw does not borrow credentials or a TLS pin from a different configured
 target. `resume` has one narrow exception for a handoff copied from the Control
-UI: when its Gateway URL byte-for-byte matches a canonical target of the current
+UI: when its Gateway URL byte-for-byte matches a configured target of the current
 profile, it may reuse that profile's configured interactive auth, SecretRef,
 and stored exact-origin device auth. In local mode, the eligible targets are the
 current local target with `gateway.controlUi.basePath` and `gateway.publicOrigin`
@@ -72,7 +72,7 @@ local Gateway certificate fingerprint, and an exact configured remote target
 may reuse `gateway.remote.tlsFingerprint`; a public-origin target never inherits
 the local listener's pin. Pass `--tls-fingerprint` explicitly when that public
 origin needs a pin. A host, port, path, profile, query, or fragment mismatch
-fails closed under the normal explicit-target policy. OpenClaw never scans
+is rejected under the normal explicit-target policy. OpenClaw never scans
 other profiles for a match. Handoff connections also ignore ambient
 `OPENCLAW_GATEWAY_TOKEN` and `OPENCLAW_GATEWAY_PASSWORD` fallback, so shell
 credentials for another Gateway cannot cross into the selected target. Explicit
@@ -99,7 +99,7 @@ credential-free handoff. Use a manually authenticated CLI target with explicit
 
 Run the command in an already configured OpenClaw terminal. The terminal
 authenticates independently. Before opening the TUI, `resume` asks that Gateway
-to resolve the qualified key and uses the returned canonical key. A deleted or
+to resolve the qualified key and uses the returned resolved key. A deleted or
 stale session stops with guidance to copy a fresh command; it never starts a new
 session. The Gateway's session access controls remain authoritative. This flow
 continues an existing session; it does not delegate first-use authentication

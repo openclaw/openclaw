@@ -1,14 +1,9 @@
 import fs from "node:fs";
-import koffi from "koffi";
+import { tryAcquireWriteLease } from "@openclaw/fs-safe/file-lock";
 
 // Linux leases check open descriptors across UIDs, unlike an unprivileged fuser census.
 // Keep SIGIO and the leased descriptor in this disposable process, never the Gateway.
 process.on("SIGIO", () => {});
-const fcntl = koffi.load(null).func("int fcntl(int fd, int command, ...)");
-const F_SETLEASE = 1024;
-const F_GETLEASE = 1025;
-const F_WRLCK = 1;
-const F_UNLCK = 2;
 // SAFETY: The maintenance owner sends this private packet after its live input guard.
 const { files, olderThan } = JSON.parse(fs.readFileSync(0, "utf8")) as {
   files: string[];
@@ -30,7 +25,8 @@ for (const file of files) {
     if (!original.isFile() || original.mtimeMs >= olderThan) {
       continue;
     }
-    if (fcntl(fd, F_SETLEASE, "int", F_WRLCK) !== 0) {
+    const lease = tryAcquireWriteLease(fd);
+    if (!lease) {
       retained++;
       continue;
     }
@@ -42,7 +38,7 @@ for (const file of files) {
         current.size !== original.size ||
         current.mtimeMs !== original.mtimeMs ||
         current.ctimeMs !== original.ctimeMs ||
-        fcntl(fd, F_GETLEASE) !== F_WRLCK
+        !lease.isHeld()
       ) {
         retained++;
         continue;
@@ -50,7 +46,7 @@ for (const file of files) {
       fs.unlinkSync(file);
       removed++;
     } finally {
-      fcntl(fd, F_SETLEASE, "int", F_UNLCK);
+      lease.release();
     }
   } catch {
     retained++;

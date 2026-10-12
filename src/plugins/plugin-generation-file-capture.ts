@@ -9,13 +9,9 @@ import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
 import type { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
-import {
-  copyPluginSourceFile,
-  pluginSourceIdentityChangedOnlyByCtime,
-} from "./plugin-source-file.js";
+import { copyPluginSourceFile } from "./plugin-source-file.js";
 import {
   readPluginSourceDirectory,
-  pluginSourceInputIdentity,
   type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
 
@@ -61,10 +57,7 @@ export function createPluginGenerationFileCapture({
   capturedPaths: Map<string, string>;
   originalSources: Map<string, string>;
   hardlinkedSources: Set<string>;
-  sourceCapture: Pick<
-    ReturnType<typeof createPluginSourceCapture>,
-    "inputs" | "pendingInputs" | "additions"
-  >;
+  sourceCapture: Pick<ReturnType<typeof createPluginSourceCapture>, "additions">;
   sourceLinks: ReturnType<typeof createPluginSourceLinkCapture>;
   deferExternalLinks: boolean;
   nativeAdmission: ReturnType<typeof createPluginNativeAdmission>;
@@ -73,7 +66,7 @@ export function createPluginGenerationFileCapture({
   sourceFacts?: Map<string, PluginCapturedSourceFact>;
   onPackageMetadata: (source: string, target: string) => void;
 }) {
-  const { inputs, pendingInputs, additions } = sourceCapture;
+  const { additions } = sourceCapture;
   const ancestors = new Set<string>();
   const copy = (source: string, target: string, copyFile: RootFileCopyBatchSync["copyFile"]) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
@@ -95,41 +88,6 @@ export function createPluginGenerationFileCapture({
     }
     const stat = fs.statSync(real, { bigint: true });
     const captured = capturedPaths.get(real);
-    const recordContent = (
-      contentHash: string,
-      sizeBytes = 0,
-      native = false,
-      identity = pluginSourceInputIdentity(stat),
-      admittedBoundary = inputBoundary,
-    ) => {
-      if (sourceFacts) {
-        const original = fs.realpathSync(source);
-        sourceFacts.set(path.relative(directory, target), {
-          source: path.resolve(source),
-          input: {
-            identity: pluginSourceInputIdentity(fs.statSync(original, { bigint: true })),
-            contentHash: stat.isDirectory()
-              ? readPluginSourceDirectory(original).contentHash
-              : contentHash,
-            sizeBytes,
-            directory: stat.isDirectory(),
-            boundary: isPathInside(boundary, original) ? boundary : path.dirname(original),
-          },
-        });
-      }
-      if (!captured) {
-        // Filesystem ticks can hide edits; aliases retain their first captured content facts.
-        inputs.set(real, {
-          identity,
-          contentHash,
-          sizeBytes,
-          directory: stat.isDirectory(),
-          boundary: admittedBoundary,
-          ...(native ? { native: true } : {}),
-        });
-        pendingInputs.add(real);
-      }
-    };
     capturedPaths.set(path.resolve(source), target);
     originalSources.set(target, path.resolve(source));
     // SDK companion loaders receive copied paths; those exact aliases retain this owner.
@@ -147,9 +105,7 @@ export function createPluginGenerationFileCapture({
       }
       ancestors.add(real);
       fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-      const { names, contentHash } = readPluginSourceDirectory(real);
-      recordContent(contentHash);
-      for (const name of names) {
+      for (const name of readPluginSourceDirectory(real)) {
         if (
           !(
             deferExternalLinks &&
@@ -170,48 +126,24 @@ export function createPluginGenerationFileCapture({
       // rejected by the acquisition owner even when the first attempt is incomplete.
       additions.add(target);
       const retainedFile = retained?.files.get(path.relative(directory, target));
-      if (retainedFile && retainedFile.source !== path.resolve(source)) {
-        throw new Error("Plugin retained source layout changed during admission");
-      }
       const retainedReference = retained?.source.native?.references.has(target);
       if (retainedReference) {
         // The fork owns this validated reference; the new lease must admit its own native owner.
         fs.unlinkSync(target);
       }
       const native = nativeAdmission.materialize(real, inputBoundary, target, stat, source);
-      let copiedContent: ReturnType<typeof copyPluginSourceFile>;
-      if (native) {
-        nativeAdmission.reconcileSourceInputs(inputs);
-      } else if (retainedFile && !retainedReference) {
-        const retainedInput = retainedFile.input;
+      let copiedContent: PluginCapturedSourceFact | undefined;
+      if (!native && retainedFile && !retainedReference) {
         // The receipt verifies the private copy against these retained content facts.
-        copiedContent = {
-          contentHash: retainedInput.contentHash,
-          sizeBytes: retainedInput.sizeBytes,
-          sourceIdentity: pluginSourceInputIdentity(stat),
-        };
-      } else if (captured) {
-        // A second filename for a prefetched entry retains its first bytes and source identity.
-        copiedContent = copyPluginSourceFile(captured, directory, target, {
-          hashCopiedContent: true,
-          copyFile,
-          preserveSourceMode: true,
-        });
-      } else {
-        copiedContent = copyPluginSourceFile(real, inputBoundary, target, {
-          hashCopiedContent: true,
-          copyFile,
-        });
-        const identity = pluginSourceInputIdentity(stat);
-        if (
-          copiedContent &&
-          copiedContent.sourceIdentity !== identity &&
-          !pluginSourceIdentityChangedOnlyByCtime(identity, copiedContent.sourceIdentity)
-        ) {
-          throw new Error(
-            "Plugin source changed while preparing its reload; retry after the edit finishes.",
-          );
-        }
+        copiedContent = retainedFile;
+      } else if (!native) {
+        // A second filename for a prefetched entry retains its first bytes.
+        copiedContent = copyPluginSourceFile(
+          captured ?? real,
+          captured ? directory : inputBoundary,
+          target,
+          { hashCopiedContent: true, copyFile, ...(captured ? { preserveSourceMode: true } : {}) },
+        );
       }
       receipt.file({
         target: native?.path ?? target,
@@ -221,13 +153,7 @@ export function createPluginGenerationFileCapture({
         prepared: native?.content ?? copiedContent,
         onContent: (content) => {
           native?.record(content);
-          recordContent(
-            content.contentHash,
-            content.sizeBytes,
-            native !== undefined,
-            native?.sourceIdentity ?? (captured ? undefined : copiedContent?.sourceIdentity),
-            native?.sourceBoundary ?? inputBoundary,
-          );
+          sourceFacts?.set(path.relative(directory, target), content);
         },
       });
       if (path.basename(target) === "package.json") {

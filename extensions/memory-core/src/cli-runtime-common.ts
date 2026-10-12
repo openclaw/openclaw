@@ -16,10 +16,10 @@ import {
 import {
   listAgentIds,
   resolveConfiguredAgentId,
-  getRuntimeConfig,
   resolveDefaultAgentId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMemoryCoreSidecarNotice, resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import type { MemoryCommandOptions } from "./cli.types.js";
@@ -123,7 +123,7 @@ async function loadMemoryCommandConfig(
   commandName: string,
   mode?: "enforce_resolved" | "read_only_status",
 ) {
-  const config = getRuntimeConfig({ skipPluginValidation: true });
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   try {
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
       config,
@@ -153,31 +153,12 @@ async function loadMemoryCommandConfig(
     };
   }
 }
-function emitMemorySecretResolveDiagnostics(
-  diagnostics: string[],
-  params?: { json?: boolean },
-): void {
-  if (diagnostics.length === 0) {
-    return;
-  }
-  const toStderr = params?.json === true;
-  for (const entry of diagnostics) {
-    const message = warn(`[secrets] ${entry}`);
-    if (toStderr) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(message);
-    }
-  }
+function emitMemoryCommandWarning(message: string, toStderr: boolean): void {
+  defaultRuntime[toStderr ? "error" : "log"](warn(message));
 }
 /** Tells the operator that a Memory Core command acts on its sidecar index only. */
 export function emitMemoryCoreSidecarNotice(owner: string, params?: { json?: boolean }): void {
-  const message = warn(formatMemoryCoreSidecarNotice(owner));
-  if (params?.json) {
-    defaultRuntime.error(message);
-  } else {
-    defaultRuntime.log(message);
-  }
+  emitMemoryCommandWarning(formatMemoryCoreSidecarNotice(owner), Boolean(params?.json));
 }
 export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
   const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
@@ -235,7 +216,9 @@ export async function withMemoryCommand(params: {
     params.commandName,
     params.purpose === "status" ? "read_only_status" : undefined,
   );
-  emitMemorySecretResolveDiagnostics(diagnostics, { json });
+  for (const entry of diagnostics) {
+    emitMemoryCommandWarning(`[secrets] ${entry}`, json === true);
+  }
   const slotOwner = resolveForeignMemorySlotOwner(cfg);
   if (slotOwner && params.requiresMemorySlot) {
     const message = `${params.commandName} reads only Memory Core's sidecar index, but plugins.slots.memory selects "${slotOwner}". Search the selected memory through the agent's memory tools or the ${slotOwner} plugin's own commands.`;

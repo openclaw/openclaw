@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import * as sessionAccess from "../../config/sessions/session-accessor.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -28,6 +29,8 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
 import * as resultStaging from "./workspace-result-staging.js";
 
+afterAll(closeStateDatabaseForTest);
+
 // Pause only the physical admission boundary, without holding a native database lock.
 vi.mock("../../agents/sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: vi.fn(),
@@ -49,7 +52,7 @@ describe("cloud transcript write admission", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.mocked(withSessionManagerWrite).mockReset();
-    await cleanupWorkerTurnLauncherTest();
+    await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
   });
 
   it.each(["current", "run", "claim", "environment", "missing", "writer", "lifecycle"] as const)(

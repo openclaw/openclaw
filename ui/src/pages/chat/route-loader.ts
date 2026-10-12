@@ -283,6 +283,15 @@ export async function loadChatRoute(
     return notFound({ routeId: face });
   }
   const { target } = resolvedTarget;
+  if (
+    target.kind === "literal" &&
+    context.sessions.cachedRoutingDefaults &&
+    (!target.slugCandidate || context.sessions.cachedRoutingDefaults.scope === "per-sender")
+  ) {
+    // Literal keys and display-name links share the scoped roster used by short links.
+    await context.sessions.whenCachedRosterSettled();
+    signal.throwIfAborted();
+  }
   const routeLocation = resolvedTarget.location;
   const preferenceDerived = isPreferenceDerivedFace(routeLocation);
   const presentation = {
@@ -376,6 +385,7 @@ export async function loadChatRoute(
   if (target.kind === "literal") {
     let defaultsKnown =
       defaultsUsable ||
+      context.sessions.cachedRoutingDefaults?.scope === "per-sender" ||
       (context.gateway.snapshot.phase === "connected" && hasConfiguredMainKey(context));
     const needsGatewayResolution = preferenceDerived || Boolean(target.slugCandidate);
     if (!defaultsKnown && needsGatewayResolution) {
@@ -386,13 +396,17 @@ export async function loadChatRoute(
       }
     }
     if (needsGatewayResolution) {
-      // Any single non-short-id segment is a slug candidate, so a plain literal route
-      // would otherwise pay a resolution round-trip on every open. A cached row is
-      // already proof the segment is a real key, which settles the exact lookup for
-      // free; only genuinely unknown references reach the gateway.
+      // Exact keys win over names; warm names use the same scoped lookup as short links.
       const cachedRow =
         defaultsKnown && !revalidation
-          ? findUiSessionRow(context, target.sessionKey, target.agentId)
+          ? (findUiSessionRow(context, target.sessionKey, target.agentId) ??
+            (context.sessions.state.resultCached && !preferenceDerived
+              ? findLocalSessionReference(
+                  context.sessions.state.result?.sessions ?? [],
+                  target,
+                  configuredMainKey(context),
+                )
+              : undefined))
           : undefined;
       const resolution =
         revalidatedResolution ??
@@ -434,9 +448,7 @@ export async function loadChatRoute(
             .then(() => canonicalMainLocation(context, routeLocation, face, target.sessionKey))
             .catch(() => null)
         : undefined;
-    const preferenceLocation = preferenceDerived
-      ? locationWithoutNavigationHints(routeLocation)
-      : null;
+    const navigationLocation = locationWithoutNavigationHints(routeLocation);
     return {
       kind: "session",
       sessionKey: target.sessionKey,
@@ -444,8 +456,8 @@ export async function loadChatRoute(
       face,
       ...(canonicalLocation
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
-        : preferenceLocation && preferenceLocation.search !== routeLocation.search
-          ? { canonicalLocation: preferenceLocation, canonicalLocationSource: routeLocation }
+        : navigationLocation.search !== routeLocation.search
+          ? { canonicalLocation: navigationLocation, canonicalLocationSource: routeLocation }
           : {}),
       ...(canonicalLocationReady
         ? { canonicalLocationReady, canonicalLocationSource: routeLocation }

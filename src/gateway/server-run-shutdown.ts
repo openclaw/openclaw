@@ -1,5 +1,8 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
-import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunRestartAbortReason,
+} from "../agents/run-termination.js";
 import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-run-registry.js";
 import { formatGatewayDrainCounts, waitForGatewayDrain } from "../infra/gateway-drain.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -62,14 +65,14 @@ function listRestartDrainRuns(
   );
 }
 
-function listRestartRecoveryRuns(
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
-): Array<[string, ChatAbortControllerEntry]> {
-  return listUnabortedRuns(chatAbortControllers).filter(
-    ([, entry]) =>
-      entry.controlUiVisible !== false &&
-      (entry.registrationCleanupRequested !== true ||
-        entry.projectSessionTerminalPersisted !== true),
+function isRestartRecoveryRun(entry: ChatAbortControllerEntry): boolean {
+  // The close prelude can abort connection work before the shutdown marker runs.
+  return (
+    (!entry.controller.signal.aborted ||
+      entry.abortStopReason === "restart" ||
+      isAgentRunRestartAbortReason(entry.controller.signal.reason)) &&
+    entry.controlUiVisible !== false &&
+    (entry.registrationCleanupRequested !== true || entry.projectSessionTerminalPersisted !== true)
   );
 }
 
@@ -110,7 +113,10 @@ function collectActiveRestartSessionRefs(
       observedAt: run.observedAt ?? observedAt,
     });
   };
-  for (const [runId, entry] of listRestartRecoveryRuns(params.chatAbortControllers)) {
+  for (const [runId, entry] of params.chatAbortControllers) {
+    if (!isRestartRecoveryRun(entry)) {
+      continue;
+    }
     const sessionKey = entry.sessionKey.trim();
     // Registration metadata can predate a reset or compaction session-id rotation.
     const resolvedSessionId =
@@ -205,9 +211,7 @@ async function markActiveRunsForRestartRecovery(
               return (
                 (entry &&
                   entry === activeEntries.get(run.runId) &&
-                  !entry.controller.signal.aborted &&
-                  (entry.registrationCleanupRequested !== true ||
-                    entry.projectSessionTerminalPersisted !== true) &&
+                  isRestartRecoveryRun(entry) &&
                   entry.lifecycleGeneration === run.lifecycleGeneration) ||
                 (candidate !== undefined &&
                   candidate === recoveryCandidates.get(run.runId) &&

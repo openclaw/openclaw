@@ -79,26 +79,22 @@ describe("config", () => {
 
 describe("attempt verdict", () => {
   it("escalates only OpenAI's own cyber refusal on this attempt", () => {
-    expect(readCodexCyberAttemptVerdict(refusal("cyber")).cyberRefused).toBe(true);
+    expect(readCodexCyberAttemptVerdict(refusal("cyber"))).toMatchObject({
+      cyberRefused: true,
+      replaySafe: true,
+    });
     expect(readCodexCyberAttemptVerdict(refusal("bio")).cyberRefused).toBe(false);
     expect(readCodexCyberAttemptVerdict(refusal("misalignment")).cyberRefused).toBe(false);
     expect(readCodexCyberAttemptVerdict(refusal("cyber", "other")).cyberRefused).toBe(false);
     expect(
       readCodexCyberAttemptVerdict(
         outcome({ lastAssistant: refusal("cyber").currentAttemptAssistant }),
-      ).cyberRefused,
-    ).toBe(false);
-    expect(readCodexCyberAttemptVerdict(undefined).cyberRefused).toBe(false);
-  });
-
-  it("requires an affirmative replay verdict", () => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ replayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }),
-      ).replaySafe,
-    ).toBe(true);
-    expect(readCodexCyberAttemptVerdict(outcome()).replaySafe).toBe(false);
-    expect(readCodexCyberAttemptVerdict(undefined).replaySafe).toBe(false);
+      ),
+    ).toMatchObject({ cyberRefused: false, replaySafe: false });
+    expect(readCodexCyberAttemptVerdict(undefined)).toMatchObject({
+      cyberRefused: false,
+      replaySafe: false,
+    });
   });
 
   it("counts only a real reply as answered", () => {
@@ -114,8 +110,8 @@ describe("attempt verdict", () => {
     expect(
       readCodexCyberAttemptVerdict(
         outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
-      ).answered,
-    ).toBe(false);
+      ),
+    ).toMatchObject({ answered: false, unavailable: false });
     expect(
       readCodexCyberAttemptVerdict(
         outcome({
@@ -131,24 +127,16 @@ describe("attempt verdict", () => {
     expect(readCodexCyberAttemptVerdict(outcome()).answered).toBe(false);
   });
 
-  it.each([
-    "unexpected status 403 Forbidden: target is not authorized",
-    new Error("unexpected status 401 Unauthorized: not authorized to access this model."),
-  ])("reads an unauthorized target from the canonical terminal", (error) => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ terminal: { kind: "failed", source: "prompt", error } }),
-      ).unavailable,
-    ).toBe(true);
-  });
-
-  it("does not record other terminal failures as target denials", () => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
-      ).unavailable,
-    ).toBe(false);
-  });
+  it.each([new Error("unexpected status 401 Unauthorized: not authorized to access this model.")])(
+    "reads an unauthorized target from the canonical terminal",
+    (error) => {
+      expect(
+        readCodexCyberAttemptVerdict(
+          outcome({ terminal: { kind: "failed", source: "prompt", error } }),
+        ).unavailable,
+      ).toBe(true);
+    },
+  );
 });
 
 describe("escalation planning", () => {

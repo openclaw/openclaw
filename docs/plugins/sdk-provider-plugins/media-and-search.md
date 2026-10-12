@@ -61,6 +61,29 @@ the adapter retains responsibility for cancellation and terminal settlement.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    If an endpoint documents an input-array limit, set the optional
+    `maxInputsPerRequest` field on the created provider instance. Use a positive
+    safe integer for the selected endpoint and model; omit it when unknown.
+    Memory caps inline embedding requests at that number before sending them,
+    alongside its existing byte budget. Undeclared or stale limits still use
+    reactive splitting when the endpoint reports a supported limit error.
+    Invalid declarations are ignored. Provider batch jobs keep their own limits.
+
+    The native OpenAI adapter declares [2048 inputs](https://developers.openai.com/api/reference/resources/embeddings/methods/create).
+    A plugin serving Zhipu [embedding-3](https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3)
+    can declare 64; do not apply that limit to other models without documentation.
+    Custom OpenAI-compatible endpoints stay undeclared. Bundled adapters using
+    `createRemoteEmbeddingProvider` can pass the same field to that factory.
+    This optional field preserves existing plugin contracts, index contents,
+    and embedding-cache identities.
+
+    `embed` and `embedBatch` accept an optional `onUsage` call option. A provider
+    that reports usage calls it once per successful upstream request, before
+    resolving, with `{ promptTokens, totalTokens }` or `undefined` when that
+    response has no valid counts. Callers can sum these reports and treat any
+    unavailable response as incomplete usage. The shared remote factory reports
+    OpenAI-style usage; vector return values and existing plugins stay unchanged.
+
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
     both creation options and cold index identity checks. Keep it configuration-only:

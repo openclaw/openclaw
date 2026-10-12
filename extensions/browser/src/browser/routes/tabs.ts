@@ -3,7 +3,6 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
-  BrowserTargetAmbiguousError,
   toBrowserErrorResponse,
 } from "../errors.js";
 import {
@@ -14,7 +13,7 @@ import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { isManagedOnlyBrowserRequest } from "../request-policy.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
-import { resolveTargetIdFromTabs } from "../target-id.js";
+import { resolveBrowserTabOrThrow } from "../target-id.js";
 import {
   browserNavigationPolicyForProfile,
   handleRouteError,
@@ -273,17 +272,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       targetId,
       mutate: async (profileCtx, id, signal) => {
         const tabs = await profileCtx.listTabs({ signal });
-        const resolved = resolveTargetIdFromTabs(id, tabs);
-        if (!resolved.ok) {
-          if (resolved.reason === "ambiguous") {
-            throw new BrowserTargetAmbiguousError();
-          }
-          throw new BrowserTabNotFoundError({ input: id });
-        }
-        const tab = tabs.find((currentTab) => currentTab.targetId === resolved.targetId);
-        if (!tab) {
-          throw new BrowserTabNotFoundError({ input: id });
-        }
+        const tab = resolveBrowserTabOrThrow(id, tabs);
         return await focusTab(req, profileCtx, tab, signal);
       },
     });

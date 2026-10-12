@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ViteUserConfig } from "vitest/config";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
@@ -14,6 +15,7 @@ import {
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
 import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
+import { controlUiSolidPlugin } from "../../ui/config/control-ui-solid.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -149,12 +151,22 @@ export const sharedVitestConfig = {
   plugins: [
     {
       name: "openclaw:node-worker-policy",
-      config: () => ({
-        test: {
-          globalSetup: [resolveRepoRootPath("test/vitest/vitest.node-policy.global-setup.ts")],
-        },
-      }),
+      config: {
+        order: "pre" as const,
+        handler: (config: ViteUserConfig) => ({
+          test: {
+            // Generated projects may copy plugins without the shared test block.
+            environment: config.test?.environment ?? "node",
+            globalSetup: [resolveRepoRootPath("test/vitest/vitest.node-policy.global-setup.ts")],
+          },
+        }),
+      },
     },
+    // Node tests also import UI renderers. Keep their compiler off non-UI sources.
+    ...controlUiSolidPlugin([
+      `${repoRoot.replaceAll("\\", "/")}/ui/**/*.tsx`,
+      `${repoRoot.replaceAll("\\", "/")}/extensions/*/browser/**/*.tsx`,
+    ]),
     createStateSchemaInlinePlugin(repoRoot),
     compiledSubprocessesPlugin(),
     createVitestProjectCachePlugin(),
@@ -513,6 +525,8 @@ export const sharedVitestConfig = {
   test: {
     dir: repoRoot,
     root: repoRoot,
+    // Solid defaults unspecified test environments to jsdom; preserve Node's default.
+    environment: "node",
     // Emit completed cases even under agent detection so healthy runs feed the output watchdog.
     reporters: ["verbose", ...(process.env.GITHUB_ACTIONS === "true" ? ["github-actions"] : [])],
     testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
@@ -530,7 +544,10 @@ export const sharedVitestConfig = {
       ...(process.versions.bun
         ? resolveTestBunSourceArgs(repoRoot)
         : ["--import", resolveTsxImport(repoRoot)]),
-      `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
+      // Bun's Windows preload resolver requires a filesystem path instead of a file URL.
+      process.versions.bun
+        ? `--preload=${fileURLToPath(new URL("./vitest.jsdom-preload.mts", import.meta.url))}`
+        : `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
     ],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,

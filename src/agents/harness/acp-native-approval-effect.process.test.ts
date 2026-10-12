@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { diffGatewayReloadPaths } from "../../gateway/config-diff.js";
@@ -36,16 +37,17 @@ import {
 import { getRegisteredAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 
-useNativeProcessFixture();
+const fixture = useNativeProcessFixture();
 
 it.for(["allow", "deny", "cancel", "always-only"] as const)(
   "fences delegated native writes while the Gateway approval waits: %s",
   { timeout: 60000 },
   async (kind, test) => {
-    await withOpenClawTestState({ label: "acp-native-approval-effect" }, async (state) => {
+    const body = withOpenClawTestState({ label: "acp-native-approval-effect" }, async (state) => {
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
       const disabledConfig: OpenClawConfig = {
         ...config,
         plugins: { entries: { acpx: { config: { nativeAgents: { qwen: false } } } } },
@@ -92,9 +94,8 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           return decision;
         });
         const abort = new AbortController();
-        attempt.input.abortSignal = abort.signal;
-        const run = runAgentHarnessAttempt(attempt.input);
-        void run.catch(() => {});
+        attempt.input.abortSignal = AbortSignal.any([test.signal, abort.signal]);
+        const run = fixture.track(runAgentHarnessAttempt(attempt.input));
         try {
           const approvalId = await Promise.race([
             entered.promise,
@@ -230,5 +231,6 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
         ).toMatchObject({ outcome: { outcome: "selected", optionId: "allow" } });
       }
     });
+    await fixture.track(body);
   },
 );

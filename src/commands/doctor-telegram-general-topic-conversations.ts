@@ -63,7 +63,10 @@ function listLegacyRows(database: import("node:sqlite").DatabaseSync): Conversat
       .where("kind", "=", "group")
       .where("thread_id", "=", GENERAL_TOPIC_ID)
       .where("parent_conversation_id", "is", null),
-  ).rows.filter((row) => canonicalIdentity(row) !== null);
+  ).rows.filter((row) => {
+    const canonical = canonicalIdentity(row);
+    return canonical && canonical.conversationId !== row.conversation_id;
+  });
 }
 
 function resolveRepairScopes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
@@ -94,13 +97,7 @@ export function detectTelegramGeneralTopicConversationRepairs(params: {
       path: databaseOptions.path ?? storePath,
       run: () =>
         withOpenClawAgentDatabaseReadOnly(
-          (database) =>
-            listLegacyRows(database.db).flatMap((row) => {
-              const canonical = canonicalIdentity(row);
-              return canonical && canonical.conversationId !== row.conversation_id
-                ? [{ agentId: scope.agentId }]
-                : [];
-            }),
+          (database) => listLegacyRows(database.db).map(() => ({ agentId: scope.agentId })),
           databaseOptions,
         ),
     });
@@ -171,7 +168,7 @@ function repairLegacyRow(database: OpenClawAgentDatabase, legacyConversationId: 
       existing.thread_id !== GENERAL_TOPIC_ID ||
       existing.parent_conversation_id !== null)
   ) {
-    throw new Error(`canonical Telegram conversation id collision: ${canonical.conversationId}`);
+    throw new Error(`normalized Telegram conversation ID collision: ${canonical.conversationId}`);
   }
 
   const merged = {

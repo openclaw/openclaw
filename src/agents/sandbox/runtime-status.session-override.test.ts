@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSandboxContext } from "./context.js";
 import {
@@ -13,6 +15,7 @@ describe("session sandbox override", () => {
   it("uses canonical classification identity in exact, batch, and context resolution", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
+      setRuntimeConfigSnapshot(cfg);
       const optional = "agent:main:optional";
       const required = "agent:main:required";
       for (const sessionKey of [optional, required]) {
@@ -75,6 +78,7 @@ describe("session sandbox override", () => {
         { sandboxed: true, sandboxRequired: true },
         { sandboxed: true, sandboxRequired: true },
       ]);
+      expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
       // An opted-out session must not start or prepare any sandbox backend.
       await expect(
         resolveSandboxContext({
@@ -92,6 +96,7 @@ describe("session sandbox override", () => {
       const cfg: OpenClawConfig = {
         agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:main:candidate";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },

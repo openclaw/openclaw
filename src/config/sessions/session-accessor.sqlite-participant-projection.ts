@@ -7,6 +7,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getSqliteReadScopeRevision,
   runSqliteReadOperationSync,
@@ -16,19 +17,12 @@ import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contra
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache-state.js";
-import {
-  readParticipantIdentity,
-  type SessionParticipantIdentity,
-} from "./session-participant-identity.js";
+import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
+import { readParticipantIdentity } from "./session-participant-identity.js";
 import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionParticipantRecord = {
-  identity: SessionParticipantIdentity;
-  contributionCount: number;
-  firstPromptedAt: number | null;
-  lastPromptedAt: number | null;
-};
+export type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 
 type SessionParticipantRow = Selectable<OpenClawAgentKyselyDatabase["session_participants"]>;
 
@@ -49,7 +43,20 @@ function selectParticipantRows(database: DatabaseSync) {
     .orderBy("identity_namespace");
 }
 
-// The last exact read belongs to this connection's admitted revision, including its snapshot.
+let participantWriteSnapshot: DatabaseSync | undefined;
+
+/** The entry CAS owns an immediate transaction before borrowing its unchanged preparation. */
+export function withSessionParticipantWriteSnapshot<T>(database: DatabaseSync, read: () => T): T {
+  const previous = participantWriteSnapshot;
+  participantWriteSnapshot = database;
+  try {
+    return read();
+  } finally {
+    participantWriteSnapshot = previous;
+  }
+}
+
+// Deferred readers must execute their first SELECT to establish the native snapshot.
 const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
   const query = prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
     selectParticipantRows(database).where(
@@ -64,14 +71,21 @@ const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
   return (key: string) =>
     runSqliteReadOperationSync(database, () => {
       const revision = getSqliteReadScopeRevision(database);
-      if (revision && last?.revision === revision && last.key === key) {
+      if (
+        revision &&
+        last?.key === key &&
+        (last.revision === revision ||
+          (participantWriteSnapshot === database &&
+            last.revision.snapshot === undefined &&
+            last.revision.schema === revision.schema &&
+            last.revision.mutationRevision === revision.mutationRevision &&
+            last.revision.writeRevision === readSqliteDatabaseWriteRevision(database)))
+      ) {
+        last.revision = revision;
         return last.rows;
       }
       const rows = query(key).rows;
-      last =
-        revision && getSqliteReadScopeRevision(database) === revision
-          ? { key, revision, rows }
-          : undefined;
+      last = revision ? { key, revision, rows } : undefined;
       return rows;
     });
 });
@@ -88,7 +102,9 @@ function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly stri
   return executeSqliteQuerySync(database, query).rows;
 }
 
-function readParticipantRecord(row: SessionParticipantRow): SessionParticipantRecord {
+export function readParticipantRecord(
+  row: Omit<SessionParticipantRow, "session_key">,
+): SessionParticipantRecord {
   return {
     identity: readParticipantIdentity(row.identity_namespace, row.actor_id),
     contributionCount: row.contribution_count,
@@ -127,7 +143,7 @@ function participantProjection(
   };
 }
 
-function withProjectedParticipants(
+export function withProjectedParticipants(
   entry: SessionEntry,
   records: readonly SessionParticipantRecord[],
 ): SessionEntry {
@@ -169,7 +185,9 @@ export function prepareSqliteSessionParticipantProjection(
   let rowsByKey: Map<string, SessionParticipantRow[]> | undefined;
   let acquisitionFailed = false;
   return (sessionKey, entry) => {
-    const prepared = readPreparedSessionParticipants(database, sessionKey);
+    const prepared =
+      readPreparedSessionParticipants(database, sessionKey) ??
+      readCurrentSessionEntryCacheParticipants(database, sessionKey);
     if (prepared) {
       return prepared.participants ? { ...entry, ...prepared } : entry;
     }
@@ -203,19 +221,22 @@ export function projectSqliteSessionParticipantsBatch(
   database: DatabaseSync,
   entries: ReadonlyMap<string, SessionEntry>,
 ): Map<string, SessionEntry> {
-  const prepared = new Map<string, SessionEntry>();
-  for (const [sessionKey, entry] of entries) {
-    const projection = readPreparedSessionParticipants(database, sessionKey);
-    if (!projection) {
-      break;
-    }
-    prepared.set(sessionKey, projection.participants ? { ...entry, ...projection } : entry);
-  }
-  if (prepared.size === entries.size) {
-    return prepared;
-  }
-  const records = participantRecordsBySessionKey(database, [...entries.keys()]);
   const projected = new Map(entries);
+  const missing: string[] = [];
+  for (const [sessionKey, entry] of entries) {
+    const projection =
+      readPreparedSessionParticipants(database, sessionKey) ??
+      readCurrentSessionEntryCacheParticipants(database, sessionKey);
+    if (!projection) {
+      missing.push(sessionKey);
+      continue;
+    }
+    projected.set(sessionKey, projection.participants ? { ...entry, ...projection } : entry);
+  }
+  if (missing.length === 0) {
+    return projected;
+  }
+  const records = participantRecordsBySessionKey(database, missing);
   for (const [sessionKey, participants] of records) {
     const entry = entries.get(sessionKey);
     if (entry) {

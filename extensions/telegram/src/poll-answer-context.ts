@@ -2,7 +2,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   findTelegramPollRegistryEntry,
-  findTelegramPollRegistryEntrySync,
   telegramPollRegistryKey,
   type TelegramPollRegistryEntry,
 } from "./poll-registry.js";
@@ -66,17 +65,6 @@ function resolveUnpreparedPollId(params: TelegramPollAnswerContextParams): strin
     return undefined;
   }
   return pollId;
-}
-
-/** Retained for hosts whose ingress monitor does not support inspectAsync. */
-export function prepareTelegramPollAnswerContext(params: TelegramPollAnswerContextParams): void {
-  const pollId = resolveUnpreparedPollId(params);
-  if (pollId === undefined) {
-    return;
-  }
-  preparedPollAnswers.set(params.update, {
-    entry: findTelegramPollRegistryEntrySync({ pollId, accountId: params.accountId }),
-  });
 }
 
 export async function prepareTelegramPollAnswerContextAsync(

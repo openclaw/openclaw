@@ -3,6 +3,7 @@ import {
   errorShape,
   validateSessionsProviderReviewContinueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   issueProviderReviewAcknowledgment,
   readProviderReviewAcknowledgment,
@@ -41,6 +42,9 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
       let acknowledgment: ProviderReviewAcknowledgment | undefined;
       let handedOff = false;
       try {
+        if (isIncognitoSessionKey(params.sessionKey)) {
+          throw new Error("Provider review cannot be continued in an incognito session");
+        }
         const authorization = options.sessionMutationAuthorization
           ? { authorization: options.sessionMutationAuthorization, error: null }
           : resolveSessionMutationAuthorization({

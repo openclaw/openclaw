@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
+import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { loadExactSessionEntryCandidates } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
+import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type {
   PreparedSessionEntryWorkerRead,
@@ -21,6 +23,9 @@ import { prepareSessionStoreTargetInventory } from "../config/sessions/session-s
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { attachErrorDiagnostic } from "../infra/error-diagnostics.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
+import type { NativeErrorResponse } from "../infra/native-error-response-schema.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
@@ -39,6 +44,26 @@ import {
   omitInternalSessionEffectsEntries,
 } from "./session-utils-store-selection.js";
 import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
+
+class SessionStoreUnavailableError extends Error {
+  constructor(
+    agentId: string,
+    readonly reason: "schema-missing" | "read-failed",
+    readonly readError?: NativeErrorResponse,
+  ) {
+    const nativeKind = readError?.code ?? readError?.name;
+    const suffix =
+      nativeKind && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(nativeKind) ? `: ${nativeKind}` : "";
+    super(
+      `Session stores for agent ${agentId} are unavailable (${reason}${suffix}); retry after storage is available.`,
+    );
+    this.name = "SessionStoreUnavailableError";
+    // Native messages can contain private paths; keep them out of message/cause and RPC JSON.
+    if (readError) {
+      attachErrorDiagnostic(this, `${readError.name}: ${formatErrorMessageWithCode(readError)}`);
+    }
+  }
+}
 
 type GatewaySessionStoreReadPlan = {
   reads: readonly SessionEntryWorkerRead[];
@@ -118,7 +143,11 @@ async function prepareGatewaySessionStoreReadInWorker(
     const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
     for (const source of sources.agents) {
       if (!source.result.available && source.result.reason !== "database-missing") {
-        throw new Error(`Session stores for agent ${source.agentId} are unavailable`);
+        throw new SessionStoreUnavailableError(
+          source.agentId,
+          source.result.reason,
+          source.result.error,
+        );
       }
       targetDiscoveryCache.set(source.agentId, {
         existing: source.result.available ? source.result.targets : [],
@@ -408,13 +437,17 @@ async function prepareGatewaySessionStoreReadInWorker(
 export async function loadGatewaySessionEntryReadOnlyInWorker(
   params: Parameters<typeof resolveGatewaySessionStoreTargetInWorker>[0] & {
     excludeInternalEffects?: boolean;
+    includeStoreChildEntries?: boolean;
   },
 ) {
-  const { excludeInternalEffects, ...lookup } = params;
+  const { excludeInternalEffects, includeStoreChildEntries, ...lookup } = params;
   const target = await resolveGatewaySessionStoreTargetInWorker({
     ...lookup,
     projection: params.projection ?? "full",
   });
+  if (includeStoreChildEntries) {
+    await includeDirectChildEntries(target, params.cfg, params.env);
+  }
   params.assertActive?.();
   if (excludeInternalEffects) {
     omitInternalSessionEffectsEntries(target.store, target.storeKeys);
@@ -426,6 +459,47 @@ export async function loadGatewaySessionEntryReadOnlyInWorker(
     entry: match?.entry,
     legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
   };
+}
+
+async function includeDirectChildEntries(
+  target: GatewaySessionStoreTargetWithStore,
+  cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): Promise<void> {
+  try {
+    const parentKeys = [...new Set([target.canonicalKey, ...target.storeKeys])];
+    const children = await listSessionChildEntriesReadOnly(
+      {
+        agentId: target.agentId,
+        env,
+        projection: "list",
+        sessionKey: target.canonicalKey,
+        storePath: target.storePath,
+      },
+      parentKeys,
+    );
+    for (const { sessionKey, entry } of children) {
+      target.store[sessionKey] = entry;
+    }
+    const hints = new Set(
+      listSubagentSessionListRunsForControllers(parentKeys).map((run) => run.childSessionKey),
+    );
+    const hinted = await Promise.all(
+      [...hints]
+        .filter((key) => !target.store[key])
+        .map((key) =>
+          resolveGatewaySessionStoreTargetInWorker({ cfg, env, key, projection: "list" }),
+        ),
+    );
+    for (const child of hinted) {
+      const entry = child.store[child.canonicalKey];
+      if (entry && !parentKeys.includes(child.canonicalKey)) {
+        target.store[child.canonicalKey] = entry;
+      }
+    }
+  } catch {
+    // Child metadata is optional; unavailable stores preserve the selected parent row.
+  }
 }
 
 /** Retain the original lookup domain for a later synchronous admission predicate. */

@@ -147,12 +147,15 @@ export function resolveSandboxWorkspaceAuthority(params: {
   requiredToolNames?: readonly string[];
   modelProvider?: string;
   modelId?: string;
+  preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 }): SandboxWorkspaceAuthority {
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+  const runtime =
+    params.preparedRuntimeStatus ??
+    resolveSandboxRuntimeStatus({
+      cfg: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
   const sandbox = resolveSandboxConfigForAgent(params.config, runtime.agentId);
   if (!runtime.sandboxed) {
     return { sandboxed: false, workspaceAccess: sandbox.workspaceAccess };

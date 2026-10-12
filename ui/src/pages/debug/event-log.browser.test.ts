@@ -1,9 +1,12 @@
+import { createComponent, flush } from "solid-js";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createGatewayEventLog } from "../../app/gateway-observers.ts";
 import { i18n } from "../../i18n/index.ts";
-import "./debug-page.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { DebugPage } from "./debug-page.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -29,11 +32,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Debug event log", () => {
           return {};
       }
     });
-    const page = document.createElement("openclaw-debug-page") as HTMLElement & {
-      context: ApplicationContext;
-      updateComplete: Promise<boolean>;
-    };
-    page.context = {
+    const context = {
       basePath: "",
       gateway: {
         snapshot: { phase: "connected", client: { request } },
@@ -48,8 +47,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Debug event log", () => {
       },
       settingsAgentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
     } as unknown as ApplicationContext;
-    document.body.append(page);
-    await page.updateComplete;
+    const provider = createSolidApplicationContextProvider(context);
+    const view = mountSolid(() => createComponent(DebugPage, {}), { wrapper: provider.wrapper });
+    const page = view.container;
+    flush();
 
     const eventSection = page.querySelector(".settings-section:last-child");
     assert(eventSection);
@@ -71,7 +72,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Debug event log", () => {
     for (const listener of listeners) {
       listener(log.entries);
     }
-    await page.updateComplete;
+    flush();
 
     const nextPayloads = Array.from(eventSection.querySelectorAll("pre"));
     expect(nextPayloads).toHaveLength(250);
@@ -86,9 +87,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Debug event log", () => {
     for (const listener of listeners) {
       listener(log.entries);
     }
-    await page.updateComplete;
+    flush();
     expect(eventSection.querySelector("pre")).toBeNull();
-    page.remove();
+    view.unmount();
     expect(listeners.size).toBe(0);
   });
 });

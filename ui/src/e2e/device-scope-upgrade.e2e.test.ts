@@ -282,7 +282,7 @@ suite.define(() => {
     );
 
     await closeInbox(page);
-    await page.locator(".sidebar-brand__collapse").click();
+    await page.locator('[data-navigation-view][aria-pressed="true"]').click();
     const collapsedItem = await openLimitedAccessItem(await openInbox(page));
     await waitForPendingUpgradeItem(collapsedItem);
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);

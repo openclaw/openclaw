@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
+import type { SessionDataController } from "../components/session-data-controller.ts";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import {
@@ -36,6 +37,7 @@ type PairingShell = HTMLElement &
   };
 
 type PairingSidebar = LitElement & {
+  sessionData: SessionDataController;
   render: () => TemplateResult;
   canPairDevice: boolean;
   onPairMobile?: () => void;
@@ -247,12 +249,15 @@ describe("application shell pairing access", () => {
       const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
         auth: { role: "operator", scopes: ["operator.admin"] },
       });
+      // This render-isolation case observes an ordinary conversation in the All list,
+      // not the compact Home control, which no longer has a row endcap.
+      const sessionKey = "agent:main:queued";
       let storedOutboxes = {
         total: 1,
         sessions: [
           {
             agentId: "main",
-            sessionKey: "agent:main:main",
+            sessionKey,
             hasComposerDraft: true,
             outboxAttentionCount: 1,
           },
@@ -275,6 +280,27 @@ describe("application shell pairing access", () => {
       await settleLitElements([sidebar, topbar]);
       await vi.dynamicImportSettled();
       await settleLitElements([sidebar, topbar]);
+      sidebar.sessionData.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { model: null, modelProvider: null, contextTokens: null },
+        sessions: [{ key: sessionKey, agentId: "main", kind: "direct", updatedAt: 1 }],
+      };
+      sidebar.sessionData.sessionsAgentId = "main";
+      sidebar.requestUpdate();
+      await settleLitElements([sidebar, topbar]);
+      const conversation = () =>
+        sidebar.querySelector<HTMLElement>(
+          `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
+        );
+      expect(conversation()).not.toBeNull();
+      if (withOutboxes) {
+        expect(
+          conversation()?.querySelector(".session-row-badge--attention")?.textContent,
+        ).toContain("1");
+        expect(conversation()?.querySelector(".session-row-badge--draft")).not.toBeNull();
+      }
       expect(sidebar.isUpdatePending).toBe(false);
       const sidebarText = sidebar.textContent;
       const topbarText = topbar.textContent;
@@ -289,19 +315,17 @@ describe("application shell pairing access", () => {
       expect(renderTopbarChild).not.toHaveBeenCalled();
       expect(sidebar.textContent).toBe(sidebarText);
       expect(topbar.textContent).toBe(topbarText);
-      expect(sidebar.storedOutboxes?.attentionCountForSession("agent:main:main") ?? 0).toBe(
+      expect(sidebar.storedOutboxes?.attentionCountForSession(sessionKey) ?? 0).toBe(
         withOutboxes ? 1 : 0,
       );
-      expect(sidebar.storedOutboxes?.hasSessionDraft("agent:main:main") ?? false).toBe(
-        withOutboxes,
-      );
+      expect(sidebar.storedOutboxes?.hasSessionDraft(sessionKey) ?? false).toBe(withOutboxes);
       if (withOutboxes) {
         storedOutboxes = {
           total: 2,
           sessions: [
             {
               agentId: "main",
-              sessionKey: "agent:main:main",
+              sessionKey,
               hasComposerDraft: false,
               outboxAttentionCount: 2,
             },
@@ -312,8 +336,10 @@ describe("application shell pairing access", () => {
         render(shell.render(), container);
         await settleLitElements([sidebar, topbar]);
         expect(renderSidebarChild).toHaveBeenCalledOnce();
-        expect(sidebar.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
-        expect(sidebar.querySelector(".session-row-badge--draft")).toBeNull();
+        expect(
+          conversation()?.querySelector(".session-row-badge--attention")?.textContent,
+        ).toContain("2");
+        expect(conversation()?.querySelector(".session-row-badge--draft")).toBeNull();
       }
     },
   );

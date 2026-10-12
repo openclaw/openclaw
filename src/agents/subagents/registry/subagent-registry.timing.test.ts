@@ -97,7 +97,11 @@ describe("subagent timing completion", () => {
       [childSessionKey, "session-overlap"],
       [requesterSessionKey, "requester-overlap"],
     ] as const) {
-      const entry = { sessionId, updatedAt: seededAt - 1 };
+      const entry = {
+        sessionId,
+        lifecycleRevision: `${sessionId}-revision`,
+        updatedAt: seededAt - 1,
+      };
       await patchSessionEntryCore({ storePath, sessionKey }, () => entry, {
         fallbackEntry: entry,
         replaceEntry: true,
@@ -107,6 +111,8 @@ describe("subagent timing completion", () => {
     await registerSubagentRun({
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: { sessionId: "session-overlap", lifecycleRevision: "session-overlap-revision" },
       requesterSessionKey,
       requesterDisplayKey: "main",
       task: "Synthetic timing reproduction",

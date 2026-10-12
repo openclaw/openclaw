@@ -8,6 +8,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import {
   publicationMethods,
   waitForWatchedSessionKey,
@@ -41,6 +42,13 @@ suite.define(() => {
             },
             pullRequest: { numbers: [42], state: "open" },
             sharingRole: "owner",
+            owner: {
+              actor: {
+                type: "human",
+                id: "synthetic-scope-viewer",
+                label: "Synthetic scope viewer",
+              },
+            },
             visibility: "shared",
             spawnedCwd: "/synthetic/scope-review",
           },
@@ -96,6 +104,7 @@ suite.define(() => {
         const chatChip = page.locator(
           '.chat-pr__link[href="https://github.com/synthetic/repo/pull/42"]',
         );
+        await openDetailsPullRequests(page);
         await chatChip.waitFor();
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           await writeFile(

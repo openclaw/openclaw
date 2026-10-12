@@ -5,6 +5,7 @@ import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
+import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
@@ -45,7 +46,7 @@ afterAll(async () => {
   await state?.cleanup();
 });
 
-it("persists interruption after a cut-short restart while recovering eligible work from its claim", async () => {
+it("persists recovery when restart cancellation precedes shutdown marking", async () => {
   const childKey = "agent:main:dashboard:child";
   const mainKey = "agent:main:dashboard:main";
   const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
@@ -110,6 +111,7 @@ it("persists interruption after a cut-short restart while recovering eligible wo
         hasActiveRun: true,
       });
     }
+    registrations[1]!.controller.abort(createAgentRunRestartAbortError());
     const warnings: string[] = [];
     await prepareGatewayRunShutdown({
       resolveGatewayContext: () => undefined,
@@ -129,6 +131,11 @@ it("persists interruption after a cut-short restart while recovering eligible wo
       },
     });
     await joinPersistence();
+    expect(read(mainKey).mainRestartRecovery?.cycleId).toEqual(expect.any(String));
+    expect(read(mainKey).restartRecoveryRuns).toContainEqual({
+      runId: `${mainKey}:run`,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    });
     expect(warnings).toContain("restart-reply-drain");
     for (const registration of registrations) {
       expect(registration.controller.signal.reason).toMatchObject({

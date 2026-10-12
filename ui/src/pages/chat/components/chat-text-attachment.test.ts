@@ -1,16 +1,39 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 async function mountAttachment(
   overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
+  request = async (_method: string, params: { html: string }) => ({
+    html: params.html,
+    sandboxUrl: "/mcp-app-sandbox?frames=none",
+    sandboxPort: 8444,
+  }),
 ) {
   const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
     content: SidebarContent;
     updateComplete: Promise<unknown>;
   };
+  const previewContext = {
+    gateway: {
+      snapshot: { client: { request }, phase: "connected" },
+      connection: { gatewayUrl: "ws://gateway.example:8443" },
+      subscribe: () => () => {},
+    },
+  } as unknown as ApplicationContext;
+  panel.addEventListener("context-request", (event) => {
+    if (
+      event.context === applicationContext &&
+      event.contextTarget.localName === "openclaw-chat-html-preview"
+    ) {
+      event.stopPropagation();
+      event.callback(previewContext);
+    }
+  });
   panel.content = {
     kind: "attachment",
     attachmentKind: "document",
@@ -116,9 +139,10 @@ it.each([
   { title: "long.md", mimeType: "text/plain", kind: "long" },
   { title: "notes.md", mimeType: "text/plain", kind: "inert" },
 ])("renders $kind Markdown attachment $title ($mimeType)", async ({ title, mimeType, kind }) => {
+  // Cross the message parse limit without creating thousands of paragraph elements.
   const text =
     kind === "long"
-      ? `# Long document\n\n${"Paragraph of notes.\n\n".repeat(2_100)}## Last section\n`
+      ? `# Long document\n\n${"Paragraph of notes. ".repeat(2_100)}\n\n## Last section\n`
       : kind === "inert"
         ? "# שלום\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert(1))\n\n![tracking](https://example.com/tracking.png)\n"
         : "# Release notes\n\n**Ready** with [details](https://example.com).\n\n- First item\n\n| Feature | State |\n| --- | --- |\n| Sidebar | Ready |\n\n```ts\nconst ready = true;\n```\n";
@@ -301,7 +325,7 @@ it("aborts a closed preview and reloads it after remount", async () => {
   const panel = await mountAttachment();
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   panel.remove();
-  expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  await waitForSolid(() => expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true));
   document.body.append(panel);
   await vi.waitFor(() => expect(panel.querySelector("pre")?.textContent).toBe("Reloaded text"));
 });
@@ -375,22 +399,14 @@ it.each([
     const text =
       "\ufeff<!doctype html>\r\n<style>h1{color:red}</style><h1>Rendered page</h1><script>window.ready=true</script>\n";
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
-    const panel = await mountAttachment({ title, mimeType });
-    await customElements.whenDefined("openclaw-chat-html-preview");
-    await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
-    const preview = panel.querySelector("openclaw-chat-html-preview")!;
     const request = vi.fn().mockResolvedValue({
       html: text,
       sandboxUrl: "/mcp-app-sandbox?frames=none",
       sandboxPort: 8444,
     });
-    Reflect.set(preview, "context", {
-      gateway: {
-        snapshot: { client: { request }, phase: "connected" },
-        connection: { gatewayUrl: "ws://gateway.example:8443" },
-        subscribe: () => () => {},
-      },
-    });
+    const panel = await mountAttachment({ title, mimeType }, request);
+    await customElements.whenDefined("openclaw-chat-html-preview");
+    await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
     await expect.poll(() => panel.querySelector("iframe")).not.toBeNull();
     const frame = panel.querySelector("iframe");
     expect(panel.querySelector("h1, script, style")).toBeNull();

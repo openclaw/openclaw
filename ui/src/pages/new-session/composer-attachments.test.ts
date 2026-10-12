@@ -6,7 +6,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { renderNewSessionComposer } from "./composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 afterEach(() => {
@@ -36,7 +36,7 @@ it.each(["owner", "tile"] as const)(
     const modelControl = new NewSessionModelControl(() => {});
     const redraw = () =>
       render(
-        renderNewSessionDraftComposer({
+        renderNewSessionComposer({
           agentId: "main",
           attachmentDraft,
           canSubmit: attachmentDraft.reads.pendingReads === 0,

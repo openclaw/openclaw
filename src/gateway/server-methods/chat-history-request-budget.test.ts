@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
@@ -41,10 +42,97 @@ function createHistoryRequest(
 }
 
 describe("chat history request byte budgets", () => {
+  it("opts into smaller tool previews without changing text, paging, or full output", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:tool-previews",
+        sessionId: "tool-previews",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const text = "Captured output line\n".repeat(500);
+      const prose = "Visible conversation text. ".repeat(160);
+      await appendTranscriptMessages(scope, {
+        messages: [
+          ...Array.from({ length: 48 }, (_, index) => ({
+            eventId: `preview-${index}`,
+            message: {
+              role: "toolResult",
+              toolName: "read",
+              toolCallId: `call-${index}`,
+              content: [{ type: "text", text }],
+            },
+          })),
+          ...["user", "assistant"].map((role) => ({
+            eventId: role,
+            message: { role, content: [{ type: "text", text: prose }] },
+          })),
+        ],
+      });
+      const context = await createHistoryReadContext();
+      const history = createHistoryRequest("chat.history", scope.sessionKey, context);
+      const legacy = await history({});
+      const compact = await history({ toolResultMaxChars: 2_000 });
+      expect(Buffer.byteLength(JSON.stringify(compact))).toBeLessThan(
+        Buffer.byteLength(JSON.stringify(legacy)) / 3,
+      );
+      expect(compact.messages).toHaveLength(50);
+      expect(compact.hasMore).toBe(false);
+      expect(compact.messages).toEqual([
+        ...Array.from({ length: 48 }, (_, index) =>
+          expect.objectContaining({
+            toolCallId: `call-${index}`,
+            content: [{ type: "text", text: text.slice(0, 2_000) }],
+            __openclaw: expect.objectContaining({ truncated: true, reason: "display-cap" }),
+          }),
+        ),
+        ...["user", "assistant"].map((role) =>
+          expect.objectContaining({ role, content: [{ type: "text", text: prose }] }),
+        ),
+      ]);
+      const recovered = await createHistoryRequest(
+        "chat.message.get",
+        scope.sessionKey,
+        context,
+      )({
+        messageId: "preview-0",
+      });
+      expect(recovered).toMatchObject({ ok: true, message: { content: [{ type: "text", text }] } });
+      const tail = await history({ limit: 20, toolResultMaxChars: 2_000 });
+      const older = await history({ offset: tail.nextOffset, toolResultMaxChars: 2_000 });
+      expect([...(older.messages as unknown[]), ...(tail.messages as unknown[])]).toEqual(
+        compact.messages,
+      );
+      await appendTranscriptMessage(scope, {
+        eventId: "next-tool",
+        message: {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "next-call",
+          content: [{ type: "text", text }],
+        },
+      });
+      const delta = await history({ cursor: compact.deltaCursor, toolResultMaxChars: 2_000 });
+      expect(delta).toMatchObject({
+        kind: "delta",
+        messages: [{ message: { content: [{ type: "text", text: text.slice(0, 2_000) }] } }],
+      });
+      const anchored = await history({ messageId: "next-tool", toolResultMaxChars: 2_000 });
+      expect(anchored.messages).toContainEqual(
+        expect.objectContaining({
+          toolCallId: "next-call",
+          content: [{ type: "text", text: text.slice(0, 2_000) }],
+        }),
+      );
+    });
+  });
+
   it.each(["chat.history", "chat.startup"] as const)(
     "%s returns a small tail with a lossless back-scroll cursor",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await captureRuntimeConfigAsyncReader()();
         const scope = {
           agentId: "main",
           sessionKey: "agent:main:budgeted-history",
@@ -115,6 +203,7 @@ describe("chat history request byte budgets", () => {
 
   it("bounds default older-history responses below 1 MB without losing messages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:large-budgeted-history",
@@ -180,6 +269,7 @@ describe("chat history request byte budgets", () => {
 
   it("replaces an indivisible source row with a fetchable reference across anchored and back-scroll pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:history-sibling-budget",
@@ -276,6 +366,7 @@ describe("chat history request byte budgets", () => {
 
   it("keeps a 5 MB tool result out of history while its reference returns every byte", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:large-tool",
@@ -314,6 +405,7 @@ describe("chat history request byte budgets", () => {
 
   it("keeps recovery lookahead beyond the default response target on older pages", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:history-recovery-budget",

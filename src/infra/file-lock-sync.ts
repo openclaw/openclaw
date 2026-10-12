@@ -58,8 +58,8 @@ export function acquireFileLockSyncWithRetry(
       });
       return () => lock.release();
     } catch (error) {
-      // fs-safe rechecks the sidecar after our callback. Only disappearance can
-      // be a release; a surviving replacement or another authority failure refuses.
+      // A live holder can release during the reclaim callback. A surviving
+      // replacement or any other authority failure must still refuse admission.
       if (
         deadline === undefined ||
         !reclaimObserved ||
@@ -73,14 +73,11 @@ export function acquireFileLockSyncWithRetry(
       if (performance.now() >= deadline) {
         throw Object.assign(
           new Error(`Storage lock admission timed out: ${lockPath}`, { cause: error }),
-          {
-            code: "file_lock_timeout",
-            lockPath,
-          },
+          { code: "file_lock_timeout", lockPath },
         );
       }
-      // Re-observe through the same Root and its original remaining budget,
-      // before any caller operation or SQLite transaction has been entered.
+      // Reacquire through the same Root and original budget before entering
+      // caller work; an admitted database transaction is never replayed.
     }
   }
 }

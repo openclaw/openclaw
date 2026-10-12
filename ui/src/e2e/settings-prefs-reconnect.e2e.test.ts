@@ -1,6 +1,8 @@
 // Control UI tests cover server preference replay and reconciliation through real reconnects.
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ShellGatewayOwner } from "../app/app-shell-gateway.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -122,6 +124,57 @@ async function readPendingPrefStorage(page: Page): Promise<Record<string, unknow
   );
 }
 
+async function observePreferenceReplay(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
+      shellGateway: ShellGatewayOwner;
+    };
+    const owner = shell.shellGateway;
+    const ensure = owner.ensureRuntimeConfig.bind(owner);
+    const trace: { phase: string; connected: boolean; canPatch: boolean | undefined }[] = [];
+    Object.assign(window, { preferenceReplayTrace: trace });
+    owner.ensureRuntimeConfig = function (snapshot, runtimeConfig) {
+      trace.push({
+        phase: snapshot.phase,
+        connected: runtimeConfig?.state.connected ?? false,
+        canPatch: runtimeConfig?.canPatch,
+      });
+      return ensure(snapshot, runtimeConfig);
+    };
+  });
+}
+
+async function waitForPreferenceReplay(page: Page, gateway: MockGatewayControls) {
+  try {
+    return await gateway.waitForRequest("config.patch");
+  } catch (error) {
+    const state = await page.evaluate(() => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime: { context: ApplicationContext };
+      };
+      const { gateway: source, runtimeConfig, theme } = app.runtime.context;
+      return {
+        phase: source.snapshot.phase,
+        connected: runtimeConfig.state.connected,
+        clientMatches: runtimeConfig.state.client === source.snapshot.client,
+        canPatch: runtimeConfig.canPatch,
+        loading: runtimeConfig.state.configLoading,
+        saving: runtimeConfig.state.configSaving,
+        draftDirty: runtimeConfig.state.configFormDirty,
+        theme: theme.settings.theme,
+        // SAFETY: observePreferenceReplay installs this test-only trace before either reconnect.
+        trace: (Reflect.get(window, "preferenceReplayTrace") as unknown[]).slice(-24),
+      };
+    });
+    console.error("[prefs-reconnect] replay failure", state, {
+      pendingKeys: (await readPendingPrefStorage(page)).map((prefs) => Object.keys(prefs)),
+      configReads: (await gateway.getRequests("config.get")).length,
+      preferenceWrites: (await gateway.getRequests("config.patch")).length,
+    });
+    throw error;
+  }
+}
+
 function themeCard(page: Page, theme: "claw" | "knot" | "dash") {
   return page.locator(`.settings-theme-card--${theme}`);
 }
@@ -133,7 +186,7 @@ async function expectThemeActive(page: Page, theme: "claw" | "knot" | "dash"): P
 }
 
 function themeModeOption(page: Page, mode: "system" | "light" | "dark") {
-  return page.locator(`wa-radio.settings-segmented__btn[value="${mode}"]`);
+  return page.locator(`input.settings-segmented__input[value="${mode}"]`);
 }
 
 suite.define(() => {
@@ -243,7 +296,10 @@ suite.define(() => {
         .toMatchObject({ theme: "claw", themeMode: "light" });
 
       await gateway.setOnline(false);
-      await page.locator(".gateway-status__label").filter({ hasText: "Reconnecting…" }).waitFor();
+      const identity = page.locator("openclaw-app-sidebar .sidebar-identity-card");
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("reconnecting");
+      expect(await identity.getAttribute("aria-label")).toContain("Reconnecting…");
+      expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
       await page.locator(".agent-chat__input--offline").waitFor();
 
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
@@ -276,22 +332,37 @@ suite.define(() => {
       await themeCard(page, "claw").waitFor();
       await gateway.waitForRequest("config.get");
       const configGetsBeforeEdit = (await gateway.getRequests("config.get")).length;
+      await observePreferenceReplay(page);
       await gateway.deferNext("config.patch");
 
       await proxyReconnect(page, gateway, async () => {
         await themeCard(page, "knot").click();
         await expectThemeActive(page, "knot");
+        expect(await readPendingPrefStorage(page)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ theme: "knot", accent: "theme" })]),
+        );
       });
 
-      const patch = await gateway.waitForRequest("config.patch");
-      expect(patchPrefs(patch)).toEqual({ theme: "knot", accent: "theme" });
       // Reconnect owns one authoritative read even while the pending LWW preference shadows it.
       await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 1);
+      const patch = await waitForPreferenceReplay(page, gateway);
+      expect(patchPrefs(patch)).toEqual({ theme: "knot", accent: "theme" });
 
       await gateway.setMethodResponse("config.get", committed);
       await gateway.resolveDeferred("config.patch", committed);
-      await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 2);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector<
+              HTMLElement & { runtime?: { context: ApplicationContext } }
+            >("openclaw-app");
+            return app?.runtime?.context.runtimeConfig.state.configSnapshot;
+          }),
+        )
+        .toMatchObject({ config: committed.config, hash: committed.hash });
+      await expect.poll(() => readPendingPrefStorage(page)).toEqual([]);
       await expectThemeActive(page, "knot");
+      expect(await gateway.getRequests("config.get")).toHaveLength(configGetsBeforeEdit + 1);
     } finally {
       await context.close();
     }
@@ -315,6 +386,7 @@ suite.define(() => {
       await themeCard(page, "claw").waitFor();
       await gateway.waitForRequest("config.get");
 
+      await observePreferenceReplay(page);
       await proxyReconnect(page, gateway, async () => {
         await themeCard(page, "knot").click();
         await expectThemeActive(page, "knot");
@@ -323,6 +395,9 @@ suite.define(() => {
 
       await expectThemeActive(page, "knot");
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await readPendingPrefStorage(page)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ theme: "knot", accent: "theme" })]),
+      );
 
       await gateway.deferNext("config.patch");
       await gateway.setMethodResponse("config.get", committed);
@@ -330,7 +405,7 @@ suite.define(() => {
         await gateway.setOperatorScopes(["operator.admin", "operator.read", "operator.write"]);
       });
 
-      const patch = await gateway.waitForRequest("config.patch");
+      const patch = await waitForPreferenceReplay(page, gateway);
       expect(patchPrefs(patch)).toEqual({ theme: "knot", accent: "theme" });
       await gateway.resolveDeferred("config.patch", committed);
       await expectThemeActive(page, "knot");

@@ -32,6 +32,7 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
+  RESPONSES_RETAINED_USER,
   type OpenAIResponsesReasoningReplayMetadata,
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
@@ -103,8 +104,19 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
 
 function normalizeOpenAIResponsesReasoningReplayItem(
   item: ReplayableResponseReasoningItem,
+  api: Api,
 ): ReplayableResponseReasoningItem {
-  return Array.isArray(item.summary) ? item : { ...item, summary: [] };
+  if (api === "openai-chatgpt-responses") {
+    return Array.isArray(item.summary) ? item : { ...item, summary: [] };
+  }
+  // Match storage's reasoning privacy shape and order before warm replay too.
+  return {
+    id: item.id,
+    type: "reasoning",
+    summary: [],
+    status: item.status,
+    encrypted_content: item.encrypted_content,
+  };
 }
 
 function prepareOpenAIResponsesReasoningItemForReplay(
@@ -116,7 +128,7 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   const hasRawMetadata = Object.hasOwn(item, OPENAI_RESPONSES_REASONING_REPLAY_META_KEY);
   const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } = item;
   if (!("encrypted_content" in rest)) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest);
+    return normalizeOpenAIResponsesReasoningReplayItem(rest, context.api);
   }
   const metadata =
     blockMetadata !== undefined
@@ -129,10 +141,11 @@ function prepareOpenAIResponsesReasoningItemForReplay(
     !hasRawMetadata &&
     options?.preserveUnattributedEncryptedContent === true;
   if (preserveUnattributed || (metadata && providerReplayContextMatches(metadata, context))) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest);
+    return normalizeOpenAIResponsesReasoningReplayItem(rest, context.api);
   }
   return normalizeOpenAIResponsesReasoningReplayItem(
     stripEncryptedReasoningContentFields(rest) as ReplayableResponseReasoningItem,
+    context.api,
   );
 }
 
@@ -148,16 +161,17 @@ function normalizeResponsesReplayItemId(id: string | undefined): string | undefi
 
 export { encodeTextSignatureV1 } from "../utils/text-signature.js";
 
+function responsesAssistantTurnKey(message: AssistantMessage) {
+  // Early fragments keep this identity when the provider ID arrives at completion.
+  const id = message.turnId || message.responseId;
+  return id ? `${message.provider}:${message.api}:${message.model}:${id}` : undefined;
+}
+
 function orderResponsesAsyncToolResults(source: Context["messages"]): Context["messages"] {
-  const turnKey = (message: AssistantMessage) => {
-    // Early fragments keep this identity when the provider ID arrives at completion.
-    const id = message.turnId || message.responseId;
-    return id ? `${message.provider}:${message.api}:${message.model}:${id}` : undefined;
-  };
   const lastAssistant = new Map<string, number>();
   for (const [index, message] of source.entries()) {
     if (message.role === "assistant") {
-      const key = turnKey(message);
+      const key = responsesAssistantTurnKey(message);
       if (key) {
         lastAssistant.set(key, index);
       }
@@ -168,7 +182,7 @@ function orderResponsesAsyncToolResults(source: Context["messages"]): Context["m
   const ordered: Context["messages"] = [];
   for (const [index, message] of source.entries()) {
     if (message.role === "assistant") {
-      const key = turnKey(message);
+      const key = responsesAssistantTurnKey(message);
       if (key) {
         for (const block of message.content) {
           if (block.type === "toolCall" && block.async) {
@@ -260,6 +274,7 @@ type ConvertResponsesMessagesOptions = {
   sessionId?: string;
   authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
+  retainUserProvenance?: boolean;
 };
 
 function convertResponsesMessagesWithStyle(
@@ -349,7 +364,15 @@ function convertResponsesMessagesWithStyle(
   // The compact endpoint's output is already canonical provider input, not
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
-    messages.push(...replayPlan.compactedWindow);
+    messages.push(
+      ...replayPlan.compactedWindow.map((item) => {
+        if (options?.retainUserProvenance && item.type === "message" && item.role === "user") {
+          return Object.assign({}, item, { [RESPONSES_RETAINED_USER]: true });
+        }
+        // SAFETY: Validated window; Responses accepts assistant output_text without an id.
+        return item as ResponseInputItem;
+      }),
+    );
   }
   let replayMessages = replayPlan.compaction
     ? [replayPlan.compaction, ...transformedMessages]
@@ -386,7 +409,7 @@ function convertResponsesMessagesWithStyle(
       messages.push(msg);
       continue;
     }
-    if (isRuntimeContextMessage(msg)) {
+    if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
       messages.push(
         buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
           {
@@ -402,36 +425,42 @@ function convertResponsesMessagesWithStyle(
         (typeof msg.content === "string" || msg.content.every((block) => block.type === "text"))
           ? resolveResponsesInstructionRole(model)
           : "user";
-      if (typeof msg.content === "string") {
-        messages.push(
-          buildResponsesInputMessage(
-            role,
-            [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
-            msg,
-          ),
-        );
-      } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter(
-          (item) => providerStyle || model.input.includes("image") || item.type !== "input_image",
-        );
-        if (content.length > 0) {
-          messages.push(buildResponsesInputMessage(role, content, msg));
-        } else if (providerStyle) {
-          continue;
+      const content: ResponseInputMessageContentList =
+        typeof msg.content === "string"
+          ? [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }]
+          : (
+              msg.content.map((item) =>
+                item.type === "text"
+                  ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
+                  : {
+                      type: "input_image",
+                      detail: "auto",
+                      image_url: `data:${item.mimeType};base64,${item.data}`,
+                    },
+              ) as ResponseInputMessageContentList
+            ).filter(
+              (item) =>
+                providerStyle || model.input.includes("image") || item.type !== "input_image",
+            );
+      if (content.length > 0) {
+        const input = buildResponsesInputMessage(role, content, msg);
+        if (
+          options?.retainUserProvenance &&
+          role === "user" &&
+          !msg.synthetic &&
+          !msg.operatorMessage &&
+          !hasRuntimeContextMarker(msg)
+        ) {
+          Object.assign(input, { [RESPONSES_RETAINED_USER]: true });
         }
+        messages.push(input);
+      } else if (providerStyle) {
+        continue;
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      const sourceTurnKey = responsesAssistantTurnKey(msg);
+      const sourceFragmentId = msg.content.find((block) => block.type === "toolCall")?.id;
       let textFallbackOrdinal = 0;
       let previousReplayItemWasReasoning = false;
       const isDifferentModel =
@@ -479,7 +508,10 @@ function convertResponsesMessagesWithStyle(
           let msgId = resolveReplayableResponsesMessageId({
             replayResponsesItemIds: shouldReplayResponsesItemIds,
             textSignatureId: textSignature?.id,
-            fallbackId: `msg_${msgIndex}`,
+            // Async prefixes own a call; the final tail has none. Both survive history pruning.
+            fallbackId: sourceTurnKey
+              ? `msg_${shortHash(JSON.stringify([sourceTurnKey, sourceFragmentId]))}`
+              : `msg_${msgIndex}`,
             fallbackOrdinal: textFallbackOrdinal,
             previousReplayItemWasReasoning,
           });
@@ -603,6 +635,7 @@ export function convertProviderResponsesMessages<TApi extends Api>(
     sessionId?: string;
     authProfileId?: string;
     replayMode?: OpenAIResponsesReplayMode;
+    retainUserProvenance?: boolean;
   },
 ): ResponseInput {
   return convertResponsesMessagesWithStyle(

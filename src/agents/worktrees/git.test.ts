@@ -333,7 +333,7 @@ describe("Git ref mutation ownership", () => {
       await Promise.allSettled(pending);
     }
     await Promise.all(pending);
-    await expect(resolved).resolves.toEqual({
+    await expect(resolved).resolves.toMatchObject({
       commit: originHead,
       gitOperand: "refs/remotes/origin/main",
       recordRef: "origin/main",

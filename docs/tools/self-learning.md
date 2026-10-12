@@ -22,8 +22,8 @@ Learning happens in three places:
 - **Unused-skill cleanup** archives learned skills unused for 30 days. See
   [Unused-skill cleanup](/tools/skill-workshop#unused-skill-cleanup).
 
-Every change applies immediately, is announced in the conversation, and can be
-undone. See [Undo](/tools/skill-workshop#undo).
+Every change applies immediately and can be undone. Background review changes
+appear in the Control UI chat. See [Undo](/tools/skill-workshop#undo).
 
 ## When a review runs
 
@@ -32,10 +32,8 @@ reaches 10 since its last review, a review is queued and the count starts over.
 The count also resets when the foreground turn itself changed a learned skill,
 so work the agent already saved is not reviewed again.
 
-A turn that read or viewed a learned skill also queues a review, whatever the
-count, so a skill that just misled or helped the agent gets a fresh look. The
-same eligibility rules apply, and a turn that changed a learned skill itself
-still skips the review.
+Reading or viewing a learned skill does not queue an extra review; those turns
+count toward the same 10-iteration threshold.
 
 A queued review starts after 30 seconds with no agent or reply run active; later
 activity in the same session restarts that wait. Reviews run one at a time.
@@ -94,16 +92,27 @@ commands, paths, or ids. When nothing durable was learned, it changes nothing.
 
 ## What you see
 
-If the review changed a skill, one line is posted to the conversation that
-triggered it and mirrored into the session transcript:
+When a review changes a skill, the Control UI chat shows a **Learned** row: one
+chip per changed skill, each opening that skill in the Skill Workshop, and an
+**Undo** button. Nothing appears when nothing changed.
+
+Channel messages are off by default. Set
+`skills.workshop.autonomous.channelNotices: true` to post the notice to the
+conversation that triggered the review instead. That session's Control UI
+chat then shows the channel message as plain text, not the **Learned** row:
 
 ```text
 💾 Learned: updated `deploy-staging` (tightened the rollback step). Say "undo" to revert this skill change.
 ```
 
-Channel-less Control UI sessions get the line as a transcript entry. Nothing is
-posted when nothing changed. Reply "undo" and the agent restores the previous
-version.
+Slack never gets a channel message; its sessions still get the Control UI row.
+
+To undo everything the review changed, press **Undo** on the Control UI row or
+channel notice. Channels that do not render buttons show a copyable
+`/learn undo <id>` command; the id comes from the channel notice. You can also
+say "undo" in the conversation, whether channel notices are on or off, and the
+agent restores the previous version. See
+[Skill Workshop undo](/tools/skill-workshop#undo).
 
 A review stops without changing anything further if you turn learning off, or
 if the source session is deleted, replaced, or changes permission mode while it

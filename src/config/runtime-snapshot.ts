@@ -26,6 +26,7 @@ import {
   type CapturedRuntimeConfigRead,
   getRuntimeConfigCapture,
 } from "./runtime-config-capture-state.js";
+import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import { configSnapshotsMatch, stableConfigStringify } from "./runtime-config-snapshot-match.js";
 import { runtimeSessionChangeScope } from "./runtime-session-changes.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
@@ -125,6 +126,7 @@ let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigCapturedSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotMetadata: RuntimeConfigSnapshotMetadata | null = null;
+let runtimeModelConfigCacheKey: string | null = null;
 let runtimeConfigPublishedFacts: ReturnType<typeof serializeConfigResolutionFacts> = null;
 let runtimeConfigAppliedHash: string | null = null;
 let runtimeConfigSnapshotRevision = 0;
@@ -232,6 +234,8 @@ function publishRuntimeConfigSnapshot(
   runtimeConfigCapturedSnapshot = null;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = metadata;
+  runtimeModelConfigCacheKey = hashModelConfig(config, sourceConfig ?? config);
+  runtimeConfigPublication.current = { config, revision: metadata };
   runtimeConfigPublishedFacts = facts;
   if (!valuesUnchanged && !matchesPublished) {
     sessionChanges.emit({ all: true, scope });
@@ -269,10 +273,13 @@ async function prepareRuntimeConfigSnapshot(
   inputConfig: OpenClawConfig,
   context: RuntimeConfigSnapshotPreparationContext = {},
   assertCurrent?: () => void,
+  sourceConfig?: OpenClawConfig,
 ): Promise<() => boolean> {
   const config = getRuntimeConfigCapture(inputConfig)
     ? cloneConfigWithResolutionFacts(inputConfig)
     : inputConfig;
+  const factSource = getConfigResolutionFacts(config) !== null ? config : (sourceConfig ?? config);
+  copyConfigResolutionFacts(factSource, config);
   const generation = runtimeConfigSnapshotGeneration;
   const preparerGeneration = runtimeConfigPreparerGeneration;
   const fingerprint = preparationFingerprint(config);
@@ -311,16 +318,19 @@ async function prepareRuntimeConfigSnapshot(
         return false;
       }
     }
-    publishRuntimeConfigSnapshot(config);
+    publishRuntimeConfigSnapshot(config, sourceConfig);
     return true;
   };
 }
 
-export function setAppliedRuntimeConfigSnapshot(
+export async function setAppliedRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig: OpenClawConfig,
-): void {
-  setRuntimeConfigSnapshot(config, sourceConfig);
+): Promise<void> {
+  const publish = await prepareRuntimeConfigSnapshot(config, {}, undefined, sourceConfig);
+  if (!publish()) {
+    throw new Error("Applied runtime config preparation was superseded before publication");
+  }
   runtimeConfigAppliedHash = hashRuntimeConfigValue(sourceConfig);
 }
 
@@ -356,6 +366,8 @@ export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean }
   runtimeConfigCapturedSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
+  runtimeModelConfigCacheKey = null;
+  runtimeConfigPublication.current = undefined;
   runtimeConfigPublishedFacts = null;
   runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
@@ -376,6 +388,17 @@ export function getRuntimeConfigSnapshot(options?: { capture?: boolean }): OpenC
     ));
   }
   return runtimeConfigSnapshot;
+}
+
+/** Read the config published by runtime preparation without cold-loading storage. */
+export function readRuntimeConfig(): OpenClawConfig {
+  const config = getRuntimeConfigSnapshot();
+  if (!config) {
+    throw new Error(
+      "Runtime config is not prepared. Await captureRuntimeConfigAsyncReader()() first.",
+    );
+  }
+  return config;
 }
 
 export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
@@ -401,6 +424,25 @@ export function resolveRuntimeConfigCacheKey(config: OpenClawConfig): string {
     return `runtime:${metadata.revision}:${metadata.fingerprint}`;
   }
   return `config:${hashRuntimeConfigValue(config)}`;
+}
+
+function hashModelConfig(config: OpenClawConfig, sourceConfig: OpenClawConfig): string {
+  const project = (value: OpenClawConfig) => {
+    const { ui: _ui, meta, ...rest } = value;
+    const { lastTouchedVersion: _lastTouchedVersion, ...modelMeta } = meta ?? {};
+    return { config: { ...rest, meta: modelMeta }, facts: serializeConfigResolutionFacts(value) };
+  };
+  return sha256Base64Url(
+    stableConfigStringify({ runtime: project(config), source: project(sourceConfig) }),
+  );
+}
+
+/** Model projections ignore display settings, but retain authored values and resolution provenance. */
+export function resolveRuntimeModelConfigCacheKey(config: OpenClawConfig): string {
+  if (config === runtimeConfigSnapshot && runtimeModelConfigCacheKey !== null) {
+    return runtimeModelConfigCacheKey;
+  }
+  return hashModelConfig(config, getRuntimeConfigCapture(config)?.source ?? config);
 }
 
 export function selectApplicableRuntimeConfig(params: {

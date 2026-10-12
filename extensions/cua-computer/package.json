@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/cua-computer",
-  "version": "2026.9.9",
+  "version": "2026.10.2",
   "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
   "repository": {
     "type": "git",
@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.25.0",
-    "@trycua/cua-driver": "0.31.0",
+    "@openclaw/fs-safe": "0.26.2",
+    "@trycua/cua-driver": "0.33.4",
     "rastermill": "0.4.0",
     "zod": "4.6.5"
   },
@@ -18,30 +18,30 @@
   },
   "cuaDriverArtifacts": {
     "darwin-universal-binary": {
-      "archiveSha256": "06cd80b153bdf046dc067fb593e0fc648e780afa37a902ca0515ac25f32f9a4f"
+      "archiveSha256": "1a1c7979749ee04585d16b17d6e3588ae8d9553dfbc84e6729af09a88a8b4775"
     },
     "linux-arm64-gnu": {
       "files": {
-        "cua_driver_node_runtime.node": "80f15df0ce354d4ca6d40ddeeead4ac6fe43d7bf449cf0966135ea5df480b9b3",
-        "libcua_driver_sdk.so": "dc0db38b23bbc3945c59d77818aff0e1220a28c5995d3b02eaef78d2a25b659f"
+        "cua_driver_node_runtime.node": "280a88c264f4406762cb277df16d951b40858024a7f3fc045feddc8848f2b66f",
+        "libcua_driver_sdk.so": "44b2fab1994490fe5726e4cfb195ca72dc8bdee52900554446febc0135bd5373"
       }
     },
     "linux-x64-gnu": {
       "files": {
-        "cua_driver_node_runtime.node": "0cc4313fef262c782946b5be8053593bc94158556ba2fef291993087fa47525b",
-        "libcua_driver_sdk.so": "0467418536e43908d9e1d22779424ccbf709171d8013863d36f6c570a09de39c"
+        "cua_driver_node_runtime.node": "4c3c18772a0805e7682d63439aa075bb67d91d7e4ad46aa007eb5894078dfdb4",
+        "libcua_driver_sdk.so": "d645e220c8f490ec5fbd4dbab8d509bdeb3590a96228cc1c4ad01e9dd19caa7d"
       }
     },
     "win32-arm64-msvc": {
       "files": {
-        "cua_driver_sdk.dll": "13aeabaadcd0abf63cdbc55feacff35d253630ee06337f55a173f06d4d01eadd",
-        "cua_driver_node_runtime.node": "20ac4f2dcead2d8417204e637815dfa831c1b804cce969e29b513eb7924beda3"
+        "cua_driver_sdk.dll": "5f5784a148486c057e5b425c12770fb26f03f9ddf1ecf19fd067978a67cc551c",
+        "cua_driver_node_runtime.node": "003d7de1f901d91b94bc362ae387ee6d5371436574195390f33517406afa7c7f"
       }
     },
     "win32-x64-msvc": {
       "files": {
-        "cua_driver_sdk.dll": "08939b5ff00c4f7825956caec732759604874c4a0bd90fb58a30cd62bbcd0659",
-        "cua_driver_node_runtime.node": "c2c4836e87126596dfdcc4dcb496dc7184d9b5f2d5ab8f03e086e96624185b27"
+        "cua_driver_sdk.dll": "ce7faf21267c9ae0c3e80ad9dbbdf93258edaae4c4dd276e5b036f96f7208242",
+        "cua_driver_node_runtime.node": "826750c50bd93fd10e2aca5db892c408469043d3cb8371b7403a9922a735f06b"
       }
     }
   },
@@ -56,11 +56,11 @@
       "minHostVersion": ">=2026.9.6"
     },
     "compat": {
-      "pluginApi": ">=2026.9.9"
+      "pluginApi": ">=2026.10.2"
     },
     "build": {
       "bundledDist": true,
-      "openclawVersion": "2026.9.9"
+      "openclawVersion": "2026.10.2"
     },
     "release": {
       "publishToClawHub": true,

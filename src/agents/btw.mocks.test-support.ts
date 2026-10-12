@@ -90,9 +90,10 @@ vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
 }));
 
+// mock-isolation: BTW fixtures supply their own auth and model registries without opening real stores.
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: (...args: unknown[]) => discoverAuthStorageMock(...args),
-  discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
+  discoverModelsAsync: async (...args: unknown[]) => discoverModelsMock(...args),
 }));
 
 vi.mock("./sessions/model-registry-runtime.js", () => ({
@@ -157,10 +158,14 @@ vi.mock("./embedded-agent-runner/model.js", async (importOriginal) => ({
   resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
 }));
 
+// mock-isolation: Side-question runs use controlled auth results without host credential discovery.
 vi.mock("./model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
+  ensureAuthProfileStoreAsync: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
   getApiKeyForModelCore: (...args: unknown[]) => getApiKeyForModelMock(...args),
   hasUsableCustomProviderApiKey: (...args: unknown[]) => hasUsableCustomProviderApiKeyMock(...args),

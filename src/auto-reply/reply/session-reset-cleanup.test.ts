@@ -1,8 +1,15 @@
 // Tests session reset cleanup for stale files and persisted state.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  clearPreparedEmbeddedAgentSettings,
+  createPreparedEmbeddedAgentSettingsManager,
+} from "../../agents/agent-project-settings.js";
+import {
   clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
+  retainEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
@@ -11,6 +18,7 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
@@ -23,8 +31,62 @@ afterEach(() => {
 });
 
 describe("clearSessionResetRuntimeState", () => {
+  it("refreshes prepared settings only for the archived session", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-settings-"));
+    const archivedSessionId = `${cwd}:archived`;
+    const retainedSessionId = `${cwd}:retained`;
+    const params = {
+      cwd,
+      agentDir: cwd,
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    };
+    const settingsPath = path.join(cwd, "settings.json");
+    try {
+      await fs.writeFile(
+        settingsPath,
+        JSON.stringify({ compaction: { keepRecentTokens: 25_000 } }),
+      );
+      for (const sessionId of [archivedSessionId, retainedSessionId]) {
+        expect(
+          createPreparedEmbeddedAgentSettingsManager({
+            ...params,
+            sessionId,
+          }).getCompactionKeepRecentTokens(),
+        ).toBe(25_000);
+      }
+      await fs.writeFile(
+        settingsPath,
+        JSON.stringify({ compaction: { keepRecentTokens: 35_000 } }),
+      );
+
+      clearSessionResetRuntimeState([archivedSessionId], {
+        agentId: "main",
+        sessionKey: "agent:main:settings-reset",
+        activeReplySessionId: archivedSessionId,
+        assertCurrent: () => {},
+      });
+
+      expect(
+        createPreparedEmbeddedAgentSettingsManager({
+          ...params,
+          sessionId: archivedSessionId,
+        }).getCompactionKeepRecentTokens(),
+      ).toBe(35_000);
+      expect(
+        createPreparedEmbeddedAgentSettingsManager({
+          ...params,
+          sessionId: retainedSessionId,
+        }).getCompactionKeepRecentTokens(),
+      ).toBe(25_000);
+    } finally {
+      clearPreparedEmbeddedAgentSettings([archivedSessionId, retainedSessionId]);
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("disposes prompt projections with the archived session", () => {
-    const state = getEmbeddedSessionPromptState("old-session");
+    using original = retainEmbeddedSessionPromptState("old-session");
+    const state = original.state;
     state.toolResults.frozen.add("sent-tool-result");
 
     clearSessionResetRuntimeState(["old-session"], {
@@ -34,7 +96,8 @@ describe("clearSessionResetRuntimeState", () => {
       assertCurrent: () => {},
     });
 
-    expect(getEmbeddedSessionPromptState("old-session")).not.toBe(state);
+    using replacement = retainEmbeddedSessionPromptState("old-session");
+    expect(replacement.state).not.toBe(state);
   });
 
   it("clears reset queues and drains system events for normalized keys", () => {

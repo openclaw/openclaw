@@ -1,22 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
-import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { WORKER_ENVIRONMENT_SESSION_ATTACHMENTS_SCHEMA_SQL } from "./session-attachment-store.js";
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
-const WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
-  environment_id TEXT NOT NULL,
-  position INTEGER NOT NULL CHECK (position >= 0 AND position <= 9),
-  port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
-  PRIMARY KEY (environment_id, position),
-  UNIQUE (environment_id, port),
-  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
-) STRICT;
-`;
+const WORKER_ENVIRONMENT_SSH_FALLBACK_PORTS_SCHEMA_SQL = getOpenClawStateFeatureSchemaSql(
+  "worker_environment_ssh_fallback_ports",
+);
 
 /** The worker store prepares its additive companion tables together on first use. */
 export function ensureWorkerEnvironmentStoreSchema(database: OpenClawStateDatabase): void {
@@ -36,16 +30,7 @@ export function ensureWorkerEnvironmentStoreSchema(database: OpenClawStateDataba
   const remember = () => {
     ensuredDatabases.add(database.db);
   };
-  // An ensure inside a worker mutation must retry if that mutation rolls back.
-  if (
-    !stageSqliteTransactionState(database.db, {
-      stage: remember,
-      rollback: () => {
-        ensuredDatabases.delete(database.db);
-      },
-      commit: remember,
-    })
-  ) {
+  if (!deferSqlitePostCommitPublication(database.db, remember)) {
     remember();
   }
 }

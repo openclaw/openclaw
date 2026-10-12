@@ -116,7 +116,7 @@ function resolveFaviconPalette() {
     ? style.getPropertyValue(`--control-ui-environment-${environment.color}`).trim()
     : "";
   const artwork =
-    currentThemeBranding().mascot === "none"
+    currentThemeBranding().brandIcon !== "claw"
       ? neutralMarkSvg({
           fill: style.getPropertyValue("--primary").trim(),
           glyph: style.getPropertyValue("--primary-foreground").trim(),

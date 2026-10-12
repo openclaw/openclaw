@@ -72,6 +72,10 @@ function normalizeMachineSize(value: unknown): number | undefined {
     : undefined;
 }
 
+function normalizeTrust(value: unknown): DraftCloudProfile["trust"] {
+  return value === "persistent" || value === "disposable" ? value : undefined;
+}
+
 function readRuntimeTargetIssues(value: unknown): RuntimeTargetIssue[] | undefined {
   const issues = (Array.isArray(value) ? value : []).flatMap<RuntimeTargetIssue>((raw) => {
     if (!isRecord(raw)) {
@@ -131,10 +135,7 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
       if (!id || !providerId) {
         return [];
       }
-      const trust: DraftCloudProfile["trust"] =
-        profile.trust === "persistent" || profile.trust === "disposable"
-          ? profile.trust
-          : undefined;
+      const trust = normalizeTrust(profile.trust);
       const machines = readDraftCloudOptions(profile.machines, "machine");
       const operatingSystems = readDraftCloudOptions(profile.operatingSystems, "os");
       return [
@@ -187,25 +188,17 @@ function readDraftCloudOptions(value: unknown, kind: "machine" | "os") {
     ) {
       continue;
     }
-    if (machine) {
-      const cpu = normalizeMachineSize(raw.cpu);
-      const memoryGb = normalizeMachineSize(raw.memoryGb);
-      options.set(key, {
-        id,
-        label,
-        ...(os ? { os } : {}),
-        ...(cpu === undefined ? {} : { cpu }),
-        ...(memoryGb === undefined ? {} : { memoryGb }),
-        ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
-      });
-    } else {
-      options.set(key, {
-        id,
-        label,
-        ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
-        ...(disabledReason ? { disabledReason } : {}),
-      });
-    }
+    const cpu = machine ? normalizeMachineSize(raw.cpu) : undefined;
+    const memoryGb = machine ? normalizeMachineSize(raw.memoryGb) : undefined;
+    options.set(key, {
+      id,
+      label,
+      ...(os ? { os } : {}),
+      ...(cpu === undefined ? {} : { cpu }),
+      ...(memoryGb === undefined ? {} : { memoryGb }),
+      ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
+      ...(disabledReason ? { disabledReason } : {}),
+    });
   }
   return [...options.values()];
 }
@@ -275,10 +268,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       }
       const label = normalizeOptionalString(environment.label);
       const platform = normalizeOptionalString(environment.platform);
-      const trust: DraftEnvironment["trust"] =
-        environment.trust === "persistent" || environment.trust === "disposable"
-          ? environment.trust
-          : undefined;
+      const trust = normalizeTrust(environment.trust);
       const capabilities = normalizeArrayBackedTrimmedStringList(environment.capabilities);
       const invocableCommands = Array.isArray(environment.invocableCommands)
         ? normalizeSortedUniqueTrimmedStringList(environment.invocableCommands)

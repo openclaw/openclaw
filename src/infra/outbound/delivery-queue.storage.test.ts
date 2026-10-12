@@ -8,8 +8,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import {
+  updateDeliveryQueueEntryInDatabase,
+  upsertDeliveryQueueEntryInDatabase,
+} from "../delivery-queue-sqlite.kernel.js";
 import { runSqliteReadOperationSync } from "../sqlite-schema-facts.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { ackDeliveryInDatabase } from "./delivery-queue-ack.kernel.js";
@@ -25,6 +27,7 @@ import {
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   loadPendingDelivery,
+  loadUnfinishedDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
@@ -41,56 +44,52 @@ describe("delivery-queue storage", () => {
   const enqueueTextDelivery = (params: Parameters<typeof enqueueDelivery>[0], rootDir = tmpDir()) =>
     enqueueDelivery(params, rootDir);
 
-  it("skips unchanged empty recovery scans and observes foreign, local, and rolled-back writes", async () => {
-    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() } };
+  it("refreshes empty recovery facts after worker and native writes without publishing rollback", async () => {
+    const stateDir = tmpDir();
+    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
     const database = openOpenClawStateDatabase(options);
-    const reads = trackSqliteStatementExecutions(database.db, ["queue"], (sql) =>
-      /^select .+ from "delivery_queue_entries"/i.test(sql) ? "queue" : null,
-    );
-    const read = () =>
-      runSqliteReadOperationSync(database.db, () =>
-        readOutboundDeliveriesInDatabase(database, { mode: "unfinished" }),
-      );
-    const peer = openNodeSqliteDatabase(database.path);
-    try {
-      expect(read()).toEqual([]);
-      expect(read()).toEqual([]);
-      expect(reads.counts.queue).toBe(1);
+    const read = () => loadUnfinishedDeliveries(stateDir);
+    expect(await read()).toEqual([]);
+    expect(await read()).toEqual([]);
 
-      const id = await enqueueTextDelivery({
-        channel: "directchat",
-        to: "+1555",
-        payloads: [{ text: "Queued after an idle poll" }],
-      });
-      expect(read().map(({ entry }) => entry.id)).toEqual([id]);
-      database.db
-        .prepare("UPDATE delivery_queue_entries SET status = 'completed' WHERE id = ?")
-        .run(id);
-      expect(read()).toEqual([]);
-      expect(read()).toEqual([]);
-      expect(reads.counts.queue).toBe(3);
-
-      peer.prepare("UPDATE delivery_queue_entries SET status = 'pending' WHERE id = ?").run(id);
-      expect(read().map(({ entry }) => entry.id)).toEqual([id]);
-      expect(reads.counts.queue).toBe(4);
-
-      expect(() =>
-        runOpenClawStateWriteTransaction(
-          () => {
-            database.db
-              .prepare("UPDATE delivery_queue_entries SET status = 'completed' WHERE id = ?")
-              .run(id);
-            expect(read()).toEqual([]);
-            throw new Error("roll back recovery fixture");
-          },
-          { ...options, database },
-        ),
-      ).toThrow("roll back recovery fixture");
-      expect(read().map(({ entry }) => entry.id)).toEqual([id]);
-    } finally {
-      peer.close();
-      reads.restore();
+    const id = await enqueueTextDelivery({
+      channel: "directchat",
+      to: "+1555",
+      payloads: [{ text: "Queued after an idle poll" }],
+    });
+    expect((await read()).map((entry) => entry.id)).toEqual([id]);
+    const entry = await loadPendingDelivery(id, stateDir);
+    if (!entry) {
+      throw new Error("Expected pending delivery");
     }
+    await ackDelivery(id, stateDir);
+    expect(await read()).toEqual([]);
+    expect(await read()).toEqual([]);
+
+    expect(() =>
+      runOpenClawStateWriteTransaction(
+        () => {
+          upsertDeliveryQueueEntryInDatabase(
+            { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, entry },
+            database,
+          );
+          expect(
+            runSqliteReadOperationSync(database.db, () =>
+              readOutboundDeliveriesInDatabase(database, { mode: "unfinished" }),
+            ).map(({ entry: pending }) => pending.id),
+          ).toEqual([id]);
+          throw new Error("roll back recovery fixture");
+        },
+        { ...options, database },
+      ),
+    ).toThrow("roll back recovery fixture");
+    expect(await read()).toEqual([]);
+
+    upsertDeliveryQueueEntryInDatabase(
+      { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, entry },
+      database,
+    );
+    expect((await read()).map((pending) => pending.id)).toEqual([id]);
   });
 
   function readStatus(id: string): string | undefined {

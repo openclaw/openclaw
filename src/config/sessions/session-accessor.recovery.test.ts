@@ -11,6 +11,7 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
@@ -22,11 +23,11 @@ import {
   loadTranscriptEvents,
   recoverSessionEntryFromRestartTombstone,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "./session-accessor.js";
 import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -423,9 +424,12 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
                   expect(nativeAdmission.settlement?.kind).toBe("completed");
                   verifiedCommands++;
                   if (retireOwner && verifiedCommands === 1) {
-                    closing = closeOpenClawAgentDatabaseByPathAsync(
-                      resolveOpenClawAgentSqlitePath(databaseOptions),
-                      "main",
+                    // Retirement belongs to an independent caller after the native commit.
+                    closing = runInDetachedAsyncContext(() =>
+                      closeOpenClawAgentDatabaseByPathAsync(
+                        resolveOpenClawAgentSqlitePath(databaseOptions),
+                        "main",
+                      ),
                     );
                     void closing.catch(() => undefined);
                     captures.mockClear();

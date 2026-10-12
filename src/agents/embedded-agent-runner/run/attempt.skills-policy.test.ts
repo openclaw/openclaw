@@ -302,7 +302,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(await fs.readFile(storeFile, "utf8")).toBe(store);
   });
 
-  it("exposes Code Mode skills only when read is available and executable", async () => {
+  it("keeps admitted Code Mode skill descriptions while enforcing execution restrictions", async () => {
     const cases: Array<{
       label: string;
       toolsAllow?: string[];
@@ -324,7 +324,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         label: "skill read denied",
         toolExecutionAllow: ["read"],
         skillsPrompt,
-        available: false,
+        available: true,
       },
       {
         label: "read denied",
@@ -334,6 +334,8 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       },
       { label: "execution denied", toolExecutionAllow: [], skillsPrompt: "", available: false },
     ];
+    let foregroundDescription: string | undefined;
+    let restrictedListResult: unknown;
     for (const testCase of cases) {
       resetEmbeddedAttemptHarness();
       enableSkills();
@@ -342,6 +344,14 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       );
       await run({
         sessionKey: `agent:main:${testCase.label.replace(" ", "-")}`,
+        sessionPrompt: async () => {
+          if (testCase.label === "skill read denied") {
+            restrictedListResult = await sessionTool("exec").execute("denied-skills", {
+              title: "Check installed skill access",
+              code: "return await skills.list();",
+            });
+          }
+        },
         attemptOverrides: {
           disableTools: false,
           toolsAllow: testCase.toolsAllow,
@@ -352,10 +362,20 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       expect(hoisted.embeddedSystemPromptInputs.at(-1)).toMatchObject({
         skillsPrompt: testCase.skillsPrompt,
       });
-      expect(sessionTool("exec").description.includes("await skills.list()")).toBe(
-        testCase.available,
-      );
+      const description = sessionTool("exec").description;
+      expect(description.includes("await skills.list()")).toBe(testCase.available);
+      if (testCase.label === "unrestricted") {
+        foregroundDescription = description;
+      } else if (testCase.label === "skill read denied") {
+        expect(description).toBe(foregroundDescription);
+      }
     }
+    expect(restrictedListResult).toMatchObject({
+      details: {
+        status: "failed",
+        error: expect.stringContaining(formatToolExecutionGatedMessage("skills_search", ["read"])),
+      },
+    });
   });
 
   it("gates catalog-hidden tools during review while skill_workshop stays callable", async () => {

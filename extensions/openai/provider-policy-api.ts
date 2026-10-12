@@ -62,13 +62,6 @@ const CODEX_AGENT_RUNTIME_ID = "codex";
 const OPENCLAW_RUNTIME_COMPATIBLE_IDS = [OPENAI_AGENT_RUNTIME_ID] as const;
 const CODEX_RUNTIME_COMPATIBLE_IDS = [OPENAI_AGENT_RUNTIME_ID, CODEX_AGENT_RUNTIME_ID] as const;
 
-type OpenAIResolveSingleModelRouteContext = Omit<
-  ProviderResolveModelRoutesContext,
-  "observedRoutes"
-> & {
-  observed?: ProviderModelRouteSource;
-};
-
 function normalizeOptionalRouteApi(value: ModelApi | null | undefined): ModelApi | undefined {
   return normalizeOptionalString(value) as ModelApi | undefined;
 }
@@ -200,12 +193,6 @@ function concreteBaseUrl(value: unknown, fallback: string): string {
   return normalizeOptionalString(value) ?? fallback;
 }
 
-function resolveOpenAIEnvironmentBaseUrl(
-  context: Pick<ProviderResolveModelRoutesContext, "env">,
-): string | undefined {
-  return (context.env ?? process.env).OPENAI_BASE_URL;
-}
-
 function codexCanReproduceRoute(candidate: ProviderModelRouteCandidate): boolean {
   if (candidate.requestTransportOverrides === "present") {
     return false;
@@ -245,6 +232,44 @@ function route(
   };
 }
 
+function resolveAuthoredModelRoute(context: ProviderResolveModelRoutesContext) {
+  const modelApi = normalizeOptionalRouteApi(context.configuredModel?.api);
+  const providerApi = normalizeOptionalRouteApi(context.configuredProvider?.api);
+  const modelBaseUrl = firstRouteBaseUrl(context.configuredModel?.baseUrl);
+  const providerBaseUrl = firstRouteBaseUrl(context.configuredProvider?.baseUrl);
+  const environmentBaseUrl = firstRouteBaseUrl((context.env ?? process.env).OPENAI_BASE_URL);
+  const hasModelRoute = modelApi !== undefined || modelBaseUrl !== undefined;
+  const hasProviderRoute = providerApi !== undefined || providerBaseUrl !== undefined;
+  if (!hasModelRoute && !hasProviderRoute && environmentBaseUrl === undefined) {
+    return undefined;
+  }
+  const api = modelApi ?? providerApi;
+  let baseUrl = hasModelRoute
+    ? modelBaseUrl
+    : hasProviderRoute
+      ? providerBaseUrl
+      : environmentBaseUrl;
+  // An authored adapter may inherit custom/invalid bases, never another official transport.
+  if (baseUrl === undefined) {
+    const lowerBaseUrl = hasModelRoute
+      ? (providerBaseUrl ?? environmentBaseUrl)
+      : environmentBaseUrl;
+    const lowerEndpointKind = classifyOpenAIBaseUrl(lowerBaseUrl);
+    if (lowerEndpointKind === "custom" || lowerEndpointKind === "invalid") {
+      baseUrl = lowerBaseUrl;
+    }
+  }
+  return {
+    api,
+    baseUrl,
+    chatGPTApi:
+      modelApi?.toLowerCase() === OPENAI_CHATGPT_RESPONSES_API ||
+      providerApi?.toLowerCase() === OPENAI_CHATGPT_RESPONSES_API,
+    customDefaultApi:
+      hasModelRoute || hasProviderRoute ? OPENAI_COMPLETIONS_API : OPENAI_RESPONSES_API,
+  };
+}
+
 /**
  * Resolves OpenAI transport policy in provider-default order.
  *
@@ -253,7 +278,9 @@ function route(
  * models without route facts remain indeterminate until a catalog row is observed.
  */
 function resolveSingleObservedModelRoute(
-  context: OpenAIResolveSingleModelRouteContext,
+  context: ProviderResolveModelRoutesContext,
+  authored: ReturnType<typeof resolveAuthoredModelRoute>,
+  observed?: ProviderModelRouteSource,
 ): ProviderModelRouteResolution {
   if (context.provider.trim().toLowerCase() !== "openai") {
     return {
@@ -262,46 +289,13 @@ function resolveSingleObservedModelRoute(
       message: `OpenAI route policy cannot resolve provider ${context.provider || "(empty)"}.`,
     };
   }
-  const modelApi = normalizeOptionalRouteApi(context.configuredModel?.api);
   const requestTransportOverrides = context.requestTransportOverrides ?? "none";
-  const providerApi = normalizeOptionalRouteApi(context.configuredProvider?.api);
-  const modelBaseUrl = firstRouteBaseUrl(context.configuredModel?.baseUrl);
-  const providerBaseUrl = firstRouteBaseUrl(context.configuredProvider?.baseUrl);
-  const environmentBaseUrl = firstRouteBaseUrl(resolveOpenAIEnvironmentBaseUrl(context));
-  const observedApi = normalizeOptionalRouteApi(context.observed?.api);
-  const observedBaseUrl = firstRouteBaseUrl(context.observed?.baseUrl);
+  const observedApi = normalizeOptionalRouteApi(observed?.api);
+  const observedBaseUrl = firstRouteBaseUrl(observed?.baseUrl);
   const hasObservedRoute = observedApi !== undefined || observedBaseUrl !== undefined;
-  let effectiveApi: ModelApi | undefined;
-  let effectiveBaseUrl: unknown;
-  let configuredRoute = false;
-  let customDefaultApi: ModelApi = OPENAI_COMPLETIONS_API;
-
-  // Model facts override provider facts field-by-field, which override the environment.
-  // Observed rows are atomic fallback only; custom bases may inherit a lower
-  // authored adapter without combining contradictory official transports.
-  const hasModelRoute = modelApi !== undefined || modelBaseUrl !== undefined;
-  if (hasModelRoute || providerApi !== undefined || providerBaseUrl !== undefined) {
-    configuredRoute = true;
-    effectiveApi = hasModelRoute ? (modelApi ?? providerApi) : providerApi;
-    effectiveBaseUrl = hasModelRoute ? modelBaseUrl : providerBaseUrl;
-    if (effectiveBaseUrl === undefined) {
-      const lowerBaseUrl = hasModelRoute
-        ? (providerBaseUrl ?? environmentBaseUrl)
-        : environmentBaseUrl;
-      const lowerEndpointKind = classifyOpenAIBaseUrl(lowerBaseUrl);
-      effectiveBaseUrl =
-        lowerEndpointKind === "custom" || lowerEndpointKind === "invalid"
-          ? lowerBaseUrl
-          : undefined;
-    }
-  } else if (environmentBaseUrl !== undefined) {
-    configuredRoute = true;
-    effectiveBaseUrl = environmentBaseUrl;
-    customDefaultApi = OPENAI_RESPONSES_API;
-  } else {
-    effectiveApi = observedApi;
-    effectiveBaseUrl = observedBaseUrl;
-  }
+  const configuredRoute = authored !== undefined;
+  const effectiveApi = authored ? authored.api : observedApi;
+  const effectiveBaseUrl = authored ? authored.baseUrl : observedBaseUrl;
   const endpointKind = classifyOpenAIBaseUrl(effectiveBaseUrl);
   if (endpointKind === "invalid") {
     return {
@@ -311,15 +305,12 @@ function resolveSingleObservedModelRoute(
     };
   }
   const chatGPTApi = effectiveApi?.toLowerCase() === OPENAI_CHATGPT_RESPONSES_API;
-  const authoredChatGPTApi =
-    modelApi?.toLowerCase() === OPENAI_CHATGPT_RESPONSES_API ||
-    providerApi?.toLowerCase() === OPENAI_CHATGPT_RESPONSES_API;
 
   // A custom endpoint owns its protocol contract. Subscription egress always
   // requires authored ChatGPT intent; observed Platform adapters remain safe
   // API-key fallbacks for otherwise unspecified custom routes.
   if (endpointKind === "custom") {
-    if (chatGPTApi && !authoredChatGPTApi) {
+    if (chatGPTApi && !authored?.chatGPTApi) {
       return {
         kind: "incompatible",
         code: "custom-chatgpt-relay-requires-configuration",
@@ -333,7 +324,8 @@ function resolveSingleObservedModelRoute(
       observedApi === OPENAI_RESPONSES_API || observedApi === OPENAI_COMPLETIONS_API
         ? observedApi
         : undefined;
-    const customApi = effectiveApi ?? observedPlatformApi ?? customDefaultApi;
+    const customApi =
+      effectiveApi ?? observedPlatformApi ?? authored?.customDefaultApi ?? OPENAI_COMPLETIONS_API;
     if (
       customApi !== OPENAI_RESPONSES_API &&
       customApi !== OPENAI_COMPLETIONS_API &&
@@ -452,35 +444,6 @@ function resolveSingleObservedModelRoute(
   return route(platformRoute);
 }
 
-function hasAuthoredRouteFacts(context: ProviderResolveModelRoutesContext): boolean {
-  return (
-    normalizeOptionalRouteApi(context.configuredModel?.api) !== undefined ||
-    firstRouteBaseUrl(context.configuredModel?.baseUrl) !== undefined ||
-    normalizeOptionalRouteApi(context.configuredProvider?.api) !== undefined ||
-    firstRouteBaseUrl(context.configuredProvider?.baseUrl) !== undefined ||
-    firstRouteBaseUrl(resolveOpenAIEnvironmentBaseUrl(context)) !== undefined
-  );
-}
-
-function authoredRouteNeedsObservedPlatformApi(
-  context: ProviderResolveModelRoutesContext,
-): boolean {
-  // Observations may fill only the missing protocol for an authored custom
-  // endpoint. Complete authored routes must stay isolated from catalog rows.
-  if (
-    normalizeOptionalRouteApi(context.configuredModel?.api) !== undefined ||
-    normalizeOptionalRouteApi(context.configuredProvider?.api) !== undefined
-  ) {
-    return false;
-  }
-  const authoredBaseUrl = firstRouteBaseUrl(
-    context.configuredModel?.baseUrl,
-    context.configuredProvider?.baseUrl,
-    resolveOpenAIEnvironmentBaseUrl(context),
-  );
-  return classifyOpenAIBaseUrl(authoredBaseUrl) === "custom";
-}
-
 function canonicalRouteCandidateBaseUrl(baseUrl: string): string {
   // Catalog rows may spell one endpoint differently. A canonical grouping key
   // prevents observation order from creating a false route ambiguity.
@@ -556,22 +519,24 @@ function resolveModelRouteCandidates(
   const observedRoutes = (context.observedRoutes ?? []).filter(
     (observed) => observed.api != null || observed.baseUrl != null,
   );
-  if (hasAuthoredRouteFacts(context)) {
-    if (authoredRouteNeedsObservedPlatformApi(context)) {
+  const authored = resolveAuthoredModelRoute(context);
+  if (authored) {
+    // Observations fill only the missing Platform adapter for an authored custom endpoint.
+    if (authored.api === undefined && classifyOpenAIBaseUrl(authored.baseUrl) === "custom") {
       const fallback = resolveAuthoredObservedFallback(observedRoutes);
       if (fallback.kind === "incompatible") {
         return fallback;
       }
-      return resolveSingleObservedModelRoute({ ...context, observed: fallback.route });
+      return resolveSingleObservedModelRoute(context, authored, fallback.route);
     }
-    return resolveSingleObservedModelRoute(context);
+    return resolveSingleObservedModelRoute(context, authored);
   }
   if (observedRoutes.length <= 1) {
-    return resolveSingleObservedModelRoute({ ...context, observed: observedRoutes[0] });
+    return resolveSingleObservedModelRoute(context, authored, observedRoutes[0]);
   }
 
   const resolutions = observedRoutes.map((observed) =>
-    resolveSingleObservedModelRoute({ ...context, observed }),
+    resolveSingleObservedModelRoute(context, authored, observed),
   );
   const incompatible = resolutions
     .filter((resolution) => resolution.kind === "incompatible")
@@ -602,7 +567,7 @@ function resolveModelRouteCandidates(
   }
   const firstRoute = routes[0];
   if (!firstRoute) {
-    return resolveSingleObservedModelRoute(context);
+    return resolveSingleObservedModelRoute(context, authored);
   }
   return {
     kind: "routes",

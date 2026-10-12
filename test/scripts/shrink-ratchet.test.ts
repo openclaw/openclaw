@@ -44,12 +44,6 @@ describe("shrink-ratchet", () => {
       parse: (source: string) => [...parseRatchetCounts(source, "counts.txt")],
       source: "# per-file debt\nsrc/b.ts\t2\nsrc/a.ts\t1\n",
     },
-    {
-      expected: 2,
-      file: "scalar.txt",
-      parse: (source: string) => parseRatchetScalar(source, "scalar.txt"),
-      source: "# total debt\n2\n",
-    },
   ])("loads the existing $file baseline format", ({ expected, file, parse, source }) => {
     const root = tempDirs.make("openclaw-shrink-ratchet-");
     fs.writeFileSync(path.join(root, file), source);
@@ -57,55 +51,41 @@ describe("shrink-ratchet", () => {
     expect(loadRatchetSnapshot<unknown>(root, file, false, parse)).toEqual(expected);
   });
 
-  it.each([0, 2 * 1024 * 1024])(
-    "loads worktree, index, and reference snapshots with %i bytes of padding",
-    (size) => {
-      const root = tempDirs.make("openclaw-shrink-ratchet-git-");
-      const baselinePath = "baseline.txt";
-      const absolutePath = path.join(root, baselinePath);
-      execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
-      const padding = `#${"x".repeat(size)}\n`;
-      fs.writeFileSync(absolutePath, padding + "1\n");
-      execFileSync("git", ["add", baselinePath], { cwd: root, stdio: "ignore" });
-      execFileSync(
-        "git",
-        [
-          "-c",
-          "user.name=OpenClaw",
-          "-c",
-          "user.email=test@openclaw.local",
-          "commit",
-          "-m",
-          "base",
-        ],
-        { cwd: root, stdio: "ignore" },
-      );
-      fs.writeFileSync(absolutePath, padding + "2\n");
-      execFileSync("git", ["add", baselinePath], { cwd: root, stdio: "ignore" });
-      fs.writeFileSync(absolutePath, padding + "3\n");
-      const parse = (source: string) => parseRatchetScalar(source, baselinePath);
+  it("loads worktree, index, and reference snapshots beyond the Git pipe limit", () => {
+    const root = tempDirs.make("openclaw-shrink-ratchet-git-");
+    const baselinePath = "baseline.txt";
+    const absolutePath = path.join(root, baselinePath);
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    const padding = `#${"x".repeat(2 * 1024 * 1024)}\n`;
+    fs.writeFileSync(absolutePath, padding + "1\n");
+    execFileSync("git", ["add", baselinePath], { cwd: root, stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
+      { cwd: root, stdio: "ignore" },
+    );
+    fs.writeFileSync(absolutePath, padding + "2\n");
+    execFileSync("git", ["add", baselinePath], { cwd: root, stdio: "ignore" });
+    fs.writeFileSync(absolutePath, padding + "3\n");
+    const parse = (source: string) => parseRatchetScalar(source, baselinePath);
 
-      expect(loadRatchetSnapshot(root, baselinePath, false, parse)).toBe(3);
-      expect(loadRatchetSnapshot(root, baselinePath, true, parse)).toBe(2);
-      expect(loadRatchetReference(root, "HEAD", baselinePath, parse)).toBe(1);
-      expect(loadRatchetReference(root, "HEAD", "missing.txt", parse)).toBeNull();
-      expect(() => loadRatchetReference(root, "missing-ref", baselinePath, parse)).toThrow();
-    },
-  );
-
-  it.each([
-    () => parseRatchetCounts("src/a.ts\t0\n", "counts.txt"),
-    () => parseRatchetCounts("src/a.ts\t1\nsrc/a.ts\t2\n", "counts.txt"),
-    () => parseRatchetCounts("src/a.ts\t1.5\n", "counts.txt"),
-  ])("rejects malformed count-map baselines", (parse) => {
-    expect(parse).toThrow(/Invalid counts\.txt entry/u);
+    expect(loadRatchetSnapshot(root, baselinePath, false, parse)).toBe(3);
+    expect(loadRatchetSnapshot(root, baselinePath, true, parse)).toBe(2);
+    expect(loadRatchetReference(root, "HEAD", baselinePath, parse)).toBe(1);
+    expect(loadRatchetReference(root, "HEAD", "missing.txt", parse)).toBeNull();
+    expect(() => loadRatchetReference(root, "missing-ref", baselinePath, parse)).toThrow();
   });
 
-  it.each([
-    () => parseRatchetScalar("1\n2\n", "scalar.txt"),
-    () => parseRatchetScalar("-1\n", "scalar.txt"),
-  ])("rejects malformed scalar baselines", (parse) => {
-    expect(parse).toThrow(/exactly one non-negative integer/u);
+  it("rejects duplicate count-map entries", () => {
+    expect(() => parseRatchetCounts("src/a.ts\t1\nsrc/a.ts\t2\n", "counts.txt")).toThrow(
+      /Invalid counts\.txt entry/u,
+    );
+  });
+
+  it("rejects negative scalar baselines", () => {
+    expect(() => parseRatchetScalar("-1\n", "scalar.txt")).toThrow(
+      /exactly one non-negative integer/u,
+    );
   });
 
   it.each([

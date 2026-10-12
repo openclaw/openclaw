@@ -4,12 +4,14 @@ import { escapeRegExp } from "../shared/regexp.js";
 import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
+  CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   isControlUiVersionedPublicAsset,
   type ControlUiEnvironment,
+  type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
@@ -53,6 +55,8 @@ export async function serveControlUiIndexHtml(
   buildId?: string,
   sessionEntryPath?: string,
   isSessionEntryCurrent?: () => boolean,
+  proxySessionEntry = false,
+  bootstrapConfig?: ControlUiBootstrapConfig,
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const preloadRoute =
@@ -69,6 +73,9 @@ export async function serveControlUiIndexHtml(
   // An empty base path is authoritative for Gateway resources even when the
   // router infers a namespace. Always emit it so resources stay root-mounted.
   const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtml(normalizedBasePath)}"`;
+  const bootstrapAttribute = bootstrapConfig
+    ? ` ${CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE}="${escapeHtml(JSON.stringify(bootstrapConfig))}"`
+    : "";
   const environmentAttributes = environment
     ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtml(JSON.stringify(environment))}"`
     : "";
@@ -84,7 +91,8 @@ export async function serveControlUiIndexHtml(
       .replace(new RegExp(`\\s${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "g"), "")
       .replace(
         /<html\b/i,
-        `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}`,
+        () =>
+          `<html${basePathAttribute}${proxySessionEntry ? ' data-openclaw-proxy-session-entry="true"' : ""} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}${bootstrapAttribute}`,
       ),
   );
   const document = sessionEntryPath
@@ -106,6 +114,9 @@ export async function serveControlUiIndexHtml(
     }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", sessionEntryPath ? "no-store" : "no-cache");
+  res.setHeader(
+    "Cache-Control",
+    bootstrapConfig ? "private, no-store" : sessionEntryPath ? "no-store" : "no-cache",
+  );
   await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent);
 }

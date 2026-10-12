@@ -108,37 +108,6 @@ verify_prior_ci_admin() {
   MERGE_PRIOR_CI_PROOF="$proof"
 }
 
-fetch_clawsweeper_review_comments() {
-  local pr="$1" repo_name="$2" repo_host="$3"
-  if ! CLAWSWEEPER_REVIEW_COMMENTS=$(pr_gh_plain issue-comments "$repo_name" "$repo_host" "$pr"); then
-    echo "ClawSweeper review gate failed: unable to read current issue comments." >&2
-    return 1
-  fi
-}
-
-validate_clawsweeper_review_comments() {
-  local pr="$1" head_sha="$2" evidence
-  if ! evidence=$(printf '%s\n' "$CLAWSWEEPER_REVIEW_COMMENTS" |
-    node "$script_parent_dir/pr-lib/clawsweeper-review-gate.mjs" "$pr" "$head_sha"); then
-    unset CLAWSWEEPER_REVIEW_COMMENTS
-    return 1
-  fi
-  unset CLAWSWEEPER_REVIEW_COMMENTS
-  CLAWSWEEPER_REVIEW_EVIDENCE="$evidence"
-  echo "ClawSweeper completed review: comment $(printf '%s\n' "$evidence" | jq -r .commentId), reviewed $(printf '%s\n' "$evidence" | jq -r .reviewedAt)"
-}
-
-require_clawsweeper_review() {
-  local pr="$1" head_sha="$2" repo_name="${3:-}" repo_host="${4:-}" repo_json
-  if [ -z "$repo_name" ] || [ -z "$repo_host" ]; then
-    repo_json=$(pr_gh_plain repo view --json nameWithOwner,url) || return 1
-    repo_name=$(printf '%s\n' "$repo_json" | jq -er '.nameWithOwner | select(type == "string" and length > 0)') || return 1
-    repo_host=$(printf '%s\n' "$repo_json" | jq -er '.url | capture("^https://(?<host>[^/]+)/").host') || return 1
-  fi
-  fetch_clawsweeper_review_comments "$pr" "$repo_name" "$repo_host" || return 1
-  validate_clawsweeper_review_comments "$pr" "$head_sha"
-}
-
 # Return 0 for relevant drift, 1 for unrelated drift, and 2 for failed evaluation.
 # The caller uses a conditional, so every fallible evidence operation is checked.
 mainline_drift_requires_sync() (
@@ -344,8 +313,6 @@ merge_verify() {
 
   fetch_pr_head "$pr" "$PREP_HEAD_SHA" "refs/heads/pr-$pr" "$json" || return 1
   json="$PR_HEAD_OBSERVATION"
-  require_clawsweeper_review "$pr" "$pr_head_sha" \
-    "${MERGE_REPO_NAME:-}" "${MERGE_REPO_HOST:-}" || return 1
   mark_pr_operation_side_effects_started || return 1
   if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
     verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
@@ -581,6 +548,9 @@ verify_merge_recovery_artifacts() (
       [ "$LOCAL_PREP_HEAD_SHA" = "$(pr_git rev-parse HEAD)" ] &&
       [ "$(pr_git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" = "$(pr_git rev-parse "$head^{tree}")" ] || return 1
     require_correction_publication_gates "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
+    local GATES_MODE=""
+    source .local/gates.env || return 1
+    [ "$GATES_MODE" != github_pending ] || [ "$qualified_pending_recovery" = true ] || return 1
     return 0
   fi
   local PR_NUMBER="" PR_HEAD_SHA="" PR_HEAD_SHA_BEFORE=""
@@ -617,9 +587,9 @@ merge_run() {
   local recovery_artifact_head="$replacement_head"
   local body_path="${5:-}" captured_body="" merge_body_snapshot=""
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
-  local cancel_auto="${7:-false}"
+  local cancel_auto="${7:-false}" merged_head="${11:-}"
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
-  local provider_rejection="" stale_head_retirement="" qualified_pending_recovery=false
+  local provider_rejection="" stale_head_retirement="" async_failure="" qualified_pending_recovery=false
   local retired_auto_admin=false stale_admin_head=false
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
@@ -641,12 +611,22 @@ merge_run() {
     echo "Replacement head requires an exact recovery outcome and full lowercase 40-character SHA." >&2
     return 2
   fi
+  if [ -n "$merged_head" ] && ! [[ "$merged_head" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Merged head requires a full lowercase 40-character SHA." >&2
+    return 2
+  fi
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
   if [ "$cancel_auto" = true ]; then
     [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] && [ "$auto_merge_requested" = false ] || return 2
     merge_outcome_cancel_auto "$pr" "$recovery_oid"
+    return
+  fi
+  if [ -n "$merged_head" ]; then
+    [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory$MERGE_ADMIN_EVIDENCE" ] &&
+      [ "$auto_merge_requested" = false ] && [ "$cancel_auto" = false ] && [ "$confirmed_admin" = false ] || return 2
+    merge_outcome_accept_head_drift "$pr" "$recovery_oid" "$merged_head"
     return
   fi
   if [ -n "$legacy_directory" ]; then
@@ -667,7 +647,11 @@ merge_run() {
           .priorCiAdmin.dispatchTransport == "rest" and .head != $replacement
          else (.accepted == false and (.route == "immediate" or
             ($refusal != "" and .route == "auto" and .method == "squash"))) or
-          (.route == "auto" and .cancellation.state == "confirmed") end)
+          (.route == "auto" and .cancellation.state == "confirmed") or
+          ($replacement == "" and $refusal == "" and .accepted == true and
+            .route == "immediate" and .transport == "rest" and
+            .asyncMerge.status == "failed" and .asyncMerge.sha == null and
+            (.asyncMerge.uuid | type == "string")) end)
       ' >/dev/null; then
       if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
         merge_outcome_stop "operator admin recovery requires an exact qualified prior-CI intent or a confirmed auto cancellation with an explicit selected head; no attempt was authorized"
@@ -677,6 +661,7 @@ merge_run() {
       return 1
     fi
     recovery_record="$MERGE_OUTCOME_RECORD"
+    async_failure=$(printf '%s\n' "$recovery_record" | jq -c 'select(.asyncMerge.status == "failed") | .asyncMerge') || return 1
   elif [ -n "$refusal_directory" ]; then
     merge_outcome_stop "pre-dispatch qualification requires explicit operator recovery"; return 1
   elif [ -n "$MERGE_OUTCOME_OID" ]; then
@@ -994,17 +979,17 @@ merge_run() {
     recovery_actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
     [ -n "$recovery_actor" ] || { merge_outcome_stop "cannot identify the operator recovery actor"; return 1; }
   fi
-  # Ordinary squash has one final authority observation after comment collection.
+  # Ordinary squash has one final authority observation before intent.
   # Special routes retain their separate admission and admin authority windows.
   if [ "$route" != immediate ] || [ "$merge_method" != squash ]; then
     merge_outcome_stable "$pr" || return 1
   fi
-  fetch_clawsweeper_review_comments "$pr" "$MERGE_REPO_NAME" "$MERGE_REPO_HOST" || return 1
-  if ! merge_outcome_stable "$pr"; then
-    unset CLAWSWEEPER_REVIEW_COMMENTS
+  if [ -n "$async_failure" ] &&
+    [ "$async_failure" != "$(merge_rest merge-result "$pr" "$(printf '%s\n' "$async_failure" | jq -r .uuid)" "$PREP_HEAD_SHA")" ]; then
+    merge_outcome_stop "async failure is unavailable or changed; no recovery attempt was authorized"
     return 1
   fi
-  validate_clawsweeper_review_comments "$pr" "$PREP_HEAD_SHA" || return 1
+  merge_outcome_stable "$pr" || return 1
   if [ -n "$merge_body_snapshot" ] &&
     [ "$merge_body_snapshot" != "$(snapshot_merge_body "$merge_body_file")" ]; then
     merge_outcome_stop "merge body changed during admission; no request was dispatched"
@@ -1128,12 +1113,11 @@ merge_run() {
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
   intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \
     --arg method "$merge_method" --arg route "$route" --arg attempt "$attempt" \
-    --arg localHead "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" --arg transport "$MERGE_TRANSPORT" \
-    --argjson review "$CLAWSWEEPER_REVIEW_EVIDENCE" '
+    --arg localHead "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" --arg transport "$MERGE_TRANSPORT" '
     {version:1,repo:$repo,pr:.pr.number,prId:.pr.id,base:.pr.baseRefName,head:.pr.headRefOid,
      localHead:$localHead,
-     main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null,
-     clawsweeperReview:$review} + (if $transport == "rest" then {transport:"rest"} else {} end)
+     main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null}
+     + (if $transport == "rest" then {transport:"rest"} else {} end)
   ') || return 1
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson proof "$MERGE_PRIOR_CI_PROOF" '.priorCiAdmin=$proof') || return 1
@@ -1158,6 +1142,9 @@ merge_run() {
   fi
   if [ -n "$provider_rejection" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson rejection "$provider_rejection" '.recovery.providerRejection=$rejection') || return 1
+  fi
+  if [ -n "$async_failure" ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson failure "$async_failure" '.recovery.asyncFailure=$failure') || return 1
   fi
   if [ -n "$stale_head_retirement" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson retirement "$stale_head_retirement" '.recovery.staleHeadRetirement=$retirement') || return 1

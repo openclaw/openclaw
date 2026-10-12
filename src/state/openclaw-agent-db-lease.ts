@@ -12,11 +12,13 @@ import {
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
+  AgentDatabaseDeletionRefusedError,
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
@@ -474,13 +476,10 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   receipt: OpenClawAgentDatabaseWorkerLeaseReceipt;
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
+  deferUnverifiedIntegrity?: boolean;
   claim(onVerification?: OpenClawAgentIntegrityVerificationReceiver): string;
 } {
-  const database = {
-    db: sharedDatabase.db,
-    path: sharedDatabase.path,
-    walMaintenance: sharedDatabase.walMaintenance,
-  };
+  const database = { ...sharedDatabase };
   const identity = requireOpenClawStateDatabaseIdentity(database);
   const assertCurrent = () => {
     if (!database.db.isOpen || requireOpenClawStateDatabaseIdentity(database) !== identity) {
@@ -513,16 +512,23 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
         { agentId: receipt.agentId, path: receipt.path },
         options,
       );
-      runOpenClawStateWriteTransaction((current) => {
-        assertCurrent();
-        claimAgentDatabaseLeaseInDatabase(
-          current,
-          { ...receipt, provenance },
-          deletionFence,
-          options.env,
-          onVerification,
-        );
-      }, options);
+      try {
+        runOpenClawStateWriteTransaction((current) => {
+          assertCurrent();
+          claimAgentDatabaseLeaseInDatabase(
+            current,
+            { ...receipt, provenance },
+            deletionFence,
+            options.env,
+            onVerification,
+          );
+        }, options);
+      } catch (error) {
+        if (error instanceof AgentDatabaseDeletionRefusedError) {
+          throw new SqliteWorkerOpenRefusedError(error);
+        }
+        throw error;
+      }
       return receipt.leaseId;
     },
   };

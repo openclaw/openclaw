@@ -295,3 +295,14 @@ export function holdCodexThreadQueue(threadId: string) {
     },
   };
 }
+
+export function oauthProfile(email: string, now: number) {
+  return {
+    type: "oauth" as const,
+    provider: "openai",
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: now + 60 * 60 * 1000,
+    email,
+  };
+}
