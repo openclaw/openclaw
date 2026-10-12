@@ -870,9 +870,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
 
         let jumpToLatest = app.buttons["Jump to latest reply"]
-        // Completed block replies follow automatically; manual departure below still owns the reader.
+        // With the keyboard hidden, a completed reply keeps the question anchor until the reader jumps.
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
+        XCTAssertTrue(submitted.frame.intersects(transcript.frame))
+        self.assertElementHasRenderedContent(submitted, named: "anchored question after completed reply")
+        self.attachScreenshot(named: "reader-completed-block-anchored")
+        jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-        self.attachScreenshot(named: "reader-completed-block-followed")
         let finalReply = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS %@ AND label CONTAINS %@",
             "I can help with",
@@ -887,6 +891,49 @@ final class OpenClawSnapshotUITests: XCTestCase {
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
         XCTAssertTrue(finalReply.exists)
+    }
+
+    func testNewlySentTurnWithCompletedReplyKeepsQuestionAnchor() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone question-anchor proof only")
+        self.continueAfterFailure = false
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-long-chat-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        self.waitForEnabled(input)
+        input.tap()
+        let prompt = String(repeating: "Keep the question visible while its reply arrives.\n", count: 9) +
+            "SENT_TURN_QUESTION_ANCHOR"
+        input.typeText(prompt)
+        try self.dismissChatKeyboardThroughTranscript(in: app)
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.isEnabled)
+        send.tap()
+        let question = app.staticTexts.matching(NSPredicate(format: "label == %@", prompt)).firstMatch
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        // The fixture stores the complete reply synchronously with send, before returning its acknowledgment.
+        let reply = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@ AND label CONTAINS %@",
+            "I can help with", "SENT_TURN_QUESTION_ANCHOR")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(
+            jump.waitForExistence(timeout: 3),
+            "A newly sent turn with a completed reply and hidden keyboard must keep the question anchor")
+        XCTAssertGreaterThanOrEqual(question.frame.minY, transcript.frame.minY)
+        XCTAssertTrue(question.frame.intersects(transcript.frame))
+        self.assertElementHasRenderedContent(question, named: "newly sent question remains anchored")
+        self.attachScreenshot(named: "sent-turn-completed-reply-question-anchored")
+        jump.tap()
+        XCTAssertTrue(jump.waitForNonExistence(timeout: 3))
+        self.assertElementHasRenderedContent(reply, named: "completed reply after explicit latest jump")
+        self.attachScreenshot(named: "sent-turn-explicit-latest-jump")
     }
 
     func testUnknownOutcomeStepUsesLocalToolTitle() throws {
@@ -1009,7 +1056,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["SCROLL_QUESTION_59"].waitForExistence(timeout: 5))
     }
 
-    func testStreamingReplyFollowsAfterKeyboardDismissedSend() throws {
+    func testStreamingReplyKeepsQuestionAnchorAfterKeyboardDismissedSend() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
             additionalArguments: [
@@ -1021,27 +1068,31 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let input = self.chatMessageInput(in: app)
         self.waitForEnabled(input)
         input.tap()
-        input.typeText("Name three European capital cities.")
+        let prompt = "Name three European capital cities."
+        input.typeText(prompt)
         try self.dismissChatKeyboardThroughTranscript(in: app)
         app.buttons["chat-send-message"].tap()
+        let question = app.staticTexts[prompt]
+        XCTAssertTrue(question.waitForExistence(timeout: 8))
         let streaming = app.descendants(matching: .any)["chat-streaming-assistant-body"].firstMatch
         XCTAssertTrue(streaming.waitForExistence(timeout: 10))
-        let composer = app.otherElements["chat-composer-surface"]
-        let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            streaming.frame.maxY <= composer.frame.minY + 1 && streaming.isHittable
-        }, object: streaming)
-        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed)
-        self.assertElementHasRenderedContent(streaming, named: "streaming reply after keyboard-dismissed send")
-        self.attachScreenshot(named: "streaming-reply-visible-with-keyboard-dismissed")
         let tail = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "GROWING_LIVE_TAIL_12"))
             .firstMatch
         XCTAssertTrue(tail.waitForExistence(timeout: 12))
         let transcript = try self.chatTranscript(in: app)
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(question.frame.intersects(transcript.frame))
+        XCTAssertLessThanOrEqual(question.frame.maxY, composer.frame.minY + 1)
+        self.assertElementHasRenderedContent(question, named: "anchored question after 12 streaming chunks")
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jump.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "growing-stream-question-anchored-after-12-chunks")
+        jump.tap()
         let growingTailVisible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             tail.frame.maxY <= composer.frame.minY + 1 && tail.frame.intersects(transcript.frame)
         }, object: tail)
         XCTAssertEqual(XCTWaiter.wait(for: [growingTailVisible], timeout: 5), .completed)
-        self.attachScreenshot(named: "growing-stream-tail-visible-after-12-chunks")
+        self.attachScreenshot(named: "growing-stream-tail-visible-after-explicit-jump")
     }
 
     func testExistingSessionRestoresLatestOutput() throws {

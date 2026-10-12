@@ -39,15 +39,6 @@ func chatReaderUserTransition(
     return .unchanged
 }
 
-func chatReaderHasAssistantReply(after messageID: UUID, rows: [ChatTranscriptRow]) -> Bool {
-    guard let index = rows.firstIndex(where: { $0.id == messageID }) else { return false }
-    for row in rows.dropFirst(index + 1) {
-        if row.startsTurn { return false }
-        if case let .message(message) = row, message.role == "assistant" { return true }
-    }
-    return false
-}
-
 func chatReaderHasNewerContent(
     after messageID: UUID,
     visibleIDs: [UUID],

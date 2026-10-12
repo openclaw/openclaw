@@ -413,7 +413,6 @@ extension OpenClawChatView {
                 geometry.contentSize.height - geometry.visibleRect.maxY <= Layout.liveEdgeThreshold
             } action: { _, isAtLiveEdge in
                 self.isAtLiveEdge = isAtLiveEdge
-                self.followOverflowingReplyIfNeeded()
             }
             .defaultScrollAnchor(
                 self.followTarget == .latest && !self.isUserScrolling ? .bottom : nil,
@@ -1274,10 +1273,9 @@ extension OpenClawChatView {
             if case let .turn(messageID) = followTarget,
                !visibleTurnStartIDs.contains(messageID)
             {
-                self.followTarget = .latest
+                self.followTarget = nil
                 self.hasNewerContentBelow = false
             }
-            if self.followTarget == .latest { self.moveScrollPosition(to: self.scrollerBottomID) }
             return
         case let .added(latestTurnStartID):
             self.lastTurnStartID = latestTurnStartID
@@ -1290,9 +1288,7 @@ extension OpenClawChatView {
             // The anchored-question layout assumes a viewport tall enough to read the turn
             // below the anchor. With the keyboard up that space is gone and the reply streams
             // straight past the fold (#108692), so follow the live edge instead.
-            if self.isKeyboardVisible ||
-                chatReaderHasAssistantReply(after: latestTurnStartID, rows: transcriptRows)
-            {
+            if self.isKeyboardVisible {
                 self.followTarget = .latest
                 self.moveScrollPosition(to: self.scrollerBottomID)
             } else {
@@ -1310,8 +1306,6 @@ extension OpenClawChatView {
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
         case let .turn(messageID):
-            // Keep the question anchor until the growing reply exceeds the available viewport.
-            if self.followOverflowingReplyIfNeeded() { return }
             // Reader policy stays on this turn after the one-shot scroll command completes. Reissuing
             // that target for every streaming delta can loop SwiftUI layout and starve interaction.
             self.hasNewerContentBelow = chatReaderHasNewerContent(
@@ -1321,19 +1315,6 @@ extension OpenClawChatView {
         case nil:
             self.hasNewerContentBelow = true
         }
-    }
-
-    @discardableResult
-    private func followOverflowingReplyIfNeeded() -> Bool {
-        guard !self.isUserScrolling, self.searchMessageID == nil,
-              case let .turn(id) = self.followTarget,
-              (!self.isAtLiveEdge && self.hasVisibleStreamingAssistantText) ||
-              chatReaderHasAssistantReply(after: id, rows: self.transcriptPresentation.rows)
-        else { return false }
-        self.followTarget = .latest
-        self.hasNewerContentBelow = false
-        self.moveScrollPosition(to: self.scrollerBottomID)
-        return true
     }
 
     private func moveScrollPosition(
