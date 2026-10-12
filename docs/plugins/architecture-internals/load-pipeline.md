@@ -152,10 +152,10 @@ generations keep their captured metadata. Each process normally owns one Gateway
 Overlapping independent Gateways in one process are best effort rather than
 coordinated owners of the same inventory.
 
-Native SDK alias resolution retains each importing file's canonical path, root
+Native SDK alias resolution retains each importing file's resolved filesystem path, root
 membership, and alias targets in that same generation. Alias registration or
 replacement clears those results, as does metadata invalidation; repeated
-imports do not repeat filesystem canonicalization or containment checks.
+imports do not repeat filesystem path resolution or containment checks.
 
 The same cache generation prepares installed-index scope lookups, compiled model
 matching patterns, parsed install-record projections, and manifest fingerprints
@@ -201,7 +201,7 @@ Only narrowed metadata views without a workspace field inherit the active
 workspace. The registry's existing load context retains its workspace so a request or active
 registry from another workspace cannot replace a prepared selection.
 
-Provider hooks share the canonical provider registry selection. Declared providers
+Provider hooks use the shared provider registry selection. Declared providers
 reserve their names, while provider-triggered helpers still activate beside them.
 Required load owners and eligible hook receivers are captured separately in that
 selection. Declared provider owners need matching physical records and provider
@@ -257,7 +257,7 @@ When selection supplies a manifest owner, artifacts resolve from that owner's
 root and entry, preserving source overlays and retained module instances.
 
 Bundled provider policy lookups retain their resolved surface, including absence,
-in the metadata cache. Repeated model-reference canonicalization reuses that
+in the metadata cache. Repeated model-reference normalization reuses that
 surface without resolving artifact candidates again. The memo follows the
 selected registry's publication version and bundled-directory selection, with
 separate weakly held entries for each registry. Completed private registries

@@ -175,7 +175,7 @@ closing the connection.
 
     `entriesInKeyRange({ keyStartInclusive, keyEndExclusive, limit, order })` reads a lexical key range, including the lower bound and excluding the upper bound. `limit` must be a positive safe integer; `order` is `"asc"` by default or `"desc"`. Storage applies ordering and the limit before returning values. Encode sortable keys when native identifiers do not sort lexically. Use bounded pages rather than `entries()` to read a growing retained store.
 
-    `moveEntriesFrom({ namespace, entries: [{ sourceKey, targetKey }] })` promotes at most 10,000 rows from a bounded namespace owned by the same plugin into the receiving retained store. One transaction rereads and moves the source records without decoding or rewriting their payloads. Existing destination records win, missing source records are no-ops, and a retry after a completed move is idempotent. Live source records with TTL reject the whole operation; expired records are not revived. The returned number counts settled source rows. This operation does not create another table or require a Doctor step.
+    `moveEntriesFrom({ namespace, entries: [{ sourceKey, targetKey }] })` promotes at most 10,000 rows from a bounded namespace owned by the same plugin into the receiving retained store. One transaction rereads and moves the source records without decoding or rewriting their payloads. Existing destination records win, missing source records are no-ops, and a retry after a completed move has no additional effect. Live source records with TTL reject the whole operation; expired records are not revived. The returned number counts settled source rows. This operation does not create another table or require a Doctor step.
 
     These two methods remain optional in the public store type for existing adapters. A plugin using retained storage must require the host capabilities it needs; do not silently fall back to an evicting store or retry failed reads through a different path. Retained runtime handles reject operations after their owning capability closes.
 
@@ -448,7 +448,7 @@ deletes atomically; a decode failure rolls back the deletion. Store creation,
 input validation, and JSON serialization remain on the calling thread.
 
 Callback-based `update` and `deleteIf` retain the native synchronous transaction;
-do not replace either with a separate lookup and write. Worker errors retain `PluginStateStoreError` codes, operation, and path. Canonical
+do not replace either with a separate lookup and write. Worker errors retain `PluginStateStoreError` codes, operation, and path. OpenClaw
 state errors use their existing codec; other native causes retain bounded causal
 messages, error codes, and numeric `errno` values. Structured file logs include
 the process ID, thread ID, and OpenClaw version that constructed the plugin-state
@@ -501,7 +501,7 @@ admission releases. SessionManager `appendModelChange` and
 AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await these
 operations before using the resulting model or thinking state. Other
 SessionManager transcript writes use their awaited `Async` companions through
-the same canonical SQLite worker. They retain the caller's live write authority,
+the same shared SQLite worker. They retain the caller's live write authority,
 commit before dependent publication, and preserve the loaded view on failure
 before commit. See the [complete session migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence).
 
@@ -515,20 +515,20 @@ sets removal at the next Plugin SDK major. Bundled production paths use awaited
 operations.
 
 Core failed-image settlement uses the internal `appendSessionTranscriptNote`
-operation, which accepts a custom message and returns a promise for its persisted `messageId`, canonical
+operation, which accepts a custom message and returns a promise for its persisted `messageId`, stored
 `message`, the append owner's `appended` result, and a `currentTail` fact from the same snapshot.
 The tail fact uses the transaction's visible leaf and generation: side metadata does not suppress a retry's publication, while a later visible entry does.
-File-backed notes use the same canonical agent worker and writer queue, reserving their turn
+File-backed notes use the same shared agent worker and writer queue, reserving their turn
 before asynchronous target preparation. The embedded runner awaits its failed-image note before publishing that stored message in live context or the
-completed result when the owner appended it or confirms it is still the current tail after a lost reply. An idempotent historical result does not reintroduce a note omitted by compaction. Input and target capture precede awaited work; transaction and
+completed result when the owner appended it or confirms it is still the current tail after a lost reply. A duplicate result for an earlier append does not reintroduce a note omitted by compaction. Input and target capture precede awaited work; transaction and
 publication checks retain the original writer and session binding. A known
 commit followed by a publication failure retains its message ID and prevents
-model fallback from replaying the append. Incognito notes use the same canonical
+model fallback from replaying the append. Incognito notes use the same stored
 append snapshot under their existing process-held native write owner until its
 actor cutover; this path still performs caller-thread SQLite work. It leaves the
 manager's loaded view unchanged and applies the same fresh-append/current-tail
 publication rules. Detached notes continue through their in-memory manager owner.
-Canonical storage close revokes pending asynchronous notes and joins their target
+Closing the underlying store revokes pending asynchronous notes and joins their target
 preparation, accepted work, and cleanup before releasing the store.
 Failed-image notes use the existing message idempotency key to survive redaction
 and same-run retries. Existing unkeyed notes retain their run-metadata matching.
@@ -542,7 +542,7 @@ captures the resolved state directory and supervisor mode; environment changes
 cannot redirect later writes. Existing `sessions.json` and custom-store routing
 and symlink spelling are preserved.
 
-File-backed transcript writes execute through the canonical agent database
+File-backed transcript writes execute through the underlying agent database
 worker. Queued extension actions retain their original runtime and session
 authority through transaction and commit admission. Runtime session hydration
 uses the existing read worker. Deprecated third-party synchronous adapters and
@@ -574,17 +574,17 @@ the operation settles. The caller still owns transactions and authorization.
 For large native publications, `openOpenClawAgentSqliteWorkerStore(options, borrowedDb, { moduleUrl, input })`
 retains the original borrowed handle and physical identity. Its
 `run(operation, assertCurrent)` joins the existing agent writer queue and borrows
-the canonical agent executor for the complete operation. The module exports
+the shared agent executor for the complete operation. The module exports
 `bindSqliteWorkerBackend(input, { databasePath, database, admit })`; it uses the
 supplied connection and closes only its own temporary state. It must not open or
 close the agent database. The operation receives only the bound backend's
 `execute` method; finish it before calling `close()`. Client close revokes new work,
-drains its accepted operations, and releases its original borrow. The canonical
+drains its accepted operations, and releases its original borrow. The shared
 executor owns the native connection, lease, idle reuse, and final close.
 
 A backend used with this owner requests `transaction` admission after BEGIN and
 `commit` admission immediately before COMMIT through the supplied `admit` callback.
-The host checks the canonical connection and current caller authority at
+The host checks the underlying connection and current caller authority at
 both points without waiting synchronously for the native transaction. An accepted
 commit grant orders the commit before later revocation; an earlier refusal rolls
 back. Callers must preserve committed or unknown outcomes and never replay them.
@@ -603,7 +603,7 @@ Preparation carries captured state/runtime facts and performs no native work.
 After it settles, `execute(command)` enters fresh synchronous authority scopes;
 connection-bound execution revalidates authority before native work. Extension
 loading, transactions, and domain callbacks remain synchronous. Agent connection policy, including TEMP
-storage, belongs to the canonical connection owner and cannot be reset when a
+storage, belongs to the underlying connection owner and cannot be reset when a
 publication binds.
 
 Backends whose failure handling can leave an unusable native connection implement

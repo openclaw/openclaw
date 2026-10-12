@@ -178,12 +178,12 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   the core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
 - Backends that can disable all native tools for a specific run may declare
   `nativeToolMode: "selectable"`. Restricted calls pass an exact
-  `ctx.toolAvailability.native` list plus canonical
+  `ctx.toolAvailability.native` list plus standard
   `ctx.toolAvailability.openClaw` names. Declare
   `toolAvailabilityEnforcement: "execution-args"` and enforce the contract in
   final fresh/resume argv, or declare `"prepare-execution"`, enforce it in
   staged policy, and return `toolAvailabilityEnforced: true`. OpenClaw disables
-  native tools for runtime caps such as cron `toolsAllow` and fails closed when
+  native tools for runtime caps such as cron `toolsAllow` and blocks execution when
   the declared enforcement path is incomplete.
 
 For an end-to-end authoring guide, see

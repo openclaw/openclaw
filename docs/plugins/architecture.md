@@ -150,7 +150,7 @@ Channel setup catalogs retain the requested workspace and load-path scope, inclu
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing an account or an agent's run workspace does not invalidate it. Explicit plugin lifecycle operations prepare a new inventory for installs, updates, removals, source or manifest edits, and discovery-root changes before publishing it to the running Gateway.
 
-Runs outside the agent's canonical workspace reuse the agent's prepared plugin generation instead of loading the plugins again. Rooted background runs, including skill workshop reviews and isolated cron jobs, qualify when their bootstrap workspace resolves to that agent's canonical workspace. In a Gateway, every other run workspace also qualifies because it resolves to the same boot inventory. Their execution directory and filesystem confinement remain at the task root, including during compaction. Hosts without that shared inventory, such as direct CLI runs in another workspace, retain their own workspace-scoped generation.
+Runs outside the agent's resolved workspace reuse the agent's prepared plugin generation instead of loading the plugins again. Rooted background runs, including skill workshop reviews and isolated cron jobs, qualify when their bootstrap workspace resolves to that agent's resolved workspace. In a Gateway, every other run workspace also qualifies because it resolves to the same boot inventory. Their execution directory and filesystem confinement remain at the task root, including during compaction. Hosts without that shared inventory, such as direct CLI runs in another workspace, retain their own workspace-scoped generation.
 
 Tool resolution treats plugins that the prepared generation recorded as disabled or failed (for example, a memory plugin outside the selected memory slot) as settled outcomes and does not load them again for each turn.
 
@@ -269,7 +269,7 @@ sharing their runtime authority.
 Managed npm plugins support capture storage on another filesystem, including a
 `tmpfs` mount, and npm roots reached through symlinks. Retained native
 directories validate the admitting plugin's OpenClaw peer against the selected
-host's canonical package root. A hoisted native dependency does not need its own
+host's resolved package root. A hoisted native dependency does not need its own
 host link, but any host it resolves must match. A mismatch names the peer path,
 resolved target, and selected host; run `openclaw doctor --fix` with that host,
 then reload the affected plugin. The loader records the failure for that plugin
@@ -583,7 +583,7 @@ loaded outside a captured plugin instance keep their existing native/Jiti loadin
 behavior.
 
 The host Plugin SDK always stays on the host's native module graph, including
-when Jiti compiles a plugin entry. SDK aliases use canonical filesystem paths so
+when Jiti compiles a plugin entry. SDK aliases use resolved filesystem paths so
 symlinked checkouts cannot create another host owner. The running host selects
 source or built SDK modules; a plugin's file extension does not select a second
 SDK graph. Source hosts need a native TypeScript loader such as the repository's
@@ -699,9 +699,9 @@ This is why embedded-runner routing changes are still plugin work: the runner is
 
 For channel-owned execution helpers, channel plugins should keep the execution runtime inside their own plugin modules. Core no longer owns the Discord, Slack, Telegram, or WhatsApp message-action runtimes under `src/agents/tools`. We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and those plugins should import their own local runtime code directly from their plugin-owned modules.
 
-The same boundary applies to provider-named SDK seams in general: core should not import channel-specific convenience barrels for Discord, Signal, Slack, WhatsApp, or similar plugins. If core needs a behavior, either consume the bundled plugin's own `api.ts` / `runtime-api.ts` barrel or promote the need into a narrow generic capability in the shared SDK.
+The same boundary applies to provider-named SDK interfaces in general: core should not import channel-specific convenience barrels for Discord, Signal, Slack, WhatsApp, or similar plugins. If core needs a behavior, either consume the bundled plugin's own `api.ts` / `runtime-api.ts` barrel or promote the need into a narrow generic capability in the shared SDK.
 
-Bundled plugins follow the same rule. A bundled plugin's `runtime-api.ts` should not re-export its own branded `openclaw/plugin-sdk/<plugin-id>` facade. Those branded facades remain compatibility shims for external plugins and older consumers, but bundled plugins should use local exports plus narrow generic SDK subpaths such as `openclaw/plugin-sdk/channel-policy`, `openclaw/plugin-sdk/runtime-store`, or `openclaw/plugin-sdk/webhook-ingress`. New code should not add plugin-id-specific SDK facades unless the compatibility boundary for an existing external ecosystem requires it.
+Bundled plugins follow the same rule. A bundled plugin's `runtime-api.ts` should not re-export its own branded `openclaw/plugin-sdk/<plugin-id>` facade. Those branded facades remain compatibility shims for external plugins and older consumers, but bundled plugins should use local exports plus narrow generic SDK subpaths such as `openclaw/plugin-sdk/channel-policy`, `openclaw/plugin-sdk/runtime-store`, or `openclaw/plugin-sdk/webhook-ingress`. New code should not add plugin-id-specific SDK facades unless the compatibility boundary for existing external integrations requires it.
 
 For polls specifically, there are two execution paths:
 
@@ -737,7 +737,7 @@ That means:
 The intended end state is:
 
 - a vendor's OpenClaw-facing surface lives in one plugin even if it spans text models, speech, images, and video
-- other vendors can do the same for their own surface area
+- other vendors can do the same for their own features
 - channels do not care which vendor plugin owns the provider; they consume the shared capability contract exposed by core
 
 This is the key distinction:
@@ -883,7 +883,7 @@ There are two layers of enforcement:
   </Accordion>
 </AccordionGroup>
 
-The practical effect is that OpenClaw knows, up front, which plugin owns which surface. That lets core and channels compose seamlessly because ownership is declared, typed, and testable rather than implicit.
+The practical effect is that OpenClaw knows, up front, which plugin owns which surface. That lets core and channels work together because ownership is declared, typed, and testable rather than implicit.
 
 ### What belongs in a contract
 

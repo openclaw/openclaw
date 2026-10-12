@@ -134,14 +134,14 @@ existing reset policy and process-held incognito behavior.
 The typed public SDK is organized into focused subpaths with documented
 contracts. Not every SDK build entrypoint is a public plugin API.
 
-Legacy provider convenience seams for bundled channels are gone too -
+Legacy provider convenience interfaces for bundled channels are gone too -
 channel-branded helper shortcuts were private mono-repo conveniences, not
 stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
 bundled plugin workspace, keep provider-owned helpers in that plugin's own
 `api.ts` or `runtime-api.ts`:
 
 - Anthropic keeps Claude-specific stream helpers in its own `api.ts` /
-  `contract-api.ts` seam.
+  `contract-api.ts` interface.
 - OpenAI keeps provider builders, default-model helpers, and realtime provider
   builders in its own `api.ts`.
 - OpenRouter keeps provider builder and onboarding/config helpers in its own

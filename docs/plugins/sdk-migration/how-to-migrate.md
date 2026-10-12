@@ -313,7 +313,7 @@ Synchronous OpenClaw database access in the callback is allowed and deprecated;
 a warning explains the timing and typed replacement once per process.
 
 There is no compatibility break for legacy callbacks or their database reads.
-The timing nuance is that the legacy check runs just before dispatch, while
+The timing difference is that the legacy check runs just before dispatch, while
 `guard.assertHost` is also rechecked inside transaction and commit grants.
 Prefer the typed guard for live revocation at commit. Callback errors continue
 to propagate. No schema, retention, durability, or update migration is required.
@@ -523,9 +523,9 @@ Foreign commits after the identity read do not rewrite that page's attribution s
 the next unpinned page reads fresh facts. This snapshot never replaces a permission check.
 Recheck the source's current sharing policy before disclosure. The existing
 `runtime.agent.session.listSessionEntries` accepts optional `sessionKeys` to restrict
-this final read to exact persisted keys while preserving canonical listing validation.
+this final read to exact persisted keys while preserving stored-data listing validation.
 Selected reads include derived participants and counts by default. Guards that consume only
-sharing metadata can pass `includeParticipants: false` to skip that hydration; canonical
+sharing metadata can pass `includeParticipants: false` to skip that hydration; stored-data
 validation remains enabled in both read-only and writable listings.
 Its optional `captureSource(assertCurrent)` callback captures the admitted physical store;
 invoke the supplied assertion after preparation and before the final sharing read to reject
@@ -699,7 +699,7 @@ still match; successful appends advance that version. A duplicate replay can
 return its original receipt after another writer advances the transcript, but
 the stale scope then refuses further mutations.
 
-Durable targets retain their canonical worker writer across callback awaits;
+Durable targets retain their shared worker writer across callback awaits;
 native compatibility and unbound native incognito targets retain their native
 writer queue. Their reads do not automatically impose an exact version
 precondition on later appends. On every path, awaited
@@ -767,7 +767,7 @@ retain that binding and the caller's live authority across queue waits. File-bac
 SQLite persistence uses the existing writer worker and per-session FIFO order.
 Append and persisted tree-mutation promises resolve after the manager adopts the
 committed result; failed writes reject instead of publishing an uncommitted view. Parent,
-leaf, branch, idempotency, and returned-entry semantics stay with the existing
+leaf, branch, duplicate-prevention, and returned-entry semantics stay with the existing
 transcript owner. Handle errors before continuing; do not retry an uncertain write
 by calling a synchronous method.
 
@@ -979,7 +979,7 @@ an existing compatibility window.
 Keep legacy file readers in the plugin's `PluginDoctorStateMigration`, exposed
 through its Doctor contract. Declare source directories and the destination
 database in `collectBackupResources`; detection remains read-only. Runtime
-consumers use canonical SQLite ingress queues.
+consumers use shared SQLite ingress queues.
 
 During repair, trusted channel plugins receive channel-bound access through
 `context.channelIngressQueues`. Require `assertCurrent` and
@@ -995,7 +995,7 @@ source's discovered `claimPaths` to the backup helper. It restores interrupted
 claims through the shared migration owner before
 capturing its snapshot; receipts always use the original source path.
 
-Call `importLegacyEntries({ accountId, entries })` with canonical channel/account
+Call `importLegacyEntries({ accountId, entries })` with normalized channel/account
 identities. Each item contains an `entry` and `sources`, whose records contain
 `sourcePath`, `sha256`, and `size` from the backed-up snapshots. The host commits
 pending entries or payload-free failed tombstones together with source receipts
@@ -1191,7 +1191,7 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
 
   <Step title="Audit Windows wrapper fallback behavior">
     If your plugin uses `openclaw/plugin-sdk/windows-spawn`, unresolved Windows
-    `.cmd`/`.bat` wrappers now fail closed unless you explicitly pass
+    `.cmd`/`.bat` wrappers are now rejected unless you explicitly pass
     `allowShellFallback: true`:
 
     ```typescript

@@ -282,7 +282,7 @@ timeline for current status.
     `resolveDefaultThinkingLevel(ctx)`.
 
     **New**: a single `resolveThinkingProfile(ctx)` that returns a
-    `ProviderThinkingProfile` with the canonical `id`, optional `label`, and a
+    `ProviderThinkingProfile` with the standard `id`, optional `label`, and a
     ranked level list. OpenClaw downgrades stale stored values by profile rank
     automatically.
 
@@ -471,7 +471,7 @@ timeline for current status.
   </Accordion>
 
   <Accordion title="OpenClawSchemaType alias -> OpenClawConfig">
-    The `OpenClawSchemaType` root-SDK alias was removed. Use the canonical
+    The `OpenClawSchemaType` root-SDK alias was removed. Use the primary
     `OpenClawConfig` name.
 
     ```typescript

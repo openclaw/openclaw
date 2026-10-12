@@ -106,19 +106,19 @@ October 1 annotation families are now `removal-pending`, with the original dates
 and the per-family removal conditions below preserved in the review queue.
 This does not authorize removal or claim a completed published-reader sweep.
 
-| Compatibility code                            | Removal condition                                                                                      | `removeAfter` |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------- |
-| `plugin-sdk-channel-setup-input-fields`       | Repeat the published-plugin artifact sweep and remove only fields with no reader.                      | 2026-10-01    |
-| `plugin-sdk-broad-runtime-barrels`            | Move bundled and indexed external consumers to focused SDK subpaths.                                   | 2026-10-01    |
-| `plugin-sdk-provider-owned-helper-shims`      | Move each deprecated provider helper to its provider-local API and prove no published reader remains.  | 2026-10-01    |
-| `message-presentation-legacy-bridges`         | Move reply producers and official channel packages to `MessagePresentation`.                           | 2026-10-01    |
-| `plugin-sdk-focused-compat-aliases`           | Prove every enumerated alias has no bundled or published reader.                                       | 2026-10-01    |
-| `agent-harness-terminal-result-aliases`       | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.     | 2026-10-01    |
-| `official-plugin-export-aliases`              | Move channel presentation and Discord timeout consumers to canonical APIs and clear published readers. | 2026-10-01    |
-| `memory-host-compatibility-aliases`           | Verify canonical memory tables and preserved legacy data before retiring overrides.                    | 2026-10-01    |
-| `plugin-runtime-api-compat-aliases`           | Move flat plugin registration/runtime calls to their namespaced or focused replacements.               | 2026-10-01    |
-| `plugin-provider-manifest-compat-aliases`     | Move kind/setup/catalog ownership to manifests and model-catalog registration.                         | 2026-10-01    |
-| `plugin-sdk-session-agent-resolution-aliases` | Move published plugins to strict session-agent resolution with an explicit or prepared owner.          | 2026-11-29    |
+| Compatibility code                            | Removal condition                                                                                     | `removeAfter` |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------- |
+| `plugin-sdk-channel-setup-input-fields`       | Repeat the published-plugin artifact sweep and remove only fields with no reader.                     | 2026-10-01    |
+| `plugin-sdk-broad-runtime-barrels`            | Move bundled and indexed external consumers to focused SDK subpaths.                                  | 2026-10-01    |
+| `plugin-sdk-provider-owned-helper-shims`      | Move each deprecated provider helper to its provider-local API and prove no published reader remains. | 2026-10-01    |
+| `message-presentation-legacy-bridges`         | Move reply producers and official channel packages to `MessagePresentation`.                          | 2026-10-01    |
+| `plugin-sdk-focused-compat-aliases`           | Prove every enumerated alias has no bundled or published reader.                                      | 2026-10-01    |
+| `agent-harness-terminal-result-aliases`       | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.    | 2026-10-01    |
+| `official-plugin-export-aliases`              | Move channel presentation and Discord timeout consumers to primary APIs and clear published readers.  | 2026-10-01    |
+| `memory-host-compatibility-aliases`           | Verify current memory tables and preserved legacy data before retiring overrides.                     | 2026-10-01    |
+| `plugin-runtime-api-compat-aliases`           | Move flat plugin registration/runtime calls to their namespaced or focused replacements.              | 2026-10-01    |
+| `plugin-provider-manifest-compat-aliases`     | Move kind/setup/catalog ownership to manifests and model-catalog registration.                        | 2026-10-01    |
+| `plugin-sdk-session-agent-resolution-aliases` | Move published plugins to strict session-agent resolution with an explicit or prepared owner.         | 2026-11-29    |
 
 `pnpm plugins:boundary-report` reports `removal-pending` records separately
 from deprecated records. A due `removal-pending` record remains blocked until
@@ -150,7 +150,7 @@ migration for other releases or plugins.
 `openclaw/plugin-sdk/session-store-runtime` and `resolveStorePath(...)` remain
 supported. The removed exports, option types, and package-root aliases are
 listed in the [session API migration guide](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis).
-This retirement changes the supported SDK surface; canonical SQLite storage
+This retirement changes the supported SDK surface; SQLite storage
 and legacy-state import and Doctor migrations remain unchanged.
 
 ### Synchronous plugin state
@@ -181,14 +181,14 @@ breaking-release approval.
 
 ### Auth profile cooldown classifications
 
-`AuthProfileStore.usageStats[*].cooldownReason` remains the closed canonical
+`AuthProfileStore.usageStats[*].cooldownReason` remains the closed
 `AuthProfileFailureReason` union. Host policy records WHAM HTTP 401 as `auth`
 and HTTP 403 as `auth_permanent`.
 
 `cooldownClassification` is an optional additive host diagnostic. Its current
 values are `wham_token_expired` and `wham_account_dead`. Plugins that display
 this field must keep a default or fallback for future optional classifications.
-Canonical failover uses `resolveProfilesUnavailableReason`; the diagnostic is
+Host failover uses `resolveProfilesUnavailableReason`; the diagnostic is
 presentation state only and must never be used as authorization.
 
 ### Channel prompt-context identifier aliases

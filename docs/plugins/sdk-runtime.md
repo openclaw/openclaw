@@ -419,7 +419,7 @@ retryable. Omitting the option leaves the generated status source unchanged.
 The existing `openclaw/plugin-sdk/meeting-runtime` entry point exposes optional
 participation methods on `MeetingSessionRuntime`. Supply its `participation`
 options with an SQLite plugin keyed store, current capabilities, action
-validation, and a provider executor. Providers observe canonical source identity,
+validation, and a provider executor. Providers observe resolved source identity,
 epoch, revision, and finality through `observeParticipationSource`; never accept
 these fields from model arguments. `inspectParticipationSource` returns a
 snapshot and a live guard for work that crosses asynchronous boundaries.

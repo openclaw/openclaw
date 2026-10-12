@@ -99,7 +99,7 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
   </Accordion>
 </AccordionGroup>
 
-Reply options accept `onVisibleWorkSessions(sessions)` to receive accepted visible work sessions before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the canonical `url`, and an optional `label`; descriptors are deduplicated by session key in acceptance order.
+Reply options accept `onVisibleWorkSessions(sessions)` to receive accepted visible work sessions before final reply delivery, including when the settled run failed. Each descriptor carries `sessionKey`, the session `url`, and an optional `label`; descriptors are deduplicated by session key in acceptance order.
 
 ## Awaited conversation binding mutations
 

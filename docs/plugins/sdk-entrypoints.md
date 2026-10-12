@@ -172,7 +172,7 @@ restrict this bridge to native bootstrap documents and the configured
 `bootstrap-extra-files` patterns. Check `canList` for directory metadata,
 `canRead` for file bytes, and `canWrite` for the four owner-editable documents.
 Directory access does not grant reads of other files. The underlying bridge
-still enforces filesystem containment and returns the read's canonical source.
+still enforces filesystem containment and returns the read's resolved source.
 
 Workspace access that has not started or has stopped throws
 `WorkspaceAccessUnavailableError`. Use `isWorkspaceAccessUnavailableError(error)`
@@ -182,7 +182,7 @@ The error code is `WORKSPACE_ACCESS_UNAVAILABLE`; do not match message text.
 The optional `memoryFiles` provider keeps workspace Memory files on the host while
 the native index, embedding providers and original sessions stay on Gateway. It
 supplies discovery, file inspection, reads and change notifications. Both indexing
-and `memory_get` use it; index publication rechecks the host file. The canonical
+and `memory_get` use it; index publication rechecks the host file. The resolved
 source returned with a read supplies provenance, without resolving a stale Gateway
 copy. Stopping the workspace binding revokes retained file access and subscriptions.
 The Memory file worker supports `--files <workspace>` for native file
@@ -232,7 +232,7 @@ File-inspecting Gateway policies receive a temporary tree from the existing Skil
 resource reader; Gateway-owned sources remain local. Resource bundle limits apply.
 
 `readWorkspaceSkillResources` lazily reuses the bounded native bundle reader.
-File-transfer adapters can check each file's requested and verified canonical paths
+File-transfer adapters can check each file's requested and verified resolved filesystem paths
 before returning a bundle; admitting the Skill directory alone does not admit every child.
 
 Hosts can provide `watchSkills(request, onChange, signal)` to notify the existing

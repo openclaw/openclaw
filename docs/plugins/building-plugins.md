@@ -238,7 +238,7 @@ local proof.
     clawhub package publish your-org/your-plugin
     ```
 
-    Canonical ClawHub package snippets live in `docs/snippets/plugin-publish/`.
+    Shared ClawHub package snippets live in `docs/snippets/plugin-publish/`.
 
   </Step>
 
@@ -361,7 +361,7 @@ turn; it can include `provider`, `modelId`, and `modelRef`. Treat it as
 informational runtime metadata, not a security boundary against the local
 operator, installed plugin code, or a modified OpenClaw runtime. Sensitive
 local tools should still require an explicit plugin or operator opt-in and
-fail closed when active-model metadata is missing or unsuitable.
+refuse to run when active-model metadata is missing or unsuitable.
 
 The manifest declares ownership and discovery; execution still calls the live
 registered tool implementation. Keep `toolMetadata.<tool>.optional: true`
@@ -380,7 +380,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 Within your plugin package, use local barrel files such as `api.ts` and
 `runtime-api.ts` for internal imports. Do not import your own plugin through an
 SDK path. Provider-specific helpers should stay in the provider package unless
-the seam is truly generic.
+the interface is truly generic.
 
 Custom Gateway RPC methods are an advanced entry point. Keep them on a
 plugin-specific prefix; core admin namespaces such as `config.*`,

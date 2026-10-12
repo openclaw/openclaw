@@ -38,7 +38,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 
-Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
+Gateway methods default to `profileAccess: "required"`, so a request is rejected before plugin dispatch if authenticated-profile verification fails. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
 Read-only methods may opt into WebSocket response sharing with registration options
 `shareKey(caller, params)`, `shareInvalidationEvents`, and `shareMaxAgeMs`.
@@ -335,7 +335,7 @@ File identities are admission facts, not native-handle attestations. Close and
 drain a database's clients before replacing or relocating its file. The host
 refuses observed identity changes and collisions with an existing owner; path
 checks cannot protect against an uncoordinated filesystem replacement.
-Each client retains its admitted lexical and canonical pathnames through
+Each client retains its admitted lexical pathnames and resolved filesystem paths through
 drainage and close. The backend's opening paths remain pinned for its native
 lifetime; released secondary aliases do not accumulate while other clients live.
 
@@ -399,7 +399,7 @@ through `new URL(rawPath, "http://localhost").pathname` first. Results `live`,
 `ready`, and `startup` identify exact paths owned by checks on the Gateway port;
 choose a different webhook path. Results `namespace` and `outside` do not identify
 an exact check route. The same private facade exports `resolvePluginRoutePathContext`
-and `isProtectedPluginRoutePathFromContext` for canonical protected-path checks.
+and `isProtectedPluginRoutePathFromContext` for shared protected-path checks.
 If the callback falls under a protected namespace, choose the channel's safe default
 path before moving the external callback or reverse proxy to the Gateway port.
 A legacy listener can still serve its old path during that migration.
@@ -436,7 +436,7 @@ runtime routing and Doctor guidance. Plugin-owned Doctor contracts can compose
 `createLegacyWebhookListenerDoctorContract` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve authored ports and
 inherited bind addresses through the normal backed-up config write. An explicit
-legacy host without a port uses the channel's shipped default port. Canonical
+legacy host without a port uses the channel's shipped default port. Current
 `false` settings remain authoritative when Doctor removes retired keys.
 For retirement of a historical default, export the helper's static
 `historicalWebhookListener` property from the existing config Doctor module and
@@ -577,7 +577,7 @@ Contract notes:
   redaction registry.
 - Requester-scoped servers do not mint MCP App views: a view outlives the
   requester-authenticated run and the gateway view boundary has no requester
-  identity, so app previews stay fail-closed for these servers. Tool results
+  identity, so app previews remain blocked for these servers. Tool results
   are unaffected.
 - Static servers without a resolver keep the existing session-scoped lifecycle.
 - **Harness delivery rule:** requester-scoped servers never enter harness-native
@@ -600,7 +600,7 @@ Memory prompt supplement builders receive optional `agentId`,
 and `get` calls receive optional `agentId` and `sandboxed` context. Plugins with
 agent-owned storage should resolve that storage for each call instead of
 capturing one global path during registration. If an agent id is required but
-missing in a multi-agent operation, fail closed rather than choosing an
+missing in a multi-agent operation, reject the operation rather than choosing an
 arbitrary agent.
 
 Use `registerMemoryPromptPreparation(...)` when prompt text depends on async

@@ -35,7 +35,7 @@ return {
 This general capability is available to every plugin command, not only Codex.
 The host gates it to the current invocation and exact bound session generation.
 The capability is absent when no current session is bound; a retained callback
-fails closed after the handler settles. Do not retain it or reconstruct
+rejects calls after the handler settles. Do not retain it or reconstruct
 compaction with session-store patches and harness calls. The result contains
 `compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
 snapshots; OpenClaw owns all persistence and lifecycle coordination.
@@ -96,7 +96,7 @@ code should await their asynchronous counterparts.
 
 Await `appendMessageAsync`, `appendCustomEntryAsync`, `appendSessionInfoAsync`,
 and the other `Async` persistence methods before using the resulting view or
-publishing dependent work. File-backed writes reuse the canonical SQLite worker,
+publishing dependent work. File-backed writes reuse the shared SQLite worker,
 preserve per-session FIFO ordering, and adopt the committed result before the
 promise resolves. User and custom messages and `beforeFreshMessageCommit` use
 this same worker path. Incognito retains its process-local persistence owner;
@@ -128,9 +128,9 @@ Native harnesses that publish committed assistant rows with
 `update.assistantItemIds`. These are the exact `assistant` stream item IDs whose
 live display the committed row replaces or supersedes. Capture the IDs before
 awaiting persistence, and publish only after the row commits or an exact
-idempotent persistence receipt confirms it. An empty array still identifies a
+persistence receipt for an identical earlier write confirms it. An empty array still identifies a
 native row with no preceding streamed item. The persisted row's existing
-idempotency key also identifies a later canonical assistant frame.
+idempotency key also identifies a later stored assistant frame.
 
 This field is display provenance, not terminal or run authorization. Existing
 session and run ownership checks still apply. It is internal to the host's
@@ -178,7 +178,7 @@ retains the latest historical user request and complete owned call/result frames
 Unselected result bodies and tool-call arguments remain intact.
 
 This is a lossy model view, not a full-fidelity history API. It does not rewrite
-canonical transcripts or change evidence and fork readers. The same byte/event
+stored transcripts or change evidence and fork readers. The same byte/event
 limits, required boundaries, and tool-result ownership checks still apply. Reads
 still fail if required user messages, call arguments, summaries, or event counts
 cannot fit, or result ownership is ambiguous. Omitting `toolResultOverflow`
@@ -260,7 +260,7 @@ the provider's own awaited work.
     // Get agent timeout
     const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
 
-    // Ensure workspace exists
+    // Create the workspace if needed
     await api.runtime.agent.ensureAgentWorkspace(cfg);
 
     // Run an embedded agent turn
@@ -291,9 +291,9 @@ the provider's own awaited work.
 
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
-    `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
+    `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the standard stored level before checking it against the resolved policy.
 
-    `resolveSessionCatalogCreateTarget(...)` is the supported synchronous policy seam for trusted native plugins that implement `SessionCatalogProvider.resolveCreateSession`. It selects the first candidate model routed to the requested runtime and allowed for the requested or default agent. It returns `undefined` when no candidate satisfies both policies. Use this helper instead of importing or duplicating core model-selection policy in a plugin.
+    `resolveSessionCatalogCreateTarget(...)` is the supported synchronous policy interface for trusted native plugins that implement `SessionCatalogProvider.resolveCreateSession`. It selects the first candidate model routed to the requested runtime and allowed for the requested or default agent. It returns `undefined` when no candidate satisfies both policies. Use this helper instead of importing or duplicating core model-selection policy in a plugin.
 
     **Session store helpers** are under `api.runtime.agent.session`:
 
@@ -331,7 +331,7 @@ the provider's own awaited work.
     );
     ```
 
-    Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `prepareSessionEntryPatch(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic canonical-store repair.
+    Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `prepareSessionEntryPatch(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic repair of the underlying store.
 
     Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and will be removed at the next Plugin SDK major. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
 
@@ -345,11 +345,11 @@ the provider's own awaited work.
 
     `captureSessionEntryCurrentCheck(...)` from `openclaw/plugin-sdk/session-binding-runtime` prepares public entry metadata and its original source together. Supply `fields` for the exact policy values the operation consumes, and call the returned synchronous `assertCurrent()` at the effect boundary after awaited work. Session identity and lifecycle remain part of the predicate unless `matchGeneration: false` is explicitly selected. An optional `expected` entry rejects a changed selection during preparation. The returned entry is descriptive data; mutating it does not alter the retained guard.
 
-    `createSessionEntry(...)` creates a new canonical session row and transcript. Its trusted `initialEntry` surface is deliberately narrow. A plugin may select an owned `agentHarnessId`; seed an owned CLI backend with `cliBackendId`, `model`, and `cliSessionBinding`; or seed a persistent ACP session with `acpBackendId` and `acpSessionBinding: { acpAgentId, agentSessionId }`. The ACP variant persists the supplied native agent session id through the canonical SQLite ACP metadata owner so the first turn resumes that external session. The injected runtime restricts plugin-owned CLI and ACP sessions to the calling plugin's `plugin:<id>:` namespace; harness ids must be owned through `registerAgentHarness(...)`. These are ownership invariants, not a sandbox between in-process plugins. Creation rejects an existing row; `label`, `displayName`, and `spawnedCwd` are separate creation fields rather than trusted-entry patches.
+    `createSessionEntry(...)` creates a new stored session row and transcript. Its trusted `initialEntry` surface is deliberately narrow. A plugin may select an owned `agentHarnessId`; seed an owned CLI backend with `cliBackendId`, `model`, and `cliSessionBinding`; or seed a persistent ACP session with `acpBackendId` and `acpSessionBinding: { acpAgentId, agentSessionId }`. The ACP variant persists the supplied native agent session id through the shared SQLite ACP metadata owner so the first turn resumes that external session. The injected runtime restricts plugin-owned CLI and ACP sessions to the calling plugin's `plugin:<id>:` namespace; harness ids must be owned through `registerAgentHarness(...)`. These are ownership invariants, not a sandbox between in-process plugins. Creation rejects an existing row; `label`, `displayName`, and `spawnedCwd` are separate creation fields rather than trusted-entry patches.
 
     Optional `displayName` seeds the existing presentation field atomically with the new row. The host trims it and truncates it to at most 500 UTF-16 code units without splitting a surrogate pair; empty or whitespace-only input leaves it unset. Duplicate display titles are allowed and do not claim an addressable label. Explicit `label` values retain normal uniqueness validation and display priority. Reuse and interrupted-initializer recovery preserve all stored labels and title snapshots, including absent titles and older automatically assigned labels. This create-only input does not permit title changes through `initialEntry` or the `afterCreate` final patch, and is not a public `sessions.create` Gateway parameter.
 
-    Before advertising an ACP-backed action, use `resolveAcpSessionAvailability(...)` from `openclaw/plugin-sdk/acp-runtime`. It applies the canonical enablement, dispatch, allowed-agent, registered-backend, and backend-health checks; recheck it immediately before creating the session.
+    Before advertising an ACP-backed action, use `resolveAcpSessionAvailability(...)` from `openclaw/plugin-sdk/acp-runtime`. It applies the shared enablement, dispatch, allowed-agent, registered-backend, and backend-health checks; recheck it immediately before creating the session.
 
     ACP manager inputs accept an optional `agentId` identifying the OpenClaw session owner; `agent` selects the external harness. Carry the resolved owner from `resolveSession(...)` through subsequent calls, including controls and cleanup. `expectedOwnerKey` retains its parent-session meaning.
 
@@ -381,21 +381,21 @@ the provider's own awaited work.
 
     `withSessionTranscriptWrite(...)` exposes `readMessageFacts({ idempotencyKeys })` for exact-key lookups without loading the complete transcript. Facts and writes retain the context’s captured session and store; retained callbacks reject after the context closes. Native-history repair can preserve an existing message’s original run attribution while leaving the append owner’s strict payload comparison intact. A returned identity is evidence, not new execution authority.
 
-    `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of an already canonical message. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries canonical ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
+    `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of a message already in the supported format. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries normalized ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
 
     Native command adapters that deliver outside the reply dispatcher use `recordDeliveredCommandExchange(...)` from `openclaw/plugin-sdk/session-transcript-runtime` **after confirmed delivery**. Pass the owning `sessionKey`, optional `agentId`, `config` or `storePath`, the literal `commandText`, the visible `replyText`, a stable `commandId`, and a stable per-reply `replyId`. Capture `expectedSessionId` before sending; optional lifecycle/writer expectations and `assertCurrent` preserve the bound target. The helper appends replayable user/assistant rows, initializes a previously absent session through the session creation owner, deduplicates input across replies, redacts login URLs and credential codes, and leaves `/btw` and `/side` ephemeral. It returns the transcript append result (`ok: true` with the target/message ID, or `ok: false` with a reason); it does not send a message. Never use it for previews, failed sends, or ordinary model replies that already own their transcript rows.
 
     When a native interaction also dispatches a command, use `scopeCommandTranscriptId(messageId, { channelId, accountId, conversationId })` for both replies so the command is stored once. Use the dispatcher's message identity and conversation route, not a separate trigger identity; distinguish the delivered replies with `replyId`.
 
-    A harness that supports `sessions_yield` uses `appendSessionYieldContext(...)` after successful yield settlement to retain private resume context in the canonical session transcript. Pass the session target, `message`, and an `assertCurrent` callback that checks the current run and settlement authority. The writer checks that callback again before appending the hidden context entry. Failed or revoked settlement must not append context; public tool results and display projections must omit the private message.
+    A harness that supports `sessions_yield` uses `appendSessionYieldContext(...)` after successful yield settlement to retain private resume context in the stored session transcript. Pass the session target, `message`, and an `assertCurrent` callback that checks the current run and settlement authority. The writer checks that callback again before appending the hidden context entry. Failed or revoked settlement must not append context; public tool results and display projections must omit the private message.
 
 Read-only native session catalogs use `readSessionTranscriptCatalogPage({ agentId, sessionKey, storePath?, limit, cursor, sourceDomain, pluginId })` from the same subpath. It returns `{ items, nextCursor? }` in newest-first catalog order; the optional opaque cursor continues toward older items and malformed cursors are rejected. The reader resolves the configured session store when `storePath` is omitted and binds the cursor to the selected store and session. Only nonempty user and assistant text from the local chat display projection is included; tool calls, tool results, reasoning, and other non-conversation blocks are omitted. Text redacts credential patterns and is bounded per item with `truncated` set when clipped. Reads scan at most 1,000 source messages per page, so a page containing only omitted activity can have no items and still return a continuation cursor. Cursors from the earlier tool-inclusive projection are rejected with a reload message. Raw page reads are bounded to 8 MiB; an oversized entry returns an explicit error. Cold history requires restoration by the source Gateway; the catalog reader never opens a writer to restore it. User sender attribution is portable: source-local profiles become remote identities in the caller's plugin/domain namespace, using a verified numeric GitHub account ID when available and a source profile ID otherwise. Existing remote and observed identities remain portable. The caller must authorize each session read separately; a cursor or identity claim never grants access. [Session Share](/plugins/session-share) uses this reader for its paired-node publication.
 
 Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })` from the same subpath after selecting a page. Call the returned function for each actor in that page, synchronously and in publication order. It shares profile and verified GitHub reads while keeping each actor's label. Only human creators stamped with `source: "profile"` resolve local profiles; the resulting remote claims never grant access. Create a new projector for each page or request so profile merges, display names, and primary GitHub accounts are refreshed.
 
-    A harness host may provide `hostCapabilities.prepareContextMedia({ message, maxChars })` to reconstruct retained document text and images from canonical user media. The host captures the current run's config, workspace, channel, account, and authority; preparation rechecks that authority across asynchronous work. `maxChars` must be finite and limits extraction for each file. Fit all returned text, attachment notes, and images into the native context budget, and deliver image bytes through the native input path. Preparation reuses ordinary local-root, URL, MIME, byte, page, and image limits without rewriting transcript rows or echoing channel media. An older host without this optional capability may still project ordinary text history, but attachment restoration must fail explicitly rather than silently omit the saved input.
+    A harness host may provide `hostCapabilities.prepareContextMedia({ message, maxChars })` to reconstruct retained document text and images from stored user media. The host captures the current run's config, workspace, channel, account, and authority; preparation rechecks that authority across asynchronous work. `maxChars` must be finite and limits extraction for each file. Fit all returned text, attachment notes, and images into the native context budget, and deliver image bytes through the native input path. Preparation reuses ordinary local-root, URL, MIME, byte, page, and image limits without rewriting transcript rows or echoing channel media. An older host without this optional capability may still project ordinary text history, but attachment restoration must fail explicitly rather than silently omit the saved input.
 
-    For an exact existing session, use `appendSessionTranscriptMessageByIdentityStrict(...)` for one message or `appendSessionTranscriptMessagesByIdentity(...)` for an atomic ordered batch. Both accept optional `storePath`: when omitted, the shared turn owner resolves it from the supplied `config` (or current runtime snapshot), session agent, and `env`; an explicit concrete path overrides `session.store`, while incognito keys retain their in-memory routing. Strict single append returns `kind: "result"`, `kind: "suppressed"` when message preparation declines the append, or `{ kind: "rejected", reason: "session-rebound" }` when the expected session no longer matches. A batch rejects if its session changed and inserts or idempotently replays the whole group, never a partial group.
+    For an exact existing session, use `appendSessionTranscriptMessageByIdentityStrict(...)` for one message or `appendSessionTranscriptMessagesByIdentity(...)` for an atomic ordered batch. Both accept optional `storePath`: when omitted, the shared turn owner resolves it from the supplied `config` (or current runtime snapshot), session agent, and `env`; an explicit concrete path overrides `session.store`, while incognito keys retain their in-memory routing. Strict single append returns `kind: "result"`, `kind: "suppressed"` when message preparation declines the append, or `{ kind: "rejected", reason: "session-rebound" }` when the expected session no longer matches. A batch rejects if its session changed and inserts or repeats the whole group without duplicates, never a partial group.
 
     A harness host may provide `hostCapabilities.annotateCurrentUserTurn(...)` for its already-admitted current prompt. The operation accepts only `mirrorIdentity`, `upstreamUserText`, `mirrorOrigin`, and `mirrorSourceFingerprint`; the host fixes diagnostic run correlation. Call it only after native prompt acceptance and outside transcript write locks. It cannot select an anchor, replace content, or annotate history. It revalidates the live host, exact recorder, active admission, session/writer ownership, unchanged message and source fingerprint at commit, then refreshes the recorder's generation and publishes the same event ID. Identical provenance does not rewrite or publish again. Missing capability, conflicts and stale owners must remain refusals; do not substitute a generic append or infer provenance. This optional capability adds no required host-version field and does not change transcript cursor invalidation.
 
@@ -407,7 +407,7 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
 
     The beta.5 whole-store and transcript-path bridge has been removed from `openclaw/plugin-sdk/session-store-runtime`, along with the package-root `loadSessionStore` and `saveSessionStore` aliases. The September 30, 2026 approved [supported-plugin cutoff](/plugins/compatibility#session-store-bridge-retirement) excludes `v2026.7.1-beta.5` and other releases still importing that bridge. The subpath, scoped entry helpers, and `resolveStorePath(...)` remain available. Pass `agentId` to row operations explicitly; path resolution does not select an agent for later calls.
 
-    Use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs. SQLite remains canonical, and existing legacy-state import and Doctor migrations remain available.
+    Use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs. SQLite remains the source of truth, and existing legacy-state import and Doctor migrations remain available.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">

@@ -552,9 +552,9 @@ resolve here.
 
 ### Provider hook families
 
-[Provider hook families](/plugins/sdk-provider-plugins/hook-families) — Shared replay, stream, and tool-compat family builders and the SDK seams behind them.
+[Provider hook families](/plugins/sdk-provider-plugins/hook-families) — Shared replay, stream, and tool-compat family builders and the SDK interfaces behind them.
 
-- <a id="sdk-seams-powering-the-family-builders"></a>[SDK seams powering the family builders](/plugins/sdk-provider-plugins/hook-families#sdk-seams-powering-the-family-builders)
+- <a id="sdk-seams-powering-the-family-builders"></a>[SDK interfaces behind the family builders](/plugins/sdk-provider-plugins/hook-families#sdk-seams-powering-the-family-builders)
 
 ### Provider hook wiring
 
