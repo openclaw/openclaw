@@ -2095,7 +2095,39 @@ describe("before_tool_call loop detection behavior", () => {
     }
   });
 
+  it("emits the retained fingerprint through a clean tracing-active delivery", async () => {
+    // Positive control for the omission cases that follow: with tracing
+    // active and a clean qualifying delivery, the fingerprint must flow
+    // through to the emission. Without this control, a guard that silently
+    // suppressed valid fingerprints would keep every omission assertion green
+    // without ever exercising the emission path.
+    registerActiveTracingBridge();
+    const delivery = createSkillDeliveryState();
+    const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
+    const tool = createDeliveryWrappedRead(execute, "fp-clean-delivery", delivery);
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      await tool.execute("clean-delivery-read", { path: pondLocator }, undefined, undefined);
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        type: "skill.used",
+        toolCallId: "clean-delivery-read",
+        activation: "read",
+        skillName: "pond",
+        skillFingerprint: "fp-clean-delivery",
+      });
+    });
+  });
+
   it("omits the fingerprint for read activations without a qualifying delivery", async () => {
+    // Tracing is active, so the matcher's general tracing gate cannot
+    // satisfy these omissions: each path must omit through its own guard. A
+    // truncated (oversized or paged) or non-text outcome resets its delivery
+    // before a marker settles, and a thrown read never completes an
+    // activation.
+    registerActiveTracingBridge();
     const truncatedResult = {
       content: [{ type: "text" as const, text: "partial" }],
       details: { kind: "truncated" as const },
@@ -2151,6 +2183,10 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("omits the fingerprint for node locator reads that run no bundle preparation", async () => {
+    // Tracing is active: the node:// locator runs no bundle preparation, so
+    // the entry carries no stamp and the delivery settles no marker — the
+    // per-path omission, not the tracing gate, is what this pins.
+    registerActiveTracingBridge();
     const nodeLocator = "node://node-1/skills/remote-skill/SKILL.md";
     const delivery = createSkillDeliveryState();
     const tool = wrapToolWithBeforeToolCallHook(
@@ -2200,6 +2236,10 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("treats an epoch clear between settlement and emission as an unknown association", async () => {
+    // Tracing is active so the settled marker could flow through: the
+    // epoch clear between settlement and emission drops the in-flight
+    // unconsumed marker, and that per-path guard is what omits here.
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
     const tool = wrapToolWithBeforeToolCallHook(
@@ -2319,6 +2359,10 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("omits a command fingerprint whose file is not the stamped entry's own", async () => {
+    // Tracing is active: the stamped resolved entry exists, but the
+    // dispatched command's relocated file is not that entry's own, so the
+    // dispatch-identity guard — never the tracing gate — is what omits.
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     const ctx = createSkillFingerprintContext({
       delivery,
@@ -2373,6 +2417,10 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("rejects a read's acquisition when the epoch clears during its instruction I/O", async () => {
+    // Tracing is active: the epoch clear during the delivery's instruction
+    // I/O must still reject the acquisition before it arms, so the emission
+    // omits through the epoch guard rather than the tracing gate.
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     const acquirer = vi.fn(async () => "fp-should-not-arm");
     const execute = vi.fn(async () => {
@@ -2416,6 +2464,10 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("rejects a skills_read receipt when the epoch clears during its serving read", async () => {
+    // Tracing is active: the serving read's epoch clear must reject the
+    // receipt capture on the installed skills_read route, so the emission
+    // omits through the epoch guard rather than the tracing gate.
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     const acquirer = vi.fn(async () => "fp-should-not-arm");
     const skills = [
@@ -2477,6 +2529,10 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("drops a skills_read receipt whose acquisition crossed an epoch clear", async () => {
+    // Tracing is active: the acquisition resolves across a clear, and the
+    // pending receipt must not bridge the epoch, so the emission omits
+    // through the epoch guard rather than the tracing gate.
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     const acquirer = vi.fn(async () => {
       // The epoch clears while the acquisition is pending: the invocation
@@ -2541,6 +2597,10 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("omits a command fingerprint whose source is not the dispatched command's own", async () => {
+    // Tracing is active: the stamped entry exists under a different source
+    // family, so the exact-source dispatch guard — not the tracing gate —
+    // is what omits the fingerprint.
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     const commandExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult("sent"));
     const ctx = createSkillFingerprintContext({ delivery });
