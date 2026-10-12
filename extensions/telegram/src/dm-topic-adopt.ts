@@ -7,8 +7,11 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 // user's first message to the root chat: the bot receives a
 // `forum_topic_created` service message carrying the new `message_thread_id`,
 // then (within the same second) the user's message without any thread id.
-// Adopt that message into the freshly created topic so the reply and the
-// session land where the user is looking instead of leaving the topic empty.
+// The receiving bot account's ingress monitor decides once, at admission,
+// whether a root message belongs to the topic its author just created. The
+// decision is recorded on the message object and persisted in the durable
+// spool payload, so lane keys, authorization, sessions, delivery and restart
+// replay all read the same topic fact instead of re-deriving it.
 export const TELEGRAM_DM_TOPIC_ADOPT_WINDOW_SEC = 3;
 const TELEGRAM_DM_TOPIC_ADOPT_MAX_ENTRIES = 512;
 
@@ -18,32 +21,76 @@ type PendingDmTopic = {
   createdMessageId: number;
 };
 
+/** Adoption state of one bot account; owned by that account's ingress monitor. */
 export type TelegramDmTopicAdoptState = {
   // Topic created by the user but not yet seen with a message: keyed by chat:user.
   pending: Map<string, PendingDmTopic>;
-  // Adopted thread id keyed by chat:message_id so repeated resolution stays stable.
-  adopted: Map<string, number>;
+  // Service messages whose adoption window was spent: keyed by chat:createdMessageId.
+  consumed: Map<string, number>;
 };
 
+type TelegramDmTopicMessage = Pick<
+  Message,
+  "chat" | "date" | "forum_topic_created" | "from" | "message_id" | "message_thread_id"
+>;
+
 const log = createSubsystemLogger("telegram/dm-topic-adopt");
+// Adopted thread id keyed by the message object the decision was made for.
+const adoptedDmThreadIds = new WeakMap<object, number>();
 
 export function createTelegramDmTopicAdoptState(): TelegramDmTopicAdoptState {
-  return { pending: new Map(), adopted: new Map() };
+  return { pending: new Map(), consumed: new Map() };
 }
 
-const defaultState = createTelegramDmTopicAdoptState();
-
-export function resetTelegramDmTopicAdoptStateForTest(): void {
-  defaultState.pending.clear();
-  defaultState.adopted.clear();
+export function getTelegramAdoptedDmThreadId(message: object): number | undefined {
+  return adoptedDmThreadIds.get(message);
 }
 
-export function resolveAdoptedTelegramDmThreadId(
-  message: Message,
-  state: TelegramDmTopicAdoptState = defaultState,
+function resolveTelegramUpdateMessage(update: unknown): object | undefined {
+  const message = (update as { message?: unknown } | null)?.message;
+  return message !== null && typeof message === "object" ? message : undefined;
+}
+
+/** Adopted thread id of a spooled update, for its durable payload. */
+export function readTelegramAdoptedDmThreadId(update: unknown): number | undefined {
+  const message = resolveTelegramUpdateMessage(update);
+  return message ? adoptedDmThreadIds.get(message) : undefined;
+}
+
+/** Restore a persisted decision onto a replayed update before lane inspection. */
+export function restoreTelegramAdoptedDmThreadId(update: unknown, threadId: unknown): void {
+  const message = resolveTelegramUpdateMessage(update);
+  const parsed = parseStrictPositiveInteger(threadId);
+  if (message && parsed !== undefined && !adoptedDmThreadIds.has(message)) {
+    adoptedDmThreadIds.set(message, parsed);
+  }
+}
+
+/** Decide once, at admission, whether a spooled update's message joins a fresh topic. */
+export function adoptTelegramDmTopicUpdate(
+  update: unknown,
+  state: TelegramDmTopicAdoptState,
 ): number | undefined {
+  const message = resolveTelegramUpdateMessage(update);
+  return message
+    ? adoptTelegramDmTopicMessage(message as TelegramDmTopicMessage, state)
+    : undefined;
+}
+
+/**
+ * Idempotent per message object and per service message: resolving either
+ * update again never rearms the adoption window.
+ */
+export function adoptTelegramDmTopicMessage(
+  message: TelegramDmTopicMessage,
+  state: TelegramDmTopicAdoptState,
+): number | undefined {
+  const recorded = adoptedDmThreadIds.get(message);
+  if (recorded !== undefined) {
+    return recorded;
+  }
   const chat = message.chat;
-  if (chat.type !== "private" || typeof chat.id !== "number") {
+  if (chat?.type !== "private" || typeof chat.id !== "number") {
     return undefined;
   }
   const from = message.from;
@@ -58,22 +105,19 @@ export function resolveAdoptedTelegramDmThreadId(
   const ownThreadId = parseStrictPositiveInteger(message.message_thread_id);
   if (ownThreadId !== undefined) {
     if (message.forum_topic_created && typeof message.date === "number") {
-      state.pending.set(userKey, {
-        threadId: ownThreadId,
-        date: message.date,
-        createdMessageId: messageId,
-      });
-      pruneMapToMaxSize(state.pending, TELEGRAM_DM_TOPIC_ADOPT_MAX_ENTRIES);
+      if (!state.consumed.has(`${chat.id}:${messageId}`)) {
+        state.pending.set(userKey, {
+          threadId: ownThreadId,
+          date: message.date,
+          createdMessageId: messageId,
+        });
+        pruneMapToMaxSize(state.pending, TELEGRAM_DM_TOPIC_ADOPT_MAX_ENTRIES);
+      }
     } else if (state.pending.get(userKey)?.threadId === ownThreadId) {
       // The client delivered the first message inside the topic: nothing to adopt.
       state.pending.delete(userKey);
     }
     return undefined;
-  }
-  const adoptKey = `${chat.id}:${messageId}`;
-  const adopted = state.adopted.get(adoptKey);
-  if (adopted !== undefined) {
-    return adopted;
   }
   const pending = state.pending.get(userKey);
   if (!pending || typeof message.date !== "number") {
@@ -88,8 +132,9 @@ export function resolveAdoptedTelegramDmThreadId(
     return undefined;
   }
   state.pending.delete(userKey);
-  state.adopted.set(adoptKey, pending.threadId);
-  pruneMapToMaxSize(state.adopted, TELEGRAM_DM_TOPIC_ADOPT_MAX_ENTRIES);
+  state.consumed.set(`${chat.id}:${pending.createdMessageId}`, messageId);
+  pruneMapToMaxSize(state.consumed, TELEGRAM_DM_TOPIC_ADOPT_MAX_ENTRIES);
+  adoptedDmThreadIds.set(message, pending.threadId);
   log.debug("adopted root DM message into client-created topic", {
     chatId: chat.id,
     messageId,

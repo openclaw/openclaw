@@ -1,14 +1,10 @@
 // Telegram tests cover canonical thread-scope resolution and encoding.
 import type { Message } from "grammy/types";
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
-import { resetTelegramDmTopicAdoptStateForTest } from "./dm-topic-adopt.js";
+import { adoptTelegramDmTopicMessage, createTelegramDmTopicAdoptState } from "./dm-topic-adopt.js";
 
 describe("resolveTelegramMessageThreadSpec client-created DM topics", () => {
-  beforeEach(() => {
-    resetTelegramDmTopicAdoptStateForTest();
-  });
-
   const chat = { id: 1001, type: "private" };
   const from = { id: 1001, is_bot: false, first_name: "User" };
   const topicCreated = {
@@ -20,22 +16,25 @@ describe("resolveTelegramMessageThreadSpec client-created DM topics", () => {
     is_topic_message: true,
     forum_topic_created: { name: "hello", icon_color: 0, is_name_implicit: true },
   } as unknown as Message;
-  const rootMessage = {
-    message_id: 501,
-    date: 1_760_000_000,
-    chat,
-    from,
-    text: "hello",
-  } as unknown as Message;
+  const rootMessage = () =>
+    ({ message_id: 501, date: 1_760_000_000, chat, from, text: "hello" }) as unknown as Message;
 
-  it("routes the root message delivered right after forum_topic_created into that topic", () => {
+  it("routes the root message the receiving account adopted into that topic", () => {
+    const state = createTelegramDmTopicAdoptState();
+    const message = rootMessage();
     expect(resolveTelegramMessageThreadSpec(topicCreated)).toEqual({ id: 500, scope: "dm" });
-    expect(resolveTelegramMessageThreadSpec(rootMessage)).toEqual({ id: 500, scope: "dm" });
-    expect(resolveTelegramMessageThreadSpec(rootMessage)).toEqual({ id: 500, scope: "dm" });
+    adoptTelegramDmTopicMessage(topicCreated, state);
+    expect(adoptTelegramDmTopicMessage(message, state)).toBe(500);
+    expect(resolveTelegramMessageThreadSpec(message)).toEqual({ id: 500, scope: "dm" });
+    expect(resolveTelegramMessageThreadSpec(message)).toEqual({ id: 500, scope: "dm" });
+    // A later root message is a genuine root message again.
+    const next = { ...rootMessage(), message_id: 502 } as Message;
+    expect(adoptTelegramDmTopicMessage(next, state)).toBeUndefined();
+    expect(resolveTelegramMessageThreadSpec(next)).toEqual({ scope: "dm" });
   });
 
-  it("keeps a root DM message without a preceding topic creation in the root session", () => {
-    expect(resolveTelegramMessageThreadSpec(rootMessage)).toEqual({ scope: "dm" });
+  it("keeps a root DM message that no account adopted in the root session", () => {
+    expect(resolveTelegramMessageThreadSpec(rootMessage())).toEqual({ scope: "dm" });
   });
 });
 

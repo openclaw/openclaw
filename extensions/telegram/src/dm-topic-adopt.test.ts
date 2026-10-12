@@ -1,9 +1,11 @@
-// Covers adopting a root DM message into the topic a client just created for it.
+// Covers the edge cases of adopting a root DM message into the topic a client just created.
+// The happy path lives at the resolver boundary (thread-spec.test.ts) and the ingress
+// boundary (telegram-ingress-drain.test.ts).
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import {
+  adoptTelegramDmTopicMessage,
   createTelegramDmTopicAdoptState,
-  resolveAdoptedTelegramDmThreadId,
   TELEGRAM_DM_TOPIC_ADOPT_WINDOW_SEC,
 } from "./dm-topic-adopt.js";
 
@@ -34,49 +36,30 @@ function rootMessage(overrides: Partial<Message> = {}): Message {
   } as Message;
 }
 
-describe("resolveAdoptedTelegramDmThreadId", () => {
-  it("adopts the next root message after a client-created topic", () => {
-    const state = createTelegramDmTopicAdoptState();
-    expect(resolveAdoptedTelegramDmThreadId(topicCreated(), state)).toBeUndefined();
-    expect(resolveAdoptedTelegramDmThreadId(rootMessage(), state)).toBe(500);
-  });
-
-  it("keeps the adopted id stable across repeated resolution of the same message", () => {
-    const state = createTelegramDmTopicAdoptState();
-    resolveAdoptedTelegramDmThreadId(topicCreated(), state);
-    expect(resolveAdoptedTelegramDmThreadId(rootMessage(), state)).toBe(500);
-    expect(resolveAdoptedTelegramDmThreadId(rootMessage(), state)).toBe(500);
-    // A later root message is a genuine root message again.
-    expect(
-      resolveAdoptedTelegramDmThreadId(rootMessage({ message_id: 502 }), state),
-    ).toBeUndefined();
-  });
-
+describe("adoptTelegramDmTopicMessage", () => {
   it("does not adopt when the first message arrives inside the topic", () => {
     const state = createTelegramDmTopicAdoptState();
-    resolveAdoptedTelegramDmThreadId(topicCreated(), state);
+    adoptTelegramDmTopicMessage(topicCreated(), state);
     expect(
-      resolveAdoptedTelegramDmThreadId(
+      adoptTelegramDmTopicMessage(
         rootMessage({ message_thread_id: 500, is_topic_message: true }),
         state,
       ),
     ).toBeUndefined();
-    expect(
-      resolveAdoptedTelegramDmThreadId(rootMessage({ message_id: 502 }), state),
-    ).toBeUndefined();
+    expect(adoptTelegramDmTopicMessage(rootMessage({ message_id: 502 }), state)).toBeUndefined();
   });
 
   it("adopts within the window and ignores later root messages", () => {
     const state = createTelegramDmTopicAdoptState();
-    resolveAdoptedTelegramDmThreadId(topicCreated(), state);
+    adoptTelegramDmTopicMessage(topicCreated(), state);
     expect(
-      resolveAdoptedTelegramDmThreadId(
+      adoptTelegramDmTopicMessage(
         rootMessage({ date: 1_760_000_000 + TELEGRAM_DM_TOPIC_ADOPT_WINDOW_SEC + 1 }),
         state,
       ),
     ).toBeUndefined();
     expect(
-      resolveAdoptedTelegramDmThreadId(
+      adoptTelegramDmTopicMessage(
         rootMessage({ message_id: 502, date: 1_760_000_000 + TELEGRAM_DM_TOPIC_ADOPT_WINDOW_SEC }),
         state,
       ),
@@ -85,26 +68,24 @@ describe("resolveAdoptedTelegramDmThreadId", () => {
 
   it("ignores messages older than the topic creation", () => {
     const state = createTelegramDmTopicAdoptState();
-    resolveAdoptedTelegramDmThreadId(topicCreated(), state);
-    expect(resolveAdoptedTelegramDmThreadId(rootMessage({ message_id: 499 }), state)).toBe(
-      undefined,
-    );
+    adoptTelegramDmTopicMessage(topicCreated(), state);
+    expect(adoptTelegramDmTopicMessage(rootMessage({ message_id: 499 }), state)).toBeUndefined();
     expect(
-      resolveAdoptedTelegramDmThreadId(rootMessage({ date: 1_760_000_000 - 1 }), state),
+      adoptTelegramDmTopicMessage(rootMessage({ date: 1_760_000_000 - 1 }), state),
     ).toBeUndefined();
   });
 
   it("ignores topics created by the bot or another user", () => {
     const state = createTelegramDmTopicAdoptState();
-    resolveAdoptedTelegramDmThreadId(
+    adoptTelegramDmTopicMessage(
       topicCreated({ from: { id: 42, is_bot: true, first_name: "Bot" } }),
       state,
     );
-    expect(resolveAdoptedTelegramDmThreadId(rootMessage(), state)).toBeUndefined();
+    expect(adoptTelegramDmTopicMessage(rootMessage(), state)).toBeUndefined();
 
-    resolveAdoptedTelegramDmThreadId(topicCreated(), state);
+    adoptTelegramDmTopicMessage(topicCreated(), state);
     expect(
-      resolveAdoptedTelegramDmThreadId(
+      adoptTelegramDmTopicMessage(
         rootMessage({ from: { id: 2002, is_bot: false, first_name: "Other" } }),
         state,
       ),
@@ -119,20 +100,41 @@ describe("resolveAdoptedTelegramDmThreadId", () => {
       title: "Group",
       is_forum: true as const,
     };
-    resolveAdoptedTelegramDmThreadId(topicCreated({ chat: groupChat }), state);
-    expect(resolveAdoptedTelegramDmThreadId(rootMessage({ chat: groupChat }), state)).toBe(
-      undefined,
-    );
+    adoptTelegramDmTopicMessage(topicCreated({ chat: groupChat }), state);
+    expect(adoptTelegramDmTopicMessage(rootMessage({ chat: groupChat }), state)).toBeUndefined();
     expect(state.pending.size).toBe(0);
   });
 
-  it("bounds the pending and adopted caches", () => {
+  it("does not rearm the window when the consumed service message is resolved again", () => {
+    const state = createTelegramDmTopicAdoptState();
+    const created = topicCreated();
+    adoptTelegramDmTopicMessage(created, state);
+    expect(adoptTelegramDmTopicMessage(rootMessage(), state)).toBe(500);
+    // Drain inspection resolves the same service update again.
+    adoptTelegramDmTopicMessage(created, state);
+    adoptTelegramDmTopicMessage(topicCreated(), state);
+    expect(state.pending.size).toBe(0);
+    expect(adoptTelegramDmTopicMessage(rootMessage({ message_id: 502 }), state)).toBeUndefined();
+  });
+
+  it("keeps adoption state per bot account", () => {
+    const botA = createTelegramDmTopicAdoptState();
+    const botB = createTelegramDmTopicAdoptState();
+    adoptTelegramDmTopicMessage(topicCreated(), botA);
+    // The same user's root message to another bot never consumes bot A's topic.
+    expect(adoptTelegramDmTopicMessage(rootMessage(), botB)).toBeUndefined();
+    expect(adoptTelegramDmTopicMessage(rootMessage(), botA)).toBe(500);
+  });
+
+  it("bounds the pending and consumed caches", () => {
     const state = createTelegramDmTopicAdoptState();
     for (let i = 0; i < 600; i += 1) {
       const chat = { id: 10_000 + i, type: "private" as const, first_name: "U" };
       const from = { id: 10_000 + i, is_bot: false, first_name: "U" };
-      resolveAdoptedTelegramDmThreadId(topicCreated({ chat, from }), state);
+      adoptTelegramDmTopicMessage(topicCreated({ chat, from }), state);
+      adoptTelegramDmTopicMessage(rootMessage({ chat, from }), state);
     }
-    expect(state.pending.size).toBeLessThanOrEqual(512);
+    expect(state.pending.size).toBe(0);
+    expect(state.consumed.size).toBeLessThanOrEqual(512);
   });
 });
