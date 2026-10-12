@@ -84,6 +84,7 @@ export async function resolveHookModelSelection(params: {
   provider: string;
   modelId: string;
   modelSelectionLocked?: boolean;
+  awaitSessionDiffBaseline?: () => Promise<void>;
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
@@ -104,6 +105,7 @@ export async function resolveHookModelSelection(params: {
   // provider/model before resolveModel().
   if (hookRunner?.hasHooks("before_model_resolve")) {
     const assertCurrent = readClaimingHookAdmission(params.hookContext)?.assertCurrent;
+    await params.awaitSessionDiffBaseline?.();
     assertCurrent?.();
     try {
       const event: PluginHookBeforeModelResolveEvent = params.attachments

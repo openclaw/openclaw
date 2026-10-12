@@ -86,6 +86,23 @@ export async function prepareEmbeddedAttemptToolBase(params: {
 }) {
   const { attempt } = params;
   const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
+  const captureBaseline = attempt.awaitSessionDiffBaseline;
+  const assertBaselineSource = captureBaseline
+    ? resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        params.runAbortController.signal,
+      )
+    : undefined;
+  const awaitSessionDiffBaseline = captureBaseline
+    ? async () => {
+        if (!assertBaselineSource) {
+          throw new Error("session attribution requires active admitted run authority");
+        }
+        assertBaselineSource();
+        await captureBaseline();
+        assertBaselineSource();
+      }
+    : undefined;
   const completionCheck = attempt.completionCheck;
   const requireExplicitMessageTarget =
     attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
@@ -282,6 +299,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       [];
     if (shouldConstructTools) {
       const codingToolOptions: OpenClawCodingToolsOptions = {
+        awaitSessionDiffBaseline,
         agentId: params.setup.sessionAgentId,
         ...buildConversationContext(),
         exec: {
@@ -438,6 +456,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const toolsRaw = await constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
     return {
       toolHookContext: {
+        awaitSessionDiffBaseline,
         agentId: params.setup.sessionAgentId,
         config: attempt.config,
         cwd: params.setup.effectiveCwd,

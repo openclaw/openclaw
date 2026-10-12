@@ -22,13 +22,7 @@ export type NativeHookRelayCommandPlan = Pick<
 export function buildNativeHookRelayCommandPlan(
   params: Pick<
     RegisterNativeHookRelayParams,
-    | "provider"
-    | "agentId"
-    | "sessionKey"
-    | "config"
-    | "preToolUseLoopDetection"
-    | "requirePreToolUse"
-    | "command"
+    "provider" | "agentId" | "sessionKey" | "config" | "preToolUseLoopDetection" | "command"
   > & {
     relayId: string;
     generation: string;

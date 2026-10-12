@@ -46,7 +46,7 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
 
 type NativeHookRelayPolicy = Pick<
   ActiveNativeHookRelayRegistration,
-  "preToolUseLoopDetection" | "requirePreToolUse" | "sessionKey" | "config" | "agentId"
+  "preToolUseLoopDetection" | "sessionKey" | "config" | "agentId"
 > & { executionAdmissionToolNames?: readonly string[] };
 
 /** Snapshot the same canonical native tool family for planning and receipt admission. */
@@ -78,7 +78,6 @@ export function nativeHookRelayEventHasLocalWork(
 ): boolean {
   if (event === "pre_tool_use") {
     return (
-      registration.requirePreToolUse === true ||
       Boolean(registration.executionAdmissionToolNames?.length) ||
       hasBeforeToolCallPolicy() ||
       nativePreToolUseMayRunLoopDetection(registration)
@@ -98,7 +97,7 @@ export function nativeHookRelayEventToolMatcher(
   event: NativeHookRelayEvent,
 ): readonly string[] | undefined {
   if (event === "pre_tool_use") {
-    if (registration.requirePreToolUse || nativePreToolUseMayRunLoopDetection(registration)) {
+    if (nativePreToolUseMayRunLoopDetection(registration)) {
       return undefined;
     }
     // Relay selection and policy execution must read the same scoped/root registry.

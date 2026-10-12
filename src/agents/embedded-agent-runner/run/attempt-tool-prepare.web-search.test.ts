@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
+import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { getHoisted, resetEmbeddedAttemptHarness } from "./attempt-spawn-workspace.test-support.js";
@@ -12,6 +15,79 @@ beforeEach(() => resetEmbeddedAttemptHarness());
 afterEach(() => vi.restoreAllMocks());
 
 describe("prepared missing-search guidance", () => {
+  it("retains attribution and its admitted source for built-in and catalog tool hooks", async () => {
+    const config: OpenClawConfig = { tools: { codeMode: false, toolSearch: { enabled: false } } };
+    const admission = prepareSystemAgentRunAdmission(config, "attribution", "main", "test");
+    const entered = createDeferred();
+    const baseline = createDeferred();
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    let result: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>> | undefined;
+    let pending: ReturnType<AnyAgentTool["execute"]> | undefined;
+    try {
+      // This fixture exercises tool preparation only; the attempt harness owns unrelated runtime state.
+      const attempt = {
+        config,
+        runId: "attribution",
+        sessionId: "attribution",
+        sessionKey: "agent:main:attribution",
+        modelId: "test-model",
+        provider: "anthropic",
+        model: makeProviderModelFixture({ id: "test-model", provider: "anthropic" }),
+        authProfileStore: { version: 1, profiles: {} },
+        admittedRunContext: await admission.admit("embedded"),
+        awaitSessionDiffBaseline: async () => {
+          entered.resolve();
+          await baseline.promise;
+        },
+      } as EmbeddedRunAttemptInternalParams;
+      hoisted.createOpenClawCodingToolsMock.mockReturnValue([]);
+      result = await prepareEmbeddedAttemptToolBase({
+        attempt,
+        agentDir: "/tmp/attribution-agent",
+        setup: createAttemptSetupFixture({ sandboxSessionKey: attempt.sessionKey! }),
+        markCoreToolStage: () => {},
+        onYield: async () => {},
+        runAbortController: new AbortController(),
+        runTrace: { traceId: "1234567890abcdef1234567890abcdef" },
+        skillUsagePaths: [],
+        skillsSnapshot: undefined,
+        codeModeSkills: [],
+        toolSearchCatalogExecutor: async () => ({ content: [], details: {} }),
+      });
+      const builtInOptions = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0];
+      expect(builtInOptions?.awaitSessionDiffBaseline).toBe(
+        result.toolHookContext.awaitSessionDiffBaseline,
+      );
+      const tool = wrapToolWithBeforeToolCallHook(
+        {
+          name: "write",
+          label: "Write",
+          description: "Write fixture",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+        result.toolHookContext,
+      );
+      pending = tool.execute("catalog-attribution", {});
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Catalog tool bypassed attribution",
+      );
+      expect(execute).not.toHaveBeenCalled();
+      admission.close();
+      baseline.resolve();
+      await expect(pending).rejects.toThrow("before_tool_call");
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      baseline.resolve();
+      await pending?.catch(() => undefined);
+      await result?.releaseTools("test-complete");
+      result?.toolSurfaceRuntime.cleanup();
+      admission.close();
+    }
+  });
+
   it.each([
     { name: "ordinary unconfigured", expected: true },
     { name: "configured", configured: true, expected: false },

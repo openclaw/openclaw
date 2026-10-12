@@ -217,6 +217,12 @@ export async function runAgentHarnessAttempt(
   const runPreparedAttempt = async (
     prepared: Parameters<typeof runAgentHarnessLifecycleAttempt>[1],
   ) => {
+    if (!selection.builtIn && internalParams.awaitSessionDiffBaseline) {
+      // Native tools cannot safely wait inside deadline-limited provider hooks.
+      await internalParams.awaitSessionDiffBaseline();
+      prepared.abortSignal?.throwIfAborted();
+      prepared.hostCapabilities?.assertActive();
+    }
     if (nativeSessionRuntime) {
       await nativeSessionRuntime.assertCurrent();
     } else {

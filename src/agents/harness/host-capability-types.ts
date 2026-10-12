@@ -46,8 +46,6 @@ export type AgentHarnessHostCapabilities = Readonly<{
     /** Await the existing workspace owner while preserving this run's authority. */
     waitUntilReady: () => Promise<void>;
   }>;
-  /** Native tools must invoke runBeforeToolCall even without plugin policies. */
-  requiresToolPreparation?: boolean;
   /** Native delegation without person selection must remain unambiguous at admission. */
   assertNativeSubagentSpawnAllowed?: () => void;
   /** Binds the actual native model; returns undefined only for runs without an operator source. */

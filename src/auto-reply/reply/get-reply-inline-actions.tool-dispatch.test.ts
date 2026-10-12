@@ -4,9 +4,15 @@ import type { GetReplyOptions } from "../types.js";
 import {
   createInlineToolDispatchFixture,
   createOpenClawToolsMock,
+  createTypingController,
   mockCallArgs,
   runTestInlineActions,
 } from "./get-reply-inline-actions.test-support.js";
+import { buildTestCtx } from "./test-ctx.js";
+
+const { handleCommandsMock } = vi.hoisted(() => ({ handleCommandsMock: vi.fn() }));
+
+vi.mock("./commands.js", () => ({ handleCommands: handleCommandsMock }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => undefined,
@@ -18,7 +24,60 @@ vi.mock("../../channels/plugins/index.js", () => ({
 describe("inline tool execution ownership", () => {
   beforeEach(() => {
     createOpenClawToolsMock.mockReset();
+    handleCommandsMock.mockReset().mockResolvedValue({ shouldContinue: true, reply: undefined });
   });
+
+  it.each(["settled", "failed", "authority revoked"] as const)(
+    "waits for workspace attribution before command dispatch (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      let active = true;
+      const result = runTestInlineActions({
+        ctx: buildTestCtx({ Body: "/export-session", CommandBody: "/export-session" }),
+        typing: createTypingController(),
+        cleanedBody: "/export-session",
+        command: {
+          isAuthorizedSender: true,
+          senderIsOwner: true,
+          assertOwnerCurrent: () => {
+            if (!active) {
+              throw new Error("command authority ended");
+            }
+          },
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          opts: {
+            awaitSessionDiffBaseline: async () => {
+              entered.resolve();
+              await baseline.promise;
+            },
+          },
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(entered.promise, result, "Command bypassed attribution");
+        expect(handleCommandsMock).not.toHaveBeenCalled();
+        if (outcome === "failed") {
+          baseline.reject(new Error("attribution failed"));
+          await expect(result).rejects.toThrow("attribution failed");
+        } else if (outcome === "authority revoked") {
+          active = false;
+          baseline.resolve();
+          await expect(result).rejects.toThrow("command authority ended");
+        } else {
+          baseline.resolve();
+          await expect(result).resolves.toMatchObject({ kind: "continue" });
+        }
+        expect(handleCommandsMock).toHaveBeenCalledTimes(outcome === "settled" ? 1 : 0);
+      } finally {
+        baseline.resolve();
+        await result.catch(() => undefined);
+      }
+    },
+  );
 
   it.each(["settled", "failed", "authority revoked"] as const)(
     "waits for workspace attribution before direct skill effects (%s)",

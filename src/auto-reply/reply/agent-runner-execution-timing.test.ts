@@ -1,10 +1,15 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import * as transcriptWatermarks from "../../config/sessions/session-transcript-watermark.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-state.js";
 import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   createMinimalRunAgentTurnParams,
   fallbackAttemptOptions,
@@ -17,6 +22,41 @@ import {
 vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }));
 
 const state = await setupAgentRunnerExecutionTestState();
+
+it("settles the turn's attribution before model-routing hooks run", async () => {
+  const { executeAgentTurn } = await import("./agent-runner-execution.js");
+  const capture = createDeferred();
+  const entered = createDeferred();
+  const hook = vi.fn(async () => undefined);
+  const registry = createEmptyPluginRegistry();
+  registry.typedHooks.push({
+    pluginId: "model-routing-fixture",
+    hookName: "before_model_resolve",
+    source: "test",
+    handler: hook,
+  });
+  initializeGlobalHookRunner(registry);
+  const turn = createMinimalRunAgentTurnParams();
+  turn.opts = {
+    awaitSessionDiffBaseline: () => {
+      entered.resolve();
+      return capture.promise;
+    },
+  };
+  state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "answer" }], meta: {} });
+  const pending = executeAgentTurn(turn);
+  try {
+    await awaitGateBeforeSettlement(entered.promise, pending, "Model routing skipped attribution");
+    expect(hook).not.toHaveBeenCalled();
+    capture.resolve();
+    await pending;
+    expect(hook).toHaveBeenCalledOnce();
+  } finally {
+    capture.resolve();
+    await pending.catch(() => undefined);
+    resetGlobalHookRunner();
+  }
+});
 
 it("announces a remote native run before its worker starts writing replies", async () => {
   const { executeAgentTurn } = await import("./agent-runner-execution.js");

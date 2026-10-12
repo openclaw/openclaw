@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -82,6 +83,60 @@ describe("resolvePromptBuildHookResult drain cache", () => {
       hookCtx: { runId, sessionKey: "global", agentId: "qa" },
     });
   }
+
+  it("keeps user prompt preparation independent of heartbeat-only hooks", async () => {
+    const heartbeat = vi.fn(async () => undefined);
+    const capture = vi.fn(async () => {
+      throw new Error("User prompt preparation must not wait for heartbeat capture");
+    });
+    await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages: [],
+      hookCtx: { trigger: "user", sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: (name) => name === "heartbeat_prompt_contribution",
+        runBeforePromptBuild: vi.fn(),
+        runHeartbeatPromptContribution: heartbeat,
+      },
+      awaitSessionDiffBaseline: capture,
+    });
+    expect(capture).not.toHaveBeenCalled();
+    expect(heartbeat).not.toHaveBeenCalled();
+  });
+
+  it.each(["agent_turn_prepare", "heartbeat_prompt_contribution", "before_prompt_build"] as const)(
+    "settles capture before the %s handler can write workspace files",
+    async (hookName) => {
+      const capture = createDeferred();
+      const awaited = createDeferred();
+      const handler = vi.fn(async () => undefined);
+      const result = resolvePromptBuildHookResult({
+        config: {},
+        prompt: "hi",
+        messages: [],
+        hookCtx: { trigger: "heartbeat", sessionKey: "agent:main:main" },
+        hookRunner: {
+          hasHooks: (name) => name === hookName,
+          runBeforePromptBuild: handler,
+          runAgentTurnPrepare: handler,
+          runHeartbeatPromptContribution: handler,
+        },
+        awaitSessionDiffBaseline: () => {
+          awaited.resolve();
+          return capture.promise;
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(awaited.promise, result, "hook skipped capture");
+        expect(handler).not.toHaveBeenCalled();
+      } finally {
+        capture.resolve();
+      }
+      await result;
+      expect(handler).toHaveBeenCalledOnce();
+    },
+  );
 
   it("preserves an explicit empty per-turn tool allowlist", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({ toolsAllow: [] }));

@@ -470,7 +470,6 @@ export function createAgentHarnessHostCapabilities(params: {
     version: 1 as const,
     assertActive,
     ...(workspaceReadiness.capability ? { workspaceReadiness: workspaceReadiness.capability } : {}),
-    ...(awaitSessionDiffBaseline ? { requiresToolPreparation: true } : {}),
     get assertNativeSubagentSpawnAllowed() {
       return bindHarnessNativeSpawnAuthority(personalToolParticipants, assertActive);
     },

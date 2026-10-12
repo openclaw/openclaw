@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
@@ -23,6 +23,7 @@ import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
+import { runAgentHarnessAttempt } from "./selection.js";
 import { createHarnessAttemptParams } from "./selection.test-support.js";
 import type { AgentHarness } from "./types.js";
 
@@ -55,6 +56,65 @@ afterEach(async () => {
 });
 
 describe("registered harness input attachment preparation", () => {
+  it.each(["settled", "aborted", "retired", "failed"] as const)(
+    "settles workspace attribution before native dispatch (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      const controller = new AbortController();
+      const failure = new Error("Workspace attribution unavailable");
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" }),
+      );
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt,
+        },
+        { ownerPluginId: "codex" },
+      );
+      const pending = runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        agentHarnessId: "codex",
+        abortSignal: controller.signal,
+        awaitSessionDiffBaseline: async () => {
+          entered.resolve();
+          await baseline.promise;
+        },
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Native harness dispatched before workspace attribution",
+        );
+        expect(runAttempt).not.toHaveBeenCalled();
+        if (outcome === "aborted") {
+          controller.abort(failure);
+        } else if (outcome === "retired") {
+          admission.close();
+        }
+        if (outcome === "failed") {
+          baseline.reject(failure);
+        } else {
+          baseline.resolve();
+        }
+        if (outcome === "settled") {
+          await expect(pending).resolves.toMatchObject({ terminal: { kind: "ok" } });
+          expect(runAttempt).toHaveBeenCalledOnce();
+        } else {
+          await expect(pending).rejects.toThrow();
+          expect(runAttempt).not.toHaveBeenCalled();
+        }
+      } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
   it.each([
     { operation: "prepare", when: "before" },
     { operation: "prepare", when: "during" },

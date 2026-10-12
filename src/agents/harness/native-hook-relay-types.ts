@@ -68,8 +68,6 @@ export type NativeHookRelayProcessResponse = {
 };
 
 export type NativeHookRelayRegistration = {
-  /** Host preparation must run before every native tool, independent of plugin policies. */
-  requirePreToolUse?: boolean;
   relayId: string;
   provider: NativeHookRelayProvider;
   generationMismatchGraceExpiresAtMs?: number;
@@ -130,7 +128,6 @@ export type RegisterNativeHookRelayParams = {
   allowedEvents?: readonly NativeHookRelayEvent[];
   /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
   preToolUseLoopDetection?: boolean;
-  requirePreToolUse?: boolean;
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;

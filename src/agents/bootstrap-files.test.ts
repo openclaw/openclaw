@@ -8,6 +8,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
@@ -193,6 +194,31 @@ describe("resolveBootstrapFilesForRun", () => {
       layout: "state-only",
       prefix: "openclaw-bootstrap-state-",
     });
+  });
+
+  it("settles capture before a bootstrap hook writes to the workspace", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-capture-");
+    const outputPath = path.join(workspaceDir, "generated.txt");
+    const capture = createDeferred();
+    const awaited = createDeferred();
+    registerInternalHook("agent:bootstrap", async () => {
+      await fs.writeFile(outputPath, "generated");
+    });
+    const result = resolveBootstrapFilesForRun({
+      workspaceDir,
+      awaitSessionDiffBaseline: () => {
+        awaited.resolve();
+        return capture.promise;
+      },
+    });
+    try {
+      await awaitGateBeforeSettlement(awaited.promise, result, "bootstrap skipped capture");
+      await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      capture.resolve();
+    }
+    await result;
+    expect(await fs.readFile(outputPath, "utf8")).toBe("generated");
   });
 
   it("excludes lower-trust root memory before hooks while preserving trusted user context", async () => {

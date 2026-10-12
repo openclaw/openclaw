@@ -57,6 +57,7 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
 }
 
 export async function resolvePromptBuildHookResult(params: {
+  awaitSessionDiffBaseline?: () => Promise<void>;
   config: OpenClawConfig;
   prompt: string;
   messages: unknown[];
@@ -82,6 +83,14 @@ export async function resolvePromptBuildHookResult(params: {
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
   // then prepare/heartbeat contributions, then prompt-build hooks.
+  if (
+    params.hookRunner?.hasHooks("agent_turn_prepare") ||
+    (params.hookCtx.trigger === "heartbeat" &&
+      params.hookRunner?.hasHooks("heartbeat_prompt_contribution")) ||
+    params.hookRunner?.hasHooks("before_prompt_build")
+  ) {
+    await params.awaitSessionDiffBaseline?.();
+  }
   const logHookFailure = (hookName: string) => (hookErr: unknown) => {
     log.warn(`${hookName} hook failed: ${String(hookErr)}`);
     return undefined;

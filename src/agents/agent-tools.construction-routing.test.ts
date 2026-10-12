@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -42,7 +43,7 @@ vi.mock("./openclaw-tools.js", async (importOriginal) => {
 
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
@@ -60,6 +61,39 @@ describe("createOpenClawCodingTools cron scope", () => {
   beforeEach(() => {
     mocks.createOpenClawToolsOptions.mockClear();
   });
+
+  it.each(["settled", "failed"] as const)(
+    "gates constructed tool effects on initial workspace attribution (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      mocks.onToolExecute.mockClear();
+      const tools = createOpenClawCodingToolsInternal({
+        awaitSessionDiffBaseline: async () => {
+          entered.resolve();
+          await baseline.promise;
+        },
+      });
+      const gateway = tools.find((tool) => tool.name === "gateway");
+      expect(gateway).toBeDefined();
+      const pending = gateway!.execute("attribution-call", {});
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "Tool bypassed attribution");
+        expect(mocks.onToolExecute).not.toHaveBeenCalled();
+        if (outcome === "failed") {
+          baseline.reject(new Error("attribution failed"));
+          await expect(pending).rejects.toThrow("before_tool_call");
+        } else {
+          baseline.resolve();
+          await pending;
+          expect(mocks.onToolExecute).toHaveBeenCalledOnce();
+        }
+      } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
 
   it("scopes cron-triggered jobs to self-removal", () => {
     const tools = createOpenClawCodingTools({
