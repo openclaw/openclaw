@@ -446,7 +446,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           package-manager-cache: false
@@ -702,7 +702,7 @@ jobs:
             "openclaw-${release_version}-stable-main-closeout.json.sha256"
 
       - name: Upload closeout workflow evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-stable-main-closeout-${{ needs.resolve.outputs.tag }}
           path: ${{ runner.temp }}/openclaw-stable-main-closeout

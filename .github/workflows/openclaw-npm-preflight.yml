@@ -147,7 +147,7 @@ jobs:
             scripts
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -259,7 +259,7 @@ jobs:
       - *checkout_npm_source
       - *checkout_npm_harness
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -383,7 +383,7 @@ jobs:
 
       - name: Upload publishable npm package set
         id: artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-npm-package-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-npm-package
@@ -405,7 +405,7 @@ jobs:
             > "$RUNNER_TEMP/prepared-npm-bundle.json"
 
       - name: Upload immutable npm package descriptor
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-npm-package-descriptor-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/prepared-npm-bundle.json
@@ -511,7 +511,7 @@ jobs:
       - name: Upload npm sdk proof
         id: artifact
         if: ${{ always() && hashFiles('.artifacts/npm-sdk-proof/plugin-sdk-api-release-evidence.json') != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-npm-sdk-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/npm-sdk-proof
@@ -658,7 +658,7 @@ jobs:
       - name: Upload npm dependencies proof
         id: artifact
         if: ${{ always() && steps.dependency_evidence.outputs.dir != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-npm-dependencies-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-release-dependency-evidence
@@ -812,7 +812,7 @@ jobs:
 
       - name: Upload extended-stable plugin npm packages
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-plugin-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.plugin_npm_preflight.outputs.dir }}
@@ -870,7 +870,7 @@ jobs:
           persist-credentials: false
       - *checkout_npm_harness
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - *acquire_prepared_npm
@@ -905,7 +905,7 @@ jobs:
           echo "dir=$RUNNER_TEMP/openclaw-npm-preflight" >> "$GITHUB_OUTPUT"
 
       - name: Upload Plugin SDK API release diff
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: plugin-sdk-api-release-diff-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -914,7 +914,7 @@ jobs:
           retention-days: 30
 
       - name: Upload dependency release evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-release-dependency-evidence-${{ inputs.tag }}
           path: ${{ runner.temp }}/openclaw-prepared-npm/qualification/dependencies
@@ -922,7 +922,7 @@ jobs:
 
       - name: Upload dependency release evidence tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-release-dependency-evidence-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ runner.temp }}/openclaw-prepared-npm/qualification/dependencies
@@ -930,7 +930,7 @@ jobs:
 
       - name: Upload prepared npm publish bundle
         id: artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
@@ -938,7 +938,7 @@ jobs:
 
       - name: Upload prepared npm publish bundle tag alias
         if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-npm-preflight-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}

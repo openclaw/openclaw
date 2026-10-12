@@ -85,7 +85,7 @@ jobs:
           path: .cache/published-driver-install/${{ steps.driver.outputs.version }}/driver.tar
           key: published-driver-update-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/e2e/Dockerfile') }}-${{ steps.driver.outputs.version }}
       - name: Download candidate package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         timeout-minutes: 2
         with:
           artifact-ids: ${{ inputs.candidate_artifact_id }}
@@ -128,7 +128,7 @@ jobs:
       - name: Preserve synthetic update diagnostics
         if: always()
         timeout-minutes: 1
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: published-driver-update
           path: .artifacts/published-driver-update

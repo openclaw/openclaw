@@ -172,7 +172,7 @@ jobs:
       workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
     steps:
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           package-manager-cache: false
@@ -777,7 +777,7 @@ jobs:
 
       - name: Upload QA profile shard evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: qa-profile-evidence-shard-${{ matrix.id }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
           path: ${{ steps.run_profile.outputs.output_dir }}
@@ -925,7 +925,7 @@ jobs:
 
       - name: Download QA profile shard evidence
         id: download_shards
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: qa-profile-evidence-shard-*-${{ needs.validate_selected_ref.outputs.selected_revision }}
           path: selected/.artifacts/qa-profile-shards
@@ -1071,7 +1071,7 @@ jobs:
         id: upload_diagnostics
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: qa-profile-diagnostics-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ github.workspace }}/selected/.artifacts/qa-e2e/profile-${{ needs.plan_qa_profile.outputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}/qa-profile-run-status.json
@@ -1084,7 +1084,7 @@ jobs:
 
       - name: Upload QA profile evidence
         if: always() && steps.evidence.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: qa-profile-evidence-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
           path: ${{ steps.aggregate.outputs.output_dir }}

@@ -42,7 +42,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
       - name: Dispatch existing protected publisher
@@ -58,7 +58,7 @@ jobs:
             --openclaw-npm-resume-run-id "$OPENCLAW_NPM_RESUME_RUN_ID"
       - name: Retain publication dispatch receipt
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-button-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -81,7 +81,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
       - name: Verify the original publication, without redispatching
@@ -94,7 +94,7 @@ jobs:
             --request "$RUNNER_TEMP/release-request.json" --output "$RUNNER_TEMP/release-button"
       - name: Retain readback evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-button-verification-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-button/clawhub-public-verification/evidence.json
@@ -153,7 +153,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
       - name: Publish the verified draft
@@ -225,7 +225,7 @@ jobs:
 
       - name: Retain Linux updater continuity evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-updater-continuity-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-updater-carry
@@ -248,7 +248,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
       - name: Dispatch detached Linux mirror
@@ -277,7 +277,7 @@ jobs:
           echo "- Legacy Linux bridge: degraded; dispatch acceptance is not mirror success." >> "$GITHUB_STEP_SUMMARY"
       - name: Retain Linux mirror dispatch evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-mirror-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-mirror-dispatch.json
@@ -300,7 +300,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
       - name: Create Linux release request token
@@ -336,7 +336,7 @@ jobs:
           echo "- Linux: request unconfirmed; publication is pending. Inspect Linux App Release Request and Linux App Release before redispatching." >> "$GITHUB_STEP_SUMMARY"
       - name: Retain Linux request evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-dispatch.json
@@ -359,7 +359,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
       - name: Dispatch detached Windows promotion
@@ -395,7 +395,7 @@ jobs:
           echo "- Windows Hub: dispatch failed; inspect this job before manual recovery." >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Windows dispatch evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-dispatch.json

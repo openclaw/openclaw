@@ -1293,7 +1293,7 @@ jobs:
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
       - name: Setup manifest TypeScript runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1803,7 +1803,7 @@ jobs:
       - name: Upload published-driver candidate
         id: published_driver_package_upload
         if: needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: published-driver-candidate-${{ github.sha }}-${{ github.run_attempt }}
           path: .artifacts/published-driver-package/openclaw-candidate.tgz
@@ -2124,7 +2124,7 @@ jobs:
         if: >-
           always() && needs.preflight.outputs.run_discord_component_proof == 'true' &&
           (steps.built_artifact_checks.outcome == 'success' || steps.built_artifact_checks.outcome == 'failure')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: discord-component-attachments
           path: |
@@ -2135,7 +2135,7 @@ jobs:
 
       - name: Upload startup memory report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: startup-memory
           path: .artifacts/startup-memory/
@@ -2144,7 +2144,7 @@ jobs:
 
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_gateway_watch == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
@@ -2290,7 +2290,7 @@ jobs:
 
       - name: Upload Control UI timeout diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: control-ui-test-timeout-${{ matrix.shard }}-${{ github.run_attempt }}
           path: ${{ github.workspace }}/.artifacts/control-ui-e2e-timeouts/ui-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}/failure-*/failure.public.json
@@ -2369,7 +2369,7 @@ jobs:
 
       - name: Upload Control UI E2E timeout diagnostics
         if: failure() && matrix.task == 'control-ui'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: control-ui-e2e-timeout-${{ matrix.shard }}-${{ github.run_attempt }}
           path: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}/failure-*/failure.public.json
@@ -2378,7 +2378,7 @@ jobs:
 
       - name: Upload synthetic desktop Picture-in-Picture proof
         if: always() && matrix.task == 'control-ui' && hashFiles('.artifacts/control-ui-e2e/desktop-picture-in-picture-*/native-pip-after-tab-switch.png') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-pip-proof-${{ strategy.job-index }}-${{ github.run_attempt }}
           path: |
@@ -2389,7 +2389,7 @@ jobs:
 
       - name: Upload synthetic widget prompt failure evidence
         if: failure() && hashFiles('.artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: widget-sandbox-ci-${{ strategy.job-index }}-${{ github.run_attempt }}
           path: |
@@ -2546,7 +2546,7 @@ jobs:
 
       - name: Upload Control UI real-Gateway failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: control-ui-real-gateway-timeout-${{ github.run_attempt }}-${{ matrix.shard }}
           path: |
@@ -2556,7 +2556,7 @@ jobs:
 
       - name: Upload quota auth and transport diagnostics
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: control-ui-quota-diagnostics-${{ github.run_attempt }}-${{ matrix.shard }}
           path: .artifacts/control-ui-e2e/real-gateway/quota-refresh-*/quota.public.json
@@ -2565,7 +2565,7 @@ jobs:
 
       - name: Upload sanitized desktop resize proof
         if: always() && matrix.run_desktop
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-resize-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/control-ui-e2e/real-gateway/desktop-resize
@@ -2574,7 +2574,7 @@ jobs:
 
       - name: Upload model picker public observations
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: model-picker-public-proof-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           path: .artifacts/control-ui-e2e/real-gateway/model-picker-public-*
@@ -2583,7 +2583,7 @@ jobs:
 
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: control-ui-real-gateway-proof-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           path: .artifacts/control-ui-e2e/real-gateway
@@ -3087,7 +3087,7 @@ jobs:
 
       - name: Upload QA smoke profile evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: qa-smoke-profile-${{ matrix.slug }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/
@@ -4331,7 +4331,7 @@ jobs:
 
       - name: Upload Plugin SDK API diff
         if: always() && matrix.group == 'plugin-sdk-api-diff' && hashFiles('.artifacts/plugin-sdk-api-diff.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: plugin-sdk-api-diff-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/plugin-sdk-api-diff.json
@@ -4983,7 +4983,7 @@ jobs:
 
       - name: Upload macOS native test logs
         if: ${{ always() && matrix.phase == 'tests' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-native-test-logs
           path: ${{ runner.temp }}/openclaw-native-test-logs/*.log
@@ -4992,7 +4992,7 @@ jobs:
 
       - name: Upload default-profile chat menu captures
         if: ${{ always() && steps.swift-test.outputs.menu-default-artifact-path != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-chat-menu-captures-default
           path: |
@@ -5005,7 +5005,7 @@ jobs:
 
       - name: Upload named-profile chat menu captures
         if: ${{ always() && steps.swift-test.outputs.menu-named-artifact-path != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-chat-menu-captures-named
           path: |
@@ -5023,7 +5023,7 @@ jobs:
 
       - name: Upload macOS health component renders
         if: ${{ always() && steps.health-render.outputs.artifact-path != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-health-component-renders
           path: |
@@ -5553,7 +5553,7 @@ jobs:
 
       - name: Upload iOS lifecycle simulator evidence
         if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped') || (steps.ios_attachment_tests.outcome != '' && steps.ios_attachment_tests.outcome != 'skipped')) }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
           path: |
@@ -5675,7 +5675,7 @@ jobs:
           fi
 
       - name: Upload iOS screenshot shard evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-release-screenshot-shard-${{ matrix.device_family }}-${{ needs.preflight.outputs.checkout_revision }}
           path: apps/ios/build/ScreenshotEvidenceShard/
@@ -5684,7 +5684,7 @@ jobs:
 
       - name: Upload failed iOS screenshot attempt evidence
         if: ${{ always() && (steps.device_screenshots.outcome == 'failure' || steps.package_screenshot_evidence.outcome == 'failure') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-release-screenshot-failure-${{ matrix.device_family }}-${{ needs.preflight.outputs.checkout_revision }}
           path: |
@@ -5716,7 +5716,7 @@ jobs:
           node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
 
       - name: Download iOS screenshot shard evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: ios-release-screenshot-shard-*-${{ needs.preflight.outputs.checkout_revision }}
           path: apps/ios/build/ScreenshotEvidenceInputs
@@ -5743,7 +5743,7 @@ jobs:
 
       - name: Upload failed iOS screenshot reducer evidence
         if: ${{ always() && steps.reduce_screenshot_evidence.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-release-screenshot-reducer-failure-${{ needs.preflight.outputs.checkout_revision }}
           path: |
@@ -5754,7 +5754,7 @@ jobs:
           retention-days: 14
 
       - name: Upload iOS release screenshot evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}
           path: |
@@ -5980,7 +5980,7 @@ jobs:
 
       - name: Upload Android test reports
         if: ${{ !cancelled() && startsWith(matrix.task, 'test-') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: android-test-reports-${{ matrix.task }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
           path: |
@@ -6049,7 +6049,7 @@ jobs:
 
       - name: Retain Android screenshot evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: android-store-screenshots-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
           path: |
@@ -6161,7 +6161,7 @@ jobs:
 
       - name: Upload Access native test reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: android-access-native-${{ matrix.page-size }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
           path: |
@@ -6270,7 +6270,7 @@ jobs:
 
       - name: Upload sanitized upgrade survivor proof
         if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: docker-seed-upgrade-survivor-proof
           path: |

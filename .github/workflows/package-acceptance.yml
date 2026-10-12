@@ -464,7 +464,7 @@ jobs:
       telegram_scenarios: ${{ steps.profile.outputs.telegram_scenarios }}
     steps:
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -711,7 +711,7 @@ jobs:
 
       - name: Download package artifact input
         if: inputs.source == 'artifact'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ inputs.artifact_id }}
           path: .artifacts/package-candidate-input
@@ -1070,7 +1070,7 @@ jobs:
           printf 'digest=%s\n' "$(jq -er '.digest' "$RUNNER_TEMP/frozen-admission.json")" >> "$GITHUB_OUTPUT"
 
       - name: Upload frozen admission diagnostic
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: frozen-source-admission-package-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -1081,7 +1081,7 @@ jobs:
 
       - name: Upload package-under-test artifact
         id: upload_package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ env.PACKAGE_ARTIFACT_NAME }}
           path: |
@@ -1093,7 +1093,7 @@ jobs:
       - name: Upload Telegram prerelease plugin registry artifact
         id: upload_telegram_registry
         if: steps.resolve.outputs.plugin_registry_manifest_sha256 != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ env.TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME }}
           path: .artifacts/package-acceptance-telegram-plugin-registry/
@@ -1199,7 +1199,7 @@ jobs:
           install-deps: "true"
 
       - name: Download package-under-test artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.resolve_package.outputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
@@ -1239,12 +1239,12 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node 24
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
       - name: Download package-under-test artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.resolve_package.outputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
@@ -1270,7 +1270,7 @@ jobs:
 
       - name: Download prerelease plugin registry artifact
         if: needs.resolve_package.outputs.prepublish_plugin_registry_json != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
           path: .artifacts/prepublish-plugin-registry

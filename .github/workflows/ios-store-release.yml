@@ -92,7 +92,7 @@ jobs:
 
       - name: Retain screenshots and sanitized diagnostics
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -251,7 +251,7 @@ jobs:
 
       - name: Retain release plan and notes
         if: always() && steps.release.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -264,7 +264,7 @@ jobs:
       - name: Retain signed release artifacts
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-release-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -279,7 +279,7 @@ jobs:
       - name: Retain sanitized screenshot diagnostics
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-release-screenshot-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

@@ -456,7 +456,7 @@ jobs:
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -598,7 +598,7 @@ jobs:
 
       - name: Download provided candidate artifact
         if: inputs.candidate_artifact_name != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ inputs.candidate_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/input
@@ -773,7 +773,7 @@ jobs:
 
       - name: Upload candidate artifact
         id: upload_candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package/${{ steps.candidate_metadata.outputs.file_name }}
@@ -782,7 +782,7 @@ jobs:
       - name: Upload source-built prerelease companion registry
         id: upload_prepublish_plugin_registry
         if: inputs.candidate_artifact_name == '' && steps.provider_requirements.outputs.json != '[]'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-cross-os-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins/
@@ -791,7 +791,7 @@ jobs:
       - name: Upload baseline artifact
         if: ${{ inputs.mode != 'fresh' }}
         id: upload_baseline
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/${{ steps.baseline_metadata.outputs.file_name }}
@@ -904,7 +904,7 @@ jobs:
 
       - name: Setup Node.js
         id: node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # Older workflow_ref harnesses omit the field; retire this adapter with those revisions.
           node-version: ${{ matrix.node_version || (matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.16.0' || env.NODE_VERSION) }}
@@ -935,7 +935,7 @@ jobs:
       - name: Download candidate artifact
         id: download_candidate
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.prepare.outputs.candidate_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
@@ -949,7 +949,7 @@ jobs:
 
       - name: Retry candidate artifact download
         if: ${{ steps.download_candidate.outcome == 'failure' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.prepare.outputs.candidate_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
@@ -960,7 +960,7 @@ jobs:
         if: ${{ matrix.suite == 'packaged-upgrade' }}
         id: download_baseline
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.prepare.outputs.baseline_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
@@ -974,7 +974,7 @@ jobs:
 
       - name: Retry baseline artifact download
         if: ${{ steps.download_baseline.outcome == 'failure' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.prepare.outputs.baseline_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
@@ -985,7 +985,7 @@ jobs:
         if: needs.prepare.outputs.prepublish_plugin_registry_json != ''
         id: download_prepublish_plugin_registry
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
@@ -999,7 +999,7 @@ jobs:
 
       - name: Retry prerelease plugin registry artifact download
         if: ${{ steps.download_prepublish_plugin_registry.outcome == 'failure' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
@@ -1133,7 +1133,7 @@ jobs:
 
       - name: Upload release-check artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: openclaw-cross-os-release-checks-${{ matrix.artifact_name }}-${{ matrix.suite }}-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}

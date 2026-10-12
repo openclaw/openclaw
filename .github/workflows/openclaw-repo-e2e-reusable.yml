@@ -115,7 +115,7 @@ jobs:
         run: node .release-harness/scripts/repo-e2e-artifacts.mts pack "$RUNNER_TEMP/repo-e2e-build" "$BUILD_PROFILE"
       - name: Upload repo E2E build
         id: upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: repo-e2e-${{ inputs.build_profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/repo-e2e-build/
@@ -143,7 +143,7 @@ jobs:
           node-version: "24.21.0"
           install-bun: "true"
       - name: Download repo E2E build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.build.outputs.artifact_id }}
           run-id: ${{ needs.build.outputs.artifact_run_id }}
@@ -162,7 +162,7 @@ jobs:
       - name: Download Bun test runtime
         id: test_bun_download
         if: inputs.test_runtime == 'bun'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ inputs.test_bun_artifact_id }}
           path: ${{ runner.temp }}/test-bun-runtime
@@ -200,7 +200,7 @@ jobs:
       # This fixture uses synthetic documents and a mocked Gateway; exclude other UI artifacts.
       - name: Upload synthetic widget prompt failure evidence
         if: failure() && hashFiles('.artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: widget-sandbox-repo-e2e-${{ strategy.job-index }}-${{ github.run_attempt }}
           path: |
