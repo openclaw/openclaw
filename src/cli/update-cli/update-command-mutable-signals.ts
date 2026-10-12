@@ -265,9 +265,13 @@ export async function withMutableUpdateSignals<T>(
         `${admission.interruption.error.message} Recovering the Gateway before exit. Check openclaw update status; use openclaw update repair if recovery remains pending.`,
       );
       const deadline =
-        Date.now() +
+        performance.now() +
         (run.activationTimeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS);
-      const settled = awaitWithinDeadline(() => admission.terminal!, deadline).then((result) => {
+      const settled = awaitWithinDeadline(
+        () => admission.terminal!,
+        deadline,
+        () => performance.now(),
+      ).then((result) => {
         if (result === ABSOLUTE_DEADLINE_EXPIRED) {
           defaultRuntime.error(
             "Update interruption cleanup exceeded its recovery budget. Run openclaw update status, then openclaw update repair to inspect retained recovery.",
