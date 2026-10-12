@@ -482,7 +482,7 @@ export async function listUserProfileAuthLinksAsync(
   const key = JSON.stringify([context.admission.databasePath, profileId]);
   const cached = userProfileAuthLinks.get(key);
   if (cached?.isCurrent()) {
-    return cached.links.map((link) => ({ ...link }));
+    return cached.links.map((link) => Object.assign({}, link));
   }
   const isCurrent = captureUserProfileModelAccountLinksAuthority(context.admission, profileId);
   const reply = await executeExistingOpenClawStateRead(
@@ -496,7 +496,7 @@ export async function listUserProfileAuthLinksAsync(
   const links = reply?.links ?? [];
   userProfileAuthLinks.set(key, { links, isCurrent });
   pruneMapToMaxSize(userProfileAuthLinks, 512);
-  return links.map((link) => ({ ...link }));
+  return links.map((link) => Object.assign({}, link));
 }
 
 /** Apply Doctor's verified credential renames without changing account selections or ownership. */

@@ -13,8 +13,10 @@ import {
   captureOpenClawStateWorkerContext,
 } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
-import { publishUserGitHubConnectionCommit } from "./user-github-connection-events.js";
-import { observeUserGitHubConnectionAuthority } from "./user-github-connection-events.js";
+import {
+  observeUserGitHubConnectionAuthority,
+  publishUserGitHubConnectionCommit,
+} from "./user-github-connection-events.js";
 import {
   cancelUserGitHubAuthorizationInDatabase,
   disconnectUserGitHubConnectionInDatabase,

@@ -2,18 +2,19 @@
 import path from "node:path";
 import { normalizeAgentIdStrict } from "@openclaw/normalization-core/agent-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readConfigMachineStateAsync } from "./config-machine-state-async.js";
+import { updateConfigMachineState } from "./config-machine-state-write.js";
+import { readConfigMachineState } from "./config-machine-state.js";
 import {
   localOnboardingStateKey,
   normalizeLocalOnboardingState,
   type LocalOnboardingState,
 } from "./local-onboarding-state-shared.js";
-export type { LocalOnboardingState } from "./local-onboarding-state-shared.js";
-import { readConfigMachineStateAsync } from "./config-machine-state-async.js";
-import { updateConfigMachineState } from "./config-machine-state-write.js";
-import { readConfigMachineState } from "./config-machine-state.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+
+export type { LocalOnboardingState } from "./local-onboarding-state-shared.js";
 
 /** Synchronous CLI onboarding inspection; runtime recovery uses the async reader below. */
 export function readLocalOnboardingState(

@@ -137,7 +137,7 @@ function assertDeletionFence(
 ) {
   const journal = assertDeletionFenceJournal(entry, operationId);
   // Orphaned ownership can outlive its install row, but must never remove a configured replacement.
-  const agent = listAgentEntries(config).find((entry) => entry.id === agentId);
+  const agent = listAgentEntries(config).find((candidate) => candidate.id === agentId);
   if (agent && digestClawValue(agent) !== install?.agentConfigDigest) {
     throw new Error("The serving Gateway's Claw agent configuration changed after planning.");
   }

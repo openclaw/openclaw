@@ -2,13 +2,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state-row.js";
-export {
-  getTtsMachinePathAdmission,
-  normalizeConfigMachineStateKey,
-  publishConfigMachineStateRow,
-  readConfigMachineStateRowInDatabase,
-  type ConfigMachineStateDatabase,
-} from "./config-machine-state-row.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
@@ -18,6 +11,14 @@ import type {
   OpenClawStateReadCommand,
   OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
+
+export {
+  getTtsMachinePathAdmission,
+  normalizeConfigMachineStateKey,
+  publishConfigMachineStateRow,
+  readConfigMachineStateRowInDatabase,
+  type ConfigMachineStateDatabase,
+} from "./config-machine-state-row.js";
 
 type ConfigMachineStateReadCommand = Extract<
   OpenClawStateReadCommand,
