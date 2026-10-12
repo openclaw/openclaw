@@ -29,6 +29,7 @@ import {
   isHookDecision,
 } from "./hook-decision-types.js";
 import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
+import { resolveSyncMessageReplacement } from "./hook-message-replacement.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import type {
@@ -554,8 +555,7 @@ export function createHookRunner(
       if (hookName === "before_message_write" && result.block) {
         return { block: true };
       }
-      const nextMessage = result.message;
-      return nextMessage ? { message: nextMessage } : undefined;
+      return resolveSyncMessageReplacement(result.message);
     } catch (err) {
       const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
       if (shouldCatchHookErrors(hookName)) {
