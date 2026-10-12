@@ -19,6 +19,9 @@ Account sign-in is available through onboarding too. Authentication methods have
 different model and capability coverage; configuring chat does not configure
 every media or voice feature.
 
+Explicitly selected pre-GPT-5 models use OpenClaw's function-tool runtime rather
+than Codex's native custom tools. GPT-5-family models keep the Codex runtime.
+
 See the [OpenAI setup guide](https://docs.openclaw.ai/providers/openai/setup) and
 [authentication comparison](https://docs.openclaw.ai/providers/openai/authentication)
 to choose the appropriate access method.

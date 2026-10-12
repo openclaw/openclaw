@@ -46,11 +46,13 @@ legacy completions models stay hidden, as do models past their OpenAI shutdown
 date. Search models stay hidden because they run only on Chat Completions; live,
 cyber, experiment, and alpha IDs stay hidden because Responses rejects them.
 GPT-3.5, GPT-4 (including GPT-4o and GPT-4.1), o1, o3, and o4 models stay hidden
-from the list because they fail on the default Codex runtime. You can still select
-one by its reference, for example as `agents.defaults.model.primary` or a session
-model; set `agents.defaults.models["openai/<model>"].agentRuntime.id` to
-`"openclaw"` so it runs. o1, o3-mini, GPT-3.5, GPT-4, GPT-4 Turbo, and GPT-4.1
-nano also reject OpenAI's hosted web search, which that runtime adds by default:
+from the list because their tool capabilities differ from the modern models.
+You can still select one by its reference, for example as
+`agents.defaults.model.primary` or a session model. OpenClaw automatically uses
+its function-tool runtime instead of Codex's native custom tools; no manual
+`agentRuntime.id` override is needed. GPT-5-family models keep the Codex runtime.
+o1, o3-mini, GPT-3.5, GPT-4, GPT-4 Turbo, and GPT-4.1 nano also reject OpenAI's
+hosted web search, which the OpenClaw runtime adds by default:
 set `tools.web.search.provider` to a managed provider such as `brave`, or
 `tools.web.search.enabled: false`, before using them (see
 [Native OpenAI web search](/tools/web#native-openai-web-search)).

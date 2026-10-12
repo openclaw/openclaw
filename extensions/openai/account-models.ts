@@ -14,8 +14,8 @@ export const OPENAI_UNKNOWN_MODEL_COST = {
 // codename ids return 404/500 for API keys that list them.
 const OPENAI_RESPONSES_UNSUPPORTED_MODEL_ID_PATTERN =
   /(?:^|-)(?:search|live|cyber|exp|alpha)(?:-|$)/;
-// Pre-GPT-5 families fail on the default Codex runtime (400 "Invalid value: 'custom'") and
-// many reject hosted web search, so listings hide them; explicitly selected refs still resolve.
+// Listings advertise the modern tool surface; many pre-GPT-5 models reject hosted
+// web search. Explicitly selected refs still resolve with function tools.
 export const OPENAI_PRE_GPT5_MODEL_ID_PATTERN = /^(?:ft:)?(?:gpt-3\.5|gpt-4|o[134])/;
 
 /** Conservative Responses metadata for an OpenAI chat id without a catalog row. */
