@@ -339,14 +339,11 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             onUpdate,
           });
           const { id, name, source } = callResult.tool;
+          const { details: _details, ...modelResult } = callResult.result;
           const images = callResult.result.content.filter((block) => block.type === "image");
-          const modelResult =
-            images.length > 0
-              ? {
-                  ...callResult.result,
-                  content: callResult.result.content.filter((block) => block.type !== "image"),
-                }
-              : callResult.result;
+          if (images.length > 0) {
+            modelResult.content = modelResult.content.filter((block) => block.type !== "image");
+          }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
           const wrappedResult = {

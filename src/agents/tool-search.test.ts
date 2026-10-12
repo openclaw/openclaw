@@ -1018,8 +1018,9 @@ describe("Tool Search", () => {
     expect(content.text.length).toBeLessThan(1_000);
     expect(JSON.parse(content.text)).toEqual({
       tool: { id: entry.id, name: target.name, source: entry.source },
-      result: targetResult,
+      result: { content: targetResult.content, terminate: true },
     });
+    expect(content.text.match(/preserved/g)).toHaveLength(1);
     expect(content.text).not.toContain("Long tool instructions");
     expect(content.text).not.toContain("option_99");
   });

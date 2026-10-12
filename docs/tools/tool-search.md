@@ -197,11 +197,12 @@ tool declares one.
 ### Call
 
 `tool_call` accepts a tool `id` and its target `args`, calls the selected tool
-through OpenClaw, and returns the `{ tool, result }` envelope. JSON-returning tools normally place their value in
-`result.details`. OpenClaw validates a trusted core or plugin tool's declared
-input schema before execution. Missing required arguments, incorrect types,
-and forbidden properties return actionable tool errors instead of executing
-the tool; misspelled properties include a suggested parameter when available.
+through OpenClaw, and returns the `{ tool, result }` envelope. The model-facing
+`result` contains the target's content and model-relevant status fields.
+OpenClaw validates a trusted core or plugin tool's declared input schema before
+execution. Missing required arguments, incorrect types, and forbidden
+properties return actionable tool errors instead of executing the tool;
+misspelled properties include a suggested parameter when available.
 If a trusted tool also declares `outputSchema`, OpenClaw compiles that schema
 before execution and validates final `details` after normal tool hooks before
 returning the catalog call. MCP and client-owned schemas remain deferred to
@@ -219,9 +220,10 @@ ambiguous tool selectors instead of calling the wrong tool. Nest target
 arguments under `args` when a target field matches another cataloged tool.
 
 The structured control's model-facing text includes only the tool's `id`,
-`name`, and `source` alongside the unchanged target `result`; it does not repeat
-the description and input signature. Its structured `details` retain the full
-call envelope for runtime consumers. Use `tool_describe` for full tool metadata.
+`name`, and `source` alongside the target's model-visible content and status; it
+does not repeat the target's structured `details`, description, or input
+signature. The control's own structured `details` retain the full call envelope
+for runtime consumers. Use `tool_describe` for full tool metadata.
 
 ```json
 {
