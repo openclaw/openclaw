@@ -1,93 +1,60 @@
 # Gateway Runtime And Delivery
 
-Gateway server tests and startup paths should not materialize bundled plugin
-runtime when they only need plugin-owned static descriptors.
+Gateway startup/tests needing only static descriptors must not load bundled plugin runtime.
 
 ## Guardrails
 
-- For plugin-owned Gateway behavior such as auth-bypass paths, prefer a
-  lightweight public artifact resolver before falling back to the full channel
-  plugin.
-- Keep the full plugin contract and the lightweight artifact backed by the same
-  plugin-owned helper so behavior does not diverge.
-- Do not load broad bundled channel registries from Gateway HTTP/server code
-  just to answer static questions.
-- If adding a new plugin-owned Gateway descriptor, add the core resolver,
-  plugin artifact, and mirrored full-plugin export in the same change.
-- In Gateway server tests, reuse suite-level servers, authenticated contexts,
-  and clients when the behavior under test does not require a fresh
-  connect/auth handshake. Reset runtime state explicitly instead of restarting
-  the whole server per case.
-- Keep schedulers, pollers, and background loops disabled in manual-RPC tests
-  unless the test is specifically proving automatic scheduling or lifecycle
-  behavior.
+- Resolve plugin-owned Gateway behavior (including auth bypass) through lightweight public artifacts before full plugins. Share one plugin-owned helper; never load broad channel registries for static HTTP/server questions.
+- Add a descriptor's core resolver, plugin artifact, and mirrored full-plugin export together.
+- Reuse suite servers, authenticated contexts, and clients unless proving fresh connect/auth; reset state explicitly. Disable schedulers/pollers/background loops in manual-RPC tests unless proving their lifecycle.
 
 ## Best-Effort Callbacks And Telemetry
 
-- When adding or changing best-effort telemetry and callbacks, keep network
-  delivery off turn execution and token delivery paths. Queue outbound work
-  through its lifecycle owner; keep the queue bounded and define visible
-  overflow/coalescing behavior. An inline callback that can wait on a remote
-  endpoint defeats that boundary.
-- Authorization, approval, required persistence, and user-requested delivery are
-  not best-effort telemetry. Classify hooks by their caller contract, not a void
-  return type; preserve required ordering and failure behavior. Callback failure
-  must neither grant permission nor silently discard required work.
+- Keep network telemetry/callbacks off turn/token paths. Queue through the lifecycle owner with bounds and visible overflow/coalescing.
+- Classify by caller contract, not void returns: authorization, approval, required persistence and user-requested delivery are not best-effort; retain ordering/failure semantics. Callback failure must not grant permission or discard required work.
 
 ## Write Target And Outcome
 
-- Bind a mutation to its intended logical target before its first side effect.
-  A failure must not silently redirect the write to another account, profile,
-  Gateway, or session. Report the failure or reconcile the original target.
-- A timeout can follow an accepted write. Use the existing owner's idempotency
-  and outcome-reconciliation contract before retrying; an error alone does not
-  prove non-execution. Transport retry or explicit failover may follow an existing
-  contract, including model-call auth-profile failover. That is not permission
-  to redirect an unrelated user-bound write to report success.
+- Bind the target before its first side effect. Never redirect failed writes across accounts, profiles, Gateways, or sessions; report/reconcile the original target.
+- Timeouts may follow accepted writes: use the owner's idempotency/outcome reconciliation before retrying. Existing transport/failover contracts (including model-call auth-profile failover) never authorize redirecting unrelated user-bound writes.
 
 ## Run Authority And Worker Upgrades
 
-- `src/infra/agent-run-registry.ts` owns run liveness. `src/gateway/worker-environments/placement-turn-claims.ts` owns worker-turn liveness. Validate both at use time; HMAC verification, TTL, and matching identifiers do not establish live authority.
-- For durable effects after awaited work, compose every applicable live-authority assertion into the owning synchronous pre-commit guard; rechecking only after the mutation returns is too late.
-- Sessionless runs retain prepared admission authority without inventing session projection. Canonical idempotency reservation owns deduplication; a source-specific RPC wait becomes terminal only after that source's replay payload publishes. Lifecycle completion or another source cannot close that barrier; abort-map binding occurs only for registered projected runs.
-- Worker launch, recovery, reclaim, and RPC use require an exact live placement, environment, owner epoch, placement generation, and turn claim.
-- The current worker execution-context dialect is an upgrade boundary. Reject incompatible workers and reprovision them; do not emit legacy payloads, locally downgrade execution, or revive pre-restart claims.
+- `src/infra/agent-run-registry.ts` owns run liveness; `src/gateway/worker-environments/placement-turn-claims.ts` owns worker-turn liveness. Validate both at use time; HMAC, TTL, and matching IDs do not establish live authority.
+- After awaits, compose all applicable live-authority assertions in the owner's synchronous pre-commit guard, never after mutation.
+- Sessionless runs retain prepared admission authority without session projection; canonical reservation owns deduplication. Source-specific RPC waits end only on that source's replay publication, never lifecycle completion/another source. Bind abort maps only for registered projected runs.
+- Worker launch, recovery, reclaim, and RPC require an exact live placement, environment, owner epoch, placement generation, and turn claim.
+- Reject/reprovision incompatible execution-context dialects; never emit legacy payloads, downgrade locally, or revive pre-restart claims.
 
 ## Approval Identity Persistence
 
-- The approval store may lazily create its additive execution-identity companion table only when writing a valid bound identity.
-- Identity rows record provenance only. Authorization and decision consumption must use the parent approval and current live authority, never the companion row.
-- Preserve schema version and older-reader tolerance. Changes to this surface require enabled, disabled, integrity, downgrade, and candidate-reopen proof.
+- Create the additive execution-identity companion table lazily, only for valid bound identity writes. Rows record provenance; parent approvals and live authority govern authorization/decision consumption.
+- Preserve schema version and older-reader tolerance. Prove enabled, disabled, integrity, downgrade, and candidate-reopen behavior when changing this surface.
 
 ## Session Row Projection
 
-- `session-row-projection-access.ts` binds request contexts to their runtime owner; context copies retain that binding, and the runtime owns projection disposal. Keep the generic request context independent of projection implementation types.
-- `session-row-projection.ts` owns resident materialized session rows. Owner publications through `sessionChanges` invalidate exact session identities; SQLite publications run after commit, and reads retain fresh sharing identity after yields.
-- Writers that create or rename keys publish the destination keys, including Doctor repairs. A broad store invalidation refreshes existing identities; it does not discover new keys by scanning.
-- Startup is per physical store: first admission, replacement, or reappearance after a hot `session.store` change hydrates that store once through the existing loader. Remove rows when their store leaves the topology. Incognito stores stay excluded across database generations.
-- Projection work retains its creation owner's async context, never a publisher's temporary startup-admission borrow. Successful deferred database preparation publishes topology after ending that borrow.
-- Legacy ACP-key, embedded ACP metadata, and missing-title repairs belong only to Doctor. Admission refuses each store's unmigrated ACP state with offline repair guidance before handing that store to runtime. Reads consume canonical metadata and never normalize or persist legacy shapes.
-- Archived rows retain list metadata, indexes, and board membership. Exact reads and selected list pages materialize them through a bounded cache sized for the requested page. Broad catalog/config/topology invalidations evict archived materializations; publications maintain cold parent/identity indexes and promote unarchived entries. Sharing filters consume metadata even when a row is cold, and backfill requires a current materialized row.
-- Runtime config publication classifies projection-neutral and identity-display-only commits. Advance the projection's config while retaining unchanged session facts; refresh agent identity display through the profile presentation owner. Topology-only admissions reconcile physical generations without invalidating unchanged stores. Keep permission revocation and catalog publications independent; changed resolution provenance and forced invalidation retain broad refresh behavior. Scope classification compares the live previous object with the previous publication's record in both its value fingerprint and its serialized resolution facts, so an in-place edit of either selects the broad `config` scope. Object identity cannot make the equivalence check, so a same-object publication retains broad refresh unless its publisher validates it against that same record, as the source-only republish in `setRuntimeConfigSourceSnapshotIfCurrent` does; a publication proven equivalent by it sends no session change.
-- Retain completed catalog facts while the model owner's replacement promise is pending; an absent owner during renewal is not a replacement catalog. Resume on that exact promise's settlement, including failure, without inferring completion from unpaired scoped auth events.
-- After hydration, clean materialized list/describe/event snapshots execute no SQLite statements. Dirty rows acquire stored metadata through exact-key readers. Resident materialization never reads transcript payloads; optional previews and fallback-model facts use bounded read-only background enrichment, and usage comes from its persistence owner. Background transcript work yields to foreground request lifetimes and rechecks that priority before publishing its result. Never scan an already resident store to serve a request.
-- The profile owner retains durable display facts, roles, and merge aliases while a projection is active. Its committed writes update exact catalog keys before publishing through `sessionChanges`; physical shared-store admission hydrates the catalog once. Person-reference selection reads that catalog, including profiles without sessions. Synthetic plugin readers and selected-profile bindings acquire current exact identity facts from the same catalog after readiness; display prefix matching never grants authority.
-- Prepare federation scopes on topology publication. Resolve sentinel precedence before viewer/activity filtering; model inheritance and child links use the same physical parent. A list awaits projection readiness; keyed describe/resolve/history reads prepare only their requested row, independently of bulk refresh. Requests select, authorize, present, and reply synchronously with the current viewer and clock; do not insert a result-promise await before the RPC response.
-- Recheck `needsMaterialization` in the consuming frame after readiness awaits: a commit can arrive as a promise settles. Successful drains join subsequent dirty work; failed refreshes keep their keys dirty for the next signal or read.
-- Queued events capture the projection generation before awaited work and reject a replaced identity before publishing. Keyed mutations use the shared per-connection snapshot presenter; broad invalidations remain keyless. Authorized incognito describe, history, resolve, and event reads share transient exact-key preparation outside the resident roster; generation checks bind both the process-local database and session lifecycle.
-- Incognito reads reuse shared authorization and the existing exact read-only lookup. They may read ephemeral SQLite, requested transcript fields, and bounded child metadata, never admit a store or retain rows; incognito rows remain excluded from discovery and resident memory.
-- Cancellation receipts prepare rows inside the existing kill hold, revalidate the run and captured session generation, then publish synchronously before releasing ownership. Ordinary events retain coalesced publication.
-- Agent event ingestion never waits for row enrichment: tool/progress consumers must capture reply content before completion. Optional tool-row metadata can be absent while rows are dirty; full lifecycle row publications await readiness.
-- Carry physical store ownership into transcript/title/usage readers independently of the logical agent used for model and visibility policy. Reuse the prepared fallback model instead of reading it twice.
-- Event authorization consumes committed sharing metadata and the membership snapshot independently of full-row materialization. `sessions.changed` and `session.message` producers still await display-row readiness. Synchronous board/progress/suggestion events must neither query SQLite nor lose authorized delivery while display rows are dirty; member revocations publish before those events.
+- `session-row-projection-access.ts` binds contexts/copies to the runtime owner responsible for disposal. Keep projection types out of generic contexts.
+- `session-row-projection.ts` owns resident rows. Publish exact-identity invalidations through `sessionChanges`, after SQLite commit; retain fresh sharing identity across yields.
+- Creation/rename writers, including Doctor, publish destination keys. Broad invalidation refreshes known identities without discovery scans.
+- Hydrate each physical store once via the existing loader on admission/replacement/reappearance after hot `session.store` changes. Remove departed rows; exclude incognito across generations.
+- Retain the creation owner's async context, never the publisher's startup-admission borrow. Publish successfully prepared topology after ending the borrow.
+- Doctor alone repairs legacy ACP keys, embedded ACP metadata, and missing titles. Refuse unmigrated ACP stores before runtime handoff with offline repair guidance; reads consume canonical metadata, never normalize/persist legacy shapes.
+- Archives retain list metadata, indexes, and board membership. Exact/selected-page reads use a page-sized bounded cache, evicted by broad catalog/config/topology invalidations. Maintain cold parent/identity indexes, promote unarchived entries, filter sharing from cold metadata; backfill only current materialized rows.
+- Neutral/display-only commits advance projection config, retaining session facts; the profile owner refreshes display. Topology-only admission reconciles generations, retaining unchanged stores. Keep revocation/catalog publications independent; provenance changes/forced invalidation refresh broadly. Compare live previous config with the prior publication's fingerprint AND serialized resolution facts: in-place changes select broad `config`. Same-object publication stays broad unless validated against that record; `setRuntimeConfigSourceSnapshotIfCurrent` sends no session change for proven equivalence.
+- Retain completed catalogs while model-owner replacement is pending/owner absent. Resume on that exact promise's settlement, including failure, never unpaired scoped auth events.
+- Hydrated clean list/describe/event snapshots execute no SQL; dirty metadata uses exact-key readers. Resident materialization never reads transcripts; requests never scan resident stores. Optional previews/fallback-model facts use bounded read-only background enrichment; usage comes from its persistence owner. Transcript enrichment yields to foreground lifetimes and rechecks priority before publication.
+- The profile owner retains durable display facts, roles, and merge aliases during projection life; committed writes update exact catalog keys before `sessionChanges`. Hydrate once per physical shared-store admission. Person selection includes sessionless profiles; synthetic plugin readers/selected-profile bindings acquire current exact catalog identities after readiness. Display prefixes never authorize.
+- Prepare federation scopes on topology publication; resolve sentinel precedence before viewer/activity filters. Model inheritance/child links share the physical parent. Lists await readiness; keyed describe/resolve/history prepare only requested rows independent of bulk refresh. Select/authorize/present/reply synchronously with current viewer/clock; no result-promise await before response.
+- Recheck `needsMaterialization` in the consuming frame after readiness awaits. Successful drains join later work; failed refreshes retain dirty keys until the next signal/read.
+- Queued events capture generation before awaits; reject replaced identities before publication. Keyed mutations share the per-connection snapshot presenter; broad invalidations stay keyless. Incognito describe/history/resolve/event reads prepare transient exact keys outside the roster; generation checks bind database/session lifecycle.
+- Incognito reads reuse shared authorization/exact read-only lookup for ephemeral SQLite, requested transcript fields, and bounded child metadata. Never admit stores, retain rows, or include incognito in discovery/resident memory.
+- Cancellation receipts prepare within the kill hold, revalidate run/session generation, then publish synchronously before release. Coalesce ordinary events.
+- Ingestion never waits for enrichment: tool/progress consumers capture replies before completion. Optional tool-row metadata may be absent while dirty; full lifecycle publications await readiness.
+- Carry physical store ownership into transcript/title/usage reads independently of logical model/visibility policy. Reuse prepared fallback models.
+- Authorize events from committed sharing metadata/membership snapshots independently of full rows. `sessions.changed`/`session.message` await display readiness. Synchronous board/progress/suggestion events must neither query SQLite nor lose authorized delivery while dirty; publish member revocations first.
 
 ## Verification
 
-- A change to session-creation publication ownership or restart-delivery custody
-  must prove the public `sessions.create` path in an isolated Gateway with an
-  explicit non-main session, followed by a post-publication read or turn.
-  Direct creation-helper tests alone do not establish this composition.
-- Benchmark the affected Gateway test file before/after with
-  `pnpm test <file>`.
-- Run `pnpm build` when changing Gateway lazy-loading or bundled plugin
-  artifacts.
+- For session-creation publication ownership or restart-delivery custody changes, prove public `sessions.create` in an isolated Gateway with an explicit non-main session, then a post-publication read/turn. Creation-helper tests alone do not prove this flow.
+- Prove trusted changes locally with touched tests (`pnpm test <file> --maxWorkers=1`) and targeted typecheck/lint/format; measure affected Gateway test time before/after. Run `pnpm build` for lazy-loading or bundled-plugin artifact changes.
+- Follow the root proof policy: PR CI for broad proof, boxes only for otherwise unavailable coverage with immediate admission; no queue waits, provider fallbacks, or reruns/re-pushes just for green. Read CI failure classification before attributing red.

@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
@@ -15,6 +16,48 @@ describe("prompt cache request observer", () => {
     currentTestScope = String(++testScope);
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it("pairs a drop with the last measured wire request across missing usage and run boundaries", () => {
+    const sessionId = scopedKey("wire-pair");
+    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+    const request = (key: string, cacheRead?: number) => {
+      const observer = createPromptCacheRequestObserver(
+        { sessionId, streamStrategy: "test" },
+        () => {},
+      );
+      observer.onModelRequest(model, { systemPrompt: "stable", messages: [] });
+      const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
+        payload: { prompt_cache_key: key, previous_response_id: "private-response", input: [] },
+        encode: true,
+      });
+      observer.onModelUsage(cacheRead === undefined ? undefined : { cacheRead }, {
+        scopeDigest: "same-scope",
+        ...fingerprint,
+      });
+      return observer.getObservation();
+    };
+    expect(request("private-first", 9_000)?.broke).toBe(false);
+    request("private-unmeasured");
+    const dropped = request("private-final", 2_000);
+    expect(dropped).toMatchObject({
+      broke: true,
+      requests: {
+        previous: {
+          cacheKeyPresent: true,
+          cacheKeyHash: hash("sha256", '"private-first"').slice(0, 16),
+        },
+        current: {
+          cacheKeyPresent: true,
+          cacheKeyHash: hash("sha256", '"private-final"').slice(0, 16),
+        },
+      },
+    });
+    expect(JSON.stringify(dropped)).not.toContain("private-");
+    // A fresh request with the original key must compare against the measured drop.
+    expect(request("private-first", 0)?.requests?.previous?.cacheKeyHash).toBe(
+      dropped?.requests?.current?.cacheKeyHash,
+    );
+  });
 
   it("keeps concurrent review and foreground usage in their own diagnostic sessions", () => {
     const promptCacheKey = scopedKey("shared-provider-affinity");

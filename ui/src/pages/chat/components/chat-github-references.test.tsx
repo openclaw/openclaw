@@ -1,11 +1,11 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
-import { renderSidebarPanel } from "./chat-sidebar-content.ts";
+import { SidebarPanel } from "./chat-sidebar-content.tsx";
 
 const text =
   "Original ClawSweeper PR **#1558 merged**; Follow-up ClawSweeper PR **#1576 opened**; OpenClaw PR #1576.";
@@ -21,30 +21,36 @@ describe("GitHub reference presentation parity", () => {
       const container = document.createElement("div");
       const message = { role: "assistant", content: text };
       if (surface === "sidebar") {
-        render(
-          renderSidebarPanel({
-            ...context,
-            content: { kind: "markdown", content: text },
-            showingRawText: false,
-            error: null,
-            attachmentRuntime: {},
-            onRetry() {},
-            onClose() {},
-            onViewRawText() {},
-            onAttachmentUpdate() {},
-            onClick() {},
-            onKeydown() {},
-          }),
-          container,
+        mountSolid(
+          () => (
+            <SidebarPanel
+              {...{
+                ...context,
+                content: { kind: "markdown", content: text },
+                showingRawText: false,
+                error: null,
+                attachmentRuntime: {},
+                onRetry() {},
+                onClose() {},
+                onViewRawText() {},
+                onAttachmentUpdate() {},
+                onClick() {},
+                onKeydown() {},
+              }}
+            />
+          ),
+          { container },
         );
       } else if (surface === "streaming") {
-        render(
-          solidContent(StreamGroupParts, {
-            parts: [{ kind: "stream", key: "live", text, isStreaming: true, startedAt: 1 }],
-            options: context,
-            presentation: "standalone",
-          }),
-          container,
+        mountSolid(
+          () => (
+            <StreamGroupParts
+              parts={[{ kind: "stream", key: "live", text, isStreaming: true, startedAt: 1 }]}
+              options={context}
+              presentation="standalone"
+            />
+          ),
+          { container },
         );
       } else {
         render(

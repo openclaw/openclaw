@@ -669,6 +669,14 @@ export function completePromptCacheObservation(
         previousCacheRead,
         cacheRead,
         changes,
+        ...(previousProviderPrompt?.wire || params.providerPrompt?.wire
+          ? {
+              requests: {
+                previous: previousProviderPrompt?.wire,
+                current: params.providerPrompt?.wire,
+              },
+            }
+          : {}),
         ...(params.providerPrompt
           ? {
               providerPrefix: describeProviderPrefix(previousProviderPrompt, params.providerPrompt),

@@ -87,6 +87,8 @@ export async function prepareSqliteReadOnlyLocation(
     signal?: AbortSignal;
     /** A dedicated reader pins its transaction without borrowing a live writer's connection. */
     allowLiveOwner?: boolean;
+    /** Throw removal failures with their cause instead of warning; a caller signal implies it. */
+    requireCleanup?: boolean;
   } = {},
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const signal = resolveSqliteInspectionSignal(options.signal);
@@ -171,13 +173,14 @@ export function startSqliteReadOnlyLocationAsync(
 
 function prepareWorkerSnapshot(
   pathname: string,
-  options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal },
+  options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal; requireCleanup?: boolean },
   signal: AbortSignal | undefined,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   signal?.throwIfAborted();
+  const requireCleanup = options.requireCleanup ?? options.signal !== undefined;
   return prepareSingleFlightSqliteSnapshot(
     pathname,
-    `${options.preserveSourceArtifacts ? "worker-sync" : "worker-async"}:${options.signal ? "strict" : "best-effort"}:sync-token`,
+    `${options.preserveSourceArtifacts ? "worker-sync" : "worker-async"}:${requireCleanup ? "strict" : "best-effort"}:sync-token`,
     async (flightSignal, recordCleanupFailure) => {
       let stagingRoot: string | undefined;
       try {
@@ -190,7 +193,7 @@ function prepareWorkerSnapshot(
           stagingRoot,
         });
         flightSignal.throwIfAborted();
-        return adoptPreparedLocation(location, stagingRoot, options.signal !== undefined);
+        return adoptPreparedLocation(location, stagingRoot, requireCleanup);
       } catch (error) {
         if (stagingRoot && !(await removeTempDirectoryAsync(stagingRoot))) {
           const failure = new SqliteSnapshotCleanupError(

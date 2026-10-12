@@ -170,6 +170,12 @@ function prepareSqliteWorkerOperationAdmission(
       }
       retained.admission.bindDatabaseAuthority({
         databasePath,
+        ...(job.request.type === "open" &&
+        !job.request.existingIdentity &&
+        resolveIdentityPathViaExistingAncestorSync(job.request.databasePath) ===
+          resolveIdentityPathViaExistingAncestorSync(databasePath)
+          ? { coldOpenPath: databasePath }
+          : {}),
         assertRequest: assertDispatchable,
         assertAccess,
         ...(job.request.type === "close" ? {} : { assertCreate }),

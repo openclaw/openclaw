@@ -59,10 +59,6 @@ function runSessionLifecyclePlanningInWorker<Key extends keyof SessionLifecycleP
   );
 }
 
-export function readSessionEntryLifecycleCountInWorker(params: SessionLifecyclePlanningOwner) {
-  return runSessionLifecyclePlanningInWorker(params, "count", undefined);
-}
-
 /** Keep builders outside SQL while retaining the caller's physical FIFO and exact source. */
 export async function projectSessionEntryLifecycleMutationInWorker(
   params: SessionLifecyclePlanningOwner & {

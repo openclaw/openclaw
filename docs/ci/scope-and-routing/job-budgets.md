@@ -30,6 +30,10 @@ before sharding; completed module identities and final counts prove coverage.
 Event intervals are not scheduler-admission times; repeated environment/prepare
 durations must not be summed into wall time.
 These receipts do not establish transform-cache hits.
+The protected cache warmer collects Gateway methods in sequential batches of
+at most 32 files. This releases the non-isolated Bun module graph between
+collections while warming the complete canonical inventory in the same cache
+slot. Ordinary test shards, worker limits, and coverage are unchanged.
 The Bun UI runtime policy requests ordinary JavaScriptCore collection after
 256 MiB of allocation per collection cycle. This is an earlier collection
 trigger, not a limit on the live heap. It applies to the existing UI process

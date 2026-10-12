@@ -473,7 +473,7 @@ function ToolAccessView(props: { menu: ChatComposerPlusMenuContentProps; serverN
 }
 
 function handleMenuSelection(
-  event: CustomEvent<{ item: { value?: string } }>,
+  event: CustomEvent<{ item: { value?: string; checked: boolean } }>,
   props: ChatComposerPlusMenuContentProps,
 ) {
   const value = event.detail.item.value ?? "";
@@ -527,20 +527,21 @@ function handleMenuSelection(
   }
   if (value === "toggle-web-search") {
     event.preventDefault();
+    // Web Awesome toggles before wa-select; policy can keep the effective value unchanged.
+    event.detail.item.checked = resolveWebSearchToolOverrideState(
+      props.webSearchBaseEnabled,
+      props.toolOverrides?.webSearch,
+    );
     if (
       props.mutationBlockedReason ||
       (!props.webSearchBaseEnabled && props.toolOverrides?.webSearch !== true)
     ) {
       return;
     }
-    const enabled = resolveWebSearchToolOverrideState(
-      props.webSearchBaseEnabled,
-      props.toolOverrides?.webSearch,
-    );
     props.onPatchToolOverrides(
       nextWebSearchToolOverrides(
         props.toolOverrides,
-        props.webSearchBaseEnabled && !enabled,
+        props.webSearchBaseEnabled && !event.detail.item.checked,
         props.webSearchBaseEnabled,
       ),
     );
@@ -624,7 +625,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
         placement="top-start"
         aria-label={t("chat.composer.addAttachment")}
         prop:open={props.menu.open}
-        onWa-select={(event: CustomEvent<{ item: { value?: string } }>) =>
+        onWa-select={(event: Parameters<typeof handleMenuSelection>[0]) =>
           handleMenuSelection(event, props.menu)
         }
         onWa-show={() => {

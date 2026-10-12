@@ -2118,6 +2118,22 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
+  it("bounds Gateway cache collections without dropping or repeating owner files", () => {
+    const config = "test/vitest/vitest.gateway-methods.config.ts";
+    const groups = createVitestCacheWarmGroups().filter((group) => group.configs.includes(config));
+    const files = groups.flatMap((group) => group.includePatterns ?? []);
+    expect(groups.length).toBeGreaterThan(1);
+    expect(groups.every((group) => group.includePatterns!.length <= 32)).toBe(true);
+    expect(new Set(groups.map((group) => group.shard_name)).size).toBe(groups.length);
+    expect(new Set(files).size).toBe(files.length);
+    expect(files).toEqual(nodeTestInventory.listNodeTestConfigFiles(config));
+    expect(
+      createVitestCacheWarmGroups().filter((group) =>
+        group.configs.includes("test/vitest/vitest.gateway-methods-isolated.config.ts"),
+      ),
+    ).toHaveLength(1);
+  });
+
   it("bounds the hybrid hosted seed to real consumer configs without runtime builds", () => {
     const groups = createVitestCacheWarmGroups("hybrid-hosted");
     expect(groups).toHaveLength(7);

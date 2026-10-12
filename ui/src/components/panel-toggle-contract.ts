@@ -71,10 +71,6 @@ export type PortalPanelToggleDetail = {
   environmentId?: string;
 };
 
-export type PanelToggleElement = HTMLElement & {
-  handleToggleRequest: (event: Event) => void;
-};
-
 export function isTerminalPanelShortcut(event: KeyboardEvent): boolean {
   return matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel, event);
 }

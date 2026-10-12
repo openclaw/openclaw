@@ -166,7 +166,6 @@ extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
-extensions/voice-call/index.test.ts
 extensions/voice-call/src/media-stream.ts
 extensions/voice-call/src/webhook.test.ts
 extensions/voice-call/src/webhook.ts

@@ -11,7 +11,7 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
-import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
+import { prepareSessionMetaPatch } from "./metadata.js";
 import type {
   RecordInboundSessionMetaParams,
   UpdateSessionLastRouteParams,
@@ -651,22 +651,13 @@ export async function recordInboundSessionMeta(
 ): Promise<SessionEntry | null> {
   normalizeInternalTurnContext(params.ctx);
   const createIfMissing = params.createIfMissing ?? true;
-  return await patchSessionEntryCore(
+  return await applySessionEntryOperation(
     { sessionKey: params.sessionKey, storePath: params.storePath },
-    (_entry, context) => {
-      const metadataPatch = deriveSessionMetaPatch({
-        ctx: params.ctx,
-        sessionKey: params.sessionKey,
-        existing: context.existingEntry,
-        groupResolution: params.groupResolution,
-      });
-      if (context.existingEntry) {
-        return metadataPatch;
-      }
-      return {
-        ...buildInboundSessionCreationStamp(params.ctx),
-        ...metadataPatch,
-      };
+    {
+      kind: "inbound-metadata",
+      sessionKey: params.sessionKey,
+      metadata: prepareSessionMetaPatch(params),
+      creation: buildInboundSessionCreationStamp(params.ctx),
     },
     {
       // Inbound metadata must not refresh activity timestamps; idle reset
@@ -711,26 +702,21 @@ export async function updateSessionLastRouteInScope(
   );
   return await patchSessionEntryInScope(
     scope,
-    (_entry, context) => {
-      const routePatch = deriveLastRoutePatch({
+    {
+      kind: "last-route",
+      route: {
         channel: params.channel,
         to: params.to,
         accountId: params.accountId,
         threadId: params.threadId,
         route: params.route,
         deliveryContext: params.deliveryContext,
-        ctx: params.ctx,
-        groupResolution: params.groupResolution,
-        existing: context.existingEntry,
         sessionKey: scope.sessionKey,
-      });
-      if (context.existingEntry) {
-        return routePatch;
-      }
-      return {
-        ...buildInboundSessionCreationStamp(params.ctx),
-        ...routePatch,
-      };
+        metadata: params.ctx
+          ? prepareSessionMetaPatch({ ctx: params.ctx, groupResolution: params.groupResolution })
+          : undefined,
+      },
+      creation: buildInboundSessionCreationStamp(params.ctx),
     },
     {
       // Route updates must not refresh activity timestamps (#49515).

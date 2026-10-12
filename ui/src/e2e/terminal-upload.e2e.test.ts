@@ -266,7 +266,7 @@ suite.define(() => {
         expect(pickedInput.data).not.toMatch(/[\r\n]/);
 
         await gateway.setMethodResponse("terminal.upload", { path: stagedDropPath, size: 3 });
-        await page.locator("wa-tab-panel.tp-viewport").evaluate((target) => {
+        await page.locator(".tp-viewport").evaluate((target) => {
           const transfer = new DataTransfer();
           transfer.items.add(new File([new Uint8Array([1, 2, 3])], "dropped.png"));
           target.dispatchEvent(
