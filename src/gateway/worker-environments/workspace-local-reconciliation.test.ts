@@ -7,8 +7,12 @@ import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { createWorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
-import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
+  parseWorkerWorkspaceManifest,
+  serializeWorkerWorkspaceManifest,
+} from "./workspace-manifest.js";
+import {
+  applyStagedWorkerWorkspaceResult,
   hasWorkerWorkspaceResultRef,
   preparedWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
@@ -85,6 +89,138 @@ async function prepareUnchangedWorkspace(options?: {
 }
 
 describe("unchanged local workspace reconciliation", () => {
+  it("retains published host additions across accepted replay and a later worker deletion", async () => {
+    const root = tempDirs.make("openclaw-accepted-host-recovery-");
+    const worker = tempDirs.make("openclaw-accepted-host-worker-");
+    const manifests = tempDirs.make("openclaw-accepted-host-manifests-");
+    await requireGit(root, ["init", "--quiet"]);
+    await fs.writeFile(path.join(root, "base.txt"), "base\n");
+    await fs.writeFile(path.join(worker, "base.txt"), "base\n");
+    await requireGit(root, ["add", "."]);
+    await requireGit(root, [
+      "-c",
+      "user.name=Workspace Fixture",
+      "-c",
+      "user.email=workspace@example.invalid",
+      "commit",
+      "--quiet",
+      "--no-gpg-sign",
+      "-m",
+      "base",
+    ]);
+    const baseCommit = await requireGit(root, ["rev-parse", "HEAD"]);
+    const base = await captureWorkspaceManifest({ root, baseCommit });
+    await fs.writeFile(
+      path.join(manifests, base.manifestRef.slice(7)),
+      serializeWorkerWorkspaceManifest(base.manifest),
+    );
+    let committedRef = base.manifestRef;
+    let remoteRef = base.manifestRef;
+    const journal = {
+      load: async () => undefined,
+      begin: async () => {},
+      commit: async (ref: string) => {
+        committedRef = ref;
+      },
+      abort: async () => {},
+    };
+    const ref = workerWorkspaceResultRef("accepted-host-recovery");
+    const reconcile = async (baseline: typeof base, current: typeof base, stagedRef: string) => {
+      const prepare = await prepareLocalWorkspaceReconciliation({
+        request: {
+          localPath: root,
+          remoteWorkspaceDir: "/worker/workspace",
+          baseManifestRef: baseline.manifestRef,
+          journal,
+          stagedResult: { ref: stagedRef, record: () => {} },
+        },
+        hashMemo: new Map(),
+        metrics: createWorkspaceReconcileMetrics(),
+      });
+      const reconciliation = await prepare({
+        stagingRoot: worker,
+        base: baseline.manifest,
+        current: current.manifest,
+        baseRaw: serializeWorkerWorkspaceManifest(baseline.manifest),
+        currentRaw: serializeWorkerWorkspaceManifest(current.manifest),
+        currentManifestRef: current.manifestRef,
+        manifestRef: () => remoteRef,
+        publishAcceptedManifest: async (accepted) => {
+          // Synthetic transport copies real accepted fixture bytes to the worker.
+          for (const entry of accepted.manifest.entries) {
+            if (entry.type !== "file") {
+              throw new Error("Diagnostic fixture expects regular files");
+            }
+            await fs.copyFile(path.join(root, entry.path), path.join(worker, entry.path));
+          }
+          const observed = await captureWorkspaceManifest({ root: worker, baseCommit });
+          expect(observed.manifestRef).toBe(accepted.manifestRef);
+          await fs.writeFile(
+            path.join(manifests, accepted.manifestRef.slice(7)),
+            serializeWorkerWorkspaceManifest(accepted.manifest),
+          );
+          remoteRef = accepted.manifestRef;
+        },
+        verifyStable: async () => {
+          const observed = await captureWorkspaceManifest({ root: worker, baseCommit });
+          expect(observed.manifestRef).toBe(remoteRef);
+        },
+      });
+      return await verifyReconciledWorkspaceFinal(reconciliation, {
+        assertActive: async () => {},
+        resume: async () => {},
+      });
+    };
+    await fs.writeFile(path.join(root, "published.txt"), "published host bytes\n");
+    await requireGit(root, ["add", "--", "published.txt"]);
+    const accepted = await reconcile(base, base, ref);
+    expect(accepted?.manifest.entries.map((entry) => entry.path)).toEqual([
+      "base.txt",
+      "published.txt",
+    ]);
+    expect(committedRef).toBe(remoteRef);
+    await expect(fs.readFile(path.join(worker, "published.txt"), "utf8")).resolves.toBe(
+      "published host bytes\n",
+    );
+    await fs.writeFile(path.join(root, "unpublished.txt"), "later host bytes\n");
+    await requireGit(root, ["add", "--", "unpublished.txt"]);
+    // Match the already-accepted pending-result production call, without admitting a new index.
+    const replay = await applyStagedWorkerWorkspaceResult({
+      root,
+      stagedResultRef: ref,
+      expectedBaseManifestRef: committedRef,
+      alreadyAccepted: true,
+      journal,
+      assertCurrent: () => {},
+    });
+    await replay.verifyLocalStable();
+    expect(committedRef).toBe(accepted?.manifestRef);
+    expect(replay.manifest.entries.some((entry) => entry.path === "unpublished.txt")).toBe(false);
+    await fs.rm(path.join(worker, "published.txt"));
+    const deleted = await captureWorkspaceManifest({ root: worker, baseCommit });
+    remoteRef = deleted.manifestRef;
+    // The next worker result resolves the placement's durable digest, not the
+    // recovery helper's diagnostic snapshot, from its retained manifest registry.
+    const nextBase = {
+      manifestRef: committedRef,
+      manifest: parseWorkerWorkspaceManifest(
+        await fs.readFile(path.join(manifests, committedRef.slice(7)), "utf8"),
+        committedRef,
+      ),
+    };
+    await reconcile(nextBase, deleted, workerWorkspaceResultRef("accepted-host-delete"));
+    const localPresent = await fs.access(path.join(root, "published.txt")).then(
+      () => true,
+      () => false,
+    );
+    const workerPresent = await fs.access(path.join(worker, "published.txt")).then(
+      () => true,
+      () => false,
+    );
+    expect(localPresent).toBe(false);
+    expect(workerPresent).toBe(false);
+  });
+
   it.each([false, true])(
     "publishes host-staged additions with worker changes=%s without enrolling other host files",
     async (workerChanged) => {

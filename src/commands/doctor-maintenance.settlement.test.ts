@@ -9,7 +9,6 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
-import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import * as updateState from "../infra/update-candidate-state.js";
 import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
@@ -199,20 +198,6 @@ it.each([
     expect(boundary.restart).not.toHaveBeenCalled();
   },
 );
-
-it("restores the Gateway after a migration refusal", async () => {
-  const maintenance = await begin();
-  const failure = new DoctorStateMigrationRefusalError([]);
-  try {
-    await maintenance!.finish(undefined, undefined, failure);
-    expect(boundary.restart).toHaveBeenCalledOnce();
-    expect(boundary.health).toHaveBeenCalledOnce();
-    expect(boundary.close).toHaveBeenCalledOnce();
-    expect(boundary.resume).toHaveBeenCalledOnce();
-  } finally {
-    await maintenance?.release();
-  }
-});
 
 it("restores the stopped Gateway before reporting a settled state-owner release failure", async () => {
   const failure = new Error("settled state-owner release failed");

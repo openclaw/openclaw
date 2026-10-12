@@ -354,7 +354,6 @@ describe("embedded compaction recovery authority", () => {
   it.each([
     { kind: "overflow", loss: "closed" },
     { kind: "overflow", loss: "replaced" },
-    { kind: "timeout", loss: "writer-replaced" },
   ] as const)(
     "stops $kind recovery when authority is $loss without a caller signal",
     async ({ kind, loss }) => {

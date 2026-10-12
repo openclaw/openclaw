@@ -204,6 +204,7 @@ it.for(["dispatch", "failure", "cancel"] as const)(
     );
     const readClaim = observer.prepare(
       `SELECT current_session_id AS sessionId, status,
+        json_extract(entry_json, '$.lastInteractionAt') AS lastInteractionAt,
         json_extract(entry_json, '$.lifecycleRunId') AS lifecycleRunId,
         json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS runId,
         json_extract(entry_json, '$.restartRecoveryDeliverySourceRunId') AS sourceRunId
@@ -228,6 +229,7 @@ it.for(["dispatch", "failure", "cancel"] as const)(
         ),
       };
     });
+    const acceptedAfter = Date.now();
     const sending = fixture.send(respond);
     try {
       await withinTest(entered.promise, signal);
@@ -246,6 +248,7 @@ it.for(["dispatch", "failure", "cancel"] as const)(
           sessionId: fixture.scope.sessionId,
           // #165733: admission clears the prior outcome; the run registry owns liveness.
           status: null,
+          lastInteractionAt: expect.any(Number),
           lifecycleRunId: fixture.params.idempotencyKey,
           runId: fixture.params.idempotencyKey,
           sourceRunId: fixture.params.idempotencyKey,
@@ -257,6 +260,9 @@ it.for(["dispatch", "failure", "cancel"] as const)(
           },
         ],
       });
+      expect(readClaim.get(fixture.scope.sessionKey)?.lastInteractionAt).toBeGreaterThanOrEqual(
+        acceptedAfter,
+      );
       const admittedTranscript = loadTranscriptEventsSync(fixture.scope);
       expect(admittedTranscript).toHaveLength(fixture.activeTranscript.length + 1);
       expect(admittedTranscript.at(-1)).toMatchObject({
@@ -302,6 +308,11 @@ it.for(["dispatch", "failure", "cancel"] as const)(
           MessageSid: fixture.params.idempotencyKey,
         });
         expect(dispatch.replyOptions?.skillLibraryAuthoring).toMatchObject({ target: "personal" });
+        expect(dispatch.replyOptions?.recordedSessionActivity).toEqual({
+          sessionId: fixture.scope.sessionId,
+          sessionKey: fixture.scope.sessionKey,
+          at: readClaim.get(fixture.scope.sessionKey)?.lastInteractionAt,
+        });
       }
       await fixture.finishDispatch();
       expect(respond).toHaveBeenCalledOnce();

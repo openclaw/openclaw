@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
@@ -13,6 +14,8 @@ import type {
 } from "./internal-params.js";
 
 async function createSettlementFixture(state: OpenClawTestState) {
+  const config = {};
+  setRuntimeConfigSnapshot(config);
   const { loadSessionEntry, replaceSessionEntry } =
     await import("../../../config/sessions/session-accessor.js");
   const {
@@ -39,7 +42,12 @@ async function createSettlementFixture(state: OpenClawTestState) {
     updatedAt: 1,
   });
   const runId = randomUUID();
-  const admission = prepareSystemAgentRunAdmission({}, runId, target.agentId, "settlement-test");
+  const admission = prepareSystemAgentRunAdmission(
+    config,
+    runId,
+    target.agentId,
+    "settlement-test",
+  );
   const controller = new AbortController();
   const unsubscriptions: Array<() => void> = [];
   const close = () => {

@@ -45,7 +45,10 @@ import {
   discoverRestartRecoveryStoreTargets,
   mainSessionRecoveryLog,
 } from "./main-session-restart-recovery-shared.js";
-import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
+import {
+  captureYieldedMainSessionContinuation,
+  resolveRestartRecoveryDispatchTarget,
+} from "./main-session-restart-recovery-target.js";
 
 async function markRecoveryStore(params: {
   agentId?: string;
@@ -200,6 +203,12 @@ export async function markRestartAbortedMainSessions(params: {
     for (const selectedSessionKey of sessionKeys) {
       let isCurrent: (() => boolean) | undefined;
       try {
+        const requester = await resolveRestartRecoveryDispatchTarget({
+          storeAgentId: target.agentId,
+          cfg: params.cfg,
+          sessionKey: selectedSessionKey,
+          storePath,
+        });
         const storeResult = await markRecoveryStore({
           ...target,
           sessionKeys: [selectedSessionKey],
@@ -234,11 +243,8 @@ export async function markRestartAbortedMainSessions(params: {
             }
             if (
               captureYieldedMainSessionContinuation({
-                storeAgentId: target.agentId,
-                cfg: params.cfg,
                 entry,
-                sessionKey,
-                storePath,
+                requester,
               })
             ) {
               recordSkip("yielded_continuation");
@@ -346,6 +352,21 @@ async function markOrphanedMainSessionStore(
     return { marked: 0, skipped: 0 };
   }
 
+  const requesters = new Map<
+    string,
+    Awaited<ReturnType<typeof resolveRestartRecoveryDispatchTarget>>
+  >();
+  for (const sessionKey of sessionKeys) {
+    requesters.set(
+      sessionKey,
+      await resolveRestartRecoveryDispatchTarget({
+        storeAgentId: params.target.agentId,
+        cfg: params.cfg,
+        sessionKey,
+        storePath: params.target.storePath,
+      }),
+    );
+  }
   const orphanChecks: Array<() => boolean> = [];
   return await markRecoveryStore({
     ...params.target,
@@ -389,11 +410,8 @@ async function markOrphanedMainSessionStore(
         return undefined;
       }
       const continuation = captureYieldedMainSessionContinuation({
-        storeAgentId: params.target.agentId,
-        cfg: params.cfg,
         entry,
-        sessionKey,
-        storePath: params.target.storePath,
+        requester: requesters.get(sessionKey),
       });
       if (continuation) {
         // A newer foreground start clears endedAt. Only an unclaimed waiting cycle

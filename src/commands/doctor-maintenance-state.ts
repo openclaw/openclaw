@@ -198,9 +198,6 @@ export async function createDoctorMaintenanceState(options: {
     get resources() {
       return resources;
     },
-    get hasOpenResources() {
-      return Boolean(resources || inspections);
-    },
     get receipt() {
       return owner ? undefined : capture?.receipt;
     },
@@ -408,7 +405,7 @@ export async function createDoctorMaintenanceState(options: {
       } catch (error) {
         // Uncertain command cleanup or a still-open scope can keep writing: retain
         // process ownership and publish no receipt.
-        if (hasCommandProcessCleanupError(error) || state.hasOpenResources) {
+        if (hasCommandProcessCleanupError(error) || resources || inspections) {
           throw error;
         }
         failures.push(error);

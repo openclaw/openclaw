@@ -4,7 +4,7 @@ import {
   createPluginStateObservation,
   pluginStateComparisonScope,
 } from "./plugin-state-observation.js";
-import { pluginStatePublication } from "./plugin-state-publication.js";
+import { pluginStatePublication, pluginStatePublicationKey } from "./plugin-state-publication.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { PluginStateEntry } from "./plugin-state-store.types.js";
 
@@ -79,7 +79,14 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStateObservation
 });
 
 function cacheKey(identity: string, key: Key): string {
-  return JSON.stringify([identity, JSON.stringify([key.pluginId, key.namespace, key.key])]);
+  return JSON.stringify([
+    identity,
+    pluginStatePublicationKey({
+      plugin_id: key.pluginId,
+      namespace: key.namespace,
+      entry_key: key.key,
+    }),
+  ]);
 }
 
 export function readPluginStateObservationCache(identity: string, key: Key) {

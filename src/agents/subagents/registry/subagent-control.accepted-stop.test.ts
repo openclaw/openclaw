@@ -6,7 +6,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
-import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { createAgentAdmissionController } from "../../../gateway/agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "../../../gateway/agent-turn/agent-dedupe-lifecycle.js";
 import { runWithChatAbortExecution } from "../../../gateway/chat-abort-lifecycle-internal.js";
@@ -60,11 +61,16 @@ async function seedExecutionTarget(name: string, task: string, lifecycleRevision
     defaultSessionId: sessionId,
     lifecycleRevision,
   });
+  const sessionEntry = await readSessionEntryReadOnlyInWorker({
+    agentId: "main",
+    storePath,
+    sessionKey,
+  });
   await registerSubagentRun({
     runId,
     childSessionKey: sessionKey,
     childAgentId: "main",
-    sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })?.entry,
+    sessionEntry,
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -75,7 +81,7 @@ async function seedExecutionTarget(name: string, task: string, lifecycleRevision
   const context = createDirectChatContext({ getRuntimeConfig });
   const resolveGatewayContext = () => context;
   bindGatewayContextResolver(subagentRuns.get(runId)!, resolveGatewayContext);
-  return { sessionKey, sessionId, runId, storePath, context, resolveGatewayContext };
+  return { sessionKey, sessionId, sessionEntry, runId, storePath, context, resolveGatewayContext };
 }
 
 it.each([
@@ -317,7 +323,7 @@ it.each(["declined", "throws"] as const)(
 );
 
 it("joins an execution registered while its accepted Stop awaits kill-claim persistence", async () => {
-  const { sessionKey, sessionId, runId, storePath, context, resolveGatewayContext } =
+  const { sessionKey, sessionId, sessionEntry, runId, storePath, context, resolveGatewayContext } =
     await seedExecutionTarget(
       "late-execution-stop",
       "join the exact execution that accepts cancellation",
@@ -359,6 +365,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
       resolveGatewayContext,
       assertAllowed: () => {},
     });
+    let admissionEntry: SessionEntry | undefined = sessionEntry;
     const nativeAdmission = createAgentAdmissionController({
       runId,
       lifecycleGeneration,
@@ -370,6 +377,10 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
       getRequestedSessionKey: () => sessionKey,
       getResolvedSessionKey: () => sessionKey,
       getResolvedSessionId: () => sessionId,
+      getSessionEntry: () => admissionEntry,
+      setSessionEntry: (entry) => {
+        admissionEntry = entry;
+      },
       getResolvedSessionAgentId: () => "main",
       getAgentId: () => "main",
       getSessionPersisted: () => true,
@@ -530,11 +541,11 @@ it.each([
         task: "retained cleanup ownership",
         cleanup: "keep",
         collect: id !== "root" || !retiresDuringStop,
-        sessionEntry: loadExactSessionEntryReadOnly({
+        sessionEntry: await readSessionEntryReadOnlyInWorker({
           agentId: "main",
           storePath,
           sessionKey: key(id),
-        })?.entry,
+        }),
         expectsCompletionMessage: false,
       });
     }

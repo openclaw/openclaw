@@ -2,6 +2,7 @@ import { isNativeError, isProxy } from "node:util/types";
 import type { MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
+import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission.js";
 import {
   SQLITE_WORKER_SOURCE_FENCE,
@@ -75,6 +76,7 @@ export type SqliteWorkerRequest = {
   operationAdmission?: MessagePort;
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
+  timing?: DiagnosticWorkerRequestFields["timing"];
 } & (
   | {
       type: "open";
@@ -96,6 +98,7 @@ export type SqliteWorkerRequest = {
 
 export type SqliteWorkerReply = {
   id: number;
+  timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
   databaseAdmissions?: SqliteDatabaseAdmissions;
 } & (

@@ -7,6 +7,7 @@ import type { SessionActorHotState } from "./session-actor-state.types.js";
 import {
   advanceSessionActorTranscriptReplica,
   readSessionActorTranscriptContext,
+  rewriteSessionActorTranscriptReplica,
   seedSessionActorTranscriptContext,
 } from "./session-actor-transcript-replica.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
@@ -181,6 +182,35 @@ describe("actor transcript context replica", () => {
     expect(
       readSessionActorTranscriptContext(retained, current, limits)?.snapshot.events,
     ).toHaveLength(4);
+  });
+
+  it("keeps rewritten metadata within the retained context and tail byte limits", () => {
+    const { hot, prepared } = fixture();
+    const event = message("next-user", "reply", "user");
+    const appended = append(hot, { rawSeq: 3, event, serializedBytes: 400 });
+    const retained = advanceSessionActorTranscriptReplica(
+      seedSessionActorTranscriptContext(undefined, hot, prepared, limits),
+      appended,
+    );
+    const rewritten = {
+      ...event,
+      message: { ...event.message, __openclaw: { steerTargetRunId: "x".repeat(512 * 1024) } },
+    };
+    const postimage = structuredClone(appended.receipt.postimage);
+    postimage.transcript.version.updatedAt = 3;
+    const next = rewriteSessionActorTranscriptReplica(retained, {
+      before: appended.receipt.postimage.transcript.version,
+      postimage,
+      rows: [
+        {
+          rawSeq: 3,
+          event: rewritten,
+          serializedBytes: Buffer.byteLength(JSON.stringify(rewritten), "utf8") + 1,
+        },
+      ],
+    });
+    expect(readSessionActorTranscriptContext(next, postimage, limits)).toBeUndefined();
+    expect(next?.tail).toEqual({ events: [], coveredAfterSeq: 3 });
   });
 
   it("detaches the retained path from seed input and returned payload mutations", () => {

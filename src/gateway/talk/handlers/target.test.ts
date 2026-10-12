@@ -580,8 +580,9 @@ describe("Talk target preparation through Gateway authorization", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(mocks.bootstrap).not.toHaveBeenCalled();
-    expect(createBrowserSession).not.toHaveBeenCalled();
+    for (const agentId of ["voice", "primary"]) {
+      expect(loadSessionEntry({ agentId, sessionKey: `agent:${agentId}:main` })).toBeUndefined();
+    }
   });
 
   it.each(["main", undefined])(
@@ -728,6 +729,8 @@ describe("Talk target preparation through Gateway authorization", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(createBrowserSession).not.toHaveBeenCalled();
+    for (const agentId of ["voice", "primary"]) {
+      expect(loadSessionEntry({ agentId, sessionKey: `agent:${agentId}:main` })).toBeUndefined();
+    }
   });
 });
