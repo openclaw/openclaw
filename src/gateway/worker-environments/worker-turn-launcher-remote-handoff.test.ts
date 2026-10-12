@@ -5,6 +5,7 @@ import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import {
   installSessionPlacementAdmissionProvider,
   withSessionPlacementTurnAdmission,
@@ -279,6 +280,8 @@ describe("worker turn launcher remote handoff", () => {
           runLocal,
         ),
     );
+    expect(result.payloads).toEqual([{ text: "Worker reply" }]);
+    await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
     expect((await SessionManager.openAsync(parentTarget)).getPersistedEntries()).toEqual(
       parentEntries,
     );
@@ -294,29 +297,26 @@ describe("worker turn launcher remote handoff", () => {
     );
     const conflictSummary =
       "Cloud result applied with 1 conflict(s); kept local versions: src/local.ts. Cloud versions staged at refs/openclaw/worker-results/";
-    expect(result.payloads).toEqual([
-      { text: expect.stringContaining(`Worker reply\n\n${conflictSummary}`) },
-    ]);
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     expect(placements.get(SESSION_ID)?.workspaceResultConflict).toMatchObject({
       paths: ["src/local.ts"],
       stagedResultRef: expect.stringMatching(/^refs\/openclaw\/worker-results\//u),
     });
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "assistant",
-      data: {
-        text: expect.stringContaining(conflictSummary),
-        delta: expect.stringContaining(conflictSummary),
-      },
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    const entries = (await openSessionManager()).getBranch();
+    const conflictIndex = entries.findIndex(
+      (entry) => entry.type === "custom_message" && entry.customType === "cloud-workspace-conflict",
+    );
+    expect(entries[conflictIndex]).toMatchObject({
+      type: "custom_message",
+      content: expect.stringContaining(conflictSummary),
+      display: true,
     });
-    expect(
-      (await openSessionManager())
-        .getBranch()
-        .some(
-          (entry) =>
-            entry.type === "custom_message" && entry.customType === "cloud-workspace-conflict",
-        ),
-    ).toBe(true);
+    expect(conflictIndex).toBeGreaterThan(
+      entries.findLastIndex(
+        (entry) => entry.type === "message" && entry.message.role === "assistant",
+      ),
+    );
     expect(descriptor?.assignment.prompt).toMatch(/^\[[^\]]+\] Inspect this workspace$/u);
     const systemPrompt = descriptor?.assignment.systemPrompt;
     expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");

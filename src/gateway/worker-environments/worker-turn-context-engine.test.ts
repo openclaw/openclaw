@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { createContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../../agents/harness/context-engine-turn-attempt.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
@@ -205,6 +206,11 @@ describe("worker context engine", () => {
         );
         expect(result.payloads).toEqual([{ text: "Fresh worker answer" }]);
         assert(claim);
+        expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
+        if (lease) {
+          expect(candidate).toHaveBeenCalledOnce();
+        }
+        await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
         expect(published).toHaveBeenCalledExactlyOnceWith(claim);
         expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
         expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
@@ -250,9 +256,9 @@ describe("worker context engine", () => {
             "bootstrap",
             "assemble",
             "launch",
+            "candidate",
             "reconcile",
             "publish",
-            "candidate",
             "dispose",
           ]);
           await expect(readFile(followUpFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });

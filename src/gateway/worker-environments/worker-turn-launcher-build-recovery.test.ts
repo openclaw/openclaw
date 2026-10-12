@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunHandleActive,
+  waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
@@ -435,6 +436,7 @@ describe("worker turn launcher build recovery", () => {
         await expect(execution).resolves.toMatchObject({
           payloads: [{ text: "Ran on the refreshed worker" }],
         });
+        await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
         expect(harness.claimTurn).toHaveBeenCalledTimes(fence ? 2 : 1);
         expect(harness.acquireTurnCredential).toHaveBeenCalledOnce();
         expect(harness.onAdmitted).toHaveBeenCalledOnce();
@@ -633,6 +635,7 @@ describe("worker turn launcher build recovery", () => {
         const settled = await result;
         if (outcome === "reconnected") {
           expect(settled).toHaveProperty("value");
+          await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
           expect(harness.launchTurn).toHaveBeenCalledOnce();
           await expectSinglePersistedInput();
         } else {
@@ -736,6 +739,7 @@ describe("worker turn launcher build recovery", () => {
       const before = placements.get(SESSION_ID);
       const result = await harness.execute();
       expect(result.payloads).toEqual([{ text: "Continued on the replacement worker" }]);
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       expect(harness.redispatchPlacement).not.toHaveBeenCalled();
       expect(harness.launchTurn).toHaveBeenCalledOnce();
       expect(harness.onAdmitted).toHaveBeenCalledOnce();
@@ -762,6 +766,7 @@ describe("worker turn launcher build recovery", () => {
       const harness = await createBuildRecoveryHarness({ rejection });
       const result = await harness.execute(new AbortController().signal);
       expect(result.payloads).toEqual([{ text: "Continued on the replacement worker" }]);
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       expect(harness.redispatchPlacement).toHaveBeenCalledOnce();
       expect(harness.onAdmitted).toHaveBeenCalledOnce();
       expect(harness.launchTurn).toHaveBeenCalledOnce();
