@@ -15,7 +15,10 @@ import { hasSessionLifecycleQueueWork } from "../../auto-reply/reply/queue/clean
 import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue, FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  createReplyOperation,
+  isReplyRunAbortableForSignal,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   loadSessionEntry,
@@ -23,6 +26,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -247,21 +251,44 @@ it.each([
   }
 });
 
-it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
+it.each(["sessions.delete", "sessions.patch"])(
   "%s still cancels the selected agent's own session",
   async (method) => {
     const key = "agent:main:lifecycle-owned";
     const sessionId = "owned-session";
     const cfg = getRuntimeConfig();
     await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const registration = registerChatAbortController({
+      chatAbortControllers: context.chatAbortControllers,
+      runId: "owned-run",
+      sessionId,
+      sessionKey: key,
+      agentId: "main",
+      timeoutMs: 30_000,
+      isAbortable: (entry) => isReplyRunAbortableForSignal(entry.controller.signal),
+    });
+    registration.markExecutionStarted();
     const operation = createReplyOperation({
+      upstreamAbortSignal: registration.controller.signal,
       sessionKey: key,
       sessionId,
       agentId: "main",
       resetTriggered: false,
     });
     operation.setPhase("running");
-    operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
+    let hadCanonicalAbortMarker = false;
+    operation.attachBackend({
+      kind: "embedded",
+      isStreaming: () => true,
+      cancel: () => {
+        hadCanonicalAbortMarker = Boolean(context.chatRunState.runs.get("owned-run")?.abortMarker);
+        queueMicrotask(() => {
+          registration.cleanup();
+          operation.complete();
+        });
+      },
+    });
     try {
       const respond = vi.fn();
       const params = {
@@ -274,14 +301,20 @@ it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
           user: ensureProfileForEmail("operator@example.test").id,
           scopes: ["operator.admin"],
         }),
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        context,
         respond,
         isWebchatConnect: () => false,
         extraHandlers: { ...sessionDeleteHandlers, ...sessionMutationHandlers },
       });
       expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
       expect(operation.abortSignal.aborted).toBe(true);
+      expect(registration.controller.signal.aborted).toBe(true);
+      expect(registration.entry?.abortStopReason).toBe(
+        method === "sessions.delete" ? "delete" : "archive",
+      );
+      expect(hadCanonicalAbortMarker).toBe(true);
     } finally {
+      registration.cleanup();
       operation.complete();
       for (const queueKey of [key, sessionId]) {
         clearFollowupQueue(queueKey);
@@ -290,3 +323,42 @@ it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
     }
   },
 );
+
+it("sessions.reset still cancels the selected agent's own session", async () => {
+  const method = "sessions.reset";
+  const key = "agent:main:lifecycle-owned";
+  const sessionId = "owned-session";
+  const cfg = getRuntimeConfig();
+  await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId,
+    agentId: "main",
+    resetTriggered: false,
+  });
+  operation.setPhase("running");
+  operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
+  try {
+    const respond = vi.fn();
+    const params = { key };
+    await handleGatewayRequest({
+      req: { type: "req", id: "lifecycle-owned", method, params },
+      client: sharingPolicyClient({
+        user: ensureProfileForEmail("operator@example.test").id,
+        scopes: ["operator.admin"],
+      }),
+      context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers: { ...sessionDeleteHandlers, ...sessionMutationHandlers },
+    });
+    expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+    expect(operation.abortSignal.aborted).toBe(true);
+  } finally {
+    operation.complete();
+    for (const queueKey of [key, sessionId]) {
+      clearFollowupQueue(queueKey);
+      clearFollowupDrainCallback(queueKey);
+    }
+  }
+});

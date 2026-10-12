@@ -305,7 +305,7 @@ describe("chat.abort queued-turn contract", () => {
     });
 
     expect(requireLastRespondCall(respond)[0]).toBe(true);
-    expect(order).toEqual(["queued-abort", "session-cleanup", "active-abort"]);
+    expect(order).toEqual(["queued-abort", "active-abort", "session-cleanup"]);
   });
 
   it("allows operator.write session cleanup when no chat run is registered", async () => {
@@ -843,11 +843,17 @@ describe("chat.abort original authority and registration", () => {
             client: { connect: { scopes: ["operator.admin"] } },
           }),
         ).rejects.toThrow("requester authority changed");
-        expect(first.controller.signal.aborted).toBe(firstEffect !== "lifecycle");
-        expect(second.controller.signal.aborted).toBe(false);
-        expect([...context.dedupe]).toEqual(pending);
+        expect(first.controller.signal.aborted).toBe(true);
+        expect(second.controller.signal.aborted).toBe(firstEffect === "lifecycle");
+        if (firstEffect === "lifecycle") {
+          expect(context.dedupe.get("agent:pending")?.payload).toMatchObject({ stopReason: "rpc" });
+          expect(context.dedupe.get("chat:pending")?.payload).toMatchObject({ stopReason: "rpc" });
+          expect(context.dedupe.has("pending-chat:pending")).toBe(false);
+        } else {
+          expect([...context.dedupe]).toEqual(pending);
+        }
         expect(cancelInferenceForSession).not.toHaveBeenCalled();
-        expect(lifecycle).toHaveBeenCalledTimes(firstEffect === "queued" ? 0 : 1);
+        expect(lifecycle).toHaveBeenCalledTimes(firstEffect === "lifecycle" ? 1 : 0);
         if (firstEffect === "active") {
           expect(persist).toHaveBeenCalledOnce();
           expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
@@ -856,18 +862,14 @@ describe("chat.abort original authority and registration", () => {
           expect(context.chatRunState.resolveBuffer("second", { final: true }).text).toBe(
             "untouched partial",
           );
+        } else if (firstEffect === "queued") {
+          expect(persist).not.toHaveBeenCalled();
         } else {
-          expect(persist.mock.calls.flatMap(([call]) => call.snapshots)).toEqual([]);
-          if (firstEffect === "queued") {
-            expect(persist).not.toHaveBeenCalled();
-          } else {
-            expect(context.chatRunState.resolveBuffer("first", { final: true }).text).toBe(
-              "committed partial",
-            );
-            expect(context.chatRunState.resolveBuffer("second", { final: true }).text).toBe(
-              "untouched partial",
-            );
-          }
+          expect(
+            persist.mock.calls.flatMap(([call]) =>
+              call.snapshots.map((snapshot) => snapshot.runId),
+            ),
+          ).toEqual(["first", "second"]);
         }
       } finally {
         persist.mockRestore();

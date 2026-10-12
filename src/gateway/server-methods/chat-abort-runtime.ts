@@ -549,9 +549,6 @@ function prepareChatSessionAbort(
         recordRun(runId);
       }
     }
-    // Hidden and preserved side runs must also block broad cleanup: authorization
-    // alone must not let the callback abort work intentionally excluded above.
-    abortAdditional();
     params.assertCurrent?.();
     if (commands.cancel()) {
       result.aborted = true;
@@ -610,6 +607,9 @@ function prepareChatSessionAbort(
         }
       }
     }
+    // Commit Gateway cancellation before reply cleanup makes its controller non-abortable.
+    // Hidden and preserved side runs still block broad lifecycle cleanup.
+    abortAdditional();
     if (params.requester.isAdmin && canCancelWorkerSession) {
       params.assertCurrent?.();
       cancelWorker();
