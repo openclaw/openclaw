@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isWellFormedApprovalId } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
@@ -28,7 +29,7 @@ type PreparedVisibleApproval = {
   guard: OperatorApprovalStoreGuard;
 };
 
-export async function loadVisibleApproval(params: {
+type LoadVisibleApprovalParams = {
   id: string;
   authority: ApprovalRequestAuthority;
   client: GatewayClient | null;
@@ -39,7 +40,32 @@ export async function loadVisibleApproval(params: {
   pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   databaseOptions?: OpenClawStateDatabaseOptions;
-}): Promise<PreparedVisibleApproval | null> {
+};
+
+// Distinguishes a clean exact-key miss from denial, corruption, or a live waiter so
+// only a true absence may retry the trimmed spelling of a padded id.
+const APPROVAL_ID_MISSING = Symbol("approval-id-missing");
+
+export async function loadVisibleApproval(
+  params: LoadVisibleApprovalParams,
+): Promise<PreparedVisibleApproval | null> {
+  const exact = await loadVisibleApprovalForId(params);
+  if (exact !== APPROVAL_ID_MISSING) {
+    return exact;
+  }
+  // Clipboard/RPC padding must still reach the live approval, but an exact
+  // whitespace-bearing id always wins and denial/corruption never retargets.
+  const trimmed = params.id.trim();
+  if (!trimmed || trimmed === params.id || !isWellFormedApprovalId(trimmed)) {
+    return null;
+  }
+  const fallback = await loadVisibleApprovalForId({ ...params, id: trimmed });
+  return fallback === APPROVAL_ID_MISSING ? null : fallback;
+}
+
+async function loadVisibleApprovalForId(
+  params: LoadVisibleApprovalParams,
+): Promise<PreparedVisibleApproval | null | typeof APPROVAL_ID_MISSING> {
   // Reconciliation can settle a live waiter, so authorization must precede
   // every durable read and no unauthorized lookup may reach the bridge.
   const authorized = params.allowApprovalRuntime
@@ -243,5 +269,5 @@ export async function loadVisibleApproval(params: {
   await reconcile(params.execApprovalManager, missing);
   await reconcile(params.pluginApprovalManager, missing);
   await reconcile(params.systemAgentApprovalManager, missing);
-  return null;
+  return liveRecord || lookup.outcome === "corrupt" ? null : APPROVAL_ID_MISSING;
 }
