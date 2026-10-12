@@ -10,11 +10,13 @@ import {
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import * as updateCheck from "../../infra/update-check.js";
 import {
+  adoptUpdateRun,
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
   listUpdateRuns,
 } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as shared from "./shared.js";
@@ -195,40 +197,70 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("restores a stopped service and defers non-serving contention", async () => {
-  const old = createUpdateRun({ trigger: "cli" });
-  const history = finishUpdateRun(old.runId, { status: "failed", reason: "abandoned" });
-  await updateRepairCommand({ json: true, yes: true, deferCompletionCache: true });
-  expect(native.events).toEqual([
-    "running-holder",
-    "stop-verified",
-    "non-serving-holder",
-    "non-serving-holder",
-    "restart",
-    "restart-verified",
-  ]);
-  expect(native.elapsedMs).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
-  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-    expect.objectContaining({
-      status: "warning",
-      postUpdate: {
-        doctor: {
+it.each([true, false])(
+  "restores a stopped service and records pending repair (json=%s)",
+  async (json) => {
+    const nextAction =
+      "Stop the Gateway through its service owner, stop other OpenClaw processes using this state, then rerun `openclaw update repair`.";
+    const old = createUpdateRun({ trigger: "cli" });
+    const history = finishUpdateRun(old.runId, { status: "failed", reason: "abandoned" });
+    await updateRepairCommand({ json, yes: true, deferCompletionCache: true });
+    expect(native.events).toEqual([
+      "running-holder",
+      "stop-verified",
+      "non-serving-holder",
+      "non-serving-holder",
+      "restart",
+      "restart-verified",
+    ]);
+    expect(native.elapsedMs).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+    if (json) {
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
           status: "warning",
-          warnings: [expect.stringContaining("openclaw update repair")],
-        },
-      },
-    }),
-  );
-  const run = listUpdateRuns()[0]!;
-  expect(run.status).toBe("succeeded");
-  expect(run.steps).toContainEqual(
-    expect.objectContaining({ step: "warning:finalize:doctor:0", status: "completed" }),
-  );
-  expect(run.steps.some((step) => step.status === "failed")).toBe(false);
-  expect(getUpdateRun(old.runId)).toEqual(history);
-  expect(readDeferredPluginMigrations()).toEqual([pending]);
+          postUpdate: {
+            doctor: {
+              status: "warning",
+              warnings: [expect.stringContaining("openclaw update repair")],
+            },
+          },
+        }),
+      );
+    } else {
+      expect(defaultRuntime.log).toHaveBeenCalledWith(
+        expect.stringContaining(`Doctor maintenance remains pending. ${nextAction}`),
+      );
+    }
+    const run = listUpdateRuns()[0]!;
+    expect(run).toMatchObject({
+      status: "skipped",
+      reason: "doctor-maintenance-pending",
+      origin: { nextAction },
+    });
+    const report = renderUpdateRunReport(run);
+    expect(report.headline).toBe(
+      "ℹ️ OpenClaw repair pending: Doctor maintenance remains unfinished.",
+    );
+    expect(report.markdown).toContain(nextAction);
+    expect(run.steps).toContainEqual(
+      expect.objectContaining({ step: "warning:finalize:doctor:0", status: "completed" }),
+    );
+    expect(run.steps.some((step) => step.status === "failed")).toBe(false);
+    expect(getUpdateRun(old.runId)).toEqual(history);
+    expect(readDeferredPluginMigrations()).toEqual([pending]);
+    expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+    expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+  },
+);
+
+it("does not finish the inherited updater run when Doctor remains pending", async () => {
+  const inherited = createUpdateRun({ trigger: "cli" });
+  adoptUpdateRun(inherited.runId);
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inherited.runId);
+  await updateRepairCommand({ json: true, yes: true, deferCompletionCache: true });
+  expect(getUpdateRun(inherited.runId)).toMatchObject({ status: "running", reason: null });
+  expect(getUpdateRun(inherited.runId)?.origin.nextAction).toBeUndefined();
   expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
-  expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
 });
 
 it("keeps a refused stop for an admitted migration write as a failed update", async () => {
