@@ -337,7 +337,7 @@ describe("Team Reports HTTP responses", () => {
       `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener" data-report-open-window aria-label="Open in a new window"`,
     );
     expect(response.body).toContain('href="/reports/people/alice/"');
-    expect(response.body).toContain("Deterministic summary");
+    expect(response.body).toContain("Summary without a model");
     expect(response.body).toContain("Fixture coverage warning");
     expect(response.body).toContain("Model summary unavailable: completion failed");
     expect(response.body).toContain("GitHub coverage is incomplete");

@@ -116,7 +116,7 @@ information as its text: invite returns `outcome`, either `email` or `githubAcco
 `expiresAt`, `gatewayAccess`, and `signInUrl`; revoke returns `outcome`, `emails`,
 and optional `githubAccountIds` and `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
 Recorded list rows include `grantId` when the invitation has a qualified lifetime,
-and `profileId` when its target belongs to a current canonical profile.
+and `profileId` when its target belongs to a current profile.
 
 Each listed grant's optional `githubLogin` is the selected verified identity from
 its current Gateway profile. The directory is read again on every listing,
@@ -128,12 +128,12 @@ When acting on a listed row, carry its `profileId` to revoke that person's grant
 or its `grantId` to cancel that invitation; do not substitute the displayed login.
 
 GitHub revocation resolves the login to its immutable account ID, then selects
-that account's canonical profile and recorded email or GitHub grants. It never
+that account's profile and recorded email or GitHub grants. It never
 selects by historical invitation handles or guesses from a public GitHub email.
 Before first sign-in, it can still cancel that exact account's invitation.
 If the current directory's selected GitHub login conflicts with that account,
 revocation refuses instead of choosing a different person after login reuse.
-Use `profileId` for a known canonical person or `grantId` to cancel one invitation
+Use `profileId` for a known person or `grantId` to cancel one invitation
 without a GitHub lookup. Explicit email needs no profile-directory lookup and
 takes precedence when supplied with a GitHub login to `visitor_revoke`.
 
@@ -143,7 +143,7 @@ cancel only that invitation, including when first sign-in is still pending and
 no profile exists. Copy the IDs from `visitor_list` or the invite result; do not
 combine either ID with another selector. An absent grant ID is a no-op and never
 falls back to another invitation. An unavailable or merged profile ID requires
-listing again and selecting the current canonical profile. Independent staff
+listing again and selecting the current profile. Independent staff
 roles, saved work, and existing PRs remain intact. Unmanaged policy entries still
 require an explicit email or GitHub login; `profileId` revocation does not infer ownership
 for them. GitHub revocation also removes the specifically requested account from
@@ -198,7 +198,7 @@ numeric account ID. Lookups use the Gateway's configured GitHub API credential
 (`gateway.controlUi.github.token`, or `GH_TOKEN`/`GITHUB_TOKEN`). Rate-limit errors
 report the retry/reset time and suggest configuring the credential when absent. Public email is neither required nor used, and a login rename
 does not change the grant's target. Cloudflare must verify that account's ID under
-the configured provider and claim. A known canonical profile retains its current
+the configured provider and claim. A known profile retains its current
 role; an unknown account reports first sign-in as pending. The stored login is a
 display label, not an identity binding or GitHub authorship credit.
 
@@ -207,7 +207,7 @@ display label, not an identity binding or GitHub authorship credit.
 Email grants retain their lowercased email keys in the Gateway's durable keyed store.
 GitHub grants use `github:<accountId>` keys in that same store.
 The Gateway requires a current grant for the plugin-managed default visitor role,
-using the person's canonical email aliases or verified GitHub account IDs. Known non-default staff roles and
+using the person's recorded email aliases or verified GitHub account IDs. Known non-default staff roles and
 the Gateway owner remain independent of visitor grants. The store has a fixed
 cap of 500 records and does not automatically expire them: a record must remain
 until policy cleanup succeeds.

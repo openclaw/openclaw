@@ -201,7 +201,7 @@ it("publishes, tracks, updates and removes Skills on the paired host with Gatewa
       workspaceDir: local,
       slug: "lifecycle-proof",
     }),
-  ).rejects.toThrow("canonical");
+  ).rejects.toThrow("resolved location");
   await fs.unlink(targetDir);
   await fs.rename(moved, targetDir);
 

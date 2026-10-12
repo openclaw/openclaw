@@ -369,7 +369,7 @@ describe("registered node workspace service", () => {
       nodePolicy.denyPaths = [actual];
       output.length = 0;
       await expect(reader.resolveExplicitSkill(selection)).rejects.toThrow(
-        kind === "file" ? /file grant/ : /canonical location/,
+        kind === "file" ? /file grant/ : /resolved location/,
       );
       expect(output).toEqual([]);
     },

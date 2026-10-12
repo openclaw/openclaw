@@ -109,7 +109,7 @@ function createManagedLocalEmbeddingSetupCheck(
                 reason: MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE,
                 requirement: "memory-embedding-provider-plugin",
                 fixHint:
-                  `Run \`${LLAMA_CPP_PROVIDER_INSTALL_COMMAND}\`, ensure the plugin is enabled, ` +
+                  `Run \`${LLAMA_CPP_PROVIDER_INSTALL_COMMAND}\`, check that the plugin is enabled, ` +
                   "then rerun this check.",
               };
             }

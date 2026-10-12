@@ -79,7 +79,7 @@ export async function generateAndStoreLegacyKeys(runtime: PluginRuntime): Promis
   );
   if (binding) {
     throw new Error(
-      `Reef identity @${binding.handle} on ${binding.relayUrl} has no canonical keys; restore the original keys before registration`,
+      `Reef identity @${binding.handle} on ${binding.relayUrl} has no stored keys; restore the original keys before registration`,
     );
   }
   const identity = generateIdentity();

@@ -502,7 +502,7 @@ describe("memory_search real manager", () => {
       unavailable: true,
       error: expect.stringContaining("openclaw doctor --fix"),
       warning:
-        "Memory search is unavailable because the session catalog requires canonical-key migration.",
+        "Memory search is unavailable because the session catalog requires session-key migration.",
       action:
         "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.",
     };
