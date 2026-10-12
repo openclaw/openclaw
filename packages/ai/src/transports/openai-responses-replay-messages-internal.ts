@@ -352,10 +352,11 @@ function convertResponsesMessagesWithStyle(
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
     messages.push(
-      ...replayPlan.compactedWindow.map((item) =>
-        options?.retainUserProvenance && item.type === "message" && item.role === "user"
-          ? Object.assign({}, item, { [RESPONSES_RETAINED_USER]: true })
-          : item,
+      ...replayPlan.compactedWindow.map(
+        (item) =>
+          options?.retainUserProvenance && item.type === "message" && item.role === "user"
+            ? Object.assign({}, item, { [RESPONSES_RETAINED_USER]: true })
+            : (item as ResponseInputItem), // SDK requires output IDs; inline replay messages omit them.
       ),
     );
   }
