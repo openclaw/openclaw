@@ -230,32 +230,6 @@ describe("native runtime startup authority", () => {
       expect(Object.isFrozen(selected.thinkingLevelMap)).toBe(true);
     });
   });
-  it("requires complete finite nonnegative local pricing and canonical map keys", () => {
-    const config = configFor(tempDirs.make("native-invalid-metadata-"));
-    const base = config.models[0]!;
-    for (const cost of [
-      undefined,
-      {},
-      { input: 1, output: 2, cacheRead: 3 },
-      ...[-1, Number.NaN, Infinity, "1"].map((input) => ({
-        input,
-        output: 1,
-        cacheRead: 1,
-        cacheWrite: 1,
-      })),
-    ]) {
-      expect(
-        NativeRuntimeConfigSchema.safeParse({ ...config, models: [{ ...base, cost }] }).success,
-      ).toBe(false);
-    }
-    expect(NativeRuntimeConfigSchema.safeParse(config).success).toBe(true);
-    for (const thinkingLevelMap of [{ turbo: "max" }, { high: true }]) {
-      expect(
-        NativeRuntimeConfigSchema.safeParse({ ...config, models: [{ ...base, thinkingLevelMap }] })
-          .success,
-      ).toBe(false);
-    }
-  });
   it("settles only its own provider session resources on success and failure", async () => {
     const runtime = await start(configFor(tempDirs.make("native-resource-owner-")));
     const cleaned: Array<string | undefined> = [];

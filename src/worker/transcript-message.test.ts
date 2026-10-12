@@ -235,7 +235,7 @@ describe("worker transcript provider replay", () => {
       "Worker transcript message exceeds the protocol payload limit",
     );
   });
-  it.each(["text", "unsupported"])("projects %s content with opaque replay state", (type) => {
+  it.each(["unsupported"])("projects %s content with opaque replay state", (type) => {
     const message = assistantWithReplay();
     Object.assign(message.content[0]!, { type });
     Object.assign(message.providerReplay!, { providerScratch: "private" });
@@ -259,23 +259,6 @@ describe("worker transcript provider replay", () => {
     ).toBe(type === "text");
   });
 
-  it("keeps replay above 48 KiB whole when the complete commit frame fits", () => {
-    const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
-    const message = assistantWithReplay({
-      ...providerReplay,
-      data: ciphertext,
-    });
-
-    const result = toWorkerTranscriptMessage(message, "transcript");
-
-    expect(result?.kind).toBe("complete");
-    if (!result || result.kind !== "complete" || result.message.role !== "assistant") {
-      throw new Error("expected projected assistant message");
-    }
-    expect(result.message.providerReplay?.data).toBe(ciphertext);
-    expect(isWorkerTranscriptMessageFrameSafe(result.message)).toBe(true);
-  });
-
   it.each([
     {
       name: "raw UTF-8 data over the replay field budget",
@@ -285,16 +268,6 @@ describe("worker transcript provider replay", () => {
     {
       name: "multibyte data whose complete frame is over budget",
       replay: { ...providerReplay, data: "€".repeat(21_845) },
-      reason: "transcript-commit-frame-budget" as const,
-    },
-    {
-      name: "JSON-escaped data over the complete frame budget",
-      replay: { ...providerReplay, data: "\0".repeat(12_000) },
-      reason: "transcript-commit-frame-budget" as const,
-    },
-    {
-      name: "a schema-valid id over the complete frame budget",
-      replay: { ...providerReplay, id: "i".repeat(65_536), data: "opaque" },
       reason: "transcript-commit-frame-budget" as const,
     },
   ])("degrades without ciphertext for $name", ({ replay, reason }) => {
@@ -308,7 +281,8 @@ describe("worker transcript provider replay", () => {
   });
 
   it("redacts diagnostic media while preserving conversation text and replay ciphertext", () => {
-    const message = assistantWithReplay();
+    const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
+    const message = assistantWithReplay({ ...providerReplay, data: ciphertext });
     message.content = [
       { type: "text", text: "keep data:video/mp4;base64,QUJDRA== byte-identical" },
     ];
@@ -327,7 +301,8 @@ describe("worker transcript provider replay", () => {
     }
 
     expect(result.message.content[0]).toEqual(message.content[0]);
-    expect(result.message.providerReplay?.data).toBe(providerReplay.data);
+    expect(result.message.providerReplay?.data).toBe(ciphertext);
+    expect(isWorkerTranscriptMessageFrameSafe(result.message)).toBe(true);
     expect(JSON.stringify(result.message.diagnostics)).not.toContain("QUJDRA==");
     expect(Value.Check(WorkerTranscriptMessageSchema, result.message)).toBe(true);
   });

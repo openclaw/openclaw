@@ -208,7 +208,6 @@ export async function createFixture(
     order.push("history");
     return {
       contextEnginePromptAuthority: "assembled",
-      contextEngineAssemblySucceeded: true,
     };
   });
   mocks.createRunAbort.mockImplementation(() => {

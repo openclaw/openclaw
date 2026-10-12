@@ -57,7 +57,9 @@ function createContext(): PluginCapabilityCatalogHostContext {
   };
   return {
     isProviderApiKeyConfigured: unavailable,
+    isProviderApiKeyConfiguredAsync: unavailable,
     isProviderAuthProfileConfigured: unavailable,
+    isProviderAuthProfileConfiguredAsync: unavailable,
     resolveAgentDir: unavailable,
     createRealtimeTranscriptionWebSocketSession: unavailable,
     resolveProviderRequestHeaders: unavailable,

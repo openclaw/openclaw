@@ -74,7 +74,7 @@ export function applySidebarSessionOwnerFilter(input: {
   // Gateway's complete owner inventory, even when rows are owner-filtered.
   const selectedOwnerId = input.selectedOwnerId?.trim() || null;
   // A complete facet may omit an owner with no rows. That means an empty
-  // filtered list, never permission to broaden the selected Mine scope to All.
+  // filtered list, never permission to broaden the selected owner to everyone.
   const activeOwnerId = selectedOwnerId;
   const filterTree = (treeRows: readonly SidebarRecentSession[]): SidebarRecentSession[] => {
     const filtered: SidebarRecentSession[] = [];

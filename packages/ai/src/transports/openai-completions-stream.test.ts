@@ -58,9 +58,7 @@ describe("openai completions stream", () => {
             }
           },
         },
-        direct
-          ? { mode: "direct", beforeContentBlock() {}, provisionalCommentaryTags: new Map() }
-          : undefined,
+        direct ? { mode: "direct", beforeContentBlock() {} } : undefined,
       );
       expect(snapshots).toEqual([
         expect.objectContaining({ id: "write-progress", partialJson: '{"content":"first' }),
@@ -350,7 +348,7 @@ describe("openai completions stream", () => {
     },
   );
 
-  it("phases text interrupted by resumed reasoning_details", async () => {
+  it("preserves unphased text across resumed reasoning_details", async () => {
     const model = makeCompletionsModel({
       id: "openrouter/qwen/qwen3-235b-a22b",
       name: "Qwen3 235B A22B",
@@ -385,9 +383,6 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Interim.",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-        ),
       },
       {
         type: "thinking",
@@ -397,9 +392,6 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Final.",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
-        ),
       },
     ]);
   });

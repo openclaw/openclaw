@@ -90,6 +90,28 @@ Removing the synchronous contracts
 requires a separately announced breaking SDK release. Incognito reads retain
 their existing native in-memory owner until that owner's worker migration.
 
+### Session and command preparation
+
+Use `getSessionEntryAsync`, `readSessionUpdatedAtAsync`,
+`getConversationSessionAsync`, and `readAmbientTranscriptWatermarkAsync` from
+`openclaw/plugin-sdk/session-store-runtime` for ordinary session reads. The
+runtime equivalent is `api.runtime.agent.session.getSessionEntryAsync`. These
+operations read through the existing session worker and observe committed
+in-process writes. Missing entries remain `undefined`; read failures propagate.
+
+Use `resolveStoredModelOverrideAsync` and `resolveCommandArgMenuAsync` from
+`openclaw/plugin-sdk/command-auth-native` when preparing native commands.
+`resolveCommandArgMenuAsync` is also exported by
+`openclaw/plugin-sdk/native-command-registry`. An inherited-model loader may
+return a promise; direct overrides still need no parent read. Menu preparation
+reads the current session's verbose setting before returning its choices.
+
+The corresponding synchronous APIs are deprecated for ordinary runtime use.
+Released signatures remain supported until the next Plugin SDK major. New
+legacy calls emit a bounded deprecation warning. Bundled callers use the awaited
+operations; final tool, disclosure, and mutation authority checks retain their
+current owner and timing.
+
 ### Session reset freshness
 
 Channel runtime consumers should await

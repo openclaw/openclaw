@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as originalCapture from "../commands/doctor-original-capture.js";
 import { preflightUpdateDoctorCli } from "../commands/doctor-update-schema-guard.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
@@ -110,9 +111,15 @@ describe("Doctor schema bumps under an updating parent", () => {
             INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at)
             VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained","updatedAt":1}', 1);
             INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
-            VALUES ('retained', 'agent:main:retained', 1, 1);
-            INSERT INTO transcript_events(session_id, seq, event_json, created_at)
-            VALUES ('retained', 0, '{"type":"message","message":{"role":"user","content":"keep"}}', 1);`);
+            VALUES ('retained', 'agent:main:retained', 1, 1);`);
+          createTranscriptEventInserter(
+            db,
+            "retained",
+          )({
+            seq: 0,
+            eventJson: '{"type":"message","message":{"role":"user","content":"keep"}}',
+            createdAt: 1,
+          });
           if (damage.includes("orphan")) {
             db.exec(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
               VALUES ('orphan', 'agent:main:missing', 1, 1)`);

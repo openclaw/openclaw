@@ -89,13 +89,13 @@ describe("assistant stream snapshots", () => {
 });
 
 describe("handleMessageUpdate text signatures", () => {
-  it("emits a commentary snapshot when Anthropic text is classified after deltas", async () => {
+  it("honors explicit commentary metadata supplied after initial deltas", async () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
     const narration = "I'll check the repo first.";
     const commentaryPartial = {
       role: "assistant",
-      api: "anthropic-messages",
+      api: "openai-responses",
       content: [
         {
           type: "text",
@@ -108,13 +108,13 @@ describe("handleMessageUpdate text signatures", () => {
     await updateMessage(context, {
       message: {
         role: "assistant",
-        api: "anthropic-messages",
+        api: "openai-responses",
         content: [{ type: "text", text: narration }],
       },
       assistantMessageEvent: { type: "text_delta", delta: narration },
     });
     await updateMessage(context, {
-      message: { role: "assistant", api: "anthropic-messages", content: [] },
+      message: { role: "assistant", api: "openai-responses", content: [] },
       assistantMessageEvent: {
         type: "text_end",
         content: narration,

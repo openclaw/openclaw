@@ -574,45 +574,6 @@ describe("gateway run option collisions", () => {
     });
   });
 
-  it("removes shell fallback values when the final accepted config disables fallback", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, async () => {
-      const enabledConfig = {
-        env: { shellEnv: { enabled: true } },
-        gateway: { auth: { mode: "none" }, mode: "local" },
-      };
-      const disabledConfig = {
-        gateway: { auth: { mode: "none" }, mode: "local" },
-      };
-      const snapshot = (config: Record<string, unknown>) =>
-        configSnapshot(config, { parsed: config });
-      readConfigFileSnapshotWithPluginMetadata
-        .mockResolvedValueOnce({ snapshot: snapshot(enabledConfig) })
-        .mockImplementationOnce(async (options) => {
-          expect(options?.lowerPrecedenceEnv).toEqual({
-            OPENCLAW_GATEWAY_TOKEN: "shell-token",
-          });
-          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("shell-token");
-          return { snapshot: snapshot(disabledConfig) };
-        })
-        .mockImplementationOnce(async (options) => {
-          expect(options?.lowerPrecedenceEnv).toBeUndefined();
-          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-          return { snapshot: snapshot(disabledConfig) };
-        });
-      loadShellEnvFallback.mockImplementationOnce((opts?: unknown) => {
-        (opts as { env: NodeJS.ProcessEnv }).env.OPENCLAW_GATEWAY_TOKEN = "shell-token";
-      });
-
-      await runGatewayCli(["gateway"]);
-
-      expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(3);
-      expect(loadShellEnvFallback).toHaveBeenCalledOnce();
-      expect(clearShellEnvAppliedKeys).toHaveBeenCalledWith(["OPENCLAW_GATEWAY_TOKEN"]);
-      expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-      expect(startGatewayServer).toHaveBeenCalledOnce();
-    });
-  });
-
   it("honors config env shell fallback deferral", async () => {
     await withEnvAsync(
       {

@@ -1,8 +1,8 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { renderPluginCredential } from "./credential-editor.ts";
+import type { PluginCredentialEditorProps } from "./credential-editor.tsx";
 import type { PluginsPageDetail } from "./plugins-page-model.ts";
-import type { PluginSettingsField } from "./settings-editor.ts";
+import type { PluginSettingsField } from "./settings-editor.tsx";
 
 export class PluginSettingsController {
   private write: Promise<boolean> | undefined;
@@ -36,7 +36,9 @@ export class PluginSettingsController {
     return true;
   };
 
-  readonly render = (field: PluginSettingsField) => {
+  readonly resolveCredential = (
+    field: PluginSettingsField,
+  ): PluginCredentialEditorProps | undefined => {
     const detail = this.options.getDetail();
     const descriptor = detail?.inspection?.credentials?.find(
       (entry) =>
@@ -47,20 +49,24 @@ export class PluginSettingsController {
       return undefined;
     }
     const runtime = this.options.getContext().runtimeConfig;
-    return renderPluginCredential(field, descriptor, {
-      pluginId: detail.pluginId,
-      baseHash: runtime.state.configSnapshot?.hash ?? null,
-      gateway: this.options.gateway,
-      canInspect: this.options.canInspect(),
-      saveError: runtime.state.lastError,
-      onDiscard: () => runtime.discardFormValue(field.path),
-      onCommit: async (path, value) => {
-        const previous = this.write;
-        const accepted = field.onPatch(path, value);
-        // Nested drafts may accept an edit without publishing a complete value.
-        // Only the flush captured by this edit can acknowledge its persistence.
-        return accepted !== false && this.write && this.write !== previous ? this.write : false;
+    return {
+      field,
+      descriptor,
+      context: {
+        pluginId: detail.pluginId,
+        baseHash: runtime.state.configSnapshot?.hash ?? null,
+        gateway: this.options.gateway,
+        canInspect: this.options.canInspect(),
+        saveError: runtime.state.lastError,
+        onDiscard: () => runtime.discardFormValue(field.path),
+        onCommit: async (path, value) => {
+          const previous = this.write;
+          const accepted = field.onPatch(path, value);
+          // Nested drafts may accept an edit without publishing a complete value.
+          // Only the flush captured by this edit can acknowledge its persistence.
+          return accepted !== false && this.write && this.write !== previous ? this.write : false;
+        },
       },
-    });
+    };
   };
 }

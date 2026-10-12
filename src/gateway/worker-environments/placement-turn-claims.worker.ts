@@ -186,25 +186,24 @@ export const placementTurnClaimOperations = {
   ),
   "placementTurns.markResultPending": operation(
     "placementTurns.markResultPending",
-    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
-      createPlacementWorkspaceResultOps(runtime).markWorkspaceResultPending(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
-    },
+    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => ({
+      placement: createPlacementWorkspaceResultOps(runtime).markWorkspaceResultPending(input.claim),
+    }),
   ),
   "placementTurns.acceptResult": operation(
     "placementTurns.acceptResult",
-    (runtime, input: ClaimInput) => {
-      createPlacementWorkspaceResultOps(runtime).acceptWorkspaceResult(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
-    },
+    (runtime, input: ClaimInput) => ({
+      placement: createPlacementWorkspaceResultOps(runtime).acceptWorkspaceResult(input.claim),
+    }),
     true,
   ),
   "placementTurns.handoffResult": operation(
     "placementTurns.handoffResult",
-    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
-      createPlacementWorkspaceResultOps(runtime).handoffWorkspaceResultRecovery(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
-    },
+    (runtime, input: ClaimInput & { gatewayInstanceId: string }) => ({
+      placement: createPlacementWorkspaceResultOps(runtime).handoffWorkspaceResultRecovery(
+        input.claim,
+      ),
+    }),
   ),
   "placementTurns.abandonResult": operation(
     "placementTurns.abandonResult",
@@ -372,16 +371,14 @@ export const placementTurnClaimOperations = {
         repositoryWorkspaceId?: string;
         sessionEntryCurrentSource?: SessionEntryCurrentSource;
       },
-    ) => {
-      const db = runtime.read();
-      recordStagedWorkerWorkspaceResult(
-        db,
+    ) => ({
+      placement: recordStagedWorkerWorkspaceResult(
+        runtime.read(),
         input.claim,
         input.stagedResultRef,
         input.repositoryWorkspaceId,
-      );
-      return { placement: getRequired(db, input.claim.sessionId) };
-    },
+      ),
+    }),
     true,
   ),
   "placementTurns.recoverWorkspace": operation(
@@ -389,8 +386,7 @@ export const placementTurnClaimOperations = {
     (runtime, input: ClaimInput & { gatewayInstanceId: string }) => {
       const results = createPlacementWorkspaceResultOps(runtime);
       results.markWorkspaceResultPending(input.claim);
-      results.handoffWorkspaceResultRecovery(input.claim);
-      return { placement: getRequired(runtime.read(), input.claim.sessionId) };
+      return { placement: results.handoffWorkspaceResultRecovery(input.claim) };
     },
   ),
   "placementTurns.handoffRuntimeRefreshResult": operation(

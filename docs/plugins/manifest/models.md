@@ -145,11 +145,9 @@ If publication fails or the process stops between replacements, inspect the
 and recovery directories. Stop competing writers, compare the current outputs with
 these artifacts, and explicitly restore or finish the pair before retrying. There
 is no automatic rollback or replay that could overwrite another writer's replacement.
-Identity checks detect observed changes but are not filesystem compare-and-swap;
+Concurrent publishers and replacement of private recovery files are unsupported;
 this protocol does not promise power-loss durability. After successful publication,
 cleanup failures warn with retained paths without reporting the pair as unpublished.
-Cleanup retains recovery entries when their device or inode is unknown (zero)
-or differs from the captured identity.
 
 Model fields:
 

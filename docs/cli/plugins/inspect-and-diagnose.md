@@ -24,6 +24,8 @@ Default human inspection uses `enabled`, `disabled`, or `error` status labels,
 matching `plugins list`. It describes the metadata snapshot; it does not claim
 that a plugin module was imported. With `--runtime`, successful runtime inspection
 uses `loaded`. JSON retains the underlying registry status and separate `imported` field.
+Known-incompatible plugins remain visible with their repair guidance. Their
+diagnostics do not prevent inspection of other plugins, including with `--runtime`.
 
 For multi-entry packages, inspecting any child shows the shared package install metadata. `inspect --all --json` includes that same record for each child. If package ownership is missing or ambiguous, inspection omits install metadata rather than attributing an unrelated install record.
 
@@ -48,7 +50,7 @@ Global discovery diagnostics go to stderr, including with `--json`. This explain
 
 SDK import failures appear in the existing plugin error output and Doctor's
 plugin diagnostics. The diagnostic names the plugin, imported
-`openclaw/plugin-sdk/*` seam, running core version, and build version when known.
+`openclaw/plugin-sdk/*` API, running core version, and build version when known.
 For an official plugin, run `openclaw plugins update <id>`. A running Gateway applies
 the update before the command completes; otherwise it loads the update at its next start.
 If the error identifies a nested SDK, the plugin bundles an incompatible

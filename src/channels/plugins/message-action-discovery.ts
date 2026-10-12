@@ -344,6 +344,8 @@ function mergeToolSchemaProperties(
 }
 
 type ChannelMessageToolSchemaParams = ChannelMessageActionDiscoveryParams & {
+  /** Core discovery selects the session channel set before merging plugin fields. */
+  channels?: readonly { id: string; actions?: ChannelMessageToolDiscoveryAdapter }[];
   /** Internal caller-owned account selection after the usual provider scoping. */
   resolveAccountIdForChannel?: (
     channel: string,
@@ -390,7 +392,8 @@ export function* resolveChannelMessageToolSchemaPropertiesSteps(
     }
   }
 
-  const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
+  const channels =
+    params.channels ?? listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
   for (const plugin of channels) {
     if (!plugin.actions) {
       continue;

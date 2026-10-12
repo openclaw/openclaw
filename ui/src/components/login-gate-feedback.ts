@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { t } from "../i18n/index.ts";
 import {
   redactLoginFailureError,
   resolveAuthHintKind,
@@ -9,6 +8,7 @@ import {
 } from "../lib/connection-hints.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
+import { t } from "../lib/reactive/i18n.ts";
 
 function isPasswordModeErrorCode(code: string | null): boolean {
   return (
@@ -46,7 +46,7 @@ type LoginFailureKind =
 type LoginFailurePlacement = "form" | "status";
 
 /** Pending is an expected wait, not a fault; the palette follows that distinction. */
-export type LoginFailureTone = "pending" | "warn" | "danger";
+type LoginFailureTone = "pending" | "warn" | "danger";
 
 type LoginFormField = "url" | "credential";
 

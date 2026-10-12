@@ -15,7 +15,7 @@ import type {
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
 import type {
   SessionSourcePredicate,
@@ -85,6 +85,13 @@ export type SessionExactEntriesWorkerSelection =
       sessionKeys?: never;
       selection: { kind: "session-id"; sessionId: string; orderBy?: "updatedAt" };
       projection: "sharing" | "full";
+    }
+  | {
+      sessionKeys?: never;
+      selection:
+        | { kind: "session-id-or-key"; sessionIdOrKey: string }
+        | { kind: "label"; label: string };
+      projection: "list";
     };
 
 export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
@@ -147,6 +154,7 @@ export type SessionExactEntriesWorkerResult = {
     identity: string;
     incarnation: string;
     filename: string;
+    canonicalPath?: string;
     birthtime?: string;
   };
   members?: Record<string, SessionMember[]>;

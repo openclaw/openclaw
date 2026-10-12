@@ -8,6 +8,7 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveProviderThinkingLevel } from "../../auto-reply/thinking.js";
 import { resolveApprovedWorkerLocalModel, resolveApprovedWorkerModel } from "./inference-model.js";
+import { executePreparedWorkerInference } from "./inference-runtime.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export async function prepareWorkerTurnModel(params: {
@@ -53,5 +54,11 @@ export async function prepareWorkerTurnModel(params: {
     agentRuntime: "openclaw",
     level: params.turn.thinkLevel,
   });
-  return { model, reasoning, transcriptPolicy: approved.transcriptPolicy };
+  return {
+    model,
+    reasoning,
+    transcriptPolicy: approved.transcriptPolicy,
+    inference:
+      "prepared" in approved ? executePreparedWorkerInference.bind(undefined, approved) : undefined,
+  };
 }

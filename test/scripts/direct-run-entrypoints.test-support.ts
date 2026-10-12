@@ -24,7 +24,6 @@ export const TSX_SHIM_WRAPPERS = [
   "scripts/run-vitest.mjs",
   "scripts/lib/plugin-npm-package-manifest.mjs",
   "scripts/e2e/kitchen-sink-rpc-walk.mjs",
-  "scripts/perf/summarize-cpuprofile.mjs",
 ] as const;
 
 export function writeEsmPluginFixture(fixtureRoot: string) {

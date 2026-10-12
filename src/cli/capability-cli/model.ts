@@ -98,7 +98,6 @@ async function runModelRun(params: {
   const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
   const { getRuntimeConfig } = await import("../../config/config.js");
   const { canonicalizeCaseOnlyCatalogModelRef } = await import("../../agents/model-selection.js");
-  const { readPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
   const explicitModelOverride = requireProviderModelOverride(params.model);
   const cfg =
     params.transport === "local"
@@ -112,7 +111,7 @@ async function runModelRun(params: {
     raw: params.model,
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () => readPreparedModelCatalog({ config: cfg, agentId, readOnly: true }),
+    loadCatalog: () => loadModelCatalogForInspection(cfg, agentId),
     preserveAuthProfile: params.transport === "local",
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);

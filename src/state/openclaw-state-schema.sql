@@ -926,6 +926,12 @@ CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
   ON node_worker_launches(completed_at_ms, launch_id)
   WHERE completed_at_ms IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS node_worker_launch_boots (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  boot_id TEXT CHECK (boot_id IS NULL OR length(boot_id) BETWEEN 1 AND 128)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
   launch_id TEXT PRIMARY KEY,
   container_json TEXT
@@ -1213,6 +1219,7 @@ CREATE TABLE IF NOT EXISTS agent_databases (
 CREATE TABLE IF NOT EXISTS agent_deletion_journal (
   agent_id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL DEFAULT '',
+  phase TEXT,
   agent_dir TEXT NOT NULL,
   workspace_dir TEXT NOT NULL,
   sessions_dir TEXT NOT NULL,

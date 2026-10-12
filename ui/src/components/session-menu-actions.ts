@@ -103,7 +103,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
 type SessionMenuActionsHost = ReactiveControllerHost &
   HTMLElement & { updateComplete: Promise<unknown> };
 
-type SessionMenuActionsState = {
+export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
   session: SessionMenuData;
   selectionCount: number;
@@ -128,7 +128,7 @@ type SessionMenuActionsState = {
 /** Canonical single-session actions shared by sidebar and chat-header menus. */
 export class SessionMenuActions {
   private readonly context;
-  private readonly ownerMenu: SessionOwnerMenu;
+  readonly ownerMenu: SessionOwnerMenu;
   private readonly appearance;
   readonly advanced;
   private readonly snoozeMenu = new SessionMenuSnooze({
@@ -168,7 +168,7 @@ export class SessionMenuActions {
     });
   }
 
-  private get involvementAvailable(): boolean {
+  get involvementAvailable(): boolean {
     return (
       this.context.value?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities ===
       true
@@ -182,12 +182,12 @@ export class SessionMenuActions {
     }
   };
 
-  private actionDisabled(kind: SessionManagementActionKind, extra = false): boolean {
+  actionDisabled(kind: SessionManagementActionKind, extra = false): boolean {
     const state = this.readState();
     return state.disabled || extra || Boolean(state.actionDisabledReasons[kind]);
   }
 
-  private actionExtraDisabled(kind: SessionManagementActionKind): boolean {
+  actionExtraDisabled(kind: SessionManagementActionKind): boolean {
     const state = this.readState();
     const { session } = state;
     const batch = state.selectionCount > 1;
@@ -255,7 +255,7 @@ export class SessionMenuActions {
     }
   }
 
-  private runAction(action: SessionManagementAction): void {
+  runAction(action: SessionManagementAction): void {
     if (this.actionDisabled(action.kind, this.actionExtraDisabled(action.kind))) {
       return;
     }
@@ -325,7 +325,10 @@ export class SessionMenuActions {
     });
   }
 
-  handleKeydown(event: KeyboardEvent): boolean {
+  handleKeydown(
+    event: KeyboardEvent,
+    appearancePicker: Pick<SessionMenuAppearance, "showIconGrid"> = this.appearance,
+  ): boolean {
     const target = event.composedPath().find((node) => node instanceof HTMLElement);
     const key = resolveAsciiShortcutKey(event);
     // Moving these actions into Advanced must not retire their existing menu shortcuts.
@@ -424,7 +427,7 @@ export class SessionMenuActions {
     event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
-      this.appearance.showIconGrid();
+      appearancePicker.showIconGrid();
     }
     return true;
   }

@@ -409,9 +409,10 @@ Register each capability inside `register(api)` alongside your existing
     Return `{ ok: true, value: { text, model } }` after transcription. Return
     `{ ok: false, error }` only for authentication or configuration rejected
     **before uploading audio**. The host records that error and automatic
-    selection may try the next provider or local backend. Missing auth for the primary
-    provider leaves the automatic candidate unavailable without a failed
-    attempt. Upload and HTTP failures must throw: automatic selection then
+    selection may try the next provider or local backend. A `ProviderAuthError`
+    with code `missing-provider-auth` leaves any automatic candidate unavailable
+    without a failed-attempt record. Other returned errors are recorded as failed
+    attempts. Upload and HTTP failures must throw: automatic selection then
     stops without sending the recording to another provider. Explicit model
     lists retain their authored fallback order.
 
