@@ -1,8 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { findAssistantTranscriptEventInDatabase } from "./session-accessor.sqlite-read.js";
+import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
+import { findTranscriptEventMatchingInDatabase } from "./session-transcript-match.js";
 import { prepareTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 describe("persisted assistant transcript matching", () => {
   let db: DatabaseSync;
@@ -13,7 +18,10 @@ describe("persisted assistant transcript matching", () => {
     // Raw legacy rows can predate identity indexing or contain invalid JSON.
     db.exec(`CREATE TABLE transcript_events (
       session_id TEXT NOT NULL, seq INTEGER NOT NULL, event_json TEXT, event_zstd BLOB,
-      event_utf8_bytes INTEGER, navigation_json TEXT, PRIMARY KEY (session_id, seq)
+      event_utf8_bytes INTEGER, navigation_json TEXT,
+      navigation_type TEXT, navigation_custom_type TEXT, navigation_display INTEGER,
+      message_role TEXT, navigation_last_type TEXT, navigation_last_custom_type TEXT,
+      navigation_valid INTEGER, PRIMARY KEY (session_id, seq)
     ) STRICT;
     CREATE TABLE session_transcript_cold_archives (session_id TEXT PRIMARY KEY) STRICT`);
   });
@@ -24,73 +32,130 @@ describe("persisted assistant transcript matching", () => {
     const payload: TranscriptPayloadRecord = compress
       ? prepareTranscriptPayload(db, json)
       : {
+          ...deriveTranscriptPredicateFields(json),
           event_json: json,
           event_zstd: null,
           event_utf8_bytes: Buffer.byteLength(json),
           navigation_json: null,
         };
-    db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?, ?, ?)").run(
+    db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
       sessionId,
       seq,
       payload.event_json,
       payload.event_zstd,
       payload.event_utf8_bytes,
       payload.navigation_json,
+      payload.navigation_type,
+      payload.navigation_custom_type,
+      payload.navigation_display,
+      payload.message_role,
+      payload.navigation_last_type,
+      payload.navigation_last_custom_type,
+      payload.navigation_valid,
     );
     return payload;
   };
 
-  it.each([
-    {
-      name: "duplicate root message envelopes",
-      json: '{"id":"answer","message":{"role":"user","idempotencyKey":"other"},"message":{"role":"assistant","idempotencyKey":"wanted","content":"complete answer"}}',
-    },
-    {
-      name: "duplicate nested roles and idempotency keys",
-      json: '{"id":"answer","message":{"role":"user","role":"assistant","idempotencyKey":"other","idempotencyKey":"wanted","content":"complete answer"}}',
-    },
-    {
-      name: "unindexed rows without an event type",
-      json: '{"id":"answer","message":{"role":"assistant","idempotencyKey":"wanted","content":"complete answer"}}',
-    },
-  ])("retains JavaScript matching for $name", ({ json }) => {
-    insert(0, json);
-    expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "wanted")).toEqual({
-      event: {
-        id: "answer",
-        message: { role: "assistant", idempotencyKey: "wanted", content: "complete answer" },
-      },
-    });
+  const find = (match: SessionTranscriptEventMatch) =>
+    findTranscriptEventMatchingInDatabase(
+      { db, path: ":memory:" },
+      { target: { agentId: "main", sessionId }, match },
+    );
+
+  const answer = {
+    id: "answer",
+    message: { role: "assistant", idempotencyKey: "wanted", content: "complete answer" },
+  };
+  it("retains the last duplicate message envelope in a compressed JavaScript match", () => {
+    const event = {
+      ...answer,
+      message: { ...answer.message, content: "complete answer ".repeat(256) },
+    };
+    const json =
+      '{"id":"answer","message":{"role":"user","idempotencyKey":"other"},"message":{"role":"assistant","idempotencyKey":"wanted","content":"complete answer"}}'.replace(
+        "complete answer",
+        event.message.content,
+      );
+    expect(insert(0, json, true).event_zstd).not.toBeNull();
+    expect(
+      findAssistantTranscriptEventInDatabase({ db }, sessionId, event.message.idempotencyKey),
+    ).toEqual({ event });
     expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "other")).toBeUndefined();
+    expect(
+      find({ kind: "idempotency", key: event.message.idempotencyKey, assistant: true }),
+    ).toEqual({ event });
+    expect(find({ kind: "idempotency", key: "other" })).toBeUndefined();
   });
 
-  it("selects the last matching assistant despite newer user and duplicate-key collisions", () => {
-    insert(0, '{"id":"older","message":{"role":"assistant","idempotencyKey":"wanted"}}');
-    insert(
-      1,
-      '{"message":{"role":"assistant","idempotencyKey":"wanted","content":"legacy idless answer"}}',
-    );
-    insert(2, '{"id":"user","message":{"role":"user","idempotencyKey":"wanted"}}');
-    insert(
-      3,
-      '{"message":{"role":"assistant","idempotencyKey":"wanted"},"message":{"role":"user","idempotencyKey":"wanted"}}',
-    );
-    insert(
-      4,
-      '{"message":{"role":"assistant","idempotencyKey":"wanted","idempotencyKey":"other"}}',
-    );
-    expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "wanted")).toEqual({
-      event: {
-        message: {
-          role: "assistant",
-          idempotencyKey: "wanted",
-          content: "legacy idless answer",
-        },
+  it("decodes only selected compressed canonical candidates", () => {
+    const codec = resolveZstdCodec();
+    if (!codec) {
+      throw new Error("Transcript matching regression requires native zstd support");
+    }
+    const event = {
+      id: "old-answer",
+      message: {
+        role: "assistant",
+        idempotencyKey: "wanted",
+        __openclaw: { runId: "wanted-run" },
+        content: "complete answer ".repeat(256),
+        provider: "openclaw",
+        model: "delivery-mirror",
       },
-    });
-    expect(findAssistantTranscriptEventInDatabase({ db }, sessionId)).toEqual({
-      event: { message: { role: "assistant", idempotencyKey: "other" } },
-    });
+    };
+    expect(insert(0, JSON.stringify(event), true).event_zstd).not.toBeNull();
+    for (let seq = 1; seq <= 12; seq++) {
+      insert(
+        seq,
+        JSON.stringify({
+          ...event,
+          id: `unrelated-${seq}`,
+          message: {
+            ...event.message,
+            role: seq % 2 ? "toolResult" : "assistant",
+            idempotencyKey: "other",
+            __openclaw: { runId: "other-run" },
+          },
+        }),
+        true,
+      );
+    }
+    const decode = vi.spyOn(codec, "decompress");
+    const sql = trackSqliteStatementExecutions(db, ["transcript"], (query) =>
+      query.includes('from "transcript_events"') ? "transcript" : null,
+    );
+    try {
+      for (const match of [
+        { kind: "visible-final", runId: "missing" },
+        { kind: "idempotency", key: "missing" },
+        { kind: "active-assistant", runId: "missing" },
+      ] satisfies SessionTranscriptEventMatch[]) {
+        decode.mockClear();
+        sql.counts.transcript = 0;
+        expect(find(match)).toBeUndefined();
+        expect(decode).not.toHaveBeenCalled();
+        expect(sql.counts.transcript).toBe(1);
+      }
+      for (const match of [
+        { kind: "visible-final", runId: "wanted-run" },
+        { kind: "idempotency", key: "wanted", assistant: true, runId: "wanted-run" },
+        { kind: "idempotency", key: "wanted", deliveryMirror: true },
+      ] satisfies SessionTranscriptEventMatch[]) {
+        decode.mockClear();
+        sql.counts.transcript = 0;
+        expect(find(match)).toEqual({ event });
+        expect(decode).toHaveBeenCalledTimes(1);
+        expect(sql.counts.transcript).toBe(2);
+      }
+      decode.mockClear();
+      sql.counts.transcript = 0;
+      expect(find({ kind: "latest" })).toMatchObject({ event: { id: "unrelated-12" } });
+      expect(decode).toHaveBeenCalledTimes(1);
+      expect(sql.counts.transcript).toBe(1);
+    } finally {
+      sql.restore();
+      decode.mockRestore();
+    }
   });
 
   it("skips malformed and non-object rows while retaining SQLite-overdepth JSON", () => {
@@ -110,26 +175,8 @@ describe("persisted assistant transcript matching", () => {
     expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "wanted")).toMatchObject({
       event: { id: "deep", message: { role: "assistant", idempotencyKey: "wanted" } },
     });
-  });
-
-  it.each(["a\u0000b", "\ud800", "雪🦞"])("matches exact persisted Unicode identity %j", (key) => {
-    insert(
-      0,
-      JSON.stringify({ message: { role: "assistant", idempotencyKey: key, content: "answer" } }),
-    );
-    expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, key)).toEqual({
-      event: { message: { role: "assistant", idempotencyKey: key, content: "answer" } },
+    expect(find({ kind: "idempotency", key: "wanted", assistant: true })).toMatchObject({
+      event: { id: "deep", message: { role: "assistant", idempotencyKey: "wanted" } },
     });
-  });
-
-  it("hydrates the complete matching compressed payload", () => {
-    const content = "compressed answer ".repeat(256);
-    const event = {
-      id: "compressed",
-      message: { role: "assistant", idempotencyKey: "wanted", content },
-    };
-    const payload = insert(0, JSON.stringify(event), true);
-    expect(payload.event_zstd).not.toBeNull();
-    expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "wanted")).toEqual({ event });
   });
 });

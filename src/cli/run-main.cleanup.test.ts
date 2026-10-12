@@ -6,8 +6,10 @@ import path from "node:path";
 import readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
@@ -19,6 +21,8 @@ const dispatch = vi.hoisted(() => ({
   run: async () => {},
   command: undefined as Promise<void> | undefined,
   memoryClosed: vi.fn(async () => {}),
+  startProxy: vi.fn<() => Promise<ProxyHandle | null>>(async () => null),
+  stopProxy: vi.fn(async (handle: ProxyHandle) => handle.stop()),
 }));
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const installUnhandledRejectionHandlerMock = vi.hoisted(() => vi.fn());
@@ -30,7 +34,6 @@ vi.mock("./route.js", () => ({
   },
 }));
 vi.mock("../infra/is-main.js", () => ({ isMainModule: () => true }));
-vi.mock("../entry.esm-resolve-fast-path.js", () => ({ installDistEsmResolveFastPath() {} }));
 vi.mock("../entry.version-fast-path.js", () => ({ tryHandleRootVersionFastPath: () => false }));
 vi.mock("../entry.compile-cache.js", () => ({
   resolveEntryInstallRoot: () => process.cwd(),
@@ -58,16 +61,18 @@ vi.mock("./dotenv.js", async (importOriginal) => ({
   loadCliDotEnv() {},
 }));
 vi.mock("../config/io.js", () => ({ readBestEffortConfig: async () => ({}) }));
+// mock-isolation: Synthetic proxy handles exercise CLI custody without changing process-wide routing or starting Proxyline.
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
-  startProxy: async () => null,
-  stopProxy: async () => {},
+  startProxy: dispatch.startProxy,
+  stopProxy: dispatch.stopProxy,
 }));
 vi.mock("../plugins/memory-state.js", () => ({ hasMemoryRuntime: () => true }));
 vi.mock("../plugins/memory-runtime.js", () => ({
   closeActiveMemorySearchManagersCore: dispatch.memoryClosed,
 }));
 vi.mock("./gateway-cli/pre-bootstrap.js", () => ({ selectGatewayRunEnvironment: async () => {} }));
-vi.mock("./gateway-cli/run-command.js", () => ({
+vi.mock("./gateway-cli/run-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-cli/run-command.js")>()),
   addGatewayRunCommand: (command: import("commander").Command) =>
     command.action(() => dispatch.run()),
 }));
@@ -184,6 +189,8 @@ beforeEach(async () => {
   dispatch.command = undefined;
   dispatch.run = async () => {};
   dispatch.memoryClosed.mockClear();
+  dispatch.startProxy.mockReset().mockResolvedValue(null);
+  dispatch.stopProxy.mockClear();
   installUnhandledRejectionHandlerMock.mockClear();
 });
 afterEach(() => {
@@ -230,6 +237,13 @@ describe("CLI process harness cleanup", () => {
     release();
     const aged = new Date(Date.now() - 2 * 60 * 60_000);
     fs.utimesSync(prior, aged, aged);
+    const { getBoundLegacyPluginSdkResourceHost } =
+      await import("../plugins/legacy-sdk-resource-host.js");
+    const { getPluginCache } = await import("../plugins/plugin-cache.js");
+    const { PluginInstance } = await import("../plugins/plugin-instance.js");
+    const { capturePluginGenerationArtifact } =
+      await import("../plugins/plugin-generation-artifact.js");
+    // Fixture imports initialize WAL maintenance before we observe the command scheduler.
     const clock = createGatewaySchedulerClock(Date.now());
     const scheduler = createTestGatewayScheduler(clock.clock);
     const schedulerModule = await import("../infra/gateway-scheduler.js");
@@ -238,13 +252,12 @@ describe("CLI process harness cleanup", () => {
       .mockImplementation(function () {
         return scheduler;
       });
-    const { getPluginCache } = await import("../plugins/plugin-cache.js");
-    const { PluginInstance } = await import("../plugins/plugin-instance.js");
-    const { capturePluginGenerationArtifact } =
-      await import("../plugins/plugin-generation-artifact.js");
     let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
     dispatch.run = async () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const host = getBoundLegacyPluginSdkResourceHost();
+      expect(host).toBeDefined();
+      expect(host?.scheduler).toBe(scheduler);
       artifact = capturePluginGenerationArtifact(source);
       const instance = new PluginInstance("orphan-recovery-fixture");
       instance.onModuleDispose(artifact.disposeAsync);
@@ -335,6 +348,158 @@ describe("CLI process harness cleanup", () => {
 
     expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
   });
+
+  it.each([undefined, "drained", "retained"] as const)(
+    "uses the actual Gateway cleanup receipt (%s), not its command name",
+    async (receipt) => {
+      const { getGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
+      const { runCli } = await import("./run-main.js");
+      dispatch.run = async () => {
+        if (receipt) {
+          getGatewayRunRuntimeHooks().onProcessResourcesSettled?.(receipt);
+        }
+      };
+      await runCli(["node", "openclaw", "gateway"]);
+      expect(dispatch.memoryClosed).toHaveBeenCalledTimes(receipt ? 0 : 1);
+    },
+  );
+
+  it("joins cancelled command work before signal finalizers", async () => {
+    const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
+    const { getAsyncWorkSignal } = await import("../shared/async-work-scope.js");
+    const { exitAfterSignalExitBarriers, registerSignalExitFinalizer, waitForCliSignalExit } =
+      await import("./signal-exit-barrier.js");
+    const { runCli } = await import("./run-main.js");
+    const entered = createDeferredCore();
+    const cancelled = createDeferredCore();
+    const finish = createDeferredCore();
+    let commandFinished = false;
+    dispatch.run = async () => {
+      const signal = getAsyncWorkSignal();
+      expect(signal).toBeDefined();
+      signal!.addEventListener("abort", () => cancelled.resolve(), { once: true });
+      entered.resolve();
+      await finish.promise;
+      commandFinished = true;
+    };
+    const finalize = vi.fn(async () => {
+      expect(commandFinished).toBe(true);
+      expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
+    });
+    const unregister = registerSignalExitFinalizer(finalize);
+    const previousExitCode = process.exitCode;
+    const command = withCliProcessScope(() => runCli(argv));
+    try {
+      await entered.promise;
+      exitAfterSignalExitBarriers(143);
+      await cancelled.promise;
+      expect(finalize).not.toHaveBeenCalled();
+      expect(dispatch.memoryClosed).not.toHaveBeenCalled();
+      finish.resolve();
+      await command;
+      expect(await waitForCliSignalExit()).toBe(143);
+      expect(finalize).toHaveBeenCalledOnce();
+    } finally {
+      finish.resolve();
+      await command;
+      await waitForCliSignalExit();
+      unregister();
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it.each(["return", "throw", "SIGTERM", "SIGINT"] as const)(
+    "joins admitted command tails before stopping their managed proxy (%s)",
+    async (mode) => {
+      const { withCliProcessScope, getCliPluginInvocationResources } =
+        await import("./runtime-cleanup-scope.js");
+      const { getAsyncWorkSignal, trackAsyncWork } = await import("../shared/async-work-scope.js");
+      const { exitAfterSignalExitBarriers, waitForCliSignalExit } =
+        await import("./signal-exit-barrier.js");
+      const { runCli } = await import("./run-main.js");
+      const entered = createDeferredCore();
+      const cancelled = createDeferredCore();
+      const settling = createDeferredCore();
+      const finish = createDeferredCore();
+      const failure = new Error("command failed with an admitted proxy tail");
+      const signalCode = mode === "SIGTERM" ? 143 : mode === "SIGINT" ? 130 : undefined;
+      const previousExitCode = process.exitCode;
+      let proxyAlive = true;
+      let tailFinished = false;
+      let tailObservedProxy: boolean | undefined;
+      let tail: Promise<void> | undefined;
+      let restoreSettlementObserver: (() => void) | undefined;
+      const proxy: ProxyHandle = {
+        proxyUrl: "http://127.0.0.1:19876",
+        stop: vi.fn(async () => {
+          proxyAlive = false;
+        }),
+        kill: vi.fn(),
+      };
+      dispatch.startProxy.mockResolvedValueOnce(proxy);
+      dispatch.run = async () => {
+        const resources = getCliPluginInvocationResources()!;
+        const settleWork = resources.settleWork.bind(resources);
+        const observer = vi.spyOn(resources, "settleWork").mockImplementation(() => {
+          const pending = settleWork();
+          settling.resolve();
+          return pending;
+        });
+        restoreSettlementObserver = () => observer.mockRestore();
+        const signal = getAsyncWorkSignal()!;
+        tail = trackAsyncWork(async () => {
+          signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+          await finish.promise;
+          tailObservedProxy = proxyAlive;
+          tailFinished = true;
+        });
+        entered.resolve();
+        if (signalCode !== undefined) {
+          await cancelled.promise;
+        }
+        if (mode === "throw") {
+          throw failure;
+        }
+      };
+      const command = withCliProcessScope(() => runCli(argv));
+      const outcome = command.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await awaitGateBeforeSettlement(entered.promise, outcome, "command never dispatched");
+        if (signalCode !== undefined) {
+          exitAfterSignalExitBarriers(signalCode);
+        }
+        await awaitGateBeforeSettlement(settling.promise, outcome, "command skipped its work join");
+        expect(tailFinished).toBe(false);
+        expect(proxyAlive).toBe(true);
+        expect(dispatch.stopProxy).not.toHaveBeenCalled();
+        expect(dispatch.memoryClosed).not.toHaveBeenCalled();
+        finish.resolve();
+        expect(await outcome).toBe(mode === "throw" ? failure : undefined);
+        await tail;
+        expect(tailObservedProxy).toBe(true);
+        expect(tailFinished).toBe(true);
+        expect(dispatch.stopProxy).toHaveBeenCalledExactlyOnceWith(proxy);
+        expect(proxy.stop).toHaveBeenCalledOnce();
+        expect(proxy.kill).not.toHaveBeenCalled();
+        expect(proxyAlive).toBe(false);
+        expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
+        expect(dispatch.stopProxy).toHaveBeenCalledBefore(dispatch.memoryClosed);
+        if (signalCode !== undefined) {
+          expect(await waitForCliSignalExit()).toBe(signalCode);
+        }
+      } finally {
+        finish.resolve();
+        await outcome;
+        await tail;
+        await waitForCliSignalExit();
+        restoreSettlementObserver?.();
+        process.exitCode = previousExitCode;
+      }
+    },
+  );
 
   it("awaits a transient disposer before later finalizers and process completion", async () => {
     const registry = emptyRegistry.createEmptyPluginRegistry();

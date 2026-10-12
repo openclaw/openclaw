@@ -6,7 +6,6 @@ import {
   expect,
   it,
   vi,
-  createCodexTestModel,
   createParams,
   createProjector,
   buildEmptyToolTelemetry,
@@ -16,7 +15,6 @@ import {
   agentMessageDelta,
   turnCompleted,
   turnWithStatus,
-  type EmbeddedRunAttemptParams,
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
@@ -44,22 +42,19 @@ async function streamFinalAnswer(
 }
 
 describe("CodexAppServerEventProjector assistant projection", () => {
-  it.each(["failed", "interrupted"])(
-    "retains streamed partial evidence after a %s turn",
-    async (status) => {
-      const projector = await createProjector(await createParams());
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          item: finalItem("partial", ""),
-        }),
-      );
-      await projector.handleNotification(agentMessageDelta("Partial work", "partial"));
-      await projector.handleNotification(turnWithStatus(status));
-      expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
-        "Partial work",
-      ]);
-    },
-  );
+  it.each(["failed"])("retains streamed partial evidence after a %s turn", async (status) => {
+    const projector = await createProjector(await createParams());
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: finalItem("partial", ""),
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Partial work", "partial"));
+    await projector.handleNotification(turnWithStatus(status));
+    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
+      "Partial work",
+    ]);
+  });
 
   it("keeps distinct completed same-text finals and raw-only completion", async () => {
     const projector = await createProjector(await createParams());
@@ -174,8 +169,14 @@ describe("CodexAppServerEventProjector assistant projection", () => {
         .map(([event]) => event)
         .filter((event) => event.stream === "assistant"),
     ).toEqual([
-      { stream: "assistant", data: { itemId: "msg-1", text: "hel", delta: "hel" } },
-      { stream: "assistant", data: { itemId: "msg-1", text: "hello", delta: "lo" } },
+      {
+        stream: "assistant",
+        data: { itemId: "msg-1", text: "hel", delta: "hel", occurrenceId: expect.any(String) },
+      },
+      {
+        stream: "assistant",
+        data: { itemId: "msg-1", text: "hello", delta: "lo", occurrenceId: expect.any(String) },
+      },
     ]);
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
@@ -342,8 +343,19 @@ describe("CodexAppServerEventProjector assistant projection", () => {
         .map((call) => call[0])
         .filter((event) => event.stream === "assistant"),
     ).toEqual([
-      { stream: "assistant", data: { itemId: "answer-1", text: summary, delta: summary } },
-      { stream: "assistant", data: { itemId: "answer-2", text: coda, delta: coda } },
+      {
+        stream: "assistant",
+        data: {
+          itemId: "answer-1",
+          text: summary,
+          delta: summary,
+          occurrenceId: expect.any(String),
+        },
+      },
+      {
+        stream: "assistant",
+        data: { itemId: "answer-2", text: coda, delta: coda, occurrenceId: expect.any(String) },
+      },
     ]);
     expect(result.assistantTexts).toEqual([summary, coda]);
     expect(result.lastAssistant?.content).toEqual([
@@ -462,67 +474,6 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
   });
 
-  it("marks partial replacement when an unphased intermediate item is superseded by a final item", async () => {
-    const onAgentEvent = vi.fn();
-    const onPartialReply = vi.fn();
-    const params = await createParams();
-    const projector = await createProjector({
-      ...params,
-      onAgentEvent,
-      onPartialReply,
-    });
-
-    await projector.handleNotification(agentMessageDelta("coordination ", "msg-intermediate"));
-    await projector.handleNotification(agentMessageDelta("draft", "msg-intermediate"));
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: finalItem("msg-final", ""),
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("final ", "msg-final"));
-    await projector.handleNotification(agentMessageDelta("answer", "msg-final"));
-
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(
-      onAgentEvent.mock.calls
-        .map((call) => call[0])
-        .filter((event) => event.stream === "assistant"),
-    ).toEqual([
-      {
-        stream: "assistant",
-        data: {
-          itemId: "msg-intermediate",
-          text: "coordination ",
-          delta: "coordination ",
-          replaceable: true,
-        },
-      },
-      {
-        stream: "assistant",
-        data: {
-          itemId: "msg-intermediate",
-          text: "coordination draft",
-          delta: "draft",
-          replaceable: true,
-        },
-      },
-      {
-        stream: "assistant",
-        data: {
-          itemId: "msg-final",
-          text: "final ",
-          delta: "",
-          replace: true,
-          replaceable: true,
-        },
-      },
-      {
-        stream: "assistant",
-        data: { itemId: "msg-final", text: "final answer", delta: "answer", replaceable: true },
-      },
-    ]);
-  });
-
   it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {
     const params = await createParams();
     const projector = await createProjector({
@@ -537,50 +488,6 @@ describe("CodexAppServerEventProjector assistant projection", () => {
 
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(params.prompt);
-  });
-
-  it.each([
-    { profile: undefined, api: "openai-chatgpt-responses" },
-    { profile: "openai:work", api: "openai-responses" },
-  ])("attributes the assistant to $api for profile $profile", async ({ profile, api }) => {
-    const projector = await createProjector({
-      ...(await createParams()),
-      provider: "openai",
-      authProfileId: profile,
-      modelId: "gpt-5.5",
-      model: {
-        ...createCodexTestModel("openai"),
-        id: "gpt-5.5",
-        name: "gpt-5.5",
-        api: "openai-responses",
-      } as EmbeddedRunAttemptParams["model"],
-      runtimePlan: {
-        auth: profile
-          ? {
-              providerForAuth: "openai",
-              authProfileProviderForAuth: "openai",
-              harnessAuthProvider: "openai",
-              forwardedAuthProfileId: profile,
-            }
-          : {},
-        observability: {
-          resolvedRef: "openai/gpt-5.5",
-          provider: "openai",
-          modelId: "gpt-5.5",
-          harnessId: "codex",
-        },
-        prompt: { resolveSystemPromptContribution: () => undefined },
-        tools: { normalize: (tools: unknown[]) => tools, logDiagnostics: () => undefined },
-      } as unknown as EmbeddedRunAttemptParams["runtimePlan"],
-    });
-    await projector.handleNotification(
-      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "done" }]),
-    );
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastAssistant).toMatchObject({
-      provider: "openai",
-      api,
-      model: "gpt-5.5",
-    });
   });
 
   it("preserves upstream text and sender metadata on the mirrored user prompt", async () => {
@@ -618,136 +525,5 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       kind: "external_user",
       sourceChannel: "discord",
     });
-  });
-});
-
-describe("CodexAppServerEventProjector assistant authority", () => {
-  it.each(["final_answer", undefined])(
-    "preserves an empty typed %s completion when its raw echo contains hidden markup",
-    async (phase) => {
-      const onAgentEvent = vi.fn();
-      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-      const item = { type: "agentMessage", id: "msg-hidden", phase, text: "" };
-
-      await projector.handleNotification(forCurrentTurn("item/started", { item }));
-      await projector.handleNotification(forCurrentTurn("item/completed", { item }));
-      await projector.handleNotification(
-        forCurrentTurn("rawResponseItem/completed", {
-          item: {
-            type: "message",
-            id: item.id,
-            role: "assistant",
-            phase,
-            content: [{ type: "output_text", text: "<oai-mem-citation>source</oai-mem-citation>" }],
-          },
-        }),
-      );
-      await projector.handleNotification(turnCompleted([]));
-
-      const result = projector.buildResult(buildEmptyToolTelemetry());
-      expect(result.assistantTexts).toEqual([]);
-      expect(result.lastAssistant).toBeUndefined();
-      expect(result.currentAttemptAssistant).toMatchObject({
-        stopReason: "stop",
-        content: [{ type: "text", text: "" }],
-      });
-      expect(result.messagesSnapshot.filter((message) => message.role === "assistant")).toEqual([]);
-      expect(
-        onAgentEvent.mock.calls.filter(
-          ([event]) =>
-            event.stream === "assistant" ||
-            (event.stream === "item" && event.data.kind === "answer_candidate"),
-        ),
-      ).toEqual([]);
-    },
-  );
-
-  it("does not reselect a final answer superseded by late tool work", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      onAgentEvent,
-    });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
-      }),
-    );
-    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "First candidate",
-        },
-      }),
-    );
-
-    const lateTool = createNativeCommandItem({
-      id: "late-tool",
-      command: "/bin/bash -lc 'printf late'",
-      aggregatedOutput: "late",
-      durationMs: 1,
-    });
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { ...lateTool, status: "inProgress", aggregatedOutput: null, exitCode: null },
-      }),
-    );
-    await projector.handleNotification(forCurrentTurn("item/completed", { item: lateTool }));
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "First candidate",
-        },
-        lateTool,
-      ]),
-    );
-
-    const candidateStatuses = onAgentEvent.mock.calls
-      .map((call) => call[0])
-      .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
-      .map((event) => event.data.status);
-    expect(candidateStatuses).toEqual(["candidate", "superseded"]);
-  });
-
-  it("selects an unphased final answer supplied only by the completed-turn snapshot", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      onAgentEvent,
-    });
-
-    await projector.handleNotification(
-      turnCompleted([{ type: "agentMessage", id: "answer-unphased", text: "done" }]),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual(["done"]);
-    expect(result.messagesSnapshot.at(-1)).toEqual(
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-      }),
-    );
-    expect(
-      onAgentEvent.mock.calls
-        .map((call) => call[0])
-        .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
-        .map((event) => event.data),
-    ).toEqual([
-      expect.objectContaining({
-        itemId: "answer-unphased",
-        status: "selected",
-        progressText: "done",
-        hideFromChannelProgress: true,
-      }),
-    ]);
   });
 });

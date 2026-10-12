@@ -1,3 +1,4 @@
+import "./boot-capabilities.ts";
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   parseControlUiFocusLocation,
@@ -63,6 +64,7 @@ import { startGatewayPageActivation } from "./gateway-page-activation.ts";
 import { startGatewayPresenceActivity } from "./gateway-presence-activity.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
+import { startMcpAppRouting } from "./mcp-app-link-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
@@ -200,9 +202,9 @@ export function bootstrapApplication(): ApplicationRuntime {
               : loadCurrentDeviceAuthToken(settings.gatewayUrl);
         })
       : null;
-  let warmBoot = bootRecord !== null && startsApplicationRouter && !hasPendingGateway;
+  let warmBoot = bootRecord !== null;
   const warmBootConnectionRevision = gateway.connectionRevision;
-  if (warmBoot && bootRecord) {
+  if (bootRecord) {
     prewarmBootChat(bootRecord, settings.sessionKey);
   }
   const stopWarmBootConnection = startsApplicationRouter
@@ -289,7 +291,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     connectionBootstrap,
     initialChatRoute:
       startsApplicationRouter &&
-      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
+      sessionRefFromPath(applicationLocation.pathname, basePath) !== null,
   });
   const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
@@ -323,6 +325,9 @@ export function bootstrapApplication(): ApplicationRuntime {
   const navigation = createApplicationNavigationPreferences(theme);
   const nativeChatDrafts = createNativeChatDrafts();
   const shouldOpenExternally = () => theme.settings.openLinksExternally === true;
+  const mcpAppRouting = startMcpAppRouting({
+    navigate: (route, options) => context.navigate(route, options),
+  });
   const linkReaderRouting = startLinkReaderRouting(() => gateway.snapshot, {
     shouldOpenExternally,
   });
@@ -381,6 +386,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     hasPendingGateway || startup.nativeClient || startup.pendingBootstrapToken,
   );
   const initialConnectionRevision = gateway.connectionRevision;
+  let firstConfigConnection = true;
   const stopPostConnect = gateway.subscribe((snapshot) => {
     if (snapshot.phase === "connected") {
       browserBootstrapAttempted = true;
@@ -412,7 +418,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     const client = snapshot.client;
     if (lastPostConnectClient !== client) {
       lastPostConnectClient = client;
-      void connectionBootstrap.run("config", () => config.refresh());
+      const ifNeeded = firstConfigConnection;
+      firstConfigConnection = false;
+      void config.refresh({ ifNeeded });
       void connectionBootstrap.run("session-observer", () =>
         sendSessionObserverVisibility(client, loadChatObserverDisplayPreference() !== "off"),
       );
@@ -556,6 +564,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
     start: () => {
+      if (!startupLifecycle.signal.aborted) {
+        void config.refresh({ ifNeeded: true });
+      }
       const stopRouter = () => router.stop();
       if (startsApplicationRouter) {
         startupLifecycle.addDisposer(stopRouter);
@@ -610,9 +621,6 @@ export function bootstrapApplication(): ApplicationRuntime {
             : {}),
         }),
       );
-      steps.push(() => {
-        void config.refresh({ skipWithoutAuthCandidate: true });
-      });
       if (startsApplicationRouter) {
         if (initialFirstRunDecision) {
           steps.push(() => initialFirstRunDecision);
@@ -681,6 +689,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       theme.dispose();
       nativeChatDrafts.dispose();
       linkReaderRouting.dispose();
+      mcpAppRouting.dispose();
       nativeLinkRouting.dispose();
       webPush.dispose();
       chatSubmissions.clear();

@@ -217,33 +217,6 @@ describe("createDiscordGatewayPlugin", () => {
     );
   });
 
-  it("leaves autoInteractions disabled so OpenClaw owns interaction handoff", () => {
-    const plugin = createPlugin();
-
-    expect(
-      (
-        plugin as unknown as {
-          options?: {
-            autoInteractions: boolean;
-            intents: number;
-            reconnect: { maxAttempts: number };
-          };
-        }
-      ).options,
-    ).toEqual({
-      autoInteractions: false,
-      intents:
-        GatewayIntents.Guilds |
-        GatewayIntents.GuildExpressions |
-        GatewayIntents.GuildMessages |
-        GatewayIntents.MessageContent |
-        GatewayIntents.DirectMessages |
-        GatewayIntents.GuildMessageReactions |
-        GatewayIntents.DirectMessageReactions,
-      reconnect: { maxAttempts: 50 },
-    });
-  });
-
   it.each(["absent", "present", "rejected"] as const)(
     "emits transport activity with %s optional async capture",
     (capability) => {

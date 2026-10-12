@@ -114,58 +114,48 @@ describe("foreground history subscription admission", () => {
     },
   );
 
-  it.each(["selection", "connection"])(
-    "retires the history read when %s changes before stream admission",
+  it.each(["selection", "connection", "rejected", "disposed"])(
+    "withholds history when stream admission is %s",
     async (change) => {
       const { state, key, requested, admitted } = admissionFixture();
       const subscription = syncSelectedSessionMessageSubscription(state);
+      if (change === "disposed") {
+        await requested.promise;
+        admitted.resolve({ key, agentId: "main" });
+        await expect(subscription).resolves.toBe(true);
+      }
       const history = loadChatHistory(state, { startup: true, deferBranches: true });
-      await requested.promise;
+      if (change !== "disposed") {
+        await requested.promise;
+      }
       if (change === "selection") {
         state.sessionKey = "agent:main:replacement";
-      } else {
+      } else if (change === "connection") {
         state.connectionEpoch += 1;
       }
-      admitted.resolve({ key, agentId: "main" });
+      if (change === "rejected") {
+        admitted.reject(new Error("Live stream subscription failed"));
+      } else if (change === "disposed") {
+        disposeSelectedSessionMessageSubscription(state);
+      } else {
+        admitted.resolve({ key, agentId: "main" });
+      }
       await Promise.all([subscription, history]);
 
       expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
       expect(state.chatMessages).toEqual([]);
+      if (change === "rejected") {
+        expect(getChatHistoryLoadState(state)).toMatchObject({
+          phase: "failed",
+          message: "Live stream subscription failed",
+          startup: true,
+        });
+        expect(state.chatLoading).toBe(false);
+        expect(state.chatError).toBeNull();
+        expect(state.lastError).toBeNull();
+      } else if (change === "disposed") {
+        expect(state.chatSessionMessageSubscription).toBeNull();
+      }
     },
   );
-
-  it("settles a rejected admission visibly without reading an incomplete transcript", async () => {
-    const { state, requested, admitted } = admissionFixture();
-    const subscription = syncSelectedSessionMessageSubscription(state);
-    const history = loadChatHistory(state, { startup: true, deferBranches: true });
-    await requested.promise;
-    admitted.reject(new Error("Live stream subscription failed"));
-    await Promise.all([subscription, history]);
-
-    expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
-    expect(getChatHistoryLoadState(state)).toMatchObject({
-      phase: "failed",
-      message: "Live stream subscription failed",
-      startup: true,
-    });
-    expect(state.chatLoading).toBe(false);
-    expect(state.chatError).toBeNull();
-    expect(state.lastError).toBeNull();
-  });
-
-  it("retires an acknowledged admission before a queued history read can issue", async () => {
-    const { state, key, requested, admitted } = admissionFixture();
-    const subscription = syncSelectedSessionMessageSubscription(state);
-    await requested.promise;
-    admitted.resolve({ key, agentId: "main" });
-    await expect(subscription).resolves.toBe(true);
-
-    const history = loadChatHistory(state, { startup: true, deferBranches: true });
-    disposeSelectedSessionMessageSubscription(state);
-    await history;
-
-    expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
-    expect(state.chatSessionMessageSubscription).toBeNull();
-    expect(state.chatMessages).toEqual([]);
-  });
 });

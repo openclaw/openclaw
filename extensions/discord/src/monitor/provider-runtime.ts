@@ -1,8 +1,7 @@
 import {
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
 } from "openclaw/plugin-sdk/command-auth-native";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -14,31 +13,18 @@ import { probeDiscordApplicationId } from "../probe.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 
-const discordVoiceRuntime = createLazyRuntimeModule(() =>
-  import("../voice/voice-runtime.js").catch((error: unknown) => {
-    discordVoiceRuntime.clear();
-    throw error;
-  }),
-);
-const discordProviderSessionRuntime = createLazyRuntimeModule(() =>
-  import("./provider-session.runtime.js").catch((error: unknown) => {
-    discordProviderSessionRuntime.clear();
-    throw error;
-  }),
-);
-
 export const discordProviderRuntime = {
   probeDiscordApplicationId,
   createDiscordNativeCommand,
   runDiscordGatewayLifecycle,
-  loadDiscordVoiceRuntime: () => discordVoiceRuntime(),
-  loadDiscordProviderSessionRuntime: () => discordProviderSessionRuntime(),
+  loadDiscordVoiceRuntime: () => import("../voice/voice-runtime.js"),
+  loadDiscordProviderSessionRuntime: () => import("./provider-session.runtime.js"),
   createClient: (...args: ConstructorParameters<typeof Client>) => new Client(...args),
   resolveDiscordAccount,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   isVerbose,
   shouldLogVerbose,
 };

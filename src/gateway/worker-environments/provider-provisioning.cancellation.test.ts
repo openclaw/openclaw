@@ -1,12 +1,10 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { racePromiseWithAbortSignal, waitForAbortSignal } from "../../infra/abort-signal.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { WorkerProviderError } from "../../plugins/capability-provider.types.js";
-import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
-import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import * as support from "./service.test-support.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -302,139 +300,34 @@ describe("worker provisioning cancellation ownership", () => {
     },
   );
 
-  it.each(["warm-runtime", "enrollment"] as const)(
-    "cleans the %s lease while shutdown retains its cancelled bundle producer",
-    async (phase) => {
-      const preparing = createDeferredCore();
-      const prepared = createDeferredCore();
-      const controller = new AbortController();
-      const events: string[] = [];
-      support.testState.prepareInstallation = vi.fn(async () => {
-        events.push("bundle-started");
-        preparing.resolve();
-        await prepared.promise;
-        events.push("bundle-settled");
-        return support.BUNDLE_ARTIFACT;
-      });
-      const transfer = createWorkerBootstrapArtifactTransferService();
-      const grant = vi.spyOn(transfer, "prepare");
-      const manager = createRuntimeManager(transfer);
-      const destroy = vi.fn(async () => {
-        events.push("destroy");
-      });
-      const service = support.createService(
-        support.createProvider({
-          supportedExecutionModes: ["worker-turn"],
-          requiresNodeEnrollment: true,
-          provisionBeforeInstallation: true,
-          provision: async (_profile, _operation, options) => {
-            events.push("allocated");
-            if (phase === "warm-runtime") {
-              await options!.prepareNodeRuntime!();
-            } else {
-              await options!.beginNodeEnrollment!();
-              await waitForAbortSignal(options!.signal);
-              options!.signal!.throwIfAborted();
-            }
-            throw new Error("Cancelled runtime preparation unexpectedly completed");
-          },
-          destroy,
-        }),
-        {
-          prepareNodeBootstrap: manager.prepare,
-          prepareNodeRuntime: manager.prepareRuntime,
-          closeNodeRuntime: manager.closeRuntime,
-          prepareNodeEnrollment: manager.begin,
-          closeNodeEnrollment: manager.close,
-          stopNodeEnrollmentWaits: manager.stop,
-        },
-      );
-      let settled = false;
-      const creation = service
-        .createWithRequest({
-          profileId: "development",
-          idempotencyKey: `${phase}-bundle-stop`,
-          executionMode: "worker-turn",
-          signal: controller.signal,
-        })
-        .catch((error: unknown) => error)
-        .finally(() => {
-          settled = true;
-        });
-      let teardown: ReturnType<typeof service.destroy> | undefined;
-      let shutdown: Promise<void> | undefined;
-      let shutdownSettled = false;
-      try {
-        await Promise.race([
-          preparing.promise,
-          creation.then((result) => {
-            throw new Error("Creation ended before bundle preparation", { cause: result });
-          }),
-        ]);
-        const record = support.testState.store.list()[0]!;
-        controller.abort(new DOMException("Stop bundle packaging", "AbortError"));
-        teardown = service.destroy(record.environmentId);
-        await support.waitForFast(() => expect(settled).toBe(true));
-        await expect(teardown).resolves.toMatchObject({ state: "destroyed" });
-        expect(events).toEqual(["allocated", "bundle-started", "destroy"]);
-        expect(destroy).toHaveBeenCalledOnce();
-        expect(grant).toHaveBeenCalledTimes(phase === "enrollment" ? 1 : 0);
-        shutdown = service.stop().then(() => {
-          shutdownSettled = true;
-        });
-        await setImmediate();
-        expect(shutdownSettled).toBe(false);
-      } finally {
-        prepared.resolve();
-        await Promise.allSettled([creation, teardown, shutdown]);
-        manager.stop();
-        grant.mockRestore();
-      }
-      expect(await creation).toMatchObject({ name: "AbortError" });
-      expect(shutdownSettled).toBe(true);
-      expect(events).toEqual(["allocated", "bundle-started", "destroy", "bundle-settled"]);
-    },
-  );
-
-  it("does not let older runtime packaging revoke a newer enrollment", async () => {
+  it("cancels node bundle preparation before allocation while shutdown retains its producer", async () => {
     const preparing = createDeferredCore();
     const prepared = createDeferredCore();
-    const enrolled = createDeferredCore<WorkerNodeEnrollment>();
-    const runtimeResult = createDeferredCore<unknown>();
-    const finishProvider = createDeferredCore();
+    const controller = new AbortController();
+    const events: string[] = [];
     support.testState.prepareInstallation = vi.fn(async () => {
+      events.push("bundle-started");
       preparing.resolve();
       await prepared.promise;
+      events.push("bundle-settled");
       return support.BUNDLE_ARTIFACT;
     });
     const transfer = createWorkerBootstrapArtifactTransferService();
+    const grant = vi.spyOn(transfer, "prepare");
     const manager = createRuntimeManager(transfer);
-    const deviceId = "newer-enrollment-device";
+    const destroy = vi.fn(async () => {
+      events.push("destroy");
+    });
     const service = support.createService(
       support.createProvider({
         supportedExecutionModes: ["worker-turn"],
         requiresNodeEnrollment: true,
         provisionBeforeInstallation: true,
-        provision: async (_profile, _operation, options) => {
-          void options!.prepareNodeRuntime!().then(runtimeResult.resolve, runtimeResult.resolve);
-          await preparing.promise;
-          const record = support.testState.store.list()[0]!;
-          const owner = await support.testState.store.ensureNodeEnrollment(record.environmentId);
-          const setupId = owner.nodeSetupId;
-          if (!setupId) {
-            throw new Error("Expected persisted enrollment setup identity");
-          }
-          await completeWorkerNodeSetupForTest({
-            baseDir: support.testState.root,
-            store: support.testState.store,
-            setupId,
-            deviceId,
-            completedAtMs: 1_000,
-          });
-          enrolled.resolve(await options!.beginNodeEnrollment!());
-          await finishProvider.promise;
-          return { leaseId: "newer-enrollment-lease", node: { deviceId }, sharedHost: false };
+        provision: async () => {
+          events.push("allocated");
+          throw new Error("Cancelled runtime preparation unexpectedly completed");
         },
+        destroy,
       }),
       {
         prepareNodeBootstrap: manager.prepare,
@@ -443,42 +336,52 @@ describe("worker provisioning cancellation ownership", () => {
         prepareNodeEnrollment: manager.begin,
         closeNodeEnrollment: manager.close,
         stopNodeEnrollmentWaits: manager.stop,
-        ensureNodeWorkerBundle: async () => support.BOOTSTRAP_RECEIPT,
       },
     );
+    let settled = false;
     const creation = service
       .createWithRequest({
         profileId: "development",
-        idempotencyKey: "runtime-before-enrollment",
+        idempotencyKey: "node-bundle-stop",
         executionMode: "worker-turn",
+        signal: controller.signal,
       })
-      .catch((error: unknown) => error);
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
+    let teardown: ReturnType<typeof service.destroy> | undefined;
+    let shutdown: Promise<void> | undefined;
+    let shutdownSettled = false;
     try {
-      const enrollment = await Promise.race([
-        enrolled.promise,
-        creation.then(() => {
-          throw new Error("Creation ended before enrollment");
+      await Promise.race([
+        preparing.promise,
+        creation.then((result) => {
+          throw new Error("Creation ended before bundle preparation", { cause: result });
         }),
       ]);
-      const authorization = transfer.authorize({
-        token: enrollment.nodeBootstrap.token,
-        artifactKey: enrollment.nodeBootstrap.sha256,
+      const record = support.testState.store.list()[0]!;
+      controller.abort(new DOMException("Stop bundle packaging", "AbortError"));
+      teardown = service.destroy(record.environmentId);
+      await support.waitForFast(() => expect(settled).toBe(true));
+      await expect(teardown).resolves.toMatchObject({ state: "failed" });
+      expect(events).toEqual(["bundle-started"]);
+      expect(destroy).not.toHaveBeenCalled();
+      expect(grant).not.toHaveBeenCalled();
+      shutdown = service.stop().then(() => {
+        shutdownSettled = true;
       });
-      expect(authorization).toBeDefined();
-      expect(enrollment.signal?.aborted).toBe(false);
-      prepared.resolve();
-      await expect(runtimeResult.promise).resolves.toMatchObject({
-        message: "Worker node enrollment has already begun",
-      });
-      expect(enrollment.signal?.aborted).toBe(false);
-      expect(transfer.isAuthorizationCurrent(authorization!)).toBe(true);
+      await setImmediate();
+      expect(shutdownSettled).toBe(false);
     } finally {
       prepared.resolve();
-      finishProvider.resolve();
-      await creation;
+      await Promise.allSettled([creation, teardown, shutdown]);
       manager.stop();
+      grant.mockRestore();
     }
-    expect(await creation).toMatchObject({ state: "ready", nodeDeviceId: deviceId });
+    expect(await creation).toMatchObject({ name: "AbortError" });
+    expect(shutdownSettled).toBe(true);
+    expect(events).toEqual(["bundle-started", "bundle-settled"]);
   });
 
   it.each(["bundle", "npm"] as const)(

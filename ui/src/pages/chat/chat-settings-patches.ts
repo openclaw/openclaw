@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import {
   resolveSessionKey,
   type SessionCapability,
@@ -42,10 +43,7 @@ function createChatPickerPatchReceipt(sessions: SessionCapability) {
     isCurrent,
     read: () => (isCurrent() ? confirmed : null),
     subscribe(onConfirmed: () => void) {
-      listeners.add(onConfirmed);
-      return () => {
-        listeners.delete(onConfirmed);
-      };
+      return registerListener(listeners, onConfirmed);
     },
     confirm: (receipt: SessionPatchResult) => {
       if (!isCurrent()) {

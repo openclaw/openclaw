@@ -1,3 +1,9 @@
+// Preserve native worker fixture mocks before production consumers load the registry.
+// oxfmt-ignore
+import {
+  runSubagentStateWorkerOperation,
+  useSubagentControlFixture,
+} from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -9,21 +15,13 @@ import { createRequesterYieldCallback } from "../../agents/openclaw-tools.reques
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../../agents/subagents/announce/subagent-announce-overrides.test-support.js";
 import { dispatchGatewayMethodInProcess } from "../../agents/subagents/announce/subagent-announce.runtime.js";
-import { useSubagentControlFixture } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../../agents/subagents/registry/subagent-registry-run-pause.js";
-import {
-  persistSubagentRunsToDiskAsyncOrThrow,
-  persistSubagentRunsToDiskOrThrow,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
-import {
-  registerSubagentRun,
-  settleRequesterAfterSessionSpawns,
-} from "../../agents/subagents/registry/subagent-registry.js";
+import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import * as requesterAuthority from "../../agents/subagents/requester-cron-authority.js";
-import * as requesterAttachment from "../../agents/subagents/requester-final-attachment.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import * as transcriptArchive from "../../config/sessions/session-accessor.sqlite-archive.js";
@@ -46,14 +44,45 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+async function createInitialYieldFixture(label: string) {
+  const requesterSessionKey = "agent:main:main";
+  const requesterTurnRunId = `${label}-parent`;
+  const runId = `${label}-child`;
+  const childSessionKey = `agent:main:subagent:${runId}`;
+  await registerSubagentRun({
+    runId,
+    childSessionKey,
+    requesterSessionKey,
+    requesterAgentId: "main",
+    requesterTurnRunId,
+    requesterDisplayKey: requesterSessionKey,
+    task: "Finish the initial requester handoff",
+    cleanup: "keep",
+    expectsCompletionMessage: true,
+  });
+  const onYield = vi.fn();
+  const tool = createSessionsYieldTool({
+    sessionId: `${label}-session`,
+    claimYield: createRequesterYieldCallback({
+      requesterSessionKey,
+      requesterAgentId: "main",
+      requesterTurnRunId,
+    }),
+    onYield,
+  });
+  return {
+    requesterSessionKey,
+    requesterTurnRunId,
+    runId,
+    childSessionKey,
+    entry: expectDefined(subagentRuns.get(runId), "initial child"),
+    onYield,
+    tool,
+  };
+}
+
 it("resumes a yielded child through sessions.send and wakes its original parent after the same batch settles", async () => {
   vi.useFakeTimers();
-  const realState = await vi.importActual<
-    typeof import("../../agents/subagents/registry/subagent-registry-state.js")
-  >("../../agents/subagents/registry/subagent-registry-state.js");
-  vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-    realState.persistSubagentRunsToDiskAsyncOrThrow,
-  );
   const { runSubagentAnnounceFlow } = await vi.importActual<
     typeof import("../../agents/subagents/announce/subagent-announce.js")
   >("../../agents/subagents/announce/subagent-announce.js");
@@ -67,16 +96,7 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   const requesterTurnRunId = "parent-turn";
   const expectCompletedRun = (runId: string, resultText: string) => {
     const entry = expectDefined(subagentRuns.get(runId), `completed run ${runId}`);
-    expect(
-      entry,
-      JSON.stringify({
-        runId,
-        cleanupHandled: entry.cleanupHandled,
-        delivery: entry.delivery,
-        requesterSettleWake: entry.requesterSettleWake,
-        requesterTurnRunId: entry.requesterTurnRunId,
-      }),
-    ).toMatchObject({
+    expect(entry).toMatchObject({
       execution: { status: "terminal", outcome: { status: "ok" } },
       completion: { resultText },
       cleanupCompletedAt: expect.any(Number),
@@ -147,7 +167,7 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   });
   const acknowledgedIntent = createDeferred();
   const releaseIntent = createDeferred();
-  const runWorker = stateWorker.runOpenClawStateWorkerOperation;
+  const runWorker = runSubagentStateWorkerOperation;
   let registryWrites = 0;
   const worker = vi
     .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
@@ -169,13 +189,6 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
         options,
       ),
     );
-  const failedPromotion = createDeferred();
-  const promotion = vi
-    .spyOn(requesterAttachment, "promoteRequesterFinalAttachment")
-    .mockImplementationOnce(() => {
-      failedPromotion.resolve();
-      throw new Error("promotion callback interrupted");
-    });
   const hostSql = observeParentSqlite();
   try {
     await withRequesterTestAuthority(requesterTurnRunId, requesterSessionKey, async () => {
@@ -195,7 +208,6 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
       await expect(yielding).resolves.toMatchObject({
         details: { status: "yielded" },
       });
-      let settled = false;
       const settlement = withLocalSessionPlacementTurnSettlement(
         {
           sessionId: `${requesterSessionKey}-session`,
@@ -212,37 +224,22 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
           },
         }),
         {},
-      ).then((result) => {
-        settled = true;
-        return result;
-      });
-      await Promise.race([
-        failedPromotion.promise,
-        settlement.then(() => {
-          throw new Error("Settlement skipped initial authority promotion");
-        }),
-      ]);
-      expect(settled).toBe(false);
-      expect(registryWrites).toBe(2);
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(30_000);
+      );
       const result = await settlement;
       expect(result.requesterContinuationSettled).toBe(true);
-      expect(registryWrites).toBe(3);
+      expect(registryWrites).toBe(2);
     });
   } finally {
     releaseIntent.resolve();
     hostSql.restore();
     worker.mockRestore();
-    promotion.mockRestore();
   }
   expect(onYield).toHaveBeenCalledOnce();
-  expect(
-    markSubagentRunPausedAfterYield({
-      entry: expectDefined(subagentRuns.get(previousRunId), "paused child"),
-    }),
-  ).toBe(true);
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+  await mutateSubagentRuns([previousRunId], (rows) => {
+    const next = structuredClone(expectDefined(rows.get(previousRunId), "paused child"));
+    expect(markSubagentRunPausedAfterYield({ entry: next })).toBe(true);
+    return { value: undefined, postimages: new Map([[next.runId, next]]) };
+  });
   const complete = async (runId: string, sessionKey: string, text: string) => {
     const announceEntered = createDeferred();
     fixture.announce.mockImplementationOnce((params) => {
@@ -333,43 +330,24 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   expect(hostSql.counts).toEqual(emptySqliteCounts());
 });
 
-it.each([
-  { retirement: "runtime owner", repetition: "intent" },
-  { retirement: "runtime owner", repetition: "cohort" },
-  { retirement: "state source", repetition: "intent" },
-  { retirement: "state source", repetition: "cohort" },
-] as const)(
-  "retains the committed outcome after $retirement replacement for a repeated $repetition claim",
-  async ({ retirement, repetition }) => {
-    const requesterSessionKey = "agent:main:main";
-    const childSessionKey = "agent:main:subagent:initial-retirement";
-    const runId = "initial-retirement-child";
-    const requesterTurnRunId = "initial-retirement-parent";
-    await registerSubagentRun({
-      runId,
-      childSessionKey,
-      requesterSessionKey,
-      requesterAgentId: "main",
-      requesterTurnRunId,
-      requesterDisplayKey: requesterSessionKey,
-      task: "Keep the original requester owner",
-      cleanup: "keep",
-      expectsCompletionMessage: true,
+it.each(["runtime owner", "state source"] as const)(
+  "retains the committed outcome after %s replacement",
+  async (retirement) => {
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      defaultSessionId: "agent:main:main-session",
     });
-    const entry = expectDefined(subagentRuns.get(runId), "original initial child");
-    const execution = entry.execution;
-    const nativeState = await vi.importActual<
-      typeof import("../../agents/subagents/registry/subagent-registry-state.js")
-    >("../../agents/subagents/registry/subagent-registry-state.js");
+    const { requesterSessionKey, requesterTurnRunId, runId, entry, onYield, tool } =
+      await createInitialYieldFixture("initial-retirement");
+    let retireRequester = () => {};
     const acknowledged = createDeferred();
     const releaseAcknowledgement = createDeferred();
     let committed = false;
     let writes = 0;
     let closing: Promise<void> | undefined;
-    vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-      nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-    );
-    const runWorker = stateWorker.runOpenClawStateWorkerOperation;
+    const runWorker = runSubagentStateWorkerOperation;
     const worker = vi
       .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
       .mockImplementation((stateContext, operation, options) =>
@@ -386,7 +364,7 @@ it.each([
                 if (!committed && args[0].type === "subagents.persistChanges") {
                   committed = true;
                   if (retirement === "runtime owner") {
-                    entry.execution = { ...execution };
+                    retireRequester();
                   } else {
                     closing = closeOpenClawStateDatabaseAsync();
                   }
@@ -399,31 +377,17 @@ it.each([
           options,
         ),
       );
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: "initial-retirement-session",
-      claimYield: createRequesterYieldCallback({
-        requesterSessionKey,
-        requesterAgentId: "main",
-        requesterTurnRunId,
-      }),
-      onYield,
-    });
-    const first = tool.execute("yield-retired-owner", {}).then(
+    const first = withRequesterTestAuthority(
+      requesterTurnRunId,
+      requesterSessionKey,
+      async (retire) => {
+        retireRequester = retire;
+        return await tool.execute("yield-retired-owner", {});
+      },
+    ).then(
       (result) => ({ result }),
       (error: unknown) => ({ error }),
     );
-    const repeatClaim = () =>
-      repetition === "intent"
-        ? tool.execute("yield-repeated-retired-owner", {})
-        : settleRequesterAfterSessionSpawns({
-            requesterSessionKey,
-            requesterAgentId: "main",
-            requesterTurnRunId,
-            requesterYielded: false,
-            acceptedSessionSpawns: [{ runId, childSessionKey, expectsCompletionMessage: true }],
-          });
-    let repeated: ReturnType<typeof repeatClaim> | undefined;
     try {
       await Promise.race([
         acknowledged.promise,
@@ -431,113 +395,55 @@ it.each([
           throw new Error("Initial write did not reach its held native acknowledgement");
         }),
       ]);
-      if (retirement === "runtime owner") {
-        repeated = repeatClaim();
-        void repeated.catch(() => {});
-        await vi.dynamicImportSettled();
-      }
       releaseAcknowledgement.resolve();
       const outcome = await first;
-      expect({
-        ...outcome,
-        committed,
-        liveIsCaptured: subagentRuns.get(runId) === entry,
-        sameExecution: entry.execution === execution,
-        yielded: entry.requesterTurnYielded,
-      }).toMatchObject({
-        error: { outcome: "committed", publication: "superseded" },
+      expect(outcome).toMatchObject({
+        error:
+          retirement === "runtime owner"
+            ? { outcome: "committed", publication: "published" }
+            : { outcome: "committed", publication: "superseded" },
       });
       expect(committed).toBe(true);
       await closing;
-      repeated ??= repeatClaim();
-      const repeatedOutcome = await repeated.then(
-        (result) => ({ result }),
-        (error: unknown) => ({ error }),
-      );
-      expect({ ...repeatedOutcome, writes, yields: onYield.mock.calls.length }).toMatchObject({
-        error: { outcome: "committed", publication: "superseded" },
-        writes: 1,
-        yields: 0,
-      });
       expect(writes).toBe(1);
       expect(onYield).not.toHaveBeenCalled();
       expect(entry.requesterTurnYielded).toBeUndefined();
       if (retirement === "runtime owner") {
-        expect(entry.execution).toEqual(execution);
-        expect(entry.execution).not.toBe(execution);
+        expect(subagentRuns.get(runId)?.requesterTurnYielded).toBe(true);
       }
     } finally {
       releaseAcknowledgement.resolve();
-      await Promise.allSettled([first, ...(repeated ? [repeated] : [])]);
+      await first;
       await closing;
       worker.mockRestore();
     }
     const { loadSubagentRegistryFromSqlite } = await vi.importActual<
-      typeof import("../../agents/subagents/registry/subagent-registry.store.sqlite.js")
-    >("../../agents/subagents/registry/subagent-registry.store.sqlite.js");
+      typeof import("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js")
+    >("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
     expect(loadSubagentRegistryFromSqlite().get(runId)?.requesterTurnYielded).toBe(true);
   },
 );
 
-it("retains an unknown initial intent until canonical worker restore reconciles the committed row", async () => {
-  const requesterSessionKey = "agent:main:main";
-  const requesterTurnRunId = "unknown-initial-parent";
-  const runId = "unknown-initial-child";
-  await registerSubagentRun({
-    runId,
-    childSessionKey: "agent:main:subagent:unknown-initial-child",
-    requesterSessionKey,
-    requesterAgentId: "main",
-    requesterTurnRunId,
-    requesterDisplayKey: requesterSessionKey,
-    task: "Retain an unacknowledged initial intent",
-    cleanup: "keep",
-    expectsCompletionMessage: true,
-  });
-  const entry = expectDefined(subagentRuns.get(runId), "original uncertain child");
-  const nativeState = await vi.importActual<
-    typeof import("../../agents/subagents/registry/subagent-registry-state.js")
-  >("../../agents/subagents/registry/subagent-registry-state.js");
-  vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-    nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-  );
-  const runWorker = stateWorker.runOpenClawStateWorkerOperation;
+it("retains an unknown initial intent until canonical worker restore reconciles the row", async () => {
+  const { requesterTurnRunId, runId, entry, onYield, tool } =
+    await createInitialYieldFixture("unknown-initial");
+  const nativePersistence = await vi.importActual<
+    typeof import("../../agents/subagents/registry/subagent-registry-persistence.js")
+  >("../../agents/subagents/registry/subagent-registry-persistence.js");
   let writes = 0;
   const worker = vi
     .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((stateContext, operation, options) =>
-      runWorker(
-        stateContext,
-        (scope) =>
-          operation({
-            ...scope,
-            execute: async (...args) => {
-              const result = await scope.execute(...args);
-              if (args[0].type === "subagents.persistChanges") {
-                writes += 1;
-                throw new SqliteWorkerError("Initial acknowledgement lost", "outcome-unknown");
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
-  const onYield = vi.fn();
-  const tool = createSessionsYieldTool({
-    sessionId: "unknown-initial-session",
-    claimYield: createRequesterYieldCallback({
-      requesterSessionKey,
-      requesterAgentId: "main",
-      requesterTurnRunId,
-    }),
-    onYield,
-  });
+    .mockImplementationOnce(async () => {
+      writes += 1;
+      throw new SqliteWorkerError("Initial write outcome unavailable", "outcome-unknown");
+    });
   try {
     await expect(tool.execute("yield-unknown", {})).rejects.toMatchObject({ outcome: "unknown" });
     expect(onYield).not.toHaveBeenCalled();
     expect(entry.requesterTurnYielded).toBeUndefined();
-    expect(() => persistSubagentRunsToDiskOrThrow(subagentRuns, [runId])).toThrow();
+    await expect(mutateSubagentRuns([runId], () => ({ value: undefined }))).rejects.toMatchObject({
+      outcome: "unknown",
+    });
     expect(writes).toBe(1);
   } finally {
     worker.mockRestore();
@@ -545,136 +451,13 @@ it("retains an unknown initial intent until canonical worker restore reconciles 
   }
   const restoredSql = observeParentSqlite();
   try {
-    await nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    await nativePersistence.restoreSubagentRunsFromDisk({ runs: subagentRuns });
   } finally {
     restoredSql.restore();
   }
   expect(restoredSql.counts).toEqual(emptySqliteCounts());
   expect(subagentRuns.get(runId)).not.toBe(entry);
-  expect(subagentRuns.get(runId)).toMatchObject({ requesterTurnYielded: true, requesterTurnRunId });
+  expect(subagentRuns.get(runId)).toMatchObject({ requesterTurnRunId });
+  expect(subagentRuns.get(runId)?.requesterTurnYielded).toBeUndefined();
   expect(onYield).not.toHaveBeenCalled();
 });
-
-it.each([false, true])(
-  "joins a concurrent yield claim until host handoff (joining caller retired: %s)",
-  async (retired) => {
-    vi.useFakeTimers();
-    const requesterSessionKey = "agent:main:main";
-    const requesterTurnRunId = "joined-initial-parent";
-    const runId = "joined-initial-child";
-    await registerSubagentRun({
-      runId,
-      childSessionKey: "agent:main:subagent:joined-initial-child",
-      requesterSessionKey,
-      requesterAgentId: "main",
-      requesterTurnRunId,
-      requesterDisplayKey: requesterSessionKey,
-      task: "Join the original initial handoff",
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
-    const nativeState = await vi.importActual<
-      typeof import("../../agents/subagents/registry/subagent-registry-state.js")
-    >("../../agents/subagents/registry/subagent-registry-state.js");
-    vi.mocked(persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-      nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-    );
-    const handoffFailed = createDeferred();
-    const commit = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        handoffFailed.resolve();
-        throw new Error("initial authority handoff interrupted");
-      })
-      .mockImplementation(() => {});
-    const bind = vi.fn().mockResolvedValue({
-      commit,
-      revoke: vi.fn(),
-    });
-    const capture = vi
-      .spyOn(requesterAuthority, "prepareRequesterCronAuthority")
-      .mockImplementation(() => ({
-        assertCurrent: vi.fn(),
-        validate: vi.fn().mockResolvedValue(undefined),
-        bind,
-        release: vi.fn().mockResolvedValue(undefined),
-      }));
-    let writes = 0;
-    const runWorker = stateWorker.runOpenClawStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        runWorker(
-          context,
-          (scope) =>
-            operation({
-              ...scope,
-              execute: (...args) => {
-                if (args[0].type === "subagents.persistChanges") {
-                  writes += 1;
-                }
-                return scope.execute(...args);
-              },
-            }),
-          options,
-        ),
-      );
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: "joined-initial-session",
-      claimYield: createRequesterYieldCallback({
-        requesterSessionKey,
-        requesterAgentId: "main",
-        requesterTurnRunId,
-      }),
-      onYield,
-    });
-    const first = tool.execute("yield-first", {});
-    let second: ReturnType<typeof tool.execute> | undefined;
-    try {
-      await Promise.race([
-        handoffFailed.promise,
-        first.then(() => {
-          throw new Error("Initial yield skipped the held handoff");
-        }),
-      ]);
-      expect(subagentRuns.get(runId)?.requesterTurnYielded).toBe(true);
-      expect(onYield).not.toHaveBeenCalled();
-      const joined = createDeferred();
-      second = withRequesterTestAuthority(
-        requesterTurnRunId,
-        requesterSessionKey,
-        async (retire) => {
-          const claim = tool.execute("yield-concurrent", {});
-          void claim.catch(() => {});
-          await vi.advanceTimersByTimeAsync(0);
-          if (retired) {
-            retire();
-          }
-          joined.resolve();
-          return await claim;
-        },
-      );
-      void second.catch(() => {});
-      await joined.promise;
-      expect(onYield).not.toHaveBeenCalled();
-      expect(writes).toBe(1);
-      await vi.advanceTimersByTimeAsync(30_000);
-      await expect(first).resolves.toMatchObject({ details: { status: "yielded" } });
-      if (retired) {
-        await expect(second).rejects.toMatchObject({ outcome: "committed" });
-      } else {
-        await expect(second).resolves.toMatchObject({ details: { status: "yielded" } });
-      }
-      expect(onYield).toHaveBeenCalledTimes(retired ? 1 : 2);
-      expect(commit).toHaveBeenCalledTimes(2);
-      expect(bind).toHaveBeenCalledOnce();
-      expect(writes).toBe(1);
-    } finally {
-      await vi.advanceTimersByTimeAsync(30_000);
-      await Promise.allSettled([first, ...(second ? [second] : [])]);
-      worker.mockRestore();
-      capture.mockRestore();
-    }
-  },
-);

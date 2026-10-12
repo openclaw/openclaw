@@ -135,7 +135,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
   const sessionManager = {
     getSessionTarget: () => undefined,
     getHeader: () => ({ version: 3 }),
-    appendCustomEntry: vi.fn(),
+    appendCustomEntryAsync: vi.fn(async () => undefined),
     getEntries: vi.fn(() => []),
   };
   const sessionRuntimeState = { systemPromptText: "system", prePromptMessageCount: 1 };
@@ -240,14 +240,20 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           activeSession,
           hookRunner: null,
           setActiveSessionSystemPrompt: vi.fn(),
-          settingsManager: { getCompactionReserveTokens: () => 77 },
+          settingsManager: {
+            getCompactionEnabled: () => true,
+            getCompactionReserveTokens: () => 77,
+          },
         },
         boundary: {
           includeBoundaryTimestamp: false,
           setCurrentUserTimestampOverride: vi.fn(),
         },
         cacheTrace: null,
-        contextGuards: { takePendingMidTurnPrecheckRequest: () => undefined },
+        contextGuards: {
+          checkMidTurnPrecheck: vi.fn(),
+          takePendingMidTurnPrecheckRequest: () => undefined,
+        },
         preparedUserTurnMessage: {
           role: "user",
           content: "hello",
@@ -295,7 +301,6 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     preparedStreamRuntime: {
       cache: {},
       history: {
-        contextEngineAssemblySucceeded: false,
         contextEnginePromptAuthority: "assembled",
       },
       promptActiveSession: vi.fn(),

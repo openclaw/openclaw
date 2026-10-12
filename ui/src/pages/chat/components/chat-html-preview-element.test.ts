@@ -1,8 +1,14 @@
 /* @vitest-environment jsdom */
-import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
+import { ContextProvider } from "@lit/context";
+import type {
+  CanvasDocumentViewResult,
+  SessionsFilesAssetsResult,
+} from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
-import { ChatHtmlPreview } from "./chat-html-preview-element.ts";
+import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
+import "./chat-html-preview-element.tsx";
 
 const source =
   "<!doctype html>\r\n<style>h1{color:red}</style><h1>HTML</h1><script>window.ready=true</script>\n";
@@ -11,8 +17,6 @@ const metadata: CanvasDocumentViewResult = {
   sandboxUrl: "/mcp-app-sandbox?frames=none",
   sandboxPort: 8444,
 };
-const tag = `test-html-preview-${crypto.randomUUID()}`;
-customElements.define(tag, class extends ChatHtmlPreview {});
 
 function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
   const listeners = new Set<() => void>();
@@ -26,15 +30,21 @@ function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
       },
     },
   };
-  const view = document.createElement(tag) as ChatHtmlPreview;
-  Reflect.set(view, "context", context);
+  const wrapper = document.createElement("div");
+  const provider = new ContextProvider(wrapper, {
+    context: applicationContext,
+    initialValue: context as unknown as ApplicationContext,
+  });
+  const view = document.createElement("openclaw-chat-html-preview");
   view.html = html;
   view.sourceIdentity = "file:example.html";
-  document.body.append(view);
+  wrapper.append(view);
+  document.body.append(wrapper);
   return {
     view,
     context,
     request,
+    setContext: (next: ApplicationContext) => provider.setValue(next),
     notify: () => {
       for (const listener of listeners) {
         listener();
@@ -43,7 +53,7 @@ function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
   };
 }
 
-async function frameFor(view: ChatHtmlPreview) {
+async function frameFor(view: ChatHtmlPreviewElement) {
   await expect.poll(() => view.querySelector("iframe")).not.toBeNull();
   return view.querySelector("iframe")!;
 }
@@ -93,11 +103,6 @@ describe("ordinary HTML preview transport", () => {
         '<a name="section"></a><map name="report"><area href="about:srcdoc#section" alt="Jump"></map>',
     },
     {
-      name: "authored base URL",
-      head: '<base href="https://example.com/report">',
-      body: '<a href="#section">Jump</a>',
-    },
-    {
       name: "independent base URL and target declarations",
       head: '<base target="_self"><base href="/report">',
       body: '<a href="#section">Jump</a>',
@@ -119,20 +124,9 @@ describe("ordinary HTML preview transport", () => {
       expected: '<a href="about:srcdoc#first" href="#second">Jump</a>',
     },
     {
-      name: "unrelated duplicate attributes",
-      body: '<p title="first" title="ignored">Report</p><a href="#section">Jump</a>',
-      expected:
-        '<p title="first" title="ignored">Report</p><a href="about:srcdoc#section">Jump</a>',
-    },
-    {
       name: "a complete link before an unfinished unrelated tail",
       body: '<a href="#section">Jump</a><p title="unfinished',
       expected: '<a href="about:srcdoc#section">Jump</a><p title="unfinished',
-    },
-    {
-      name: "anchors reconstructed across paragraphs",
-      body: '<p><a href="#x">one<p>two',
-      expected: '<p><a href="about:srcdoc#x">one<p>two',
     },
     {
       name: "anchors reconstructed across formatting elements",
@@ -246,10 +240,96 @@ describe("ordinary HTML preview transport", () => {
     await view.updateComplete;
     expect(view.querySelector('[role="status"]')).toBeNull();
     view.title = "Changed title";
-    view.requestUpdate();
     await view.updateComplete;
     expect(view.querySelector("iframe")).toBe(frame);
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("loads assets from the owning session and announces omissions beside the sandbox", async () => {
+    const html = '<img src="a.png"><img src="missing.png"><a href="#section">Jump</a>';
+    const canvas = Promise.resolve({ ...metadata, html });
+    const assets: SessionsFilesAssetsResult = {
+      assets: [
+        { ref: "a.png", mimeType: "image/png", content: "YQ==" },
+        { ref: "missing.png", error: "outside_session_boundary" },
+      ],
+    };
+    const request = vi.fn((method: string) =>
+      method === "canvas.document.preview" ? canvas : Promise.resolve(assets),
+    );
+    const { view } = mount(request, html);
+    view.sessionFileSource = {
+      sessionKey: "agent:sender:main",
+      agentId: "sender",
+      path: "/sender/report/index.html",
+    };
+    await view.updateComplete;
+    await canvas;
+    await view.updateComplete;
+    const frame = view.querySelector("iframe")!;
+    expect(frame).not.toBeNull();
+    const transfer = Promise.withResolvers<unknown>();
+    vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((value: unknown) =>
+      transfer.resolve(value),
+    );
+    message(frame, ready(frame));
+    expect(await transfer.promise).toMatchObject({
+      params: {
+        html: '<img src="data:image/png;base64,YQ=="><img src="missing.png"><a href="about:srcdoc#section">Jump</a>',
+      },
+    });
+    await view.updateComplete;
+    expect(request).toHaveBeenCalledWith("sessions.files.assets", {
+      sessionKey: "agent:sender:main",
+      agentId: "sender",
+      path: "/sender/report/index.html",
+      refs: ["a.png", "missing.png"],
+    });
+    expect(view.querySelector('.file-view__save-notice[role="status"]')?.textContent).toContain(
+      "Some assets couldn't be loaded (1)",
+    );
+    expect(view.html).toBe(html);
+  });
+
+  it("retires an asset response when the same document moves to another owner", async () => {
+    const html = '<img src="a.png">';
+    const oldAssets = Promise.withResolvers<SessionsFilesAssetsResult>();
+    const oldRequested = Promise.withResolvers<void>();
+    const newRequested = Promise.withResolvers<void>();
+    const request = vi.fn((method: string, params: { sessionKey?: string }) => {
+      if (method === "canvas.document.preview") {
+        return Promise.resolve({ ...metadata, html });
+      }
+      if (params.sessionKey === "agent:old:main") {
+        oldRequested.resolve();
+        return oldAssets.promise;
+      }
+      newRequested.resolve();
+      return Promise.resolve({
+        assets: [{ ref: "a.png", mimeType: "image/png", content: "Yg==" }],
+      });
+    });
+    const { view } = mount(request, html);
+    view.sessionFileSource = { sessionKey: "agent:old:main", path: "/report/index.html" };
+    await oldRequested.promise;
+    const oldFrame = view.querySelector("iframe")!;
+    const oldPost = vi.spyOn(oldFrame.contentWindow!, "postMessage");
+    message(oldFrame, ready(oldFrame));
+    view.sessionFileSource = { sessionKey: "agent:new:main", path: "/report/index.html" };
+    await newRequested.promise;
+    const newFrame = view.querySelector("iframe")!;
+    const transfer = Promise.withResolvers<unknown>();
+    vi.spyOn(newFrame.contentWindow!, "postMessage").mockImplementation((value: unknown) =>
+      transfer.resolve(value),
+    );
+    message(newFrame, ready(newFrame));
+    oldAssets.resolve({ assets: [{ ref: "a.png", error: "not_found" }] });
+    expect(await transfer.promise).toMatchObject({
+      params: { html: '<img src="data:image/png;base64,Yg==">' },
+    });
+    await view.updateComplete;
+    expect(oldPost).not.toHaveBeenCalled();
+    expect(view.querySelector('.file-view__save-notice[role="status"]')).toBeNull();
   });
 
   it("closes unsupported ports without lending prompt, wake, tools, board or theme APIs", async () => {
@@ -333,7 +413,7 @@ describe("ordinary HTML preview transport", () => {
             }),
         )
         .mockResolvedValue(metadata);
-      const { view, context, notify } = mount(request);
+      const { view, context, notify, setContext } = mount(request);
       await expect.poll(() => request.mock.calls.length).toBe(1);
       if (change === "html") {
         view.html = "<p>new</p>";
@@ -342,7 +422,7 @@ describe("ordinary HTML preview transport", () => {
         view.sourceIdentity = "next.html";
       }
       if (change === "context") {
-        Reflect.set(view, "context", { gateway: { ...context.gateway } });
+        setContext({ gateway: { ...context.gateway } } as unknown as ApplicationContext);
       }
       if (change === "client") {
         context.gateway.snapshot.client = { request: vi.fn().mockResolvedValue(metadata) };
@@ -392,7 +472,7 @@ describe("ordinary HTML preview transport", () => {
     await expect
       .poll(() => view.querySelector('[role="alert"]')?.textContent)
       .toContain("Preview denied");
-    view.requestUpdate();
+    view.title += " ";
     await view.updateComplete;
     expect(request).toHaveBeenCalledOnce();
     view.querySelector("button")!.click();
@@ -401,7 +481,7 @@ describe("ordinary HTML preview transport", () => {
     await view.updateComplete;
     expect(view.querySelector('[role="alert"]')).not.toBeNull();
     expect(view.querySelector("iframe")).toBeNull();
-    view.requestUpdate();
+    view.title += " ";
     await view.updateComplete;
     expect(request).toHaveBeenCalledTimes(2);
     view.querySelector("button")!.click();

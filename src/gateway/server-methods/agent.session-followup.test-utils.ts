@@ -2,21 +2,33 @@
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import * as announceDelivery from "../../agents/subagents/announce/subagent-announce-delivery.js";
+import { sourceOwnerChangedResult } from "../../agents/subagents/announce/subagent-announce-dispatch.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { restoreSubagentRunsFromDisk } from "../../agents/subagents/registry/subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
+  getSubagentRunByRunId,
   initSubagentRegistry,
+  resumeSubagentRun,
   registerSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import { upsertSubagentRunRowInDatabase } from "../../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
+  testing as registryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import * as admissionController from "../agent-turn/agent-admission-controller.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { withPluginSubagentTestState } from "./agent.spawned-child.test-support.js";
+import {
+  seedReleasedYieldedSubagentRun,
+  withPluginSubagentTestState,
+} from "./agent.spawned-child.test-support.js";
 import {
   backendGatewayClient,
   describe0AfterEach0,
@@ -127,7 +139,7 @@ describe("gateway agent follow-up activity", () => {
       hiddenTranscript,
     }) => {
       await withPluginSubagentTestState("openclaw-parent-followup-", async ({ stateDir: root }) => {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const requesterSessionKey = "agent:main:main";
         const childSessionKey = unregistered
           ? "agent:main:dashboard:parent"
@@ -142,7 +154,7 @@ describe("gateway agent follow-up activity", () => {
         const previousRunId = "previous-review";
         const runId = "continued-review";
         if (!unregistered && !register && !persisted) {
-          addSubagentRunForTests({
+          await addSubagentRunForTests({
             runId: previousRunId,
             runTimeoutSeconds: budget,
             childSessionKey,
@@ -167,7 +179,7 @@ describe("gateway agent follow-up activity", () => {
           });
         }
         if (sourceTool !== "sessions_send") {
-          addSubagentRunForTests({
+          await addSubagentRunForTests({
             runId: "settled-grandchild",
             childSessionKey: "agent:main:subagent:grandchild",
             requesterSessionKey: childSessionKey,
@@ -195,57 +207,21 @@ describe("gateway agent follow-up activity", () => {
           canonicalKey: childSessionKey,
         }));
         if (persisted) {
-          // Frozen v2026.9.6 (eb377ac59e6c) codec/normalizer output after sessions_yield.
-          // Seed the released bytes without passing through the candidate's serializer.
-          runOpenClawStateWriteTransaction((database) =>
-            upsertSubagentRunRowInDatabase(database, {
-              run_id: previousRunId,
-              child_session_key: childSessionKey,
-              controller_session_key: requesterSessionKey,
-              requester_session_key: requesterSessionKey,
-              requester_store_path: storePath,
-              controller_store_path: storePath,
-              created_at: 1,
-              payload_json: JSON.stringify({
-                runId: previousRunId,
-                taskRunId: previousRunId,
-                childSessionKey,
-                controllerSessionKey: requesterSessionKey,
-                requesterSessionKey,
-                requesterStorePath: storePath,
-                controllerStorePath: storePath,
-                requesterDisplayKey: requesterSessionKey,
-                requesterAgentId: "main",
-                task: "Review the candidate",
-                cleanup: "keep",
-                expectsCompletionMessage: true,
-                spawnMode: "run",
-                runTimeoutSeconds: budget,
-                generation: 1,
-                createdAt: 1,
-                execution: {
-                  status: "terminal",
-                  startedAt: 1,
-                  endedAt: 2,
-                  lifecycleGeneration: "released-generation",
-                },
-                completion: { required: true },
-                delivery: { status: "pending" },
-                sessionStartedAt: 1,
-                accumulatedRuntimeMs: 0,
-                cleanupHandled: false,
-                pauseReason: "sessions_yield",
-              }),
-            }),
-          );
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
+          seedReleasedYieldedSubagentRun({
+            previousRunId,
+            childSessionKey,
+            requesterSessionKey,
+            storePath,
+            budget,
+          });
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
           await initSubagentRegistry();
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
             runId: previousRunId,
             runTimeoutSeconds: budget,
             pauseReason: "sessions_yield",
           });
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).not.toHaveProperty(
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).not.toHaveProperty(
             "childSessionIdentity",
           );
         }
@@ -265,7 +241,7 @@ describe("gateway agent follow-up activity", () => {
               typeof import("../../agents/subagents/registry/subagent-registry.js")
             >("../../agents/subagents/registry/subagent-registry.js");
             expect(
-              replaceSubagentRunAfterSteerCore({
+              await replaceSubagentRunAfterSteerCore({
                 previousRunId,
                 nextRunId: "successor-review",
               }),
@@ -281,7 +257,7 @@ describe("gateway agent follow-up activity", () => {
             currentEntry = { ...currentEntry, lifecycleRevision: "new-revision" };
           }
         }
-        const previousRun = structuredClone(getSubagentRunByChildSessionKey(childSessionKey));
+        const previousRun = structuredClone(await getSubagentRunByChildSessionKey(childSessionKey));
         const admissionStarted = createDeferred();
         const releaseAdmission = createDeferred();
         const createController = admissionController.createAgentAdmissionController;
@@ -380,7 +356,7 @@ describe("gateway agent follow-up activity", () => {
           expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "ok" });
         }
         if (persisted) {
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
             runId,
             taskRunId: previousRunId,
             runTimeoutSeconds: budget,
@@ -388,13 +364,309 @@ describe("gateway agent follow-up activity", () => {
             requesterSessionKey,
             execution: { status: "running" },
           });
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).not.toHaveProperty(
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).not.toHaveProperty(
             "childSessionIdentity",
           );
         } else {
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).toEqual(previousRun);
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).toEqual(previousRun);
         }
       });
     },
   );
+});
+
+describe("gateway agent completed-child delivery", () => {
+  afterEach(describe0AfterEach0);
+
+  for (const boundary of [
+    "transcript read",
+    "delivery admission",
+    "restored transcript read",
+  ] as const) {
+    it(`announces both executions when follow-up starts during the first ${boundary}`, async ({
+      signal,
+    }) => {
+      await withPluginSubagentTestState("openclaw-followup-delivery-", async ({ stateDir }) => {
+        const registry = await vi.importActual<
+          typeof import("../../agents/subagents/registry/subagent-registry.js")
+        >("../../agents/subagents/registry/subagent-registry.js");
+        const reads = await vi.importActual<
+          typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+        >("../../agents/subagents/registry/subagent-registry-read.js");
+        const announce = await vi.importActual<
+          typeof import("../../agents/subagents/announce/subagent-announce.js")
+        >("../../agents/subagents/announce/subagent-announce.js");
+        mocks.getLatestSubagentRunByChildSessionKey.mockImplementation(
+          reads.getLatestSubagentRunByChildSessionKey,
+        );
+        mocks.replaceSubagentRunAfterSteer.mockImplementation(
+          registry.replaceSubagentRunAfterSteerCore,
+        );
+        const childSessionKey = "agent:main:dashboard:kept-child";
+        const requesterSessionKey = "agent:main:main";
+        const firstRunId = "first-execution";
+        const secondRunId = "second-execution";
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const entry = {
+          sessionId: "kept-child-session",
+          lifecycleRevision: "kept-child-revision",
+          spawnedBy: requesterSessionKey,
+          updatedAt: Date.now(),
+        };
+        sessionAccessor.ensureSessionEntrySync(
+          { agentId: "main", storePath, sessionKey: childSessionKey },
+          entry,
+        );
+        sessionAccessor.ensureSessionEntrySync(
+          { agentId: "main", storePath, sessionKey: requesterSessionKey },
+          {
+            sessionId: "parent-session",
+            lifecycleRevision: "parent-revision",
+            updatedAt: Date.now(),
+          },
+        );
+        mocks.userTurnStorePath = storePath;
+        mocks.loadSessionEntry.mockReturnValue({
+          cfg: {},
+          storePath,
+          entry,
+          canonicalKey: childSessionKey,
+        });
+        mocks.updateSessionStore.mockResolvedValue(undefined);
+        await addSubagentRunForTests({
+          runId: firstRunId,
+          childSessionKey,
+          childSessionIdentity: entry,
+          requesterSessionKey,
+          requesterDisplayKey: requesterSessionKey,
+          task: "First task",
+          cleanup: "keep",
+          spawnMode: "session",
+          expectsCompletionMessage: true,
+          completionTarget: "parent",
+          generation: 1,
+          createdAt: Date.now() - 20,
+          execution: {
+            status: "terminal",
+            startedAt: Date.now() - 20,
+            endedAt: Date.now() - 10,
+            outcome: { status: "ok" },
+            transcriptTarget: {
+              agentId: "main",
+              storePath,
+              sessionKey: childSessionKey,
+              sessionId: entry.sessionId,
+            },
+          },
+          completion: {
+            required: true,
+            terminalReply: { disposition: "visible", text: "FIRST_ONLY" },
+          },
+          delivery: { status: "pending" },
+        });
+        const paused = createDeferred();
+        const release = createDeferred();
+        const firstAnnounceFinished = createDeferred();
+        const secondAnnounceFinished = createDeferred();
+        const receipts = new Map([
+          [firstRunId, createDeferred()],
+          [secondRunId, createDeferred()],
+        ]);
+        const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
+          for (const [runId, receipt] of receipts) {
+            if (getSubagentRunByRunId(runId)?.cleanupCompletedAt) {
+              receipt.resolve();
+            }
+          }
+        });
+        mocks.registryAnnounce.mockImplementation(async (params) => {
+          try {
+            return await announce.runSubagentAnnounceFlow(params);
+          } finally {
+            (params.childRunId === firstRunId
+              ? firstAnnounceFinished
+              : secondAnnounceFinished
+            ).resolve();
+          }
+        });
+        const transcript = vi
+          .spyOn(sessionAccessor, "findTranscriptEvent")
+          .mockImplementation(async (_target, match) => {
+            expect(match.kind).toBe("visible-final");
+            if (match.kind !== "visible-final") {
+              throw new Error("Expected an exact-run visible transcript read");
+            }
+            if (match.runId === firstRunId && boundary !== "delivery admission") {
+              paused.resolve();
+              await release.promise;
+            }
+            return {
+              event: {
+                type: "message",
+                message: {
+                  role: "assistant",
+                  stopReason: "stop",
+                  content: [
+                    {
+                      type: "text",
+                      text: match.runId === firstRunId ? "FIRST_ONLY" : "SECOND_ONLY",
+                    },
+                  ],
+                  __openclaw: { runId: match.runId },
+                },
+              },
+            };
+          });
+        const handoffs: Parameters<typeof announceDelivery.deliverSubagentAnnouncement>[0][] = [];
+        const deliver = vi
+          .spyOn(announceDelivery, "deliverSubagentAnnouncement")
+          .mockImplementation(async (params) => {
+            if (params.sourceRunId === firstRunId && boundary === "delivery admission") {
+              paused.resolve();
+              await release.promise;
+            }
+            if (params.isSourceSessionEffectsAllowed?.() === false) {
+              return sourceOwnerChangedResult();
+            }
+            handoffs.push(params);
+            return {
+              delivered: true,
+              disposition: "delivered",
+              path: "direct",
+              deliveredAt: Date.now(),
+            };
+          });
+        const provider = createDeferred<{
+          payloads: { text: string }[];
+          meta: { durationMs: number };
+        }>();
+        const secondWait = createDeferred<{
+          status: "ok";
+          startedAt: number;
+          endedAt: number;
+          terminalReply: { disposition: "visible"; text: string };
+        }>();
+        const commandStarted = createDeferred();
+        mocks.agentCommand.mockImplementationOnce(() => {
+          commandStarted.resolve();
+          return provider.promise;
+        });
+        mocks.registryCallGateway.mockImplementation(async (request) => {
+          if (request.method !== "agent.wait") {
+            throw new Error(`Unexpected child-session effect: ${request.method}`);
+          }
+          expect(request.params).toMatchObject({ runId: secondRunId });
+          return await secondWait.promise;
+        });
+        const context = makeContext();
+        const client = backendGatewayClient();
+        const terminal = createDeferred();
+        const respond = vi.fn((ok, payload) => {
+          if (!ok || payload?.status === "ok" || payload?.status === "error") {
+            terminal.resolve();
+          }
+        });
+        let admitted = false;
+        try {
+          if (boundary === "restored transcript read") {
+            await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+          }
+          resumeSubagentRun(firstRunId);
+          await withinTest(paused.promise, signal);
+          await invokeAgent(
+            {
+              sessionKey: childSessionKey,
+              message: "Second task",
+              idempotencyKey: secondRunId,
+            },
+            { context, respond, reqId: secondRunId, client, flushDispatch: false },
+          );
+          admitted = true;
+          await withinTest(commandStarted.promise, signal);
+          expect(getSubagentRunByRunId(secondRunId)).toMatchObject({
+            generation: 2,
+            task: "Second task",
+            execution: { status: "running" },
+          });
+          if (boundary === "restored transcript read") {
+            expect(loadSubagentRegistryFromSqlite().get(firstRunId)).toMatchObject({
+              runId: firstRunId,
+              generation: 1,
+              execution: { status: "terminal", outcome: { status: "ok" } },
+              completion: { terminalReply: { disposition: "visible", text: "FIRST_ONLY" } },
+              delivery: { status: "pending" },
+            });
+          }
+          release.resolve();
+          await withinTest(firstAnnounceFinished.promise, signal);
+          expect(handoffs).toHaveLength(1);
+          expect(handoffs[0]).toMatchObject({
+            sourceRunId: firstRunId,
+            directIdempotencyKey: `announce:v1:${childSessionKey}:${firstRunId}`,
+            internalEvents: [{ taskLabel: "First task", status: "ok", result: "FIRST_ONLY" }],
+          });
+          await withinTest(receipts.get(firstRunId)!.promise, signal);
+          expect(getSubagentRunByRunId(firstRunId)?.delivery).toMatchObject({
+            status: "delivered",
+            deliveredAt: expect.any(Number),
+          });
+          expect(getSubagentRunByRunId(secondRunId)).toMatchObject({
+            execution: { status: "running" },
+            delivery: { status: "pending" },
+            cleanupHandled: false,
+          });
+          expect(
+            sessionAccessor.loadSessionEntryReadOnly({
+              agentId: "main",
+              storePath,
+              sessionKey: childSessionKey,
+            }),
+          ).toMatchObject(entry);
+          provider.resolve({ payloads: [{ text: "SECOND_ONLY" }], meta: { durationMs: 1 } });
+          secondWait.resolve({
+            status: "ok",
+            startedAt: Date.now() - 1,
+            endedAt: Date.now(),
+            terminalReply: { disposition: "visible", text: "SECOND_ONLY" },
+          });
+          await withinTest(terminal.promise, signal);
+          await withinTest(secondAnnounceFinished.promise, signal);
+          await withinTest(receipts.get(secondRunId)!.promise, signal);
+          expect(handoffs).toHaveLength(2);
+          expect(handoffs[1]).toMatchObject({
+            sourceRunId: secondRunId,
+            directIdempotencyKey: `announce:v1:${childSessionKey}:${secondRunId}`,
+            internalEvents: [{ taskLabel: "Second task", status: "ok", result: "SECOND_ONLY" }],
+          });
+          expect(getSubagentRunByRunId(secondRunId)?.delivery).toMatchObject({
+            status: "delivered",
+            deliveredAt: expect.any(Number),
+          });
+          resumeSubagentRun(firstRunId);
+          resumeSubagentRun(secondRunId);
+          await registryTesting.sweepOnceForTests();
+          await settleSubagentRegistryPersistenceWork();
+          expect(handoffs).toHaveLength(2);
+        } finally {
+          release.resolve();
+          provider.resolve({ payloads: [{ text: "SECOND_ONLY" }], meta: { durationMs: 1 } });
+          secondWait.resolve({
+            status: "ok",
+            startedAt: Date.now() - 1,
+            endedAt: Date.now(),
+            terminalReply: { disposition: "visible", text: "SECOND_ONLY" },
+          });
+          if (admitted) {
+            await terminal.promise;
+          }
+          await resetSubagentRegistryForTests({ persist: false });
+          unsubscribe();
+          transcript.mockRestore();
+          deliver.mockRestore();
+          mocks.getLatestSubagentRunByChildSessionKey.mockReset();
+          mocks.replaceSubagentRunAfterSteer.mockReset();
+        }
+      });
+    });
+  }
 });

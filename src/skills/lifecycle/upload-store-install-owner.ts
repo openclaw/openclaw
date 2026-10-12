@@ -21,6 +21,7 @@ export async function withSkillUploadInstallOwner<T>(
   const cleanupContext = {
     environment: context.environment,
     existingSchemaPath: context.existingSchemaPath,
+    stateIntegrity: context.stateIntegrity,
   };
   const assertOwned = () => {
     if (!active || !identity) {
@@ -47,25 +48,24 @@ export async function withSkillUploadInstallOwner<T>(
               context.admission.databasePath,
               cleanupContext,
               assertOwned,
+              observed,
             );
             if (!store) {
               throw new Error("Skill upload cleanup lost its original shared database");
             }
             const errors: unknown[] = [];
             try {
-              if (!released) {
-                const input = {
-                  ...lease,
-                  sharedStateIdentity: identity,
-                };
-                await runSqliteWorkerStoreOperation(
-                  store,
-                  (scope) => scope.execute({ type: "skillUploads.release", input }),
-                  cleanupContext,
-                  assertOwned,
-                );
-                released = true;
-              }
+              const input = {
+                ...lease,
+                sharedStateIdentity: identity,
+              };
+              await runSqliteWorkerStoreOperation(
+                store,
+                (scope) => scope.execute({ type: "skillUploads.release", input }),
+                cleanupContext,
+                assertOwned,
+              );
+              released = true;
             } catch (error) {
               errors.push(error);
             }

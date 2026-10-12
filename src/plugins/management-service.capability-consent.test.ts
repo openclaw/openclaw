@@ -15,7 +15,6 @@ import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.
 import {
   configSnapshot,
   emptyMetadataSnapshot,
-  hostedDiffsEntry,
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -29,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   records: {} as Record<string, import("../config/types.plugins.js").PluginInstallRecord>,
   replaceConfig: vi.fn(),
   writeRecords: vi.fn(),
-  slotSelection: vi.fn((config) => ({ config, warnings: [] })),
+  slotSelection: vi.fn((config) => config),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -175,39 +174,6 @@ describe("managed plugin capability consent", () => {
         persistedSourceConfig: config,
       };
     });
-  });
-
-  it("inspects UI capabilities without activating a disabled plugin", async () => {
-    const enabled = false;
-    const record = installRecord();
-    const snapshot = configureExternalPlugin(record, enabled);
-    snapshot.byPluginId.get("community-plugin")!.uiCapabilities = ["page", "widget"];
-    const inspection = await inspectManagedPlugin({
-      config: { plugins: { entries: { "community-plugin": { enabled } } } },
-      env: {},
-      pluginId: "community-plugin",
-    });
-    expect(inspection.overview?.capabilities?.ui).toEqual(["page", "widget"]);
-    expect(inspection.plugin.enabled).toBe(enabled);
-    expect(fs.existsSync(path.join(record.installPath!, "runtime-loaded.txt"))).toBe(false);
-    expect(inspection.declared).not.toHaveProperty("uiCapabilities");
-  });
-
-  it("normalizes optional UI metadata before installation", async () => {
-    const uiCapabilities = ["widget", "page", "widget"];
-    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mocks.officialCatalog.mockResolvedValue({
-      source: "hosted",
-      entries: [
-        {
-          ...hostedDiffsEntry,
-          openclaw: { ...hostedDiffsEntry.openclaw, uiCapabilities },
-        },
-      ],
-    });
-    const inspection = await inspectManagedPlugin({ config: {}, env: {}, pluginId: "diffs" });
-    expect(inspection.plugin.installed).toBe(false);
-    expect(inspection.overview?.capabilities?.ui).toEqual(["page", "widget"]);
   });
 
   it.each([
@@ -553,7 +519,7 @@ describe("managed plugin capability consent", () => {
           config,
           env,
           pluginId: inspection.plugin.id,
-          acknowledge: { reviewToken: inspection.reviewToken },
+          acknowledge: { reviewToken },
         }),
       ).resolves.toBeUndefined();
     }

@@ -4,6 +4,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { decodeXml } from "../src/shared/xml.ts";
 import { selectDeterministicTranslation } from "./android-app-i18n.ts";
 import { compareAscii as compareCodeUnits } from "./lib/canonical-json.mjs";
+import {
+  type NativeI18nInventoryEntry,
+  parseNativeI18nInventory,
+} from "./native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -189,7 +193,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(verbatim: self.item.title)",
-    "Text(verbatim: self.item.trailing)",
+    'Text(verbatim: "chat")',
     "Text(verbatim: self.item.detail)",
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
     "private func actionButton(\n        _ title: OpenClawTextValue",
@@ -264,7 +268,7 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
   ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(self.item.title)",
-    "Text(self.item.trailing)",
+    'Text("chat")',
     "Text(self.item.detail)",
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: String",
     "private func actionButton(\n        _ title: String",
@@ -312,18 +316,6 @@ type Catalog = {
   sourceLanguage?: string;
   strings?: Record<string, CatalogEntry>;
   version?: string;
-};
-
-type NativeSourceEntry = {
-  id: string;
-  source: string;
-  sites: Array<{ kind: string; path: string }>;
-  surface: string;
-};
-
-type NativeSourceArtifact = {
-  entries: NativeSourceEntry[];
-  version: number;
 };
 
 type NativeTranslationArtifact = {
@@ -418,15 +410,16 @@ export function selectInfoPlistTranslation(
 export function infoPlistTranslationCandidates(
   artifact: NativeTranslationArtifact | undefined,
   sourceId: string,
-  _source: string,
 ): string[] {
   const translated = artifact?.translations[sourceId];
   return typeof translated === "string" ? [translated] : [];
 }
 
-function infoPlistSourceIds(nativeSource: NativeSourceArtifact): Map<string, string> {
+function infoPlistSourceIds(
+  nativeSource: readonly NativeI18nInventoryEntry[],
+): Map<string, string> {
   return new Map(
-    nativeSource.entries.flatMap((entry) =>
+    nativeSource.flatMap((entry) =>
       entry.sites
         .filter((site) => site.kind === "plist-string")
         .map((site) => [[site.path, entry.source].join("\u0000"), entry.id] as const),
@@ -446,7 +439,7 @@ function renderInfoPlistStrings(
     if (!sourceId) {
       throw new Error(`missing native InfoPlist source id for ${sourcePath}:${key}`);
     }
-    const candidates = infoPlistTranslationCandidates(artifact, sourceId, source);
+    const candidates = infoPlistTranslationCandidates(artifact, sourceId);
     const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
     return [
       `/* OpenClaw source: ${JSON.stringify(source)} */`,
@@ -472,7 +465,7 @@ function isAppleCatalogKind(kind: string): boolean {
 }
 
 function isAppleCatalogEntry(
-  entry: NativeSourceEntry,
+  entry: NativeI18nInventoryEntry,
   sourcePrefixes: readonly string[],
   exclusions: ReadonlySet<string>,
 ): boolean {
@@ -517,11 +510,11 @@ function appleCatalogValue(value: string): string {
 
 function buildAppleCatalog(
   existingCatalog: Catalog,
-  nativeSource: NativeSourceArtifact,
+  nativeSource: readonly NativeI18nInventoryEntry[],
   translations: readonly NativeTranslationArtifact[],
-  includesEntry: (entry: NativeSourceEntry) => boolean,
+  includesEntry: (entry: NativeI18nInventoryEntry) => boolean,
 ): AppleCatalogBuild {
-  const catalogEntries = nativeSource.entries
+  const catalogEntries = nativeSource
     .filter(includesEntry)
     .map((entry) => [entry, appleCatalogValue(entry.source)] as const);
   const sources = [...new Set(catalogEntries.map(([, source]) => source))].toSorted(
@@ -529,7 +522,7 @@ function buildAppleCatalog(
   );
   const catalogIds = new Set(catalogEntries.map(([entry]) => entry.id));
   const existingStrings = existingCatalog.strings ?? {};
-  const nativeEntryById = new Map(nativeSource.entries.map((entry) => [entry.id, entry]));
+  const nativeEntryById = new Map(nativeSource.map((entry) => [entry.id, entry]));
   const translationsByLocale = new Map(
     translations.map((artifact) => {
       const bySource = new Map<string, string[]>();
@@ -599,7 +592,7 @@ function buildAppleCatalog(
 
 export function buildIosCatalog(
   existingCatalog: Catalog,
-  nativeSource: NativeSourceArtifact,
+  nativeSource: readonly NativeI18nInventoryEntry[],
   translations: readonly NativeTranslationArtifact[],
 ): AppleCatalogBuild {
   return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
@@ -609,7 +602,7 @@ export function buildIosCatalog(
 
 export function buildMacosCatalog(
   existingCatalog: Catalog,
-  nativeSource: NativeSourceArtifact,
+  nativeSource: readonly NativeI18nInventoryEntry[],
   translations: readonly NativeTranslationArtifact[],
 ): AppleCatalogBuild {
   return buildAppleCatalog(existingCatalog, nativeSource, translations, (entry) =>
@@ -702,9 +695,9 @@ async function readAppleCatalogBuild(
   const existingCatalog = JSON.parse(
     await readFile(path.join(ROOT, catalogPath), "utf8"),
   ) as Catalog;
-  const nativeSource = JSON.parse(
+  const nativeSource = parseNativeI18nInventory(
     await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
-  ) as NativeSourceArtifact;
+  );
   const translations = await readNativeTranslations();
   return buildCatalog(existingCatalog, nativeSource, translations);
 }
@@ -779,9 +772,9 @@ function validateCatalog(
 
 async function syncIosInfoPlist(write: boolean): Promise<number> {
   const translations = await readNativeTranslations();
-  const nativeSource = JSON.parse(
+  const nativeSource = parseNativeI18nInventory(
     await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
-  ) as NativeSourceArtifact;
+  );
   const sourceIds = infoPlistSourceIds(nativeSource);
   let checked = 0;
   for (const target of IOS_INFO_PLIST_TARGETS) {
@@ -941,9 +934,7 @@ export async function compileMacosLocalizations(outputDir: string) {
     throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG_PATH}`);
   }
   const [nativeSource, translations, infoPlistSource] = await Promise.all([
-    readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8").then(
-      (source) => JSON.parse(source) as NativeSourceArtifact,
-    ),
+    readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8").then(parseNativeI18nInventory),
     readNativeTranslations(),
     readFile(path.join(ROOT, MACOS_INFO_PLIST_PATH), "utf8"),
   ]);

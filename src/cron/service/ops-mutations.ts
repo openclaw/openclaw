@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   type CronActiveJobMarker,
   noteActiveCronJobRemoval,
@@ -207,16 +207,8 @@ export async function add(
     if (normalizedId && state.store?.jobs.some((job) => job.id === normalizedId)) {
       throw new Error(`cron job already exists: ${normalizedId}`);
     }
-    const explicitOwnerAgentId =
-      normalizeOptionalAgentId(normalizedInput.agentId) ??
-      parseAgentSessionKey(normalizeOptionalString(normalizedInput.sessionKey))?.agentId;
-    const retainedLegacyAgentId = normalizeOptionalAgentId(state.deps.legacyDefaultAgentId);
-    const creationInput =
-      !explicitOwnerAgentId && retainedLegacyAgentId
-        ? { ...normalizedInput, agentId }
-        : normalizedInput;
     const snapshot = snapshotStoreForRollback(state);
-    const job = createJob(state, creationInput, {
+    const job = createJob(state, normalizedInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       toolsAllowExecTarget: opts?.toolsAllowExecTarget,
@@ -224,6 +216,9 @@ export async function add(
     });
     if (opts?.createdActor) {
       job.createdActor = structuredClone(opts.createdActor);
+    }
+    if (opts?.sourceConversation) {
+      job.sourceConversation = structuredClone(opts.sourceConversation);
     }
     if (opts?.skillLibrarySelections) {
       job.skillLibrarySelections = structuredClone(opts.skillLibrarySelections);
@@ -477,11 +472,7 @@ export async function remove(
       },
     );
 
-    const agentId = resolveCronJobEffectiveAgentId(
-      removedJob,
-      resolveCurrentDefaultAgentId(state),
-      state.deps.legacyDefaultAgentId,
-    );
+    const agentId = resolveCronJobEffectiveAgentId(removedJob, resolveCurrentDefaultAgentId(state));
     const sessionStorePath =
       state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
     let activeRunCancellationRequested = false;
@@ -561,7 +552,7 @@ export async function remove(
     }
   };
   if (activeMarker) {
-    onCronJobInactive(activeMarker, () => void cleanup());
+    onCronJobInactive(activeMarker, () => void trackAsyncWork(cleanup));
     if (!outcome.ok) {
       throw outcome.error;
     }
@@ -596,9 +587,7 @@ export async function removeAgentJobsTransactional<T>(
     const defaultAgentId = resolveCurrentDefaultAgentId(state);
     const previous = structuredClone(state.store);
     const removedJobs = previous.jobs.filter(
-      (job) =>
-        tryResolveCronJobEffectiveAgentId(job, defaultAgentId, state.deps.legacyDefaultAgentId) ===
-        id,
+      (job) => tryResolveCronJobEffectiveAgentId(job, defaultAgentId) === id,
     );
     if (removedJobs.length === 0) {
       return await commit();

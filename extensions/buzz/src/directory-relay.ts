@@ -52,7 +52,6 @@ export async function queryBuzzDirectoryProfiles(params: {
   relay: Relay;
   state: BuzzDirectoryState;
   publicKeys: string[];
-  onTimeout?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<void> {
   for (const authors of chunkItems(params.publicKeys, BUZZ_PROFILE_QUERY_CHUNK_SIZE)) {
@@ -66,7 +65,6 @@ export async function queryBuzzDirectoryProfiles(params: {
       onEvent: (event) => {
         params.state.applyProfileEvent(event);
       },
-      onTimeout: params.onTimeout,
       signal: params.signal,
     });
   }
@@ -113,11 +111,7 @@ export function startBuzzDirectoryRelay(params: {
   onError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
   onRoomChanged?: () => void;
-}): {
-  replaceProfilePublicKeys: (publicKeys: string[]) => void;
-  refreshRooms: (channelIds: string[]) => Promise<void>;
-  close: () => void;
-} {
+}) {
   let closed = false;
   let profileGeneration: ProfileSubscriptionGeneration | undefined;
   let queuedProfilePublicKeys: string[] | undefined;

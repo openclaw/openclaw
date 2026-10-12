@@ -6,12 +6,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -19,7 +21,6 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
-  captureSessionTranscriptReconcileGeneration,
   closeSessionTranscriptReconcileWorkerPool,
   getSessionTranscriptReconcileWorkerPoolSnapshot,
   runSessionTranscriptReconcileOperation,
@@ -50,23 +51,18 @@ function readAgentDatabaseLeaseIds(pathname: string, env: NodeJS.ProcessEnv): st
 
 function observeCanonicalWriterLeases() {
   const leases = new Map<string, string>();
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
-  const spy = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        const facts = request.facts;
-        if (
-          request.stage === "open" &&
-          isRecord(facts) &&
-          typeof facts.databasePath === "string" &&
-          typeof facts.leaseId === "string"
-        ) {
-          leases.set(facts.databasePath, facts.leaseId);
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const spy = probe.admission(admission, (request, grant, admit) => {
+    const facts = request.facts;
+    if (
+      request.stage === "open" &&
+      isRecord(facts) &&
+      typeof facts.databasePath === "string" &&
+      typeof facts.leaseId === "string"
+    ) {
+      leases.set(facts.databasePath, facts.leaseId);
+    }
+    admit(request, grant);
+  });
   return { leases, restore: () => spy.mockRestore() };
 }
 
@@ -85,6 +81,8 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
       },
     );
     await waitForSessionTranscriptIndexReconcile(options);
+    // Seeding may retain a worker writer; this fixture starts with only its native handle.
+    await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
     const database = openOpenClawAgentDatabase(options);
     const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
     expect(nativeLeases).toHaveLength(1);
@@ -161,6 +159,7 @@ it.each(["complete", "native-exit"] as const)(
           },
         );
         await waitForSessionTranscriptIndexReconcile(options);
+        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         const database = openOpenClawAgentDatabase(options);
         const baseline = readAgentDatabaseLeaseIds(database.path, env);
         expect(baseline).toHaveLength(1);
@@ -193,7 +192,6 @@ it.each(["complete", "native-exit"] as const)(
           postMessage(message, options);
         };
       };
-      const generation = captureSessionTranscriptReconcileGeneration();
       const direct = reconcileSessionTranscriptIndexes(targets[0]!);
       startSessionTranscriptIndexReconcile(targets[1]!);
       operations = Promise.allSettled([
@@ -205,7 +203,6 @@ it.each(["complete", "native-exit"] as const)(
         expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toMatchObject({
           workers: 1,
           activeTasks: 1,
-          pendingTasks: 2,
         });
       });
       const activePath = openOpenClawAgentDatabase(targets[0]!).path;
@@ -224,7 +221,6 @@ it.each(["complete", "native-exit"] as const)(
       const closing = closeSessionTranscriptReconcileWorkerPool().then(() => {
         closed = true;
       });
-      const duringClose = captureSessionTranscriptReconcileGeneration();
       await expect(reconcileSessionTranscriptIndexes(targets[2]!)).rejects.toThrow(
         "lifecycle is closed",
       );
@@ -244,7 +240,8 @@ it.each(["complete", "native-exit"] as const)(
         ending === "native-exit" ? "rejected" : "fulfilled",
         "fulfilled",
       ]);
-      expect(modes).toEqual(
+      // Across agents, planning and lease recovery join the FIFO worker as they become ready.
+      expect(modes.toSorted()).toEqual(
         ending === "native-exit" ? ["disk", "disk", "release"] : ["disk", "disk"],
       );
       expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toMatchObject({
@@ -252,35 +249,24 @@ it.each(["complete", "native-exit"] as const)(
         activeTasks: 0,
         pendingTasks: 0,
       });
-      const retainedCanonicalLeases: string[] = [];
       for (const options of targets.slice(0, 2)) {
         const database = openOpenClawAgentDatabase(options);
         const actual = readAgentDatabaseLeaseIds(database.path, env);
-        const canonicalId = canonical.leases.get(database.path);
+        const canonicalId = expectDefined(canonical.leases.get(database.path), "canonical lease");
         const plannerId = plannerLeases.get(database.path);
         expect(canonicalId).toEqual(expect.any(String));
         expect(plannerId).toEqual(expect.any(String));
         expect(canonicalId).not.toBe(plannerId);
         expect(actual).not.toContain(plannerId);
-        const retained = actual.filter((id) => id === canonicalId);
-        retainedCanonicalLeases.push(...retained);
-        expect(actual).toEqual([...nativeLeases.get(database.path)!, ...retained].toSorted());
+        expect(actual).toEqual(
+          [...nativeLeases.get(database.path)!, canonicalId].toSorted((left, right) =>
+            left.localeCompare(right),
+          ),
+        );
         expect(
           database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
         ).toEqual([{ message_id: options.agentId, text: options.agentId }]);
       }
-      // The canonical executor retains one idle generation across both completed owners.
-      expect(retainedCanonicalLeases).toHaveLength(1);
-      const late = vi.fn(async () => undefined);
-      for (const captured of [generation, duringClose]) {
-        await expect(
-          runSessionTranscriptReconcileOperation(captured, late, {
-            agentId: targets[0]!.agentId,
-            path: openOpenClawAgentDatabase(targets[0]!).path,
-          }),
-        ).rejects.toThrow("lifecycle is closed");
-      }
-      expect(late).not.toHaveBeenCalled();
       observer.onTask = ({ worker }) => {
         expect(worker.threadId).not.toBe(threadId);
       };
@@ -341,6 +327,7 @@ it.each(["complete", "native-exit"] as const)(
         await waitForSessionTranscriptIndexReconcile(options);
       }
       await closeSessionTranscriptReconcileWorkerPool();
+      await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
       const database = openOpenClawAgentDatabase(options);
       const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
       expect(nativeLeases).toHaveLength(1);
@@ -509,15 +496,11 @@ it("revokes scheduled reconciliation before its first disk admission", async () 
     const task = vi.fn();
     observer.onTask = task;
     const operationSpy = vi.spyOn(pool, "runSessionTranscriptReconcileOperation");
-    operationSpy.mockImplementationOnce((generation, run, owner) =>
-      runOperation(
-        generation,
-        async (operation) => {
-          await resume.promise;
-          return run(operation);
-        },
-        owner,
-      ),
+    operationSpy.mockImplementationOnce((run, owner) =>
+      runOperation(async (operation) => {
+        await resume.promise;
+        return run(operation);
+      }, owner),
     );
     startSessionTranscriptIndexReconcile(options);
     completion = waitForSessionTranscriptIndexReconcile(options);

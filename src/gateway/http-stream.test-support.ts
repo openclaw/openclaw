@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI from "openai";
 import { expect } from "vitest";
 import {
@@ -5,6 +6,11 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
 } from "../agents/agent-run-terminal-outcome.js";
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
+import {
+  createSubscribedSessionHarness,
+  emitToolRun,
+} from "../agents/embedded-agent-subscribe.e2e-harness.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import {
   emitAgentEvent,
@@ -13,6 +19,71 @@ import {
 } from "../infra/agent-events.js";
 
 type SseEvent = { event?: string; data: string };
+
+export async function emitEmbeddedLateCommentary(opts: unknown): Promise<void> {
+  const runId = asOptionalObjectRecord(opts)?.runId;
+  if (typeof runId !== "string" || !runId) {
+    throw new Error("Expected a streaming HTTP run identity");
+  }
+  const { emit, subscription } = createSubscribedSessionHarness({ runId });
+  const commentary = "I will inspect the workspace.";
+  const finalText = "The check is complete.";
+  const message = (text: string) =>
+    makeAgentAssistantMessage({
+      api: "openai-completions",
+      content: [{ type: "text", text }],
+    });
+  try {
+    emit({ type: "message_start", message: message("") });
+    emit({
+      type: "message_update",
+      message: message(commentary),
+      assistantMessageEvent: { type: "text_delta", delta: commentary },
+    });
+    const completedCommentary = makeAgentAssistantMessage({
+      api: "openai-completions",
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: commentary,
+          textSignature: JSON.stringify({ v: 1, id: "commentary-http", phase: "commentary" }),
+        },
+        { type: "toolCall", id: "read-http", name: "read", arguments: {} },
+      ],
+    });
+    emit({
+      type: "message_update",
+      message: completedCommentary,
+      assistantMessageEvent: {
+        type: "toolcall_start",
+        contentIndex: 1,
+        partial: completedCommentary,
+      },
+    });
+    emit({ type: "message_end", message: completedCommentary });
+    emitToolRun({
+      emit,
+      toolName: "read",
+      toolCallId: "read-http",
+      args: {},
+      isError: false,
+      result: { content: [{ type: "text", text: "Read complete." }] },
+    });
+    const finalMessage = message(finalText);
+    emit({ type: "message_start", message: message("") });
+    emit({
+      type: "message_update",
+      message: finalMessage,
+      assistantMessageEvent: { type: "text_delta", delta: finalText },
+    });
+    emit({ type: "message_end", message: finalMessage });
+    emit({ type: "agent_end", messages: [completedCommentary, finalMessage] });
+    await subscription.waitForPendingEvents();
+  } finally {
+    subscription.unsubscribe();
+  }
+}
 
 export function parseSseEvents(text: string): SseEvent[] {
   const events: SseEvent[] = [];

@@ -1,3 +1,5 @@
+import { resolveUiTypeScriptPath } from "./vitest.ui-paths.mjs";
+
 // The shared UI runner reuses its module graph across fresh jsdom registries.
 // Tests in this list depend on module singletons or custom-element registration
 // matching the current registry, so they need a fresh graph in the isolated lane.
@@ -9,6 +11,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/app-sidebar-native-gateways.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
   "ui/src/components/markdown-tables.test.ts",
+  "ui/src/components/mcp-app-bridge.test.ts",
+  "ui/src/components/mcp-app-panel.test.tsx",
   "ui/src/components/mcp-app-view.test.ts",
   "ui/src/components/resizable-divider.test.ts",
   "ui/src/components/sidebar-update-card.test.ts",
@@ -27,6 +31,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
   "ui/src/pages/chat/chat-pane-pull-requests.test.ts",
   "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
+  "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-pane-swarm-startup.test.ts",
   "ui/src/pages/chat/chat-pane.read-marker.test.ts",
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
@@ -42,7 +47,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/config/memory-page.test.ts",
   "ui/src/pages/new-session/draft-persistence.test.ts",
   "ui/src/pages/sessions/sessions-page.archived.test.ts",
-];
+].map((file) => resolveUiTypeScriptPath(file));
 
 const uiIsolatedTestFileSet = new Set(uiIsolatedTestFiles);
 

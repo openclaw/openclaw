@@ -15,16 +15,37 @@ const result = {
 
 describe("node workspace transfer command", () => {
   it.each([
-    { name: "default", command: undefined, timeoutMs: 600_000 },
-    { name: "guarded", command: { assertCurrent: () => {} }, timeoutMs: 600_000 },
-    {
-      name: "explicit override",
-      command: { assertCurrent: () => {}, timeoutMs: 42_000 },
-      timeoutMs: 42_000,
-    },
-  ])("preserves the $name transfer budget", async ({ command, timeoutMs }) => {
-    const exec = vi.fn(async () => result);
-    await createNodeWorkspaceTransferCommand(exec)(input, "transfer failed", command);
+    ["default", result, undefined],
+    ["guarded", result, undefined],
+    ["explicit override", result, undefined],
+    ["exit code", { ...result, code: 1 }, "transfer failed"],
+    ["termination", { ...result, termination: "timeout" }, "transfer failed"],
+    ["manifest", { ...result, stdout: `sha256:${"b".repeat(64)}` }, "transfer failed"],
+    ["closed authority", result, "initiating turn closed"],
+  ] as const)("validates the %s transfer result and budget", async (mode, received, failure) => {
+    let current = true;
+    const timeoutMs = mode === "explicit override" ? 42_000 : 600_000;
+    const command =
+      mode === "default"
+        ? undefined
+        : {
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("initiating turn closed");
+              }
+            },
+            ...(mode === "explicit override" ? { timeoutMs } : {}),
+          };
+    const exec = vi.fn(async () => {
+      current = mode !== "closed authority";
+      return received;
+    });
+    const pending = createNodeWorkspaceTransferCommand(exec)(input, "transfer failed", command);
+    if (failure) {
+      await expect(pending).rejects.toThrow(failure);
+    } else {
+      await expect(pending).resolves.toBe(result);
+    }
     expect(exec).toHaveBeenCalledWith(
       expect.objectContaining({
         timeoutMs,
@@ -33,34 +54,5 @@ describe("node workspace transfer command", () => {
         ...(command?.assertCurrent ? { assertCurrent: command.assertCurrent } : {}),
       }),
     );
-  });
-
-  it.each([
-    { ...result, code: 1 },
-    { ...result, termination: "timeout" as const },
-    { ...result, stdout: `sha256:${"b".repeat(64)}` },
-  ])("rejects an unsuccessful or mismatched result", async (received) => {
-    await expect(
-      createNodeWorkspaceTransferCommand(async () => received)(input, "transfer failed", {
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("transfer failed");
-  });
-
-  it("rejects a late result after initiating authority closes", async () => {
-    let current = true;
-    const transfer = createNodeWorkspaceTransferCommand(async () => {
-      current = false;
-      return result;
-    });
-    await expect(
-      transfer(input, "transfer failed", {
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("initiating turn closed");
-          }
-        },
-      }),
-    ).rejects.toThrow("initiating turn closed");
   });
 });

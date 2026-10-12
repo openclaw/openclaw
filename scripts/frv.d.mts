@@ -26,7 +26,6 @@ interface FrvReadOptions {
 
 export interface FrvClient {
   repository?: string;
-  loadFlakeClassifications: typeof import("./full-release-flake-classification.mjs").loadFlakeClassifications;
   getReleaseEvidenceClient: () => ReturnType<
     typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient
   >;
@@ -43,10 +42,10 @@ export interface FrvClient {
     runAttempt: number,
     options?: FrvReadOptions,
   ) => Promise<Record<string, unknown>>;
+  cancelRun?: (runId: string, force: boolean) => Promise<unknown>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunJob?: (jobId: number) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
-  cancelRun?: (runId: string) => Promise<unknown>;
   rerunRun?: (runId: string) => Promise<unknown>;
   listRuns?: (query: string) => Promise<Record<string, unknown>[]>;
   getVariable?: (name: string) => Promise<string>;
@@ -69,7 +68,13 @@ export type FrvConcreteClient = FrvClient &
   Required<
     Pick<
       FrvClient,
-      "rerunFailed" | "rerunJob" | "rerunParent" | "listRuns" | "verify" | "verifySeal"
+      | "cancelRun"
+      | "rerunFailed"
+      | "rerunJob"
+      | "rerunParent"
+      | "listRuns"
+      | "verify"
+      | "verifySeal"
     >
   >;
 
@@ -98,7 +103,7 @@ export function watchRelease(
 ): Promise<{ complete: boolean; statePath: string }>;
 export function inspectContinuation(
   plan: Record<string, unknown>,
-  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository" | "loadFlakeClassifications">,
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository">,
   options?: FrvReadOptions,
 ): Promise<FrvContinuationStatus>;
 export function createClient(

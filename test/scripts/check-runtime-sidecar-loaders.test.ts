@@ -74,34 +74,13 @@ describe("check-runtime-sidecar-loaders", () => {
       relative(resolve(dirname(sourcePath.pathname), "../.."), filePath),
     );
 
-    expect(runtimeGraph.filter((filePath) => /(^|\/)manager(?:-|\.)/.test(filePath))).toEqual([]);
-  });
-
-  it("flags hidden createRequire runtime sidecars that are not build entries", () => {
-    const source = `
-      import { createRequire } from "node:module";
-      const require = createRequire(import.meta.url);
-      export function loadRuntime() {
-        return require("./missing.runtime.js");
-      }
-    `;
-
+    // Shared shadow identity helpers have no manager imports or startup effects.
+    const sharedShadowTask = "extensions/memory-core/src/memory/manager-shadow-task.ts";
     expect(
-      findRuntimeSidecarLoaderViolations(
-        source,
-        "src/example/example-registry.ts",
-        new Set(),
-        parser.parseSourceFile("src/example/example-registry.ts", source),
+      runtimeGraph.filter(
+        (filePath) => filePath !== sharedShadowTask && /(^|\/)manager(?:-|\.)/.test(filePath),
       ),
-    ).toEqual([
-      {
-        line: 5,
-        specifier: "./missing.runtime.js",
-        sourcePath: "src/example/missing.runtime.ts",
-        reason:
-          'hidden local runtime loader "./missing.runtime.js" resolves to src/example/missing.runtime.ts, but that source is not an explicit tsdown entry',
-      },
-    ]);
+    ).toEqual([]);
   });
 
   it("allows hidden createRequire runtime sidecars when the source is an explicit build entry", () => {

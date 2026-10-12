@@ -3,15 +3,11 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  appendTranscriptEvent,
-  persistSessionTranscriptTurn,
-  replaceTranscriptEvents,
-} from "./session-accessor.js";
-import { readSessionTranscriptActiveStats } from "./session-accessor.sqlite-active-events.js";
+import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
 import {
   historyEventId,
+  readActiveTranscriptStats,
   readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryAnchorPage,
   readSessionTranscriptHistoryEvents,
@@ -19,6 +15,7 @@ import {
   useHistoryEventScope,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
 describe("SQLite imported transcript history", () => {
@@ -175,7 +172,7 @@ describe("SQLite imported transcript history", () => {
         "fresh",
       ]);
       const retained = new Set(["kept-user", "kept-assistant", "kept-result", "fresh"]);
-      expect(readSessionTranscriptActiveStats(scope)).toEqual({
+      expect(readActiveTranscriptStats(scope)).toEqual({
         eventCount: retained.size,
         sizeBytes: rows.reduce(
           (bytes, row, seq) =>

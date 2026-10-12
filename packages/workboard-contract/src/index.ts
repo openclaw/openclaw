@@ -242,6 +242,8 @@ export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
 export type WorkboardChange = {
   epoch: string;
   revision: number;
+  cardsRevision?: number;
+  sessionsRevision?: number;
 };
 
 export type WorkboardWorkspace = {
@@ -310,23 +312,12 @@ export type WorkboardBoardMetadata = {
   archivedAt?: number;
 };
 
-export type WorkboardBoardSummary = {
-  id: string;
-  kind?: "cards" | "sessions";
-  sessions?: WorkboardSessionsBoardSpec;
-  name?: string;
-  description?: string;
-  icon?: string;
-  color?: string;
-  automationJobId?: string;
-  defaultWorkspace?: WorkboardWorkspace;
-  orchestration?: WorkboardOrchestrationSettings;
+export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "updatedAt"> & {
   total: number;
   active: number;
   archived: number;
   byStatus: Partial<Record<WorkboardStatus, number>>;
   updatedAt?: number;
-  archivedAt?: number;
 };
 
 export type WorkboardOrchestrationSettings = {
@@ -407,6 +398,7 @@ export type {
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardRevision,
   WorkboardSessionsBoardSpec,
   WorkboardSessionsBoardView,
   WorkboardSessionsColumn,

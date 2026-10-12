@@ -32,9 +32,6 @@ type UpdateCampaignAnnouncement = {
 };
 
 function sameTarget(a: UpdateCampaignTarget, b: UpdateCampaignTarget): boolean {
-  if (a.kind !== b.kind) {
-    return false;
-  }
   if (a.kind === "package" && b.kind === "package") {
     return a.version === b.version;
   }
@@ -49,7 +46,6 @@ function sameTarget(a: UpdateCampaignTarget, b: UpdateCampaignTarget): boolean {
 
 /** Owns the single in-memory automatic-update campaign for this process. */
 export class UpdateCampaignController {
-  private readonly createId = randomUUID;
   private campaign: UpdateCampaignState | undefined;
   private target: UpdateCampaignTarget | undefined;
   private announcement: UpdateCampaignAnnouncement | undefined;
@@ -89,7 +85,7 @@ export class UpdateCampaignController {
     this.announcement = announcement;
     const now = this.scheduler.now();
     this.campaign = {
-      id: this.createId(),
+      id: randomUUID(),
       state: "waiting-for-idle",
       announcedAtMs: now,
       forceAtMs: now + CAMPAIGN_FORCE_DELAY_MS,
@@ -261,18 +257,16 @@ export class UpdateCampaignController {
     });
     if (runApply) {
       // An apply can settle after clear/new announce; only its originating campaign may be cleared.
-      void trackAsyncWork(() => announcement.apply({ forced })).then(
-        (outcome) => {
-          if (outcome === "failed" && this.campaign?.id === campaign.id) {
-            this.clear();
-          }
-        },
-        () => {
-          if (this.campaign?.id === campaign.id) {
-            this.clear();
-          }
-        },
-      );
+      const clearIfCurrent = () => {
+        if (this.campaign?.id === campaign.id) {
+          this.clear();
+        }
+      };
+      void trackAsyncWork(() => announcement.apply({ forced })).then((outcome) => {
+        if (outcome === "failed") {
+          clearIfCurrent();
+        }
+      }, clearIfCurrent);
     }
   }
 

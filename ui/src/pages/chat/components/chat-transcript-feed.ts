@@ -24,10 +24,12 @@ import {
   extractToolCardsCached,
   isToolCardError,
   isToolCallContentBlock,
+  resolveToolCardDisplay,
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
+import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
@@ -171,7 +173,8 @@ function toolIcon(call: ToolCard) {
   }
 }
 
-function renderToolLine(call: ToolCard) {
+function renderToolLine(originalCall: ToolCard) {
+  const call = resolveToolCardDisplay(originalCall);
   const view = resolveToolCallView(call);
   const raw = redactToolPayloadText(
     (view.command ?? view.code ?? call.inputText ?? call.name).trim(),
@@ -203,7 +206,9 @@ function renderToolLine(call: ToolCard) {
 }
 
 function renderToolGroup(entry: Extract<Entry, { kind: "tools" }>) {
-  const overview = describeToolGroup(entry.activity);
+  const overview = describeToolGroup(entry.activity, {
+    ownSessionLaunches: ownSessionLaunchCalls(entry.calls.map(({ card }) => card)),
+  });
   return html`<details class="chat-task-feed__tool-group">
     <summary>
       <span class="chat-task-feed__overview">

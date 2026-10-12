@@ -177,6 +177,7 @@ export function projectSettledProviderFailureAttempt(
     getHeartbeatToolResponse: () => undefined,
     getItemLifecycle: () => base.itemLifecycle,
     getLastAssistantTextMessageIndex: () => undefined,
+    getKeptAnswer: () => undefined,
     getLastCompactionTokensAfter: () => undefined,
     getLastToolError: () => undefined,
     getLatestMcpAppChannelView: () => undefined,

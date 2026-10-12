@@ -21,7 +21,7 @@ extension ChatSessionSidebar {
             set: { if !$0 { self.sessionPendingRename = nil } })
     }
 
-    func contextMenu(for session: OpenClawChatSessionEntry, isChild: Bool) -> some View {
+    func contextMenu(for session: OpenClawChatSessionEntry, isChild: Bool, now: Date = .now) -> some View {
         var session = session
         session.agentId = OpenClawChatSessionKey.agentID(from: session.key) ??
             self.viewModel.sessionMutationTarget(key: session.key, agentID: session.agentId).agentID
@@ -31,12 +31,15 @@ extension ChatSessionSidebar {
             isChild: isChild,
             groups: self.groups,
             actions: self.menuActions,
+            now: now,
             inspect: { self.inspectedSession = session },
             rename: {
                 self.renameText = session.label ?? session.displayName ?? ""
                 self.sessionPendingRename = session
             },
             delete: { self.sessionPendingDeletion = session },
+            archive: { Task { await self.archiveSidebarSession(session) } },
+            archiving: self.batch.isArchiving(session),
             present: { self.menuPresentation = $0 })
     }
 }
@@ -48,10 +51,13 @@ private struct ChatSessionSidebarRowMenu: View {
     let isChild: Bool
     let groups: [OpenClawChatSessionGroup]
     let actions: ChatSessionSidebarActions
+    let now: Date
     let inspect: () -> Void
     let rename: () -> Void
     let delete: () -> Void
-    let present: (ChatSessionIconPicker) -> Void
+    let archive: () -> Void
+    let archiving: Bool
+    let present: (ChatSessionMenuPresentation) -> Void
 
     var body: some View {
         Group {
@@ -73,6 +79,13 @@ private struct ChatSessionSidebarRowMenu: View {
                         pinned: self.session.pinned != true,
                         agentID: self.session.agentId)
                 }
+            }
+            // Snooze shares Pin's root-session eligibility.
+            if ChatSessionSidebarEligibility.canPin(self.session, isChild: self.isChild), !self.session.isArchived,
+               ChatSessionSidebarEligibility.canArchive(
+                   self.session, mainSessionKey: self.viewModel.selectedAgentMainSessionKey)
+            {
+                self.snoozeMenu
             }
             self.button(String(localized: "Rename…"), "pencil", key: "r", action: self.rename)
             self.button(
@@ -106,19 +119,18 @@ private struct ChatSessionSidebarRowMenu: View {
                 mainSessionKey: self.viewModel.selectedAgentMainSessionKey)
             {
                 self.button(
-                    self.session.isArchived ? String(localized: "Restore") : String(localized: "Archive"),
+                    self.archiving ? String(localized: "Archiving…") :
+                        self.session.isArchived ? String(localized: "Restore") : String(localized: "Archive"),
                     "archivebox",
                     key: "a")
                 {
-                    self.viewModel.setSessionArchived(self.session, archived: !self.session.isArchived)
+                    self.archive()
                 }
+                .disabled(self.archiving)
             }
             Divider()
             self.button(String(localized: "Icon & color…"), "paintpalette", key: "i") {
-                if let connection = self.actions.connection { self.present(.init(
-                    session: self.session,
-                    connection: connection,
-                    viewModel: self.viewModel)) }
+                if let connection = self.actions.connection { self.present(.appearance(self.session, connection)) }
             }.disabled(self.actions.connection?.allows("sessions.patch") != true)
             if ChatSessionSidebarActions.canMoveToGroup(
                 self.session,
@@ -139,7 +151,13 @@ private struct ChatSessionSidebarRowMenu: View {
                     agentID: self.session.agentId) }
             }
             self.copyMenu
-            self.openMenu
+            ChatSidebarPullRequestMenu(session: self.session, viewModel: self.viewModel) { self.openMenu }
+            if let agentID = self.session.agentId,
+               let open = self.viewModel.webConversation?.sessionActions(
+                   for: .init(agentId: agentID, sessionKey: self.session.key))
+            {
+                self.button(String(localized: "More actions…"), "ellipsis.circle", action: open)
+            }
             Divider()
             Button(role: .destructive, action: self.delete) { Label("Delete…", systemImage: "trash") }
                 .keyboardShortcut("d", modifiers: [])
@@ -148,6 +166,36 @@ private struct ChatSessionSidebarRowMenu: View {
             self.button(String(localized: "Get Info…"), "info.circle", action: self.inspect)
         }
         .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
+    }
+
+    private var snoozeMenu: some View {
+        Group {
+            if self.session.isSnoozed(at: self.now), let until = self.session.snoozedUntil {
+                let description = OpenClawChatSessionSnooze.wakeDescription(
+                    Date(timeIntervalSince1970: until / 1000), now: self.now)
+                self.button(String(format: String(localized: "Wake session · %@"), description), "clock") {
+                    self.setSnooze(.wake)
+                }
+            } else {
+                Menu("Snooze") {
+                    ForEach(OpenClawChatSessionSnooze.presets(now: self.now), id: \.id) { preset in
+                        let time = preset.id == "next-week" ?
+                            OpenClawChatSessionSnooze.wakeDescription(preset.wakeAt, now: self.now) :
+                            preset.wakeAt.formatted(date: .omitted, time: .shortened)
+                        Button { self.setSnooze(.until(preset.wakeAt)) } label: {
+                            Text(verbatim: "\(preset.title) · \(time)")
+                        }
+                    }
+                }
+            }
+        }
+        .disabled(self.actions.connection?.allows("sessions.patch") != true || self.session.sessionId?.isEmpty != false)
+    }
+
+    private func setSnooze(_ patch: OpenClawChatSnoozePatch) {
+        self.viewModel.performSidebarAction {
+            try await self.actions.setSnooze(patch, session: self.session, viewModel: self.viewModel)
+        }
     }
 
     private var groupMenu: some View {

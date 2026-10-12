@@ -1,8 +1,3 @@
-/**
- * Conversation label resolver.
- *
- * Builds readable labels from inbound context while preserving useful id disambiguators.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -25,9 +20,6 @@ function shouldAppendId(id: string): boolean {
   return /^[0-9]+$/.test(id) || /^[^\s:@]+@[^\s:@]+$/.test(id);
 }
 
-/**
- * Resolves the most readable conversation label from normalized inbound message context.
- */
 export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   const explicit = normalizeOptionalString(ctx.ConversationLabel);
   if (explicit) {

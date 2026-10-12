@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => {
       program.command("tui").aliases(["terminal", "chat"]),
     ),
     registerCronCli: vi.fn((program: Command) => program.command("cron").alias("automations")),
+    registerPairingCli: registrar("pairing").register,
     registerPluginsCli: vi.fn((program: Command) =>
       program
         .command("plugins")
@@ -38,7 +39,7 @@ const mocks = vi.hoisted(() => {
         .argument("[id]")
         .action(() => undefined),
     ),
-    registerPluginCliCommandsFromValidatedConfig: vi.fn(async () => null),
+    registerPluginCliCommandsFromValidatedConfig: vi.fn(async (_program: Command) => null),
     registerChannelsCli: vi.fn(async () => undefined),
     registerResumeCli: registrar("resume").register,
     gatewayRunAction,
@@ -66,6 +67,8 @@ vi.mock("../exec-approvals-cli.js", () => ({
 }));
 vi.mock("../tui-cli.js", () => ({ registerTuiCli: mocks.registerTuiCli }));
 vi.mock("../cron-cli.js", () => ({ registerCronCli: mocks.registerCronCli }));
+// mock-isolation: registration-order checks must not initialize channel plugins or pairing stores.
+vi.mock("../pairing-cli.js", () => ({ registerPairingCli: mocks.registerPairingCli }));
 vi.mock("../plugins-cli.js", () => ({ registerPluginsCli: mocks.registerPluginsCli }));
 vi.mock("../channels-cli.js", () => ({ registerChannelsCli: mocks.registerChannelsCli }));
 vi.mock("../resume-cli.js", () => ({ registerResumeCli: mocks.registerResumeCli }));
@@ -207,4 +210,18 @@ describe("registerSubCliCommands", () => {
       expect(mocks.registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    { name: "pairing", expected: ["synthetic-plugin", "pairing"] },
+    { name: "plugins", expected: ["plugins", "synthetic-plugin"] },
+  ])("preserves plugin command registration order for $name", async ({ name, expected }) => {
+    mocks.registerPluginCliCommandsFromValidatedConfig.mockImplementationOnce(async (program) => {
+      program.command("synthetic-plugin");
+      return null;
+    });
+    const program = new Command().name("openclaw");
+    // Eager registration visits other groups while a plugin-backed command is selected.
+    await registerSubCliByName(program, name, ["node", "openclaw", "directory", "peers"]);
+    expect(program.commands.map((command) => command.name())).toEqual(expected);
+  });
 });

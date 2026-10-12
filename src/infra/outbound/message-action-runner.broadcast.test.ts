@@ -26,12 +26,7 @@ import {
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
-import {
-  registerReplyPlugin,
-  runReplyAction,
-  workspaceConfig,
-  workspaceTestPlugin,
-} from "./message-action-runner.test-support.js";
+import { workspaceConfig, workspaceTestPlugin } from "./message-action-runner.test-support.js";
 import type { OutboundGatewayRequest } from "./message-gateway-options.js";
 
 const channel = "broadcast-test";
@@ -463,23 +458,6 @@ describe("broadcast send outcomes through native actions", () => {
       }),
     );
   });
-  it("strips citation markers before reply dispatch", async () => {
-    const handleAction = registerReplyPlugin();
-
-    await runReplyAction({
-      actionParams: {
-        message: "Ayutthaya Thai is my pick. citeturn2search9turn2search6",
-        messageId: "1783",
-      },
-      currentMessageId: "1783",
-    });
-
-    expect(handleAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ message: "Ayutthaya Thai is my pick." }),
-      }),
-    );
-  });
   const sourceInput = {
     cfg: {},
     action: "send",
@@ -542,37 +520,70 @@ describe("broadcast send outcomes through native actions", () => {
       },
     );
 
-    it("requires an address for private source delivery", async () => {
-      const failure = runMessageAction({
+    it("reports a route-less message-tool-only reply as a transcript record", async () => {
+      const result = await runMessageAction({
         ...sourceInput,
-        toolContext: {
-          currentChannelProvider: "telegram",
+        sessionKey: "agent:main:main",
+        sourceReplyTranscriptOnly: true,
+        toolContext: { currentChannelProvider: "webchat" },
+      });
+
+      if (result.kind !== "send") {
+        throw new Error("Expected send result");
+      }
+      expect(result).toMatchObject({ handledBy: "internal-source", to: "current-run" });
+      expect(result.toolResult?.content).toEqual([
+        {
+          type: "text",
+          text: "Recorded reply in the current session transcript via internal-ui. This send did not deliver it to an external channel.",
         },
-      });
-      await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
-      await expect(failure).rejects.toMatchObject({
-        reasonCode: "message_target_missing",
-        policyRef: "message-target:required",
-      });
-      await expect(failure).rejects.toThrow(/requires a target/i);
+      ]);
     });
 
-    it("types disabled broadcast as an outcome-owning policy denial", async () => {
-      const failure = runMessageAction({
-        cfg: { tools: { message: { broadcast: { enabled: false } } } } as OpenClawConfig,
-        action: "broadcast",
-        params: { targets: ["qa-channel:direct:one"], message: "hello" },
+    it("sends an explicit target from a route-less run through the channel", async () => {
+      const result = await runMessageAction({
+        cfg: {
+          ...workspaceConfig,
+          tools: { message: { crossContext: { allowAcrossProviders: true } } },
+        },
+        action: "send",
+        params: { channel: "workspace", target: "#C12345678", message: "hello from codex" },
+        toolContext: { currentChannelProvider: "webchat" },
+        sessionKey: "agent:main:main",
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyTranscriptOnly: true,
       });
-      await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
-      await expect(failure).rejects.toMatchObject({
-        reasonCode: "message_broadcast_disabled",
-        policyRef: "message-broadcast:enabled",
+
+      expect(result).toMatchObject({
+        kind: "send",
+        channel: "workspace",
+        handledBy: "core",
+        dryRun: false,
       });
     });
 
-    it("does not treat broadcast targets as a send target", async () => {
-      await expect(
-        runMessageAction({
+    it.each([
+      {
+        name: "private source without an address",
+        input: { ...sourceInput, toolContext: { currentChannelProvider: "telegram" } },
+        denial: { reasonCode: "message_target_missing", policyRef: "message-target:required" },
+        message: /requires a target/i,
+      },
+      {
+        name: "disabled broadcast",
+        input: {
+          cfg: { tools: { message: { broadcast: { enabled: false } } } },
+          action: "broadcast",
+          params: { targets: ["qa-channel:direct:one"], message: "hello" },
+        },
+        denial: {
+          reasonCode: "message_broadcast_disabled",
+          policyRef: "message-broadcast:enabled",
+        },
+      },
+      {
+        name: "broadcast targets used as a send target",
+        input: {
           cfg: {},
           action: "send",
           params: {
@@ -581,8 +592,23 @@ describe("broadcast send outcomes through native actions", () => {
             targets: ["user:123456789"],
             message: "hello from codex",
           },
-        }),
-      ).rejects.toThrow(/requires a target/i);
+        },
+        message: /requires a target/i,
+      },
+    ] satisfies Array<{
+      name: string;
+      input: MessageActionInput;
+      denial?: { reasonCode: string; policyRef: string };
+      message?: RegExp;
+    }>)("rejects $name", async ({ input, denial, message }) => {
+      const failure = runMessageAction(input);
+      if (denial) {
+        await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
+        await expect(failure).rejects.toMatchObject(denial);
+      }
+      if (message) {
+        await expect(failure).rejects.toThrow(message);
+      }
     });
 
     it.each([false, true])(

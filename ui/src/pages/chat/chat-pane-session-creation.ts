@@ -53,6 +53,8 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       );
       return {
         kind: "composer-replacement" as const,
+        presentation: this.onBackToSubagents ? ("hidden" as const) : ("compact" as const),
+        icon: "eye" as const,
         title: t("chat.subagentViewOnly"),
         text: t("chat.subagentSessionDisabled", {
           parent: parent?.title ?? t("chat.parentSession"),

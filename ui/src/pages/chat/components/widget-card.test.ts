@@ -36,7 +36,9 @@ function initializeWidgetFrame(frame: HTMLIFrameElement) {
   frame.dispatchEvent(new Event("load"));
 }
 
-afterEach(() => {
+afterEach(async () => {
+  // Rendering starts lazy element imports that must finish before this environment retires.
+  await vi.dynamicImportSettled();
   for (const port of widgetPorts.splice(0)) {
     port.close();
   }
@@ -257,7 +259,7 @@ describe("widget-card", () => {
     expect(host.querySelector("iframe")?.hasAttribute("src")).toBe(false);
   });
 
-  it("dispatches canvas HTML and MCP App content and ignores unknown kinds", () => {
+  it("dispatches canvas HTML and MCP App content and ignores unknown kinds", async () => {
     const canvas = mountWidget({
       ...canvasPreview,
       url: "/__openclaw__/canvas/documents/cv_dispatch/index.html",
@@ -279,6 +281,8 @@ describe("widget-card", () => {
       },
       { sessionKey: "agent:main:main" },
     );
+    await vi.dynamicImportSettled();
+    expect(customElements.get("mcp-app-view")).toBeDefined();
     expect(app.querySelector("mcp-app-view")).not.toBeNull();
     expect(app.querySelector(".chat-tool-card__preview")?.getAttribute("data-content-kind")).toBe(
       "mcp-app",

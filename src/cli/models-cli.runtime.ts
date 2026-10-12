@@ -9,14 +9,8 @@ export function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
 }
 
-export function resolveModelAgentOption(
-  command: Command | undefined,
-  opts?: { agent?: unknown },
-): string | undefined {
-  return (
-    resolveOptionFromCommand<string>(command, "agent") ??
-    (typeof opts?.agent === "string" ? opts.agent : undefined)
-  );
+export function resolveModelAgentOption(command: Command): string | undefined {
+  return resolveOptionFromCommand<string>(command, "agent");
 }
 
 /** `models` subcommands that operate on global state only, never per-agent. */
@@ -27,7 +21,8 @@ export type GlobalOnlyModelCommandName =
   | "aliases list"
   | "aliases add"
   | "aliases remove"
-  | "refresh";
+  | "refresh"
+  | `${"fallbacks" | "image-fallbacks"} ${"add" | "remove" | "clear"}`;
 
 export function rejectAgentScopedModelCommand(
   command: Command,

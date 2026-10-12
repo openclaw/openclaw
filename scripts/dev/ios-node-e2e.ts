@@ -36,7 +36,6 @@ const getArg = (flag: string) => {
   const index = argv.indexOf(flag);
   return index === -1 ? undefined : argv[index + 1];
 };
-const hasFlag = (flag: string) => argv.includes(flag);
 const BOOLEAN_FLAGS = new Set(["--dangerous", "--help", "-h", "--json"]);
 const VALUE_FLAGS = new Set(["--node", "--token", "--url", "--wait-seconds"]);
 
@@ -68,7 +67,7 @@ function validateArgs(): void {
 }
 
 validateArgs();
-if (hasFlag("--help") || hasFlag("-h")) {
+if (argv.includes("--help") || argv.includes("-h")) {
   writeStdoutLine(usage());
   process.exit(0);
 }
@@ -91,8 +90,8 @@ type NodeListNode = NonNullable<NodeListPayload["nodes"]>[number];
 const urlRaw = getArg("--url") ?? process.env.OPENCLAW_GATEWAY_URL;
 const token = getArg("--token") ?? process.env.OPENCLAW_GATEWAY_TOKEN;
 const nodeHint = getArg("--node");
-const dangerous = hasFlag("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS === "1";
-const jsonOut = hasFlag("--json");
+const dangerous = argv.includes("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS === "1";
+const jsonOut = argv.includes("--json");
 
 if (!urlRaw || !token) {
   writeStderrLine(usage());
@@ -242,7 +241,7 @@ async function main() {
   const listPayload = (nodesRes.payload ?? {}) as NodeListPayload;
   let node = pickIosNode(listPayload, nodeHint);
   if (!node) {
-    const deadline = Date.now() + Math.max(1, waitSeconds) * 1000;
+    const deadline = Date.now() + waitSeconds * 1000;
     while (!node && Date.now() < deadline) {
       await new Promise((r) => {
         setTimeout(r, 1000);

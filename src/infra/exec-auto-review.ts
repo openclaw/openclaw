@@ -110,7 +110,7 @@ export function formatExecAutoReviewAssessment(decision: ExecAutoReviewDecision)
 
 /** Keeps reviewer and provider explanations safe for human-facing approval text. */
 export function normalizeExecAutoReviewRationale(value: unknown, fallback: string): string {
-  const text = normalizeOptionalString(typeof value === "string" ? value : undefined);
+  const text = normalizeOptionalString(value);
   const sanitized = sanitizeTerminalText(text ?? fallback)
     .replace(/[\p{Cf}\u2028\u2029]/gu, "")
     .replace(/\s+/gu, " ")

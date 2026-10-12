@@ -24,15 +24,9 @@ export const pluginCredentialHandlers: GatewayRequestHandlers = {
           !signal?.aborted &&
           (!hasCurrentClientAuthority || hasCurrentClientAuthority()),
         );
-      const denied = () =>
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Current administrator access is required to inspect plugin credentials.",
-          ),
-        );
+      const denied = (
+        message = "Current administrator access is required to inspect plugin credentials.",
+      ) => respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       if (!authorized()) {
         denied();
         return;
@@ -49,14 +43,7 @@ export const pluginCredentialHandlers: GatewayRequestHandlers = {
           ? context.configRevisionProjector.projectRawHash(snapshot.hash)
           : undefined;
         if (!baseHash || baseHash !== params.baseHash) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "Configuration changed. Reload Settings before inspecting this reference.",
-            ),
-          );
+          denied("Configuration changed. Reload Settings before inspecting this reference.");
           return;
         }
         const metadata = resolveManagedPluginMetadata(context.getRuntimeConfig(), process.env);
@@ -67,14 +54,7 @@ export const pluginCredentialHandlers: GatewayRequestHandlers = {
             (field) => JSON.stringify(field.path) === JSON.stringify(params.path),
           );
         if (!descriptor) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "This installed plugin does not declare that credential field.",
-            ),
-          );
+          denied("This installed plugin does not declare that credential field.");
           return;
         }
         respond(

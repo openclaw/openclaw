@@ -28,10 +28,7 @@ const mocks = vi.hoisted(() => ({
   replaceConfig: vi.fn(),
   planUninstall: vi.fn(),
   selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
-  slotSelection: vi.fn((config: unknown): { config: unknown; warnings: string[] } => ({
-    config,
-    warnings: [],
-  })),
+  slotSelection: vi.fn((config: unknown) => config),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -135,7 +132,7 @@ describe("plugin management service", () => {
       hookMutation: { mode: "allowed" },
       pluginMutation: { mode: "allowed" },
     });
-    mocks.slotSelection.mockImplementation((config) => ({ config, warnings: [] }));
+    mocks.slotSelection.mockImplementation((config) => config);
     mocks.installRecords.mockResolvedValue({});
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.pluginVersionCategories.mockResolvedValue([]);
@@ -231,19 +228,33 @@ describe("plugin management service", () => {
     },
   );
 
-  it("reloads a discovered plugin without inventing an installed package record", async () => {
-    const origin = "config";
+  it.each([
+    { origin: "config", retainedRecord: false },
+    { origin: "bundled", retainedRecord: false },
+    { origin: "bundled", retainedRecord: true },
+  ] as const)("reloads a discovered plugin: %j", async ({ origin, retainedRecord }) => {
     const signal = new AbortController().signal;
     const metadata = metadataSnapshot({ enabled: true, id: "discovered" });
+    const installRecords = retainedRecord
+      ? {
+          discovered: {
+            source: "npm",
+            spec: "@openclaw/discovered",
+            installPath: "/tmp/registry/discovered",
+          },
+        }
+      : {};
     mocks.metadata.mockReturnValue({
       ...metadata,
       index: {
         ...metadata.index,
         plugins: metadata.index.plugins.map((plugin) => ({ ...plugin, origin })),
+        installRecords,
       },
       byPluginId: new Map(metadata.plugins.map((plugin) => [plugin.id, { ...plugin, origin }])),
     });
     mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.readPersistedRecords.mockReturnValue(installRecords);
     const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
       request.assertInvokerOwned?.();
       expect(request.expectedInstallHashes).toBeUndefined();
@@ -270,6 +281,18 @@ describe("plugin management service", () => {
         expectedSourceDigests: { discovered: "a".repeat(64) },
       }),
     );
+    if (retainedRecord) {
+      await expect(
+        reloadManagedPlugin({
+          plugins: [
+            { pluginId: "discovered", installHash: hashStableJson(installRecords.discovered) },
+          ],
+          env: {},
+          applyRuntime,
+        }),
+      ).rejects.toThrow("changed after the installation batch");
+      expect(applyRuntime).toHaveBeenCalledOnce();
+    }
     expect(mocks.commitRecords).not.toHaveBeenCalled();
     expect(mocks.replaceConfig).not.toHaveBeenCalled();
   });

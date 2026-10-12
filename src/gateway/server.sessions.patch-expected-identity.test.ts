@@ -378,7 +378,7 @@ test.each([
   // reentrant admission context when authorization releases the gate.
   const lifecycleWrite = authorizePatch.promise.then(() =>
     patchSessionEntryCore({ sessionKey, storePath }, () => ({
-      status: "running",
+      startedAt: 100,
       lifecycleRunId: "interleaved-run",
     })),
   );
@@ -402,7 +402,7 @@ test.each([
       expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject(scenario.expected);
     }
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      status: "running",
+      startedAt: 100,
       lifecycleRunId: "interleaved-run",
     });
   } finally {

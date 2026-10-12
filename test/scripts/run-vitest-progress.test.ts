@@ -305,16 +305,15 @@ posixSerialDescribe("compiled subprocess preparation progress", { concurrent: fa
           await releaseCompiler.promise;
           return runManaged({ ...options, args: controlled.args(generation) });
         });
-      const readFile = fs.promises.readFile.bind(fs.promises);
-      const verificationRead = vi
-        .spyOn(fs.promises, "readFile")
-        .mockImplementation(async (...args) => {
-          if (args[0] === heldOutput) {
-            verificationStarted.resolve();
-            await releaseVerification.promise;
-          }
-          return readFile(...args);
-        });
+      const readFile = fs.readFile.bind(fs);
+      const verificationRead = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
+        if (args[0] === heldOutput) {
+          verificationStarted.resolve();
+          void releaseVerification.promise.then(() => readFile(...args));
+          return;
+        }
+        return readFile(...args);
+      });
       const borrower = path.join(directory, "vitest.mjs");
       fs.writeFileSync(
         borrower,

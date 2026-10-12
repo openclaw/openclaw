@@ -176,9 +176,10 @@ Console logs are **TTY-aware** and formatted for readability:
 Console formatting is controlled by `logging.consoleStyle`.
 
 SQLite worker diagnostics use stderr. After the final backend closes normally,
-the worker gives pending console output up to five seconds to drain before
-acknowledging close. This is best effort; forced worker termination can still
-discard pending diagnostics.
+the worker flushes queued file logs and gives pending console output up to five
+seconds to drain before acknowledging close. Source-loaded backends and compiled
+workers share the same file-log queue. Forced worker termination can still discard
+pending diagnostics.
 
 ### Gateway WebSocket logs
 
@@ -198,6 +199,16 @@ openclaw gateway --verbose --ws-log full
 ```
 
 ### Steering and input cancellation
+
+Ordinary channel reply routing logs
+`steering rejected; applying follow-up policy` at warning level when steering
+falls back. The fixed `reason` code distinguishes an unavailable owner or
+injection path, a pending source operation, changed authority, terminal-reply
+state, and runtime rejection.
+Records include the channel, opaque session ID, and input or active run IDs when
+supplied. `disposition` distinguishes a follow-up policy decision, confirmed
+or rejected queue admission, and a known queue-cap rejection; it does not confirm delivery.
+These records omit message text, attachments, session keys, and raw exceptions.
 
 When retained reply-delivery state prevents steering, the Gateway logs
 `chat steering rejected; falling back to follow-up dispatch`. Its structured
@@ -338,6 +349,11 @@ enabled.
 latency, and request fields such as method, URL, timeout, proxy, and policy)
 uses `debug` by default. Responses with a non-2xx status or at least one second
 of elapsed time remain at `info`, and transport failures remain warnings.
+`[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
+at `debug` (or `info` with the targeted flags), rather than as provider failures.
+The requesting layer owns the final cancellation or timeout outcome; an SDK can
+also abort its fetch when its own deadline expires. Explicit `TimeoutError`
+reasons and failures without a caller abort remain warnings.
 Elapsed time includes local-service preparation and waiting for response headers,
 but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
@@ -371,6 +387,24 @@ Talk lifecycle log records also flow to diagnostics-otel log export when
 OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
+
+### Chat-send startup
+
+The Gateway logs `slow chat send` when acknowledgement or startup takes at least
+one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
+agent execution starts. `replyInitialization` covers inbound dispatch through
+session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
+preparation belong to `preparation`, before the first model request.
+
+`detail.*` fields attribute those intervals using the existing reply and agent
+preparation spans, without enabling timeline file logging. They include session
+binding, cold transcript hydration, writer admission, snapshot reads, and commit,
+alongside workspace, Git baseline, hooks, and embedded preparation when used.
+`reply.session.writer` includes both queue waiting and `reply.session.initialize`;
+their difference indicates the writer wait. Parent and child spans overlap and
+must not be summed. Unfinished spans stop at the startup boundary; later model
+and tool latency does not extend them. Structured `chat.send.detail.*` phase
+events use the same durations when diagnostics are enabled.
 
 ### Embedded attempt preparation
 
@@ -556,8 +590,9 @@ holder sample.
 
 `operationId` and `holderOperationId` identify diagnostic operation instances
 within `diagnosticEpoch`, PID and thread. Operations use the fixed boundary
-labels `lifecycle`, `mutation` and `compaction`; they do not name arbitrary
-callers. Existing request traces appear in `operationTraceId`/`operationSpanId`
+labels `lifecycle`, `mutation` and `compaction`. Mutations also include the bounded
+`mutationKind` (for example, `create`, `archive`, `delete`, or `worktree-cleanup`);
+queue samples include `holderMutationKind`. Existing request traces appear in `operationTraceId`/`operationSpanId`
 and separate `holderTraceId`/`holderSpanId` fields when present. Missing trace
 fields remain unknown; no new trace or audit execution identity is created.
 
@@ -565,6 +600,10 @@ fields remain unknown; no new trace or audit execution identity is created.
 identity. It correlates only inside the same JavaScript runtime isolate and
 diagnostic epoch. Raw session keys and paths are omitted. The digest is
 operational correlation, not anonymization or authorization evidence.
+Both records include `sessionScopeHash`, the salted digest of the first normalized
+identity, and `identityCount`. For batches this names one scope, not every affected
+session. `holderSessionScopeHash` identifies that same scope for the current holder.
+No session titles, transcript content, repository names, or raw identities are logged.
 
 `slow session lifecycle operation` records operations taking at least one
 second through their actual queued work's settlement. It separates
@@ -587,7 +626,11 @@ capacity or after enablement. `omittedObservations` on a later record reports
 suppressed observations; missing records never prove no wait.
 
 Elapsed intervals can include asynchronous waits and nested work, so phase
-and queue totals need not form a disjoint partition. A holder sample identifies
+and queue totals need not form a disjoint partition. `isMainThread=true` identifies
+the emitting thread; a long `.run` interval does not establish event-loop blocking.
+Correlate it with event-loop delay or a CPU profile before attributing a stall.
+Work before lifecycle admission, including request preflight, is outside these intervals.
+A holder sample identifies
 who owns that queue at the sampled instant, not every predecessor responsible
 for the entire wait or which work consumed CPU. These are ordinary performance
 logs. They do not use or change [audit identity](/gateway/audit), decisions,
@@ -599,13 +642,48 @@ Gateway `status` responses include `workerPools.transcriptReconciliation` and
 `workerPools.modelCatalog`. Each reports `maxWorkers`, `workers`, `workersCreated`,
 `activeTasks`, and `pendingTasks` from the pool owner. Both Gateway pools admit one
 worker at a time. Pending tasks include queued and executing work; creation counts
-belong to the current pool lifetime. The startup trace's `memory.ready` record also
-includes these pool counts.
+belong to the current pool lifetime. `workerPools.modelCatalog` also reports
+`workerFailures`: how many model-catalog workers have failed (run out of memory,
+exited, or timed out) since the Gateway started. A failed pool is replaced, so this
+count survives replacement. Each failure also logs one
+`model catalog worker failed` warning when it happens, with the worker's reason and
+the number of agent catalogs to republish on a new worker. A worker that exits while
+idle is counted and logged at once; the next catalog request replaces it.
+Shutdown and plugin retirement are not counted. The startup trace's `memory.ready`
+record also includes these pool counts.
 
 These figures describe worker and task counts. Process RSS includes every isolate
 and native allocation; Node's process heap flags can override a worker's requested
 heap limits. Use constructor or per-isolate measurements when attributing memory
 growth to a particular worker.
+
+### Slow Git content reads
+
+With process diagnostics and info-level logging enabled, `git/worker` emits
+`slow Git content read` after a diff, diff-baseline, or PR branch-facts operation
+lasting at least one second. The journal message includes the same fields as the
+structured file log. Records are limited to 60 per minute.
+
+`operation` identifies the caller family. `checkoutId` is a truncated SHA-256 of
+the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
+is `managed` when the caller supplies managed-index ownership, otherwise
+`unspecified`. Paths, refs, command arguments, and output contents are not logged.
+
+`workerQueueWaitMs` measures admission wait (null if never dispatched).
+`firstHostRequestMs` includes that wait plus worker startup and work before the
+first host request. `workerMs` covers subsequent worker and host work;
+`settlementMs` covers final cleanup. `summedGitQueueWaitMs` measures waiting for
+shared content-process slots, while `summedGitWallMs` sums command execution
+including process settlement. Concurrent commands overlap, so their sum can
+exceed operation duration; these are wall times, not CPU times.
+
+`gitCommandCount` counts started host command requests, not Git's own subprocesses.
+`gitStdoutBytes` and `gitStderrBytes` count captured bytes, excluding any truncated
+output. `gitTimeoutCount` counts returned timeouts; `slowestGitCommand` records
+the longest command's allowlisted name, diff mode when applicable, duration, and
+termination. An operation can return successfully after a command times out
+because optional statistics fall back to unknown. Artifact and maintenance
+operations contribute to aggregate Git worker metrics but do not emit this log.
 
 ### Slow worktree cleanup
 
@@ -667,6 +745,31 @@ attribution. These diagnostics measure cleanup without changing its ordering or
 completion behavior.
 
 ### Slow agent database opens
+
+Foreground Gateway startup reports a bounded set of `startup phase` records even
+without opt-in tracing. CLI records identify entry-module loading, environment
+selection, command imports, and state preparation before `loading configuration`.
+Bootstrap subphases separate config-guard imports, config and database admission,
+plugin metadata, payload verification, and lease acquisition. Gateway records
+separate maintenance work, listener binding, plugin loading and attachment, worker
+startup, model preparation, channel startup, and restored subagent activation.
+Measured phases log both their start and elapsed
+duration; `total` is elapsed time from process startup (or the current in-process
+restart). These are wall times, including asynchronous waits, not CPU measurements.
+Nested durations overlap their parent phases; do not add them to the parent total.
+Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the complete breakdown and per-plugin
+import and registration timings.
+
+Desktop permission narrowing and canonical session checks remain on their required
+admission paths. Transcript projection repair, orphan settlement, channel
+maintenance, pairing diagnostics, and restored-subagent activation run after
+readiness. Retired plugin captures join the existing post-ready idle cleanup.
+History reads use the transcript owner's bounded on-demand repair when needed.
+Orphan status and its failure receipt settle together in the database worker,
+with current run ownership checked before commit. These scheduling changes do
+not change stored formats or require an update migration.
+Each CLI admission pass shares one read-only state snapshot and releases it before
+live guards and writes; acquiring a preparation lease still starts a fresh pass.
 
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
 a persistent database open takes at least one second:
@@ -752,9 +855,9 @@ errors. These elapsed durations do not measure SQL CPU time or establish a
 causal link to a nearby request.
 
 Older builds report `session.reclamation.commit-settlement` for a parent-side
-synchronous SQLite probe after authorizing a reclamation or cold-storage commit.
+synchronous SQLite check after authorizing a reclamation or cold-storage commit.
 The parent now atomically accepts the commit after checking live authority and
-awaits settlement asynchronously, without that probe or its lock wait.
+awaits settlement asynchronously, without that check or its lock wait.
 
 Hot transcript reads identify their purpose in `operation`: `session transcript
 <purpose> read`, where `<purpose>` is `identity`, `header`, `tail`, `incremental`,
@@ -929,6 +1032,22 @@ capturing raw prompt or response content:
 
 These fields are available to diagnostic snapshots, model-call plugin hooks, and
 OTEL model-call spans/metrics when diagnostics export is enabled.
+
+Prompt-cache drop warnings include `requestGapMs` (start-to-start time since the
+session's previous request) and `promptTokens` when reported by the provider.
+`providerPrefix` compares final encoded request segments against the last request
+with usable cache-read usage: system instructions, tools, history messages, and
+other request parameters. It names the first differing segment or `prefix-match`
+when the previous prefix is unchanged. A match does not prove provider cache
+availability or retention. Unsupported transports and missing baselines report
+`unavailable`.
+
+Only hashes are retained, within the existing 512-entry diagnostic tracker.
+History comparison keeps the first 512 message hashes and one remaining-tail
+hash. A changed tail reports `message-tail:512`; a growing or shrinking tail
+reports `unverified-after:512` because its earlier prefix cannot be verified.
+Background sessions sharing a provider cache key keep separate diagnostic
+baselines. No prompt content or digest values appear in these warnings.
 
 ### Console styles
 

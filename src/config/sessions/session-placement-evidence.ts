@@ -1,13 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agent-db-resources.js";
 import {
   readOpenIncognitoAgentDatabaseGeneration,
   resolveIncognitoOpenClawAgentSqlitePath,
   retainOpenClawAgentDatabaseReadCandidates,
 } from "../../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -17,10 +17,14 @@ import {
   type SessionIdentityEvidenceResult,
 } from "./session-accessor.sqlite-entry-availability.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { captureIncognitoSessionTopology } from "./session-incognito-binding.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
-import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  captureSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
+} from "./session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
@@ -35,13 +39,73 @@ export async function readPlacementSessionIdentityEvidence(
   cfg: OpenClawConfig,
   input: readonly PlacementSessionIdentityProbe[],
 ): Promise<SessionIdentityEvidenceResult[]> {
-  const capturedEnv = cloneEnvWithPlatformSemantics(process.env);
+  const topology = captureIncognitoSessionTopology();
+  const capturedEnv = cloneEnvWithPlatformSemantics(topology?.env ?? process.env);
   const env = { ...capturedEnv, OPENCLAW_STATE_DIR: resolveStateDir(capturedEnv) };
   const probes = input.map((probe) => ({ ...probe }));
   const results: SessionIdentityEvidenceResult[] = probes.map(() => ({ status: "absent" }));
   const incognito = probes.flatMap((probe, index) =>
     isIncognitoSessionKey(probe.sessionKey) ? [{ probe, index }] : [],
   );
+  if (topology && incognito.length) {
+    const actors = topology.entries.filter((target) =>
+      incognito.some(({ probe }) => probe.agentId === target.agentId),
+    );
+    const checks: Array<() => void> = [];
+    const assertCurrent = () => {
+      topology.assertCurrent();
+      checks.forEach((check) => check());
+    };
+    const read = async (offset: number): Promise<SessionIdentityEvidenceResult[]> => {
+      assertCurrent();
+      const target = actors[offset];
+      if (!target) {
+        const disk = probes.flatMap((probe, index) =>
+          !isIncognitoSessionKey(probe.sessionKey) ? [{ probe, index }] : [],
+        );
+        const evidence = await readPlacementSessionIdentityEvidence(
+          cfg,
+          disk.map(({ probe }) => probe),
+        );
+        disk.forEach(({ index }, indexInDisk) => {
+          results[index] = evidence[indexInDisk]!;
+        });
+        assertCurrent();
+        return results;
+      }
+      const actor = await captureOpenClawAgentDatabaseExecution({
+        kind: "ephemeral",
+        agentId: target.agentId,
+        env: topology.env,
+        existingOnly: true,
+        authority: { assertCurrent: topology.assertCurrent },
+      });
+      if (!actor || actor.identity.incarnation !== target.identity.incarnation) {
+        await actor?.release();
+        throw new Error("Incognito placement owner changed during acquisition");
+      }
+      try {
+        return await actor.sessions.withSharedState(async () => {
+          const selected = incognito.filter(({ probe }) => probe.agentId === target.agentId);
+          const found = await actor.sessions.readIdentities(
+            { assertCurrent: topology.assertCurrent },
+            { identities: selected.map(({ probe }) => probe) },
+          );
+          checks.push(found.snapshot.assertCurrent);
+          selected.forEach(({ index }, selectedIndex) => {
+            results[index] = found.evidence[selectedIndex]!;
+          });
+          return read(offset + 1);
+        });
+      } finally {
+        await actor.release();
+      }
+    };
+    return read(0).then((result) => {
+      topology.assertCurrent();
+      return result;
+    });
+  }
   const nativeProbes = incognito.map(({ probe }) => ({
     ...probe,
     env,
@@ -61,16 +125,33 @@ export async function readPlacementSessionIdentityEvidence(
     readIncognito();
     return results;
   }
-  const { candidates, ...prepared } = prepareSessionStoreTargetInventory(
-    cfg,
-    disk.map(({ probe }) => probe.agentId),
-    env,
-  );
-  const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
-  const nativeReaders = retainOpenClawAgentDatabaseReadCandidates(
-    candidates.flatMap((candidate) => [candidate, { ...candidate, path: candidate.physicalPath }]),
-    env,
-  );
+  const prepareDisk = () => {
+    const { candidates, ...prepared } = prepareSessionStoreTargetInventory(
+      cfg,
+      disk.map(({ probe }) => probe.agentId),
+      env,
+    );
+    const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...prepared, candidates });
+    const nativeReaders = retainOpenClawAgentDatabaseReadCandidates(
+      candidates.flatMap((candidate) => [
+        candidate,
+        { ...candidate, path: candidate.physicalPath },
+      ]),
+      env,
+    );
+    return { candidates, prepared, inventoryRead, nativeReaders };
+  };
+  let diskPreparation: ReturnType<typeof prepareDisk>;
+  try {
+    diskPreparation = prepareDisk();
+  } catch {
+    for (const { index } of disk) {
+      results[index] = { status: "unknown", reason: "read-failed" };
+    }
+    readIncognito();
+    return results;
+  }
+  const { candidates, prepared, inventoryRead, nativeReaders } = diskPreparation;
   const continuations: Array<{
     path: string;
     owner: NonNullable<ReturnType<typeof captureCanonicalSessionReaderContinuation>>;
@@ -94,7 +175,6 @@ export async function readPlacementSessionIdentityEvidence(
     throw error;
   }
   let changed = false;
-  let assertRegistryCurrent: (() => void) | undefined;
   const unsubscribe = sessionChanges.subscribe((change) => {
     if ("all" in change || !change.storePath) {
       changed = true;
@@ -111,29 +191,7 @@ export async function readPlacementSessionIdentityEvidence(
     );
   });
   try {
-    await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-      let inventory = await discovery.readTargetInventory({
-        ...prepared,
-        registeredDatabases: { status: "deferred" },
-      });
-      if (inventory.kind === "session-target-registry-required") {
-        const registry = await registryRead.read();
-        assertRegistryCurrent = registry.assertCurrent;
-        registry.assertCurrent();
-        discovery.assertCurrent();
-        inventory = await discovery.readTargetInventory({
-          ...prepared,
-          registeredDatabases:
-            registry.result.status === "available"
-              ? registry.result.entries
-              : { status: "unavailable" },
-        });
-        if (inventory.kind === "session-target-registry-required") {
-          throw new Error("Session target discovery requested registry rows twice");
-        }
-      }
-      assertRegistryCurrent?.();
-      discovery.assertCurrent();
+    await inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
       const agents = new Map(inventory.agents.map((agent) => [agent.agentId, agent]));
       const groups = new Map<
         string,
@@ -168,8 +226,7 @@ export async function readPlacementSessionIdentityEvidence(
         reads.map(({ database }) => ({ ...database, env })),
         async (owners) => {
           const assertCurrent = () => {
-            assertRegistryCurrent?.();
-            discovery.assertCurrent();
+            assertDiscoveryCurrent();
             for (const owner of owners) {
               owner.assertCurrent();
             }
@@ -213,12 +270,9 @@ export async function readPlacementSessionIdentityEvidence(
         },
       );
     });
-    assertRegistryCurrent?.();
+    inventoryRead.assertRegistryCurrent();
     for (const candidate of candidates) {
-      if (
-        captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-        candidate.physicalPath
-      ) {
+      if (!isSessionStoreReadCandidateCurrent(candidate)) {
         throw new Error("Session store alias changed during discovery; retry the read.");
       }
     }

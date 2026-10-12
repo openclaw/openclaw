@@ -11,11 +11,6 @@ import {
   extractErrorCode,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
-import {
-  asDateTimestampMs,
-  parseFiniteNumber,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString as normalizeThreadTs } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -86,13 +81,7 @@ async function resolveThreadTsFromHistory(params: {
   return normalizeThreadTs(message?.thread_ts);
 }
 
-export function createSlackThreadTsResolver(params: {
-  client: SlackWebClient;
-  cacheTtlMs?: number;
-  maxSize?: number;
-}) {
-  const ttlMs = Math.max(0, parseFiniteNumber(params.cacheTtlMs) ?? DEFAULT_THREAD_TS_CACHE_TTL_MS);
-  const maxSize = Math.max(0, parseFiniteNumber(params.maxSize) ?? DEFAULT_THREAD_TS_CACHE_MAX);
+export function createSlackThreadTsResolver(params: { client: SlackWebClient }) {
   const cache = new Map<string, ThreadTsCacheEntry>();
   const inflight = new Map<string, Promise<string | undefined>>();
 
@@ -101,16 +90,9 @@ export function createSlackThreadTsResolver(params: {
     if (!entry) {
       return undefined;
     }
-    if (entry.expiresAt !== 0) {
-      const normalizedNow = asDateTimestampMs(now);
-      if (
-        normalizedNow === undefined ||
-        asDateTimestampMs(entry.expiresAt) === undefined ||
-        entry.expiresAt <= normalizedNow
-      ) {
-        cache.delete(key);
-        return undefined;
-      }
+    if (entry.expiresAt <= now) {
+      cache.delete(key);
+      return undefined;
     }
     cache.delete(key);
     cache.set(key, entry);
@@ -118,14 +100,9 @@ export function createSlackThreadTsResolver(params: {
   };
 
   const setCached = (key: string, threadTs: string | null, now: number) => {
-    const expiresAt = ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) : 0;
-    if (expiresAt === undefined) {
-      cache.delete(key);
-      return;
-    }
     cache.delete(key);
-    cache.set(key, { threadTs, expiresAt });
-    pruneMapToMaxSize(cache, maxSize);
+    cache.set(key, { threadTs, expiresAt: now + DEFAULT_THREAD_TS_CACHE_TTL_MS });
+    pruneMapToMaxSize(cache, DEFAULT_THREAD_TS_CACHE_MAX);
   };
 
   return {

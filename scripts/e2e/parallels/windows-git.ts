@@ -16,11 +16,9 @@ async function sha256File(filePath: string): Promise<string> {
 }
 
 export async function prepareMinGitZip(tgzDir: string): Promise<string> {
-  const metadata = run(
-    "python3",
-    [
-      "-c",
-      String.raw`import json
+  const metadata = run("python3", [
+    "-c",
+    String.raw`import json
 import re
 import urllib.request
 
@@ -97,9 +95,7 @@ if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
 print(best["name"])
 print(best["browser_download_url"])
 print(digest)`,
-    ],
-    { quiet: true },
-  ).stdout.trim();
+  ]).stdout.trim();
   const [name, url, digest] = metadata.split("\n");
   const expectedSha256 = digest?.match(/^sha256:([a-f\d]{64})$/u)?.[1];
   if (!name || !url || !expectedSha256) {

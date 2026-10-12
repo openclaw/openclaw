@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   runSqliteImmediateTransactionSync,
+  sqliteStringSet,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type { MemoryOriginDeletion } from "./memory-entry-origins-task.js";
@@ -31,9 +32,9 @@ export function deleteMemoryEntryOriginsInDatabase(
       let query = getNodeSqliteKysely<OriginDatabase>(db)
         .deleteFrom("memory_entry_origins")
         .where("agent_id", "=", params.agentId)
-        .where("entry_key", "in", params.entryKeys);
+        .where("entry_key", "in", sqliteStringSet(params.entryKeys));
       if (params.sessionIds) {
-        query = query.where("session_id", "in", params.sessionIds);
+        query = query.where("session_id", "in", sqliteStringSet(params.sessionIds));
       }
       return Number(executeSqliteQuerySync(db, query).numAffectedRows ?? 0n);
     },

@@ -182,6 +182,7 @@ export async function searchProjectedSessionTranscripts(params: {
         });
         return true;
       },
+      { selection: true },
     );
     if (published) {
       return;

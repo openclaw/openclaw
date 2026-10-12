@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
-import { render, type TemplateResult } from "lit";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import {
   agentsCapability,
   agentsList,
@@ -13,13 +13,12 @@ import {
   pageContext,
   settingsSelection,
   snapshot,
-  type TestAgentsPage,
+  createAgentsPage,
 } from "./agents-page.test-support.ts";
-import "./agents-page.ts";
+import { Agents } from "./view.tsx";
 
 it.each([
   "file tabs",
-  "agent selection",
   "empty draft",
   "external update",
   "missing file",
@@ -98,9 +97,7 @@ it.each([
     ensureFiles: vi.fn(async (agentId: string) => fileList(agentId)),
     recordFile: vi.fn(),
   };
-  const page = document.createElement("openclaw-agents-page") as TestAgentsPage & {
-    render: () => TemplateResult;
-  };
+  const page = createAgentsPage();
   page.context = {
     ...pageContext(currentGateway, agents),
     basePath: "",
@@ -117,8 +114,9 @@ it.each([
   page.routeData = agentsRouteData(currentGateway, roster, "main", selection);
   page.subscriptions.hostConnected();
   page.routeDataInitialized = true;
-  const container = document.createElement("div");
-  const paint = () => render(page.render(), container);
+  const mounted = mountSolid(Agents, page.viewProps);
+  const { container } = mounted;
+  const paint = () => mounted.update(page.viewProps);
   const textarea = () => {
     paint();
     const input = container.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
@@ -127,7 +125,7 @@ it.each([
   };
   const settle = async () => {
     await vi.waitFor(() => {
-      expect(page.agentFileContents[page.agentFileActive ?? ""]).toBeDefined();
+      expect(page.agentFileEditors[page.agentFileActive ?? ""]?.content).toBeDefined();
       expect(page.agentFilesList?.agentId).toBe(selection.state.selectedId);
       expect(page.agentFilesLoading).toBe(false);
       paint();
@@ -217,7 +215,7 @@ it.each([
       expect(save().disabled).toBe(true);
     }
     if (transition === "external update" || transition === "missing file") {
-      expect(page.agentFileContents["AGENTS.md"]).toBe("changed on disk");
+      expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("changed on disk");
       save().click();
       await vi.waitFor(() => {
         paint();
@@ -243,7 +241,7 @@ it.each([
       next.value = "next edit";
       next.dispatchEvent(new Event("input", { bubbles: true }));
       save().click();
-      await vi.waitFor(() => expect(page.agentFileContents["AGENTS.md"]).toBe("next edit"));
+      await vi.waitFor(() => expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("next edit"));
       expect(save().disabled).toBe(true);
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
         agentId: "main",
@@ -256,6 +254,6 @@ it.each([
     pendingSave.resolve();
     page.subscriptions.hostDisconnected();
     selection.dispose();
-    render(null, container);
+    mounted.dispose();
   }
 });

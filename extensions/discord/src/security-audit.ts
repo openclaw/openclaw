@@ -24,10 +24,7 @@ function hasNarrowMemberRestriction(
 ): boolean {
   const users = channel?.users ?? guild.users ?? [];
   const roles = channel?.roles ?? guild.roles ?? [];
-  if ([...users, ...roles].some((entry) => isWildcardEntry(entry))) {
-    return false;
-  }
-  return users.length > 0 || roles.length > 0;
+  return ![...users, ...roles].some(isWildcardEntry) && (users.length > 0 || roles.length > 0);
 }
 
 function listBroadMemberTargetPaths(params: {
@@ -187,7 +184,8 @@ export async function collectDiscordSecurityAuditFindings(params: {
   const guildsConfigured = Object.keys(guildEntries).length > 0;
   const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
   const ownerAllowFromConfigured =
-    normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
+    normalizeAllowFromList([...(discordCfg.allowFrom ?? dmAllowFrom), ...storeAllowFrom]).length >
+    0;
   if (
     effectiveGroupPolicy !== "disabled" &&
     guildsConfigured &&

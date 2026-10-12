@@ -5,10 +5,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
-import {
-  isOutboundDeliveryError,
-  isPlatformMessageRejectedError,
-} from "../../../infra/outbound/deliver-types.js";
+import { isPlatformMessageRejectedError } from "../../../infra/outbound/deliver-types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isFailoverError } from "../../failover-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
@@ -72,11 +69,9 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
 ];
 
 function isWriterClaimReboundAnnounceError(error: unknown): boolean {
-  return Boolean(
-    (error &&
-      typeof error === "object" &&
-      (error as { name?: unknown }).name === "SessionTranscriptWriterClaimReboundError") ||
-    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error)),
+  return (
+    asOptionalObjectRecord(error)?.name === "SessionTranscriptWriterClaimReboundError" ||
+    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error))
   );
 }
 
@@ -134,9 +129,7 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     }
     const message = summarizeDeliveryError(candidate);
     if (
-      candidate &&
-      typeof candidate === "object" &&
-      (candidate as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
+      asOptionalObjectRecord(candidate)?.gatewayCode === "UNAVAILABLE" &&
       /cron run continuation/i.test(message)
     ) {
       return true;
@@ -158,16 +151,11 @@ export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
 }
 
-function hasDirectAnnounceSendEvidence(error: unknown): boolean {
-  if (isOutboundDeliveryError(error) && error.sentBeforeError) {
-    return true;
-  }
-  const record = asOptionalObjectRecord(error);
-  return record?.sentBeforeError === true || record?.visibleReplySent === true;
-}
-
 export function hasAnnounceSendEvidence(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, hasDirectAnnounceSendEvidence);
+  return hasAnnounceErrorMatch(error, (candidate) => {
+    const record = asOptionalObjectRecord(candidate);
+    return record?.sentBeforeError === true || record?.visibleReplySent === true;
+  });
 }
 
 export async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {

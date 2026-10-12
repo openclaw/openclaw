@@ -76,38 +76,27 @@ function buildNonMatchingWhatsAppQaAllowFrom(existingAllowFrom: string[]) {
   throw new Error("Unable to derive a WhatsApp QA groupAllowFrom entry outside allowFrom.");
 }
 
-type WhatsAppQaAgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
-
-function buildWhatsAppQaScenarioAgent(agentId: string): WhatsAppQaAgentConfig {
-  const identityName =
-    agentId === "main"
-      ? "Main WhatsApp QA"
-      : agentId === "qa-second"
-        ? "Second WhatsApp QA"
-        : `WhatsApp QA ${agentId}`;
-  return {
-    identity: {
-      name: identityName,
-    },
-  };
-}
-
 function appendWhatsAppQaAgents(
   agents: OpenClawConfig["agents"],
   agentIds: readonly string[],
 ): OpenClawConfig["agents"] {
-  if (agentIds.length === 0) {
-    return agents;
-  }
   const entries = { ...agents?.entries };
   const originalIds = Object.keys(entries);
   for (const agentId of agentIds) {
     if (!Object.hasOwn(entries, agentId)) {
-      entries[agentId] = buildWhatsAppQaScenarioAgent(agentId);
+      entries[agentId] = {
+        identity: {
+          name:
+            agentId === "main"
+              ? "Main WhatsApp QA"
+              : agentId === "qa-second"
+                ? "Second WhatsApp QA"
+                : `WhatsApp QA ${agentId}`,
+        },
+      };
     }
   }
-  const needsExplicitOwnership =
-    Object.keys(entries).length > 1 && !Object.values(entries).some((entry) => entry.default);
+  const needsExplicitOwnership = Object.keys(entries).length > 1;
   const soleAgentId = originalIds.length === 1 ? originalIds[0] : undefined;
   const defaults = { ...agents?.defaults };
   if (needsExplicitOwnership && soleAgentId) {
@@ -188,37 +177,27 @@ export function buildWhatsAppQaConfig(
     broadcast: params.overrides?.broadcast,
     groupJid: params.groupJid,
   });
-  const audioPreflightConfig = params.overrides?.audioPreflight
-    ? {
-        tools: {
-          ...baseCfg.tools,
-          media: {
-            ...baseCfg.tools?.media,
-            models: [
-              {
-                provider: "openai",
-                model: "gpt-4o-transcribe",
-                capabilities: ["audio" as const],
-              },
-              ...(baseCfg.tools?.media?.models ?? []),
-            ],
-            audio: {
-              ...baseCfg.tools?.media?.audio,
-              enabled: true,
-            },
-          },
-        },
-      }
-    : {};
+  let tools = baseCfg.tools;
+  if (params.overrides?.audioPreflight) {
+    tools = {
+      ...tools,
+      media: {
+        ...tools?.media,
+        models: [
+          { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+          ...(tools?.media?.models ?? []),
+        ],
+        audio: { ...tools?.media?.audio, enabled: true },
+      },
+    };
+  }
   const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
-  const actionToolConfig = params.overrides?.actions
-    ? {
-        tools: {
-          ...baseCfg.tools,
-          alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "message"]),
-        },
-      }
-    : {};
+  if (params.overrides?.actions) {
+    tools = {
+      ...baseCfg.tools,
+      alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "message"]),
+    };
+  }
   const messagesConfig = {
     ...baseCfg.messages,
     ...(params.overrides?.inboundDebounceMs !== undefined
@@ -260,9 +239,8 @@ export function buildWhatsAppQaConfig(
   return {
     ...baseCfg,
     ...approvalForwardingConfig,
-    ...audioPreflightConfig,
     ...broadcastConfig,
-    ...actionToolConfig,
+    ...(params.overrides?.audioPreflight || params.overrides?.actions ? { tools } : {}),
     commands: {
       ...baseCfg.commands,
       ownerAllowFrom: uniqueStrings([

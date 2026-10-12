@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -35,7 +36,7 @@ async function runValidCommand(host: SpawnBrokerHost): Promise<void> {
 describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
   "spawn broker failed launch cleanup",
   () => {
-    it.skipIf(Boolean(process.versions.bun))(
+    it.skipIf(!supportsSpawnBrokerCommandTransport())(
       "releases native descriptors after missing executable and cwd failures",
       async () => {
         const host = createSpawnBrokerHost();
@@ -65,9 +66,11 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       },
     );
 
-    it.skipIf(process.platform !== "linux" || Boolean(process.versions.bun))(
-      "preserves EMFILE and the broker after a streamless raw spawn failure",
-      async () => {
+    it
+      .skipIf(process.platform !== "linux" || !supportsSpawnBrokerCommandTransport())
+      .each(["raw", "execa"] as const)(
+      "preserves EMFILE and the broker after a streamless %s spawn failure",
+      async (transport) => {
         const host = createSpawnBrokerHost();
         try {
           await host.ready();
@@ -91,72 +94,30 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
           if (soft === undefined || hard === undefined) {
             throw new Error("prlimit did not report both descriptor limits");
           }
-          // Existing IPC remains usable; only this disposable broker loses new fd slots.
           expect(host.pid).toBe(pid);
           await execFileAsync("prlimit", ["--pid", String(pid), "--nofile=3:"]);
           const { stdout: pressured } = await execFileAsync("prlimit", limitArgs);
           expect(pressured.trim().split(/\s+/)).toEqual(["3", hard]);
-          const child = host.spawn(process.execPath, ["-e", "process.exit(0)"], {
-            stdio: ["ignore", "pipe", "pipe"],
-          });
+          // Unbuffered execa must reach Node's streamless EMFILE child itself.
+          const run =
+            transport === "execa"
+              ? host.spawnExeca([process.execPath, "-e", "process.exit(0)"], {
+                  buffer: false,
+                  reject: false,
+                })
+              : undefined;
+          const child =
+            run?.child ??
+            host.spawn(process.execPath, ["-e", "process.exit(0)"], {
+              stdio: ["ignore", "pipe", "pipe"],
+            });
           const closed = child.waitForClose();
           await expect(child.ready()).rejects.toMatchObject({ code: "EMFILE" });
+          if (run) {
+            await expect(run.result).rejects.toMatchObject({ code: "EMFILE" });
+          }
           await closed;
           expect(child.pid).toBeUndefined();
-          expect(host.pid).toBe(pid);
-          await execFileAsync("prlimit", ["--pid", String(pid), `--nofile=${soft}:`]);
-          const { stdout: restored } = await execFileAsync("prlimit", limitArgs);
-          expect(restored.trim()).toBe(limits.trim());
-          await runValidCommand(host);
-          expect(host.pid).toBe(pid);
-          expect(await openDescriptorCount(pid)).toBe(before);
-        } finally {
-          // A failed assertion closes the broker instead of restoring a potentially retired PID.
-          await host.close();
-        }
-      },
-    );
-
-    it.skipIf(process.platform !== "linux" || Boolean(process.versions.bun))(
-      "preserves EMFILE and the broker after a streamless unbuffered execa spawn failure",
-      async () => {
-        const host = createSpawnBrokerHost();
-        try {
-          await host.ready();
-          const pid = host.pid;
-          if (pid === undefined) {
-            throw new Error("Ready spawn broker has no process identifier");
-          }
-          await runValidCommand(host);
-          const before = await openDescriptorCount(pid);
-          const limitArgs = [
-            "--pid",
-            String(pid),
-            "--nofile",
-            "--output",
-            "SOFT,HARD",
-            "--noheadings",
-            "--raw",
-          ];
-          const { stdout: limits } = await execFileAsync("prlimit", limitArgs);
-          const [soft, hard] = limits.trim().split(/\s+/);
-          if (soft === undefined || hard === undefined) {
-            throw new Error("prlimit did not report both descriptor limits");
-          }
-          await execFileAsync("prlimit", ["--pid", String(pid), "--nofile=3:"]);
-          const { stdout: pressured } = await execFileAsync("prlimit", limitArgs);
-          expect(pressured.trim().split(/\s+/)).toEqual(["3", hard]);
-          // Unbuffered output skips the broker's output sockets, so execa itself meets the
-          // streamless child that Node returns for EMFILE.
-          const run = host.spawnExeca([process.execPath, "-e", "process.exit(0)"], {
-            buffer: false,
-            reject: false,
-          });
-          const closed = run.child.waitForClose();
-          await expect(run.child.ready()).rejects.toMatchObject({ code: "EMFILE" });
-          await expect(run.result).rejects.toMatchObject({ code: "EMFILE" });
-          await closed;
-          expect(run.child.pid).toBeUndefined();
           expect(host.pid).toBe(pid);
           await execFileAsync("prlimit", ["--pid", String(pid), `--nofile=${soft}:`]);
           const { stdout: restored } = await execFileAsync("prlimit", limitArgs);

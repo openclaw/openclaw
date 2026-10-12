@@ -65,8 +65,8 @@ suite.define(() => {
             [routeAgentId]: { name: "Writer", workspace: writerWorkspace },
           },
         },
-        // This fixture owns its session catalog; native model discovery is unrelated.
-        plugins: { entries: { codex: { enabled: false } } },
+        // Keep the injected registry active without loading unrelated runtime plugins.
+        plugins: { allow: ["codex"], entries: { codex: { enabled: false } } },
         gateway: {
           auth: { mode: "none" },
           controlUi: {

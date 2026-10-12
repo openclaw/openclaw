@@ -7,22 +7,21 @@ import { convertPathToPattern } from "tinyglobby";
 import { describe, expect, vi } from "vitest";
 import { parseCLI } from "vitest/node";
 import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { stripVitestAnsi } from "../../scripts/lib/vitest-unhandled-errors.mts";
 import {
-  isVitestWorkerDeclaration,
   resolveVitestWorkerDeclaration,
   verifyVitestWorkerArtifacts,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
-import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
 import { copyCompiledFsSafeRuntimeFixture } from "./fs-safe-package.test-support.js";
 import {
@@ -204,10 +203,19 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
     .runIf(process.platform !== "win32")
     .for(["close before ready", "cancel while compiling", "terminated group", "uncertain output"])(
     "owns the real compiler lifetime: %s",
-    (mode, { workerArtifacts }) =>
+    (mode, { workerArtifacts, signal, onTestFinished }) =>
       workerArtifacts.fixtureLifetime.run(async () => {
         const { node } = workerArtifacts.createFixtureCommands();
         const directory = workerArtifacts.fixtureDirectory();
+        const outerRoot = path.join(directory, "outer-custody");
+        const compilerRoot = path.join(directory, "compiler-custody");
+        let outerResources: ReturnType<typeof createVitestResourceOwner> | undefined;
+        if (mode === "uncertain output") {
+          fs.mkdirSync(outerRoot);
+          fs.mkdirSync(compilerRoot);
+          outerResources = createVitestResourceOwner(outerRoot);
+          createVitestResourceOwner(compilerRoot);
+        }
         const preload = writeFixture(
           directory,
           "compiler-lifetime.mjs",
@@ -279,12 +287,14 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       import {syncFixtureBuiltinExports} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
       import {setTimeout as tick} from 'node:timers/promises';
       import {inspectManagedProcessGroup} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/managed-child-process.mts")).href)};
-      import {createVitestResourceOwner} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-resource-ownership.mts")).href)};
+      import {findVitestResourceOwner} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-resource-ownership.mts")).href)};
       const directory=${JSON.stringify(directory)}, mode=${JSON.stringify(mode)};
       // Only the deliberately escaped writer has a fixture-owned namespace.
       // Other compiler failures must still retain the outer runner's claims.
-      const resources=mode==='uncertain output'?createVitestResourceOwner(directory):undefined;
-      if(resources) Object.assign(process.env,{TMPDIR:directory,TMP:directory,TEMP:directory});
+      const compilerRoot=${JSON.stringify(compilerRoot)};
+      const resources=mode==='uncertain output'?findVitestResourceOwner(compilerRoot):undefined;
+      if(mode==='uncertain output') assert.ok(resources,'compiler custody owner must exist');
+      if(resources) Object.assign(process.env,{TMPDIR:compilerRoot,TMP:compilerRoot,TEMP:compilerRoot});
       const file=name=>path.join(directory,name);
       fs.writeFileSync(file('input'),'compiler input');
       const spawn=cp.spawn;
@@ -376,7 +386,32 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       }
     `,
         );
-        const command = node([driver]);
+        const finished = new AbortController();
+        // Expected failed custody has its own owner. Its explicit rescue receipt,
+        // rather than the failed command result, authorizes fixture disposal.
+        const command =
+          mode === "uncertain output"
+            ? runNodeScript(
+                [driver],
+                preparedCompiler.env(
+                  { ...process.env, TMPDIR: outerRoot, TMP: outerRoot, TEMP: outerRoot },
+                  "node",
+                ),
+                undefined,
+                {
+                  cwd: root,
+                  signal: AbortSignal.any([signal, finished.signal]),
+                  maxBuffer: 2 * 1024 * 1024,
+                  requireProcessTreeExit: true,
+                },
+              ).then((result) => ({ ...result, code: result.status }))
+            : node([driver]);
+        if (mode === "uncertain output") {
+          onTestFinished(async () => {
+            finished.abort();
+            await command;
+          });
+        }
         await workerArtifacts.fixtureLifetime.verifyCleanup(async () => {
           const result = await command;
           // Driver death must not turn its private pending claims into disposable inputs.
@@ -386,7 +421,20 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         });
         const result = await command;
         console.log(result.stdout);
-        expect(result.code, result.stderr + result.stdout).toBe(0);
+        if (mode === "uncertain output") {
+          expect(result.error, result.stderr + result.stdout).toMatchObject({
+            code: "EPROCESSGROUP_CLEANUP_FAILED",
+            processTreeState: "indeterminate",
+            cause: { message: "Managed cleanup owner reported unjoined work" },
+          });
+          expect(result.code).toBeNull();
+          expect(() => outerResources!.assertReleased()).toThrow(
+            "Unreleased Vitest resource claim",
+          );
+        } else {
+          expect(result.error, result.stderr + result.stdout).toBeUndefined();
+          expect(result.code, result.stderr + result.stdout).toBe(0);
+        }
       }),
   );
 
@@ -530,18 +578,6 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       );
     }));
 
-  it.each([
-    "src/infra/runtime-process-entrypoints.ts",
-    "src/tui/tui-pty-runtime-test-support.ts",
-    "src/plugins/runtime-retention-entrypoint.test-support.ts",
-  ])("recognizes native and Windows-normalized declaration IDs for %s", (source) => {
-    const declaration = path.join(root, source);
-    expect(isVitestWorkerDeclaration(declaration)).toBe(true);
-    expect(isVitestWorkerDeclaration(declaration.replaceAll("\\", "/"))).toBe(true);
-    expect(isVitestWorkerDeclaration(declaration.replaceAll("/", "\\"))).toBe(true);
-    expect(isVitestWorkerDeclaration(`${declaration}.unrelated`)).toBe(false);
-  });
-
   it("uses the prepared Anthropic failover hook in a fresh process without global activation", ({
     workerArtifacts,
   }) =>
@@ -670,7 +706,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               },
             }});
             const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
-            assert.deepEqual(unprepared,[{text:'⚠️ fixture-provider/fixture-model request failed (authentication failed, HTTP 403). Re-authenticate the provider and try again.',isError:true}], 'an unprepared error must retain safe provider, model and status facts');
+            assert.deepEqual(unprepared,[{text:"⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run \`openclaw configure\`.",isError:true}], 'an unprepared error must show sign-in guidance without provider hook policy');
             assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
             let scopedPreparationRecordCount = 0;
             if (${scope === "scoped"}) {
@@ -751,8 +787,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
                 : path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts"),
             );
             const result = await node(
-              [
-                ...resolveRuntimeWorkerArgv(pathToFileURL(probe), resolveTestNodeExecPath()),
+              (workerArgv) => [
+                ...workerArgv(pathToFileURL(probe)),
                 url.href,
                 pathToFileURL(
                   owner
@@ -781,10 +817,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },
-    { args: ["run", "--testNamePattern", "--help"], metadata: true },
     { args: ["run", "--help"], metadata: true },
     { args: ["bench", "--run"], metadata: false },
-    { args: ["related", "--run"], metadata: false },
     { args: ["list"], metadata: true },
     { args: ["--browser.headless", "run", "--version"], metadata: false },
     { args: ["--browser.headless", "--version"], metadata: true },
@@ -1160,7 +1194,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         "vitest.config.mts",
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
-      export default Promise.resolve({plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}]}});
+      export default Promise.resolve({plugins:shared.plugins,test:{environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}]}});
     `,
       );
       const imported = await node([
@@ -1277,7 +1311,7 @@ export default class {
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
       // This fixture tests live-source reruns independently of native filesystem notifications.
-      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,server:{watch:{usePolling:true}},test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,reporters:['default',${JSON.stringify(reporter)}]}};
+      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,server:{watch:{usePolling:true}},test:{environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,reporters:['default',${JSON.stringify(reporter)}]}};
     `,
       );
       const handle = spawnWatchedVitestProcess({

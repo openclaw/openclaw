@@ -22,20 +22,7 @@ import type {
   HostedOfficialExternalPluginCatalogTrustState,
 } from "./official-external-plugin-catalog.types.js";
 
-type HostedCatalogSnapshotRow = {
-  feed_url: string;
-  body: string;
-  status: number | bigint;
-  etag: string | null;
-  last_modified: string | null;
-  checksum: string;
-  saved_at: string;
-  trust_mode: string | null;
-  trust_key_id: string | null;
-  trust_signature_count: number | bigint | null;
-  trust_threshold: number | bigint | null;
-  trust_verified_at: string | null;
-};
+type HostedCatalogSnapshotRow = NonNullable<ReturnType<typeof readHostedCatalogSnapshotRow>>;
 
 type HostedCatalogSnapshotDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -69,11 +56,6 @@ function rowToTrustState(
   };
 }
 
-function decodeBase64Payload(payload: string): string {
-  const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(normalized, "base64").toString("utf8");
-}
-
 function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicState | undefined {
   try {
     const document: unknown = JSON.parse(body);
@@ -81,7 +63,9 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
       return undefined;
     }
     const payload =
-      typeof document.payload === "string" ? decodeBase64Payload(document.payload) : body;
+      typeof document.payload === "string"
+        ? Buffer.from(document.payload, "base64").toString("utf8")
+        : body;
     const feed: unknown = typeof document.payload === "string" ? JSON.parse(payload) : document;
     if (!isRecord(feed) || !isOfficialExternalPluginCatalogSequence(feed.sequence)) {
       return undefined;
@@ -167,10 +151,7 @@ function rowToSnapshot(
   };
 }
 
-function readHostedCatalogSnapshotRow(
-  db: DatabaseSync,
-  url: string,
-): HostedCatalogSnapshotRow | undefined {
+function readHostedCatalogSnapshotRow(db: DatabaseSync, url: string) {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
   return executeSqliteQueryTakeFirstSync(
     db,

@@ -5,9 +5,11 @@ import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import {
   upsertAuthProfile,
+  upsertAuthProfileAsync,
   upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow,
 } from "../agents/auth-profiles/profiles.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,6 +26,7 @@ import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
+import { warnPluginSdkDeprecation } from "./sdk-deprecation.js";
 
 const resolveAuthAgentDir = (agentDir?: string, config?: OpenClawConfig) =>
   agentDir ?? resolveDefaultAgentDir(config ?? {});
@@ -62,19 +65,13 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
-  if (input !== null && typeof input === "object") {
-    const coercedRef = coerceSecretRef(input);
-    if (!coercedRef || !isValidSecretRef(coercedRef)) {
-      throw new Error("API key SecretRef is invalid.");
-    }
-    return coercedRef;
-  }
-  if (options?.secretInputMode === "plaintext") {
+  const objectInput = input !== null && typeof input === "object";
+  if (!objectInput && options?.secretInputMode === "plaintext") {
     return normalizeSecretInput(input);
   }
   const coercedRef = coerceSecretRef(input);
-  if (coercedRef) {
-    if (!isValidSecretRef(coercedRef)) {
+  if (objectInput || coercedRef) {
+    if (!coercedRef || !isValidSecretRef(coercedRef)) {
       throw new Error("API key SecretRef is invalid.");
     }
     return coercedRef;
@@ -111,6 +108,7 @@ export function buildApiKeyCredential(
   };
 }
 
+/** @deprecated Use upsertApiKeyProfileAsync. Removed at the next Plugin SDK major. */
 export function upsertApiKeyProfile(params: {
   provider: string;
   input: SecretInput;
@@ -119,8 +117,30 @@ export function upsertApiKeyProfile(params: {
   profileId?: string;
   metadata?: Record<string, string>;
 }): string {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "upsertApiKeyProfile",
+    replacement: "upsertApiKeyProfileAsync",
+  });
   const profileId = params.profileId ?? buildAuthProfileId({ providerId: params.provider });
   upsertAuthProfile({
+    profileId,
+    credential: buildApiKeyCredential(
+      params.provider,
+      params.input,
+      params.metadata,
+      params.options,
+    ),
+    agentDir: resolveAuthAgentDir(params.agentDir, params.options?.config),
+  });
+  return profileId;
+}
+
+export async function upsertApiKeyProfileAsync(
+  params: Parameters<typeof upsertApiKeyProfile>[0],
+): Promise<string> {
+  const profileId = params.profileId ?? buildAuthProfileId({ providerId: params.provider });
+  await upsertAuthProfileAsync({
     profileId,
     credential: buildApiKeyCredential(
       params.provider,
@@ -295,12 +315,14 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => path.join(agentsRoot, entry.name, "agent"));
 
+  // Publish the shared profile before siblings decide whether to inherit it.
+  const sharedAgentDir = safeRealpathSync(resolveSharedMainAuthAgentDir());
   return uniqueStrings(
     [normalized, ...discovered].flatMap((dir) => {
       const real = safeRealpathSync(path.resolve(dir));
       return real ? [real] : [];
     }),
-  );
+  ).toSorted((left, right) => Number(right === sharedAgentDir) - Number(left === sharedAgentDir));
 }
 
 export async function writeOAuthCredentials(

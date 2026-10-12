@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -18,6 +19,10 @@ import {
   pluginSourceIdentityChangedOnlyByCtime,
   pluginSourceStatIdentity,
 } from "./plugin-source-file.js";
+
+export type NativeReferenceProgress = { pluginId: string; completed: number };
+export const nativeReferenceProgress = channel("openclaw.plugin-native-reference");
+let verifiedMembers = 0;
 
 /** A hardlink needs the owner's complete-directory check before the generation is exposed. */
 export function linkPluginNativeReference(
@@ -69,8 +74,11 @@ function resolveNativeHost(filename: string): string | undefined {
 }
 
 /** Verdicts belong to one capture; replacement namespaces and placements must be admitted again. */
-export function createPluginNativeReferenceValidator(boundary: string) {
-  const admitted = new WeakMap<PluginNativeNamespaceFact, Set<string>>();
+export function createPluginNativeReferenceValidator(boundary: string, pluginId: string) {
+  const admitted = new WeakMap<
+    PluginNativeNamespaceFact,
+    { placements: Set<string>; members: Set<string> }
+  >();
   return (
     target: string,
     fact: PluginNativeArtifactFact,
@@ -81,15 +89,22 @@ export function createPluginNativeReferenceValidator(boundary: string) {
       pluginNativeNamespaceMemberRelativePath(namespace, fact.capturedPath),
     );
     const placement = `${directory}\0${path.dirname(target)}`;
-    let placements = admitted.get(namespace);
+    let verdict = admitted.get(namespace);
     try {
-      if (!placements?.has(placement)) {
-        assertPluginNativeReferenceDirectory(target, namespace, boundary, directory);
-        if (!placements) {
-          placements = new Set();
-          admitted.set(namespace, placements);
+      if (!verdict?.placements.has(placement)) {
+        if (!verdict) {
+          verdict = { placements: new Set(), members: new Set() };
+          admitted.set(namespace, verdict);
         }
-        placements.add(placement);
+        assertPluginNativeReferenceDirectory(
+          target,
+          namespace,
+          boundary,
+          directory,
+          verdict.members,
+          pluginId,
+        );
+        verdict.placements.add(placement);
       }
       if (expectedHost && resolveNativeHost(target) !== expectedHost) {
         throw new Error("The native companion directory resolves a different OpenClaw host");
@@ -109,14 +124,24 @@ function assertPluginNativeReferenceDirectory(
   namespace: PluginNativeNamespaceFact,
   boundary: string,
   directory: string,
+  admittedMembers: Set<string>,
+  pluginId: string,
 ): void {
+  nativeReferenceProgress.publish({
+    pluginId,
+    completed: verifiedMembers,
+  } satisfies NativeReferenceProgress);
   for (const [name, member] of Object.entries(namespace.members)) {
     if (!isPathInside(directory, name || ".")) {
       continue;
     }
-    const filename = fs.realpathSync(
-      path.join(path.dirname(target), path.relative(directory, name || ".")),
-    );
+    const memberPath = path.join(path.dirname(target), path.relative(directory, name || "."));
+    // Parent and child native directories can cover the same member at the same placement.
+    const memberKey = `${name}\0${memberPath}`;
+    if (admittedMembers.has(memberKey)) {
+      continue;
+    }
+    const filename = fs.realpathSync(memberPath);
     if (
       !isPathInside(boundary, filename) &&
       !isPathInside(pluginNativeNamespaceBoundary(namespace), filename)
@@ -128,18 +153,22 @@ function assertPluginNativeReferenceDirectory(
       if (!current.isDirectory()) {
         throw new Error(`Companion ${name} is not a directory`);
       }
-      continue;
+    } else {
+      const captured = fs.statSync(pluginNativeNamespaceMemberPath(namespace, name), {
+        bigint: true,
+      });
+      if (current.dev !== captured.dev || current.ino !== captured.ino) {
+        const content = hashPluginSourceFile(filename, path.dirname(filename));
+        if (content.contentHash !== member.contentHash || content.sizeBytes !== member.sizeBytes) {
+          throw new Error(`Companion ${name} differs from its captured bytes`);
+        }
+      }
     }
-    const captured = fs.statSync(pluginNativeNamespaceMemberPath(namespace, name), {
-      bigint: true,
-    });
-    if (current.dev === captured.dev && current.ino === captured.ino) {
-      continue;
-    }
-    const content = hashPluginSourceFile(filename, path.dirname(filename));
-    if (content.contentHash !== member.contentHash || content.sizeBytes !== member.sizeBytes) {
-      throw new Error(`Companion ${name} differs from its captured bytes`);
-    }
+    admittedMembers.add(memberKey);
+    nativeReferenceProgress.publish({
+      pluginId,
+      completed: ++verifiedMembers,
+    } satisfies NativeReferenceProgress);
   }
 }
 

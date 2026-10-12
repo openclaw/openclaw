@@ -1,88 +1,163 @@
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
-import * as databaseLifecycle from "../../../state/openclaw-state-db-cache.js";
-import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
-import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import type { createQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
-import * as registryState from "./subagent-registry-state.js";
-import * as registryStore from "./subagent-registry.store.sqlite.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
+import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
-export function registerQueuedUnknownKillAuthorityTest(params: {
-  fixture: () => ReturnType<typeof createQueuedRegistrationFixture>;
-  getContext: () => OpenClawStateWorkerContext;
-}) {
-  it("retains uncertain kill custody across source close without blocking another queued run", async () => {
-    const f = params.fixture();
-    const unrelated = params.fixture();
-    unrelated.registration.runId = "unrelated-registration";
-    unrelated.registration.childSessionKey = "agent:main:subagent:unrelated-registration";
-    f.acknowledgeAllWrites();
-    unrelated.acknowledgeAllWrites();
-    await f.register();
-    await unrelated.register();
-    const entry = f.runs.get(f.registration.runId)!;
-    const canonical = structuredClone(new Map([...f.runs, ...unrelated.runs]));
-    const readCanonical = vi
-      .spyOn(registryStore, "loadSubagentRegistryFromSqlite")
-      .mockImplementation(() => structuredClone(canonical));
-    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
-      async (_options, command) => {
-        expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
-        return {
-          ok: true,
-          type: "subagents.runs",
-          sourceAdmitted: true,
-          runs: readCanonical(),
-        };
-      },
-    );
-    vi.spyOn(databaseLifecycle, "captureOpenClawStateDatabaseReadAdmission").mockImplementation(
-      () => params.getContext().admission,
-    );
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockRejectedValueOnce(new SqliteWorkerError("Kill acknowledgement lost", "outcome-unknown"));
-    f.options.persistAsyncOrThrow.mockImplementation((context, callbacks, ...ids) =>
-      registryState.persistSubagentRunsToDiskAsyncOrThrow(f.runs, ids, { context, ...callbacks }),
-    );
-    const usable = (scope: typeof f.scope) => [
-      scope.canLaunch(),
-      scope.canAcceptLaunch(),
-      scope.canCleanupSession(),
-    ];
-    try {
-      expect(usable(f.scope)).toEqual([true, true, true]);
-      expect(usable(unrelated.scope)).toEqual([true, true, true]);
-      await expect(
+export function registerQueuedUnknownKillAuthorityTest() {
+  it("fences uncertain kill rows until canonical restore without blocking unrelated registration", async () => {
+    await withQueuedRegistrationFixture(async (f) => {
+      await f.register();
+      const entry = f.current();
+      const ack = f.holdNextWrite();
+      const killing = f.track(
         f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry }),
-      ).rejects.toMatchObject({ outcome: "unknown" });
-      expect(entry.killIntent).toBeUndefined();
-      expect(entry.execution.status).toBe("queued");
-      expect(usable(f.scope)).toEqual([false, false, false]);
-      expect(usable(unrelated.scope)).toEqual([true, true, true]);
+      );
+      await ack.entered;
+      ack.loseReceipt(new SqliteWorkerError("Kill acknowledgement lost", "outcome-unknown"));
+      await expect(killing).rejects.toMatchObject({ outcome: "unknown" });
+      expect(f.current().killIntent).toBeUndefined();
+      expect(f.stored()?.killIntent).toBeDefined();
+      expect([f.scope.canLaunch(), f.scope.canAcceptLaunch(), f.scope.canCleanupSession()]).toEqual(
+        [false, false, false],
+      );
+      const unrelated = {
+        ...f.registration,
+        runId: "unrelated",
+        childSessionKey: "agent:main:subagent:unrelated",
+      };
+      await f.manager.registerSubagentRun(unrelated);
+      expect(f.runs.get(unrelated.runId)?.queuedLaunch).toBeDefined();
+      await closeOpenClawStateDatabaseAsync();
       await expect(
-        registryState.restoreSubagentRunsFromDisk({ runs: f.runs }),
+        mutateSubagentRuns([entry.runId], () => ({ value: true }), { runs: f.runs }),
       ).rejects.toMatchObject({ outcome: "unknown" });
-      await databaseLifecycle.closeOpenClawStateDatabaseAsync();
-      expect(usable(f.scope)).toEqual([false, false, false]);
+      await restoreSubagentRunsFromDisk({ runs: f.runs });
+      expect(f.current().killIntent).toBeDefined();
       await expect(
-        registryState.restoreSubagentRunsFromDisk({ runs: f.runs, mergeOnly: true }),
-      ).rejects.toMatchObject({ outcome: "unknown" });
-      await expect(
-        f.manager.claimSubagentRunKill({ runId: entry.runId, expected: entry }),
-      ).rejects.toMatchObject({ outcome: "unknown" });
-      expect(worker).toHaveBeenCalledOnce();
-      await registryState.restoreSubagentRunsFromDisk({ runs: f.runs });
-      expect(f.runs.get(entry.runId)).not.toBe(entry);
-      expect(f.runs.get(entry.runId)).toEqual(canonical.get(entry.runId));
-      expect(usable(f.scope)).toEqual([false, false, false]);
-      expect(usable(unrelated.scope)).toEqual([true, true, true]);
-    } finally {
-      await databaseLifecycle.closeOpenClawStateDatabaseAsync();
-      readCanonical.mockReturnValue(new Map());
-      await registryState.restoreSubagentRunsFromDisk({ runs: new Map() });
-      registryState.clearSubagentRunsReadCacheForTest();
-    }
+        mutateSubagentRuns([entry.runId], () => ({ value: true }), { runs: f.runs }),
+      ).resolves.toBe(true);
+      expect(f.runs.get(unrelated.runId)?.execution.status).toBe("queued");
+    });
+  });
+
+  it("restores an uncertain accepted address with its original runtime and completion custody", async () => {
+    await withQueuedRegistrationFixture(async (f) => {
+      expect(f.runs.size).toBe(0);
+      const context = createContext();
+      const resolveGatewayContext = () => context;
+      context.resolveGatewayContext = resolveGatewayContext;
+      const client = createOperatorClient({
+        profileName: "collector-rekey",
+        scopes: ["operator.write"],
+      });
+      const completion = await withPluginRuntimeGatewayRequestScope(
+        { client, context, resolveGatewayContext, isWebchatConnect: () => false },
+        () => captureOperatorToolGatewayContinuationContext(),
+      );
+      if (!completion?.operatorAuthority) {
+        throw new Error("Expected captured operator completion custody");
+      }
+      f.registration.gatewayContextResolver = resolveGatewayContext;
+      await f.register();
+      const original = f.current();
+      const runtimeKey = getSubagentRunRuntimeKey(original);
+      subagentRuns.bindCompletionAuthority(original, completion);
+      const retirement = subagentRuns.captureRetirement(
+        original,
+        (candidate) => candidate.runId !== original.runId,
+      );
+      const ack = f.holdNextWrite();
+      const acceptedId = "accepted-after-unknown-ack";
+      const accepting = f.track(f.manager.startQueuedSubagentRun(original.runId, acceptedId));
+      try {
+        await awaitGateBeforeSettlement(
+          ack.entered,
+          accepting,
+          "Accepted rekey did not reach native ACK",
+        );
+        expect(loadSubagentRegistryFromSqlite().has(original.runId)).toBe(false);
+        expect(loadSubagentRegistryFromSqlite().get(acceptedId)?.queuedLaunch).toBeUndefined();
+        ack.loseReceipt(new SqliteWorkerError("Accepted address receipt lost", "outcome-unknown"));
+        await expect(accepting).rejects.toMatchObject({ outcome: "unknown" });
+        expect(f.runs.get(original.runId)).toBe(original);
+        expect(f.runs.has(acceptedId)).toBe(false);
+        const plan = vi.fn(() => ({ value: true }));
+        for (const id of [original.runId, acceptedId]) {
+          await expect(mutateSubagentRuns([id], plan, { runs: f.runs })).rejects.toMatchObject({
+            outcome: "unknown",
+          });
+        }
+        expect(plan).not.toHaveBeenCalled();
+        await restoreSubagentRunsFromDisk({ runs: f.runs });
+        const accepted = f.runs.get(acceptedId);
+        if (!accepted) {
+          throw new Error("Canonical accepted row was not restored");
+        }
+        expect(f.runs.has(original.runId)).toBe(false);
+        expect(accepted).toMatchObject({
+          swarmRunId: original.runId,
+          taskRunId: original.taskRunId,
+          execution: { status: "running" },
+        });
+        expect(accepted.queuedLaunch).toBeUndefined();
+        expect(getSubagentRunRuntimeKey(accepted)).toBe(runtimeKey);
+        expect(getCurrentSubagentRunOwner(f.runs, original)).toBe(accepted);
+        expect(retirement.observation).toMatchObject({
+          state: "selected",
+          entry: { runId: acceptedId },
+        });
+        expect(retirement.observation.entry).toBe(accepted);
+        expect(f.scope.canAcceptLaunch()).toBe(true);
+        const readCompletionSource = () =>
+          getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.source;
+        expect(subagentRuns.runWithCompletionAuthority(original, readCompletionSource)).toBe(
+          completion.operatorAuthority.source,
+        );
+        expect(subagentRuns.runWithCompletionBatchAuthority([original], readCompletionSource)).toBe(
+          completion.operatorAuthority.source,
+        );
+        await expect(
+          mutateSubagentRuns([original.runId, acceptedId], () => ({ value: true }), {
+            runs: f.runs,
+          }),
+        ).resolves.toBe(true);
+        const unrelated = structuredClone(accepted);
+        await mutateSubagentRuns(
+          [acceptedId],
+          () => ({ value: undefined, postimages: new Map([[acceptedId, null]]) }),
+          { runs: f.runs },
+        );
+        await mutateSubagentRuns(
+          [acceptedId],
+          () => ({ value: undefined, postimages: new Map([[acceptedId, unrelated]]) }),
+          { runs: f.runs },
+        );
+        expect(isSameSubagentRunOwner(f.runs.get(acceptedId), original)).toBe(false);
+        expect(getCurrentSubagentRunOwner(f.runs, original)).toBeUndefined();
+      } finally {
+        ack.release();
+        await Promise.allSettled([accepting]);
+        retirement.release();
+        subagentRuns.releaseCompletionAuthority(original);
+        completion.release();
+      }
+    }, subagentRuns);
   });
 }

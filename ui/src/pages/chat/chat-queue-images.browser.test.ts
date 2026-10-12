@@ -8,7 +8,7 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { renderChatQueue } from "./components/chat-composer-queue.ts";
+import { renderChatQueue } from "./components/chat-composer-queue.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
 
@@ -46,7 +46,11 @@ describe("queued image snippets", () => {
 
   function draw(queue: ChatQueueItem[], editingId?: string) {
     render(
-      renderChatQueue({ queue, editingId, onQueueRemove: vi.fn(), onQueueEdit: vi.fn() }),
+      renderChatQueue({
+        queue,
+        queuedEdit: { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
+        onQueueRemove: vi.fn(),
+      }),
       container,
     );
   }

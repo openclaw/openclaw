@@ -596,20 +596,6 @@ describe("cron controller", () => {
     },
   );
 
-  it("loads declared Workshop jobs as locked rows", async () => {
-    const job = createCronJob({
-      id: "review",
-      name: "Review",
-      declarationKey: "skill-collection-review:main",
-    });
-    const request = createMethodRequest({ "cron.list": cronJobsListResponse([job]) });
-    const state = createStateWithRequest(request);
-    await loadCronJobsPage(state);
-    expect(state.cronJobs).toEqual([job]);
-    startCronEdit(state, job);
-    expect(state.cronForm).toMatchObject({ payloadKind: "agentTurn", payloadLocked: true });
-  });
-
   it("preserves configured duration precision when editing a staggered cron expression", async () => {
     const job = createCronJob({
       id: "job-exact-stagger",

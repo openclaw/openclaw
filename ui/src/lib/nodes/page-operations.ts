@@ -32,8 +32,6 @@ export type ExecAsk = ExecApprovalsResolvedDefaults["ask"];
 // Editor choices stay closed even though the wire accepts policy strings for host normalization.
 type ExecApprovalsDefaults = Partial<ExecApprovalsResolvedDefaults>;
 
-export type ExecApprovalsAllowlistEntry = NonNullable<WireExecApprovalsAgent["allowlist"]>[number];
-
 type ExecApprovalsAgent = ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">;
 
 export type ExecApprovalsFile = {
@@ -74,15 +72,11 @@ type NodesRequestState = {
 
 type QueuedRefresh = "none" | "quiet" | "visible";
 
-type NodesState = NodesRequestState & {
+type InventoryState = NodesRequestState & {
   nodesLoading: boolean;
   nodesQueuedRefresh: QueuedRefresh;
   nodes: Array<Record<string, unknown>>;
   lastError: string | null;
-  chatError?: string | null;
-};
-
-type DevicesState = NodesRequestState & {
   devicesLoading: boolean;
   devicesQueuedRefresh: QueuedRefresh;
   devicesError: string | null;
@@ -97,10 +91,9 @@ type ExecApprovalsState = NodesRequestState & {
   execApprovalsForm: ExecApprovalsFile | null;
   execApprovalsSelectedAgent: string | null;
   lastError: string | null;
-  chatError?: string | null;
 };
 
-export type DevicesPageDataState = NodesState & DevicesState & ExecApprovalsState;
+export type DevicesPageDataState = InventoryState & ExecApprovalsState;
 
 export function createInitialDevicesState(
   snapshot: Partial<NodesGatewaySnapshot> = {},
@@ -138,75 +131,61 @@ function queueRefresh(current: QueuedRefresh, quiet: boolean | undefined): Queue
   return current === "visible" || quiet !== true ? "visible" : "quiet";
 }
 
-export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
-  const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.nodesLoading) {
-    state.nodesQueuedRefresh = queueRefresh(state.nodesQueuedRefresh, opts?.quiet);
-    return;
-  }
-  state.nodesLoading = true;
-  if (!opts?.quiet) {
-    state.lastError = null;
-    state.chatError = null;
-  }
-  const generation = state.requestGeneration;
-  try {
-    const res = await client.request<{ nodes?: NodeListNode[] }>("node.list", {});
-    if (isCurrentNodesRequest(state, client, generation)) {
-      state.nodes = Array.isArray(res.nodes) ? res.nodes : [];
-    }
-  } catch (err) {
-    if (!opts?.quiet && isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = formatUiError(err);
-    }
-  } finally {
-    if (isCurrentNodesRequest(state, client, generation)) {
-      state.nodesLoading = false;
-      const queued = state.nodesQueuedRefresh;
-      state.nodesQueuedRefresh = "none";
-      if (queued !== "none") {
-        await loadNodes(state, { quiet: queued === "quiet" });
-      }
-    }
-  }
+export function loadNodes(state: InventoryState, opts?: { quiet?: boolean }) {
+  return loadInventory(state, "nodes", opts);
 }
 
-export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean }) {
+export function loadDevices(state: InventoryState, opts?: { quiet?: boolean }) {
+  return loadInventory(state, "devices", opts);
+}
+
+async function loadInventory(
+  state: InventoryState,
+  kind: "nodes" | "devices",
+  opts?: { quiet?: boolean },
+) {
   const client = state.client;
   if (!client || !state.connected) {
     return;
   }
-  if (state.devicesLoading) {
-    state.devicesQueuedRefresh = queueRefresh(state.devicesQueuedRefresh, opts?.quiet);
+  const loading = `${kind}Loading` as const;
+  const queuedRefresh = `${kind}QueuedRefresh` as const;
+  const error = kind === "nodes" ? "lastError" : "devicesError";
+  if (state[loading]) {
+    state[queuedRefresh] = queueRefresh(state[queuedRefresh], opts?.quiet);
     return;
   }
-  state.devicesLoading = true;
+  state[loading] = true;
   if (!opts?.quiet) {
-    state.devicesError = null;
+    state[error] = null;
   }
   const generation = state.requestGeneration;
   try {
-    const res = await client.request<Partial<DevicePairingList>>("device.pair.list", {});
-    if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesList = {
-        pending: Array.isArray(res?.pending) ? res.pending : [],
-        paired: Array.isArray(res?.paired) ? res.paired : [],
-      };
+    if (kind === "nodes") {
+      const res = await client.request<{ nodes?: NodeListNode[] }>("node.list", {});
+      if (isCurrentNodesRequest(state, client, generation)) {
+        state.nodes = Array.isArray(res.nodes) ? res.nodes : [];
+      }
+    } else {
+      const res = await client.request<Partial<DevicePairingList>>("device.pair.list", {});
+      if (isCurrentNodesRequest(state, client, generation)) {
+        state.devicesList = {
+          pending: Array.isArray(res?.pending) ? res.pending : [],
+          paired: Array.isArray(res?.paired) ? res.paired : [],
+        };
+      }
     }
   } catch (err) {
     if (!opts?.quiet && isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = formatUiError(err);
+      state[error] = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesLoading = false;
-      const queued = state.devicesQueuedRefresh;
-      state.devicesQueuedRefresh = "none";
+      state[loading] = false;
+      const queued = state[queuedRefresh];
+      state[queuedRefresh] = "none";
       if (queued !== "none") {
-        await loadDevices(state, { quiet: queued === "quiet" });
+        await loadInventory(state, kind, { quiet: queued === "quiet" });
       }
     }
   }
@@ -214,7 +193,7 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
 
 // Persist accepted mutations before fencing their captured connection's view refresh.
 async function runDeviceMutation<T>(
-  state: DevicesState,
+  state: InventoryState,
   mutate: (client: GatewayRequestClient) => Promise<T>,
 ): Promise<T | null> {
   const client = state.client;
@@ -236,23 +215,20 @@ async function runDeviceMutation<T>(
   }
 }
 
-export async function approveDevicePairing(state: DevicesState, requestId: string) {
+export async function approveDevicePairing(state: InventoryState, requestId: string) {
   await runDeviceMutation(state, (client) => client.request("device.pair.approve", { requestId }));
 }
 
-export async function rejectDevicePairing(state: DevicesState, requestId: string) {
+export async function rejectDevicePairing(state: InventoryState, requestId: string) {
   await runDeviceMutation(state, (client) => client.request("device.pair.reject", { requestId }));
 }
 
-/** Entry removal request resolved from the unified inventory row. */
 export type InventoryRemovalRequest = {
   id: string;
   name: string;
   removeNode: boolean;
   removeDevice: boolean;
 };
-
-type InventoryState = NodesState & DevicesState;
 
 async function removeInventoryEntryRpc(
   client: GatewayRequestClient,
@@ -328,7 +304,7 @@ export async function removeStaleInventoryEntries(
 
 /** Null closes the rename dialog; an error leaves the attempted alias retryable. */
 export async function renameDevice(
-  state: DevicesState,
+  state: InventoryState,
   params: { deviceId: string; label: string },
 ): Promise<string | null> {
   const client = state.client;
@@ -416,9 +392,8 @@ function classifyRotationOutcome(
   );
 }
 
-/** Rotates a device token and returns what the Gateway did with the replacement. */
 export async function rotateDeviceToken(
-  state: DevicesState,
+  state: InventoryState,
   params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
 ): Promise<RotatedDeviceTokenOutcome | null> {
   return runDeviceMutation(state, async (client) => {
@@ -450,7 +425,7 @@ export async function rotateDeviceToken(
 }
 
 export async function revokeDeviceToken(
-  state: DevicesState,
+  state: InventoryState,
   params: { deviceId: string; gatewayUrl: string; role: string },
 ) {
   await runDeviceMutation(state, async (client) => {
@@ -494,7 +469,6 @@ export async function loadExecApprovals(
   }
   state.execApprovalsLoading = true;
   state.lastError = null;
-  state.chatError = null;
   const generation = state.requestGeneration;
   try {
     const rpc = resolveExecApprovalsRpc(target);
@@ -545,7 +519,6 @@ export async function saveExecApprovals(
   }
   state.execApprovalsSaving = true;
   state.lastError = null;
-  state.chatError = null;
   const generation = state.requestGeneration;
   try {
     if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {

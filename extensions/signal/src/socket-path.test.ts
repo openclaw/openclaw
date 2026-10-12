@@ -80,11 +80,25 @@ describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary
     });
   });
 
-  it.each([0o755, 0o770])(
-    "rejects a nonprivate parent (%s) without changing its permissions",
-    async (mode) => {
+  it.each([
+    { mode: 0o755, privateChild: false },
+    { mode: 0o770, privateChild: false },
+    { mode: 0o777, privateChild: true },
+  ])(
+    "rejects nonprivate directories ($mode, child=$privateChild) without changing permissions",
+    async ({ mode, privateChild }) => {
+      const parent = privateChild ? path.join(root, "private") : root;
+      if (privateChild) {
+        await mkdir(parent, { mode: 0o700 });
+      }
       await chmod(root, mode);
-      await expect(prepareSignalSocketPath(path.join(root, "rpc"))).rejects.toThrow();
+      if (privateChild) {
+        await expect(assertSignalSocketEndpoint(path.join(parent, "rpc"))).rejects.toThrow(
+          "ancestors",
+        );
+      } else {
+        await expect(prepareSignalSocketPath(path.join(parent, "rpc"))).rejects.toThrow();
+      }
       expect((await lstat(root)).mode & 0o777).toBe(mode);
     },
   );
@@ -97,13 +111,6 @@ describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary
       "symlinks",
     );
     expect((await lstat(target)).mode & 0o777).toBe(0o700);
-  });
-
-  it("rejects a replaceable ancestor even when the immediate parent is private", async () => {
-    const parent = path.join(root, "private");
-    await mkdir(parent, { mode: 0o700 });
-    await chmod(root, 0o777);
-    await expect(assertSignalSocketEndpoint(path.join(parent, "rpc"))).rejects.toThrow("ancestors");
   });
 
   it("preserves existing files and rejects them as socket endpoints", async () => {
@@ -135,35 +142,38 @@ describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary
     });
   });
 
-  it("rejects an endpoint replaced during its stale-socket ownership probe", async () => {
-    const socketPath = path.join(root, "rpc");
-    await withStaleSocket(socketPath, async () => {
-      let endpointStats = 0;
-      fsMocks.lstat.mockImplementation(async (entryPath, ...args) => {
-        const stat = await fsMocks.actualLstat(entryPath, ...args);
-        if (entryPath !== socketPath || ++endpointStats !== 2) {
-          return stat;
+  it.each([false, true])(
+    "recovers only an unchanged stale owned socket (replaced=%s)",
+    async (replaced) => {
+      const socketPath = path.join(root, "rpc");
+      await withStaleSocket(socketPath, async () => {
+        expect((await lstat(socketPath)).isSocket()).toBe(true);
+        let endpointStats = 0;
+        if (replaced) {
+          fsMocks.lstat.mockImplementation(async (entryPath, ...args) => {
+            const stat = await fsMocks.actualLstat(entryPath, ...args);
+            if (entryPath !== socketPath || ++endpointStats !== 2) {
+              return stat;
+            }
+            return new Proxy(stat, {
+              get: (target, property, receiver) =>
+                property === "ino"
+                  ? Number(target.ino) + 1
+                  : Reflect.get(target, property, receiver),
+            });
+          });
         }
-        return new Proxy(stat, {
-          get: (target, property, receiver) =>
-            property === "ino" ? Number(target.ino) + 1 : Reflect.get(target, property, receiver),
-        });
+        const preparation = prepareSignalSocketPath(socketPath);
+        if (replaced) {
+          await expect(preparation).rejects.toThrow("changed during its ownership check");
+          expect((await fsMocks.actualLstat(socketPath)).isSocket()).toBe(true);
+        } else {
+          await expect(preparation).resolves.toBeUndefined();
+          await expect(lstat(socketPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
       });
-      await expect(prepareSignalSocketPath(socketPath)).rejects.toThrow(
-        "changed during its ownership probe",
-      );
-      expect((await fsMocks.actualLstat(socketPath)).isSocket()).toBe(true);
-    });
-  });
-
-  it("recovers a stale owned socket after an unclean daemon exit", async () => {
-    const socketPath = path.join(root, "rpc");
-    await withStaleSocket(socketPath, async () => {
-      expect((await lstat(socketPath)).isSocket()).toBe(true);
-      await expect(prepareSignalSocketPath(socketPath)).resolves.toBeUndefined();
-      await expect(lstat(socketPath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
+    },
+  );
 
   it("does not probe or remove an existing socket when startup was cancelled", async () => {
     const socketPath = path.join(root, "rpc");
@@ -193,21 +203,19 @@ describe.skipIf(process.platform !== "darwin")("Signal socket macOS ACL boundary
     fsMocks.lstat.mockImplementation(fsMocks.actualLstat);
   });
 
-  it("rejects an existing mode 0700 parent with an access-granting ACL", async () => {
-    await execFileAsync("/bin/chmod", ["+a", "everyone allow search", root]);
-    await expect(prepareSignalSocketPath(path.join(root, "rpc"))).rejects.toThrow("ACL access");
-    expect((await lstat(root)).mode & 0o777).toBe(0o700);
-  });
-
-  it("rejects an inherited ACL and removes the newly created private parent", async () => {
+  it.each([false, true])("rejects parent ACL access (inherited=%s)", async (inherited) => {
     await execFileAsync("/bin/chmod", [
       "+a",
-      "everyone allow search,file_inherit,directory_inherit",
+      inherited ? "everyone allow search,file_inherit,directory_inherit" : "everyone allow search",
       root,
     ]);
-    const parent = path.join(root, "private");
+    const parent = inherited ? path.join(root, "private") : root;
     await expect(prepareSignalSocketPath(path.join(parent, "rpc"))).rejects.toThrow("ACL access");
-    await expect(lstat(parent)).rejects.toMatchObject({ code: "ENOENT" });
+    if (inherited) {
+      await expect(lstat(parent)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect((await lstat(root)).mode & 0o777).toBe(0o700);
+    }
   });
 
   it("rejects a socket endpoint with an access-granting ACL", async () => {

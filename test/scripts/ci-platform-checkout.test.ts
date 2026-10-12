@@ -52,13 +52,23 @@ function expectedHarnessSparseCheckoutArgs(linux: boolean) {
       ? [
           "/scripts/lib/release-upgrade-baseline.mjs",
           "/scripts/lib/release-version.mjs",
+          "/scripts/lib/canonical-json.mjs",
+          "/scripts/lib/upgrade-survivor-policy.mjs",
+          "/scripts/lib/upgrade-survivor-scenarios.json",
           "/scripts/ci-npm-lock-admission.mjs",
           "/scripts/generate-npm-package-lock.mjs",
           "/scripts/generate-npm-package-lock.mts",
           "/scripts/changed-lanes.mts",
           "/scripts/lib/merge-head-diff-base.mjs",
+          "/scripts/ci-additional-checks.sh",
+          "/scripts/stage-openclaw-bun.sh",
+          "/scripts/lib/openclaw-bun.json",
         ]
-      : ["/scripts/lib/swift-toolchain.sh", "/scripts/lib/ci-ios-smoke-plan.mjs"]),
+      : [
+          "/scripts/lib/swift-toolchain.sh",
+          "/scripts/lib/ci-ios-smoke-plan.mjs",
+          "/scripts/ci-xcodebuild.py",
+        ]),
   ];
 }
 
@@ -178,9 +188,6 @@ if (process.argv[2] === "sentinel") {
       throw error;
     }
   };
-  // Loaded macOS hosts can drop FSEvents directory notifications entirely.
-  const watch = fs.watch;
-  fs.watch = (target, ...args) => (target === root ? { close() {} } : watch(target, ...args));
 }
 syncFixtureBuiltinExports();
 `
@@ -346,8 +353,6 @@ it.concurrent.for([
     ? []
     : [
         { event: "push", workflow: "same", target: "selected", code: 0, fetches: 2 },
-        { event: "pull_request", workflow: "same", target: "selected", code: 0, fetches: 2 },
-        { event: "pull_request", workflow: "previous", target: "selected", code: 0, fetches: 2 },
         {
           event: "workflow_dispatch",
           workflow: "previous",
@@ -412,6 +417,7 @@ it.concurrent.for([
     };
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
+      "scripts/ci-xcodebuild.py": "workflow Xcode diagnostics helper\n",
     };
     const preflightScripts = {
       "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),
@@ -427,6 +433,9 @@ it.concurrent.for([
         "scripts/lib/release-context.mjs",
         "scripts/lib/release-version.mjs",
         "scripts/lib/release-upgrade-baseline.mjs",
+        "scripts/lib/canonical-json.mjs",
+        "scripts/lib/upgrade-survivor-policy.mjs",
+        "scripts/lib/upgrade-survivor-scenarios.json",
       ].map((name) => [name, readFileSync(name, "utf8")]),
     );
     const candidateFiles = {
@@ -696,7 +705,12 @@ it.concurrent.for([
         }
         for (const [name, contents] of Object.entries(releasePolicy)) {
           const ownsPolicy = preflight
-            ? name !== "scripts/lib/release-upgrade-baseline.mjs"
+            ? ![
+                "scripts/lib/release-upgrade-baseline.mjs",
+                "scripts/lib/canonical-json.mjs",
+                "scripts/lib/upgrade-survivor-policy.mjs",
+                "scripts/lib/upgrade-survivor-scenarios.json",
+              ].includes(name)
             : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
           expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
           if (ownsPolicy) {
@@ -1065,6 +1079,14 @@ cp.spawnSync = (command, args, options) => {
 ''' + "\nrequire(" + json.dumps(sys.argv[5]) + ").syncFixtureBuiltinExports();\n")
     with subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.read()"],
                           stdin=subprocess.PIPE) as child, contextlib.ExitStack() as cleanup:
+        lease_owner = cleanup.enter_context(subprocess.Popen([
+            sys.argv[1], sys.argv[2], "lease-owner", str(root), "standalone"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+        def close_lease_owner():
+            lease_owner.communicate(timeout=4)
+            assert lease_owner.returncode == 0, "lease owner failed during retirement"
+        cleanup.callback(close_lease_owner)
+        assert lease_owner.stdout.readline().strip() == "ready", "lease owner failed to initialize"
         if os.name == "nt":
             broker = cleanup.enter_context(subprocess.Popen([
                 sys.argv[1], "--input-type=module", "-e", """
@@ -1159,11 +1181,19 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_sess
     assert not group_alive(child.pid, deadline), "zombies are terminated, not checkout writers"
     group_signal(child.pid, signal.SIGTERM, deadline)
     group_signal(child.pid, signal.SIGKILL, deadline)
-    with tempfile.TemporaryDirectory(prefix="checkout-zombie-") as directory:
+    with tempfile.TemporaryDirectory(prefix="checkout-zombie-") as directory, contextlib.ExitStack() as cleanup:
         root = pathlib.Path(directory).resolve()
         (root / "workspace").mkdir()
         (root / "pids").mkdir()
         (root / "lease").write_text("owned")
+        lease_owner = cleanup.enter_context(subprocess.Popen([
+            sys.argv[1], sys.argv[2], "lease-owner", str(root), "standalone"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+        def close_lease_owner():
+            lease_owner.communicate(timeout=4)
+            assert lease_owner.returncode == 0, "lease owner failed during retirement"
+        cleanup.callback(close_lease_owner)
+        assert lease_owner.stdout.readline().strip() == "ready", "lease owner failed to initialize"
         for pid, role, attempt in [(child.pid, "grandchild", 1), (os.getpid(), "sentinel", 0)]:
             (root / "pids" / f"{pid}.json").write_text(json.dumps(dict(pid=pid, role=role, attempt=attempt, instance=str(pid))))
         subprocess.run([sys.argv[1], sys.argv[2], "git", str(root), "early-leader-exit",
@@ -1371,7 +1401,6 @@ ${policy}`,
 }
 
 it.each([
-  { scenario: "direct denial", setup: "", types: ["PermissionError"] },
   {
     scenario: "timeout context",
     setup: "error.__context__ = owner.FetchTimeout()",

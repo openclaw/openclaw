@@ -1,7 +1,9 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { CronJobsListResult } from "../api/types.ts";
-import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  defaultControlUiFeatureMethods,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -9,7 +11,6 @@ import {
   actionOpacity,
   activateSelfRemovingControl,
   captureUiProof,
-  captureUiProofEnabled,
   collapsedSessionSectionsStorageKey,
   controlUiSessionPath,
   createSessionManagementE2eSuite,
@@ -132,113 +133,6 @@ suite.define(() => {
     }
   });
 
-  it("keeps a rejected sidebar mutation visible until the user dismisses it", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.patch"],
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:rename-me", "Rename me", Date.now()),
-        ]),
-      },
-      sessionKey: "agent:main:rename-me",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
-      const row = page.locator('[data-session-key="agent:main:rename-me"]');
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.hover();
-      await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Rename…" }).click();
-      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-      await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
-      await dialog.getByRole("button", { name: "Save" }).click();
-      await gateway.waitForRequest("sessions.patch");
-      await gateway.rejectDeferred("sessions.patch", {
-        code: "INVALID_REQUEST",
-        message: "sidebar rename rejected",
-      });
-
-      const error = page.locator("[data-sidebar-session-error]");
-      await error.waitFor({ state: "visible" });
-      await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
-      expect(
-        await error
-          .locator("xpath=ancestor::*[contains(@class, 'sidebar-recent-sessions')]")
-          .count(),
-      ).toBe(0);
-
-      await error.getByRole("button", { name: "Dismiss error" }).click();
-      await expect.poll(() => error.count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("renames a sidebar session through an in-app dialog", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      recordVideo: captureUiProofEnabled
-        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-    });
-    const page = await context.newPage();
-    const proofVideo = page.video();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:rename-me", "Original name", Date.now()),
-        ]),
-        "sessions.patch": {},
-      },
-      sessionKey: "agent:main:rename-me",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
-      const row = page.locator('[data-session-key="agent:main:rename-me"]');
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      await row.hover();
-      await row.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Rename…" }).click();
-
-      await page.getByRole("dialog", { name: "Rename session" }).waitFor({ state: "visible" });
-      const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-      const name = dialog.getByRole("textbox", { name: "Rename session" });
-      await name.waitFor({ state: "visible" });
-      await expect.poll(() => name.inputValue()).toBe("Original name");
-      await captureUiProof(
-        suite,
-        page,
-        "sidebar-session-rename-dialog.png",
-        dialog.locator("dialog"),
-        [name],
-      );
-      await name.fill("Renamed session");
-      await dialog.getByRole("button", { name: "Save" }).click();
-
-      const patch = await waitForPatch(
-        gateway,
-        (params) => params.key === "agent:main:rename-me" && params.label === "Renamed session",
-      );
-      expect(patch.params).toMatchObject({
-        key: "agent:main:rename-me",
-        label: "Renamed session",
-      });
-      await expect.poll(() => row.textContent()).toContain("Renamed session");
-      await captureUiProof(suite, page, "sidebar-session-renamed.png");
-    } finally {
-      await context.close();
-      if (proofVideo) {
-        await proofVideo.saveAs(path.join(suite.artifactDir, "sidebar-session-rename.webm"));
-      }
-    }
-  });
-
   it("manages sessions through the sidebar groups and command palette", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await suite.browser.newContext({
@@ -271,6 +165,13 @@ suite.define(() => {
     };
     const page = await context.newPage();
     await page.clock.install();
+    await page.addInitScript((key) => {
+      const stored = JSON.parse(localStorage.getItem(key) ?? "{}");
+      localStorage.setItem(
+        key,
+        JSON.stringify({ ...stored, railShortcuts: ["session:agent:main:release"] }),
+      );
+    }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const gateway = await installMockGateway(page, {
       featureMethods: [...defaultControlUiFeatureMethods, "cron.list"],
       methodResponses: {
@@ -284,10 +185,7 @@ suite.define(() => {
               match: {},
               response: sessionsListResponse([
                 sessionRow("agent:main:main", "Main", baseTime),
-                sessionRow("agent:main:release", "Release planning", baseTime - 60_000, {
-                  pinned: true,
-                  pinnedAt: baseTime - 30_000,
-                }),
+                sessionRow("agent:main:release", "Release planning", baseTime - 60_000),
                 sessionRow("agent:main:migration", "Data migration", baseTime - 90_000, {
                   hasActiveRun: true,
                   status: "running",
@@ -318,13 +216,14 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      // Sidebar: pinned rows join the ordered page zone while staying out of Threads.
+      // A personal rail shortcut leaves its ordinary session row in recency order.
       const sidebarRows = page.locator(".sidebar-recent-session");
       await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
       const pinnedZoneRow = page.locator(
-        '[data-sidebar-entry="session:agent:main:release"] .sidebar-recent-session',
+        '.sidebar-rail [data-sidebar-entry="session:agent:main:release"]',
       );
-      await expect.poll(() => pinnedZoneRow.textContent()).toContain("Release planning");
+      await pinnedZoneRow.getByRole("link", { name: "Release planning", exact: true }).waitFor();
+      expect(await pinnedZoneRow.locator(".sidebar-recent-session").count()).toBe(0);
       const groups = page.locator(".sidebar-recent-sessions__group");
       await expect.poll(() => groups.count()).toBe(1);
       await expect
@@ -339,7 +238,7 @@ suite.define(() => {
         chatRows.evaluateAll((rows) =>
           rows.map((row) => row.querySelector(".sidebar-recent-session__name")?.textContent ?? ""),
         );
-      await expect.poll(rowNames).toEqual(["Data migration", "Research notes"]);
+      await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
         .poll(() =>
@@ -362,15 +261,15 @@ suite.define(() => {
 
       await sidebarRows.filter({ hasText: "Release planning" }).hover();
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("1");
+      const patchesBeforeUnpin = (await gateway.getRequests("sessions.patch")).length;
       await sidebarReleasePin.click();
-      const pinPatch = await waitForPatch(
-        gateway,
-        (params) => params.key === "agent:main:release" && params.pinned === false,
-      );
-      expect(requireRecord(pinPatch.params)).toMatchObject({
-        key: "agent:main:release",
-        pinned: false,
-      });
+      await expect.poll(() => pinnedZoneRow.count()).toBe(0);
+      await sidebarRows
+        .filter({ hasText: "Release planning" })
+        .getByRole("button", { name: "Pin session", exact: true })
+        .waitFor();
+      await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(patchesBeforeUnpin);
 
       // Active rows can archive through the Gateway's stop-and-drain lifecycle,
       // while Delete keeps its separate active-run guard.
@@ -379,6 +278,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
         .toBe(false);
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await expect
         .poll(() => page.getByRole("menuitem", { name: "Delete…" }).isDisabled())
         .toBe(true);
@@ -694,7 +594,7 @@ suite.define(() => {
       // Group by "None" flattens the category sections into the plain list. The
       // confirm left the pointer over the dialog rather than the sidebar; the
       // global toolbar remains available without revealing a section action.
-      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
+      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort", exact: true });
       await filterAndSortButton.click();
       await openSidebarMenu(page);
       const showAutomationSessions = page.getByRole("switch", {
@@ -937,7 +837,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
+      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort", exact: true });
       await filterAndSortButton.click();
       await chooseSidebarMenuOption(page, "Group by", "None");
       await closeSidebarMenu(page);

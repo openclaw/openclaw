@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -7,10 +8,8 @@ import {
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createRetainedOperation } from "./retained-operation.js";
 import {
   adoptPreparedLocation,
-  adoptRetainedPreparedLocation,
   registerRetainedSnapshotTempDirectory,
   retainSnapshotTempDirectory,
   cleanupSnapshotOperations,
@@ -24,7 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-function fixture(strict: boolean) {
+function fixture(strict: boolean, onCleanupFailure?: () => void) {
   const parent = tempDirs.make("sqlite-cleanup-owner-");
   const ownedRoot = path.join(parent, "owned");
   const child = path.join(ownedRoot, "snapshot-child");
@@ -33,7 +32,11 @@ function fixture(strict: boolean) {
   const sibling = path.join(parent, "retained.txt");
   fs.writeFileSync(location, "private synthetic snapshot");
   fs.writeFileSync(sibling, "not owned by snapshot");
-  return { ownedRoot, sibling, prepared: adoptPreparedLocation(location, ownedRoot, strict) };
+  return {
+    ownedRoot,
+    sibling,
+    prepared: adoptPreparedLocation(location, ownedRoot, strict, onCleanupFailure),
+  };
 }
 
 it("retains bytes after a serviced cleanup failure and retries the same directory owner", () => {
@@ -47,7 +50,7 @@ it("retains bytes after a serviced cleanup failure and retries the same director
     retirements.push(retirement);
     return retirement.operation;
   });
-  const prepared = adoptRetainedPreparedLocation(location, directory);
+  const prepared = adoptPreparedLocation(location, directory);
   const first = prepared.startCleanup();
   expect(first.read()).toEqual({ status: "pending" });
   expect(fs.readFileSync(location, "utf8")).toBe("retained snapshot bytes");
@@ -202,7 +205,8 @@ describe("prepared SQLite snapshot cleanup", () => {
   it.each([false, true])(
     "joins concurrent async removal and refuses racing synchronous cleanup (strict: %s)",
     async (strict) => {
-      const { ownedRoot, sibling, prepared } = fixture(strict);
+      const report = vi.fn();
+      const { ownedRoot, sibling, prepared } = fixture(strict, report);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const remove = fs.promises.rm;
@@ -234,6 +238,7 @@ describe("prepared SQLite snapshot cleanup", () => {
         }
         expect(synchronousRemoval).not.toHaveBeenCalled();
         expect(removal).toHaveBeenCalledOnce();
+        expect(report).not.toHaveBeenCalled();
       } finally {
         release.resolve();
         await Promise.allSettled([first, second]);
@@ -246,6 +251,7 @@ describe("prepared SQLite snapshot cleanup", () => {
       expect(await prepared.cleanupAsync()).toBe(true);
       expect(removal).toHaveBeenCalledOnce();
       expect(synchronousRemoval).not.toHaveBeenCalled();
+      expect(report).not.toHaveBeenCalled();
     },
   );
 
@@ -255,7 +261,8 @@ describe("prepared SQLite snapshot cleanup", () => {
   ] as const)(
     "keeps failed async removal retryable with $retry cleanup (strict: $strict)",
     async ({ strict, retry }) => {
-      const { ownedRoot, prepared } = fixture(strict);
+      const report = vi.fn();
+      const { ownedRoot, prepared } = fixture(strict, report);
       const failure = Object.assign(new Error("snapshot busy"), { code: "EBUSY" });
       const remove = vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(failure);
       const first = prepared.cleanupAsync();
@@ -269,6 +276,7 @@ describe("prepared SQLite snapshot cleanup", () => {
       expect(fs.existsSync(ownedRoot)).toBe(false);
       expect(remove).toHaveBeenCalledTimes(retry === "async" ? 2 : 1);
       expect(await prepared.cleanupAsync()).toBe(true);
+      expect(report).toHaveBeenCalledTimes(strict ? 0 : 1);
     },
   );
 });

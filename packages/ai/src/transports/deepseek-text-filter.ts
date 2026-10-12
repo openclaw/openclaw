@@ -16,15 +16,8 @@ const DSML_OPEN_TOKENS = DEEPSEEK_DSML_MARKERS.flatMap((marker) =>
 );
 const MAX_OPEN_TOKEN_LEN = Math.max(...DSML_OPEN_TOKENS.map((token) => token.length));
 
-interface DeepSeekTextFilter {
-  /** Push one streamed text chunk and receive any safe visible text segments. */
-  push(chunk: string): string[];
-  /** Flush buffered text at stream end, dropping any unterminated DSML block. */
-  flush(): string[];
-}
-
 /** Create an incremental text filter that strips DeepSeek DSML tool blocks. */
-export function createDeepSeekTextFilter(): DeepSeekTextFilter {
+export function createDeepSeekTextFilter() {
   let buffer = "";
   // Only the matching delimiter and kind may end the block being suppressed.
   let closeToken: string | undefined;

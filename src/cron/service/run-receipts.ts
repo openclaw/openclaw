@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -20,7 +19,6 @@ import { cronStoreKey } from "../store/key.js";
 import {
   CronRunReceiptRevisionError,
   prepareCronRunReceiptAdjudication,
-  readCronRunReceiptCurrentJob,
   assertCronRunReceiptCurrentFacts,
   trackCronRunReceiptSettlement,
 } from "../store/run-receipt-store.js";
@@ -32,8 +30,7 @@ import type {
   PreparedCronRunReceiptAdjudication,
 } from "../store/run-receipt.types.js";
 import type { CronAgentScope } from "../types-shared.js";
-import type { CronJob, CronRunStatus, CronStoredJob } from "../types.js";
-import { isJobEnabled } from "./jobs-scheduling.js";
+import type { CronJob, CronRunStatus } from "../types.js";
 import {
   resolveCronJobMessageActionAuthorityInputs,
   resolveCronJobMessageToolAuthorityInputs,
@@ -44,12 +41,9 @@ import { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
 function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronAgentScope): string {
   return resolveCronJobEffectiveAgentId(
     job,
-    state.deps.legacyDefaultAgentId
-      ? undefined
-      : state.deps.resolveDefaultAgentId
-        ? state.deps.resolveDefaultAgentId()
-        : state.deps.defaultAgentId,
-    state.deps.legacyDefaultAgentId,
+    state.deps.resolveDefaultAgentId
+      ? state.deps.resolveDefaultAgentId()
+      : state.deps.defaultAgentId,
   );
 }
 
@@ -97,60 +91,45 @@ export function markServiceCronJobActive(
   job: CronJob,
   runReceipt: CronRunReceiptHandle,
 ): CronActiveJobMarker | undefined {
-  return markCronJobActive(job.id, {
-    agentId: runReceipt.agentId,
-    stateIdentityKey: captureOpenClawStateWorkerContext().admission.identity.key,
-    declarationKey: job.declarationKey,
-    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
-    isMessageActionAuthorityCurrent: createServiceCronRunMessageAuthorityChecker({
-      state,
-      job,
-      handle: runReceipt,
-      resolveInputs: resolveCronJobMessageToolAuthorityInputs,
-    }),
-    isMessageSourceAuthorityCurrent: createServiceCronRunMessageAuthorityChecker({
-      state,
-      job,
-      handle: runReceipt,
-      resolveInputs: resolveCronJobMessageActionAuthorityInputs,
-    }),
-  });
-}
-
-/** Retains admission's permission facts while consulting the existing canonical receipt owner. */
-function createServiceCronRunMessageAuthorityChecker(params: {
-  state: CronServiceState;
-  job: CronStoredJob;
-  handle: CronRunReceiptHandle;
-  resolveInputs: (job: CronStoredJob) => unknown;
-}): (() => boolean) | undefined {
-  const expected = params.resolveInputs(params.job);
-  if (!expected) {
-    return undefined;
-  }
-  const { state, handle } = params;
-  const admittedEnabled = isJobEnabled(params.job);
-  return () => {
-    let current: CronJob | undefined;
-    try {
-      current = readCronRunReceiptCurrentJob({
-        handle,
-        resolveAgentId: (job) => resolveCronRunReceiptAgentId(state, job),
-        isAgentAvailable: state.deps.isAgentAvailable,
-      });
-    } catch (error) {
-      if (error instanceof CronRunReceiptRevisionError) {
-        return false;
-      }
-      throw error;
+  const context = captureOpenClawStateWorkerContext();
+  const assertOwner = () => {
+    context.admission.assertCurrent();
+    if (
+      resolveCronRunReceiptAgentId(state, job) !== runReceipt.agentId ||
+      state.deps.isAgentAvailable?.(runReceipt.agentId, undefined, {
+        deletionBlocked: false,
+      }) === false
+    ) {
+      throw new CronRunReceiptRevisionError(runReceipt.receiptId, "cron owner changed");
     }
-    // A force run may start disabled; a later disable still retires an enabled admission.
-    return (
-      current !== undefined &&
-      (!admittedEnabled || isJobEnabled(current)) &&
-      isDeepStrictEqual(expected, params.resolveInputs(current))
-    );
   };
+  const isCurrent = () => {
+    try {
+      assertOwner();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const marker = markCronJobActive(job.id, {
+    agentId: runReceipt.agentId,
+    stateIdentityKey: context.admission.identity.key,
+    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
+    isMessageActionAuthorityCurrent: resolveCronJobMessageToolAuthorityInputs(job)
+      ? isCurrent
+      : undefined,
+    isMessageSourceAuthorityCurrent: resolveCronJobMessageActionAuthorityInputs(job)
+      ? isCurrent
+      : undefined,
+  });
+  if (marker) {
+    marker.standingGrantAuthority = {
+      context,
+      handle: { ...runReceipt },
+      assertCurrent: assertOwner,
+    };
+  }
+  return marker;
 }
 
 export type CronRunReceiptOwnerMutation = {

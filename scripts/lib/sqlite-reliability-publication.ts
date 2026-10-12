@@ -7,21 +7,12 @@ import { fileURLToPath } from "node:url";
 import { createVerifiedSqliteSnapshot } from "../../src/infra/sqlite-snapshot.js";
 import {
   assertSameReliabilityState,
-  type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
+import type { ReliabilityWorkerExit } from "./sqlite-reliability-process.js";
 import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type PublicationCrashPoint = "after-publish" | "before-publish";
-type PublicationExit = ReliabilityReport["publicationInterruptionProof"]["beforePublish"]["exit"];
-
-type CrashPointResult = {
-  exit: PublicationExit;
-  stagingEntries: number;
-  targetState: ReliabilityStateProof | null;
-  targetVisibleAfterCrash: boolean;
-};
-
 const PUBLICATION_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-publication-worker.ts", import.meta.url),
 );
@@ -75,7 +66,7 @@ async function runCrashPoint(params: {
   scratchPath: string;
   sourcePath: string;
   verifyDatabase: (databasePath: string) => ReliabilityStateProof;
-}): Promise<CrashPointResult> {
+}) {
   const targetPath = path.join(params.scratchPath, `${params.crashPoint}.sqlite`);
   const markerPath = path.join(params.scratchPath, `${params.crashPoint}.ready`);
   let stderr = "";
@@ -99,7 +90,7 @@ async function runCrashPoint(params: {
   child.stderr.on("data", (chunk) => {
     stderr += chunk.toString();
   });
-  const exitPromise = new Promise<PublicationExit>((resolve, reject) => {
+  const exitPromise = new Promise<ReliabilityWorkerExit>((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
@@ -187,7 +178,7 @@ export async function runPublicationInterruptionProof(params: {
   scratchPath: string;
   sourcePath: string;
   verifyDatabase: (databasePath: string) => ReliabilityStateProof;
-}): Promise<ReliabilityReport["publicationInterruptionProof"]> {
+}) {
   fs.mkdirSync(params.scratchPath, { recursive: true, mode: 0o700 });
   const beforePublish = await runCrashPoint({
     ...params,

@@ -19,55 +19,14 @@ afterEach(() => {
   }
 });
 
-// Label rules: an agent's main session reads as the agent itself; other
-// sessions read as the session (titler-resolved), prefixed with the agent
-// name only when the sender is a different agent.
-it.each(
-  [
-    {
-      name: "another agent's main session labels as that agent",
-      key: "agent:research:main",
-      chipText: "Research Agent",
-      prefix: null,
-      titled: true,
-    },
-    {
-      name: "own main session labels as the local agent",
-      key: "agent:main:main",
-      chipText: "main",
-      prefix: null,
-      titled: true,
-    },
-    {
-      name: "same-agent session leaves the key for the titler",
-      key: "agent:main:bench",
-      chipText: "agent:main:bench",
-      prefix: null,
-      titled: false,
-    },
-    {
-      name: "other-agent session prefixes the agent name",
-      key: "agent:research:bench",
-      chipText: "agent:research:bench",
-      prefix: "Research Agent ·",
-      titled: false,
-    },
-    {
-      name: "same-agent subagent stays a subagent session",
-      key: "agent:main:subagent:audit",
-      chipText: "agent:main:subagent:audit",
-      prefix: null,
-      titled: false,
-    },
-    {
-      name: "other-agent subagent stays a subagent session",
-      key: "agent:research:subagent:audit",
-      chipText: "agent:research:subagent:audit",
-      prefix: null,
-      titled: false,
-    },
-  ].flatMap((entry) => ["assistant", "user"].map((role) => Object.assign({ role }, entry))),
-)("$role: $name", ({ key, chipText, prefix, titled, role }) => {
+it.each([
+  ["assistant", "agent:research:main", "Research Agent", null, true],
+  ["user", "agent:main:main", "main", null, true],
+  ["assistant", "agent:main:bench", "agent:main:bench", null, false],
+  ["user", "agent:research:bench", "agent:research:bench", "Research Agent ·", false],
+  ["assistant", "agent:main:subagent:audit", "agent:main:subagent:audit", null, false],
+  ["user", "agent:research:subagent:audit", "agent:research:subagent:audit", null, false],
+] as const)("labels %s forwarding from %s", (role, key, chipText, prefix, titled) => {
   container = document.createElement("div");
   const group: MessageGroup = {
     kind: "group",

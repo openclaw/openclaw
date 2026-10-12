@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "./host/openclaw-runtime-kysely.js";
 
 export type MemoryEntryOrigin = {
@@ -58,10 +59,10 @@ export function readMemoryEntryOriginsInDatabase(
     .selectAll()
     .where("agent_id", "=", params.agentId);
   if (params.sessionIds) {
-    query = query.where("session_id", "in", params.sessionIds);
+    query = query.where("session_id", "in", sqliteStringSet(params.sessionIds));
   }
   if (params.entryKeys) {
-    query = query.where("entry_key", "in", params.entryKeys);
+    query = query.where("entry_key", "in", sqliteStringSet(params.entryKeys));
   }
   return executeSqliteQuerySync(
     db,

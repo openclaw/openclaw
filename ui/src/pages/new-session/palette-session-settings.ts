@@ -1,4 +1,5 @@
 import { html, nothing, svg } from "lit";
+import type { ReactiveControllerHost } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
@@ -9,12 +10,17 @@ import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
-import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
+import {
+  environmentPlacementRuntime,
+  environmentDeviceDisabledReason,
+  environmentCloudDisabledReason,
+} from "./hosted-environments.ts";
+import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
-import { folderDisplayName } from "./path.ts";
 import { resolveProjectChip } from "./project-chip.ts";
-import { renderAgentSelect } from "./target-controls.ts";
+import { renderAgentSelect, renderRequiredSessionPlacement } from "./target-controls.ts";
 import { resolveWhereChip } from "./where-chip.ts";
 import "../../styles/palette-session-settings.css";
 
@@ -39,6 +45,7 @@ type MachineChoice = {
   id: string;
   label: string;
   remote: boolean;
+  hosted?: boolean;
   selected: boolean;
   disabledReason?: string;
   select: () => void;
@@ -50,7 +57,8 @@ export class PaletteSessionSettings {
   private query = "";
 
   constructor(
-    private readonly host: OpenClawLightDomElement,
+    private readonly host: ReactiveControllerHost &
+      Pick<HTMLElement, "ownerDocument" | "querySelector" | "querySelectorAll">,
     private readonly id: string,
   ) {}
 
@@ -133,21 +141,27 @@ export class PaletteSessionSettings {
   render(options: SettingsOptions) {
     const { draft, context, preferences, onChange } = options;
     const { place, gateway, submission } = draft;
+    const placementLocked = place.requiredPlacement;
+    if (placementLocked) {
+      this.places = false;
+    }
     const locked =
       submission.submitting ||
       Boolean(submission.pendingPlacement.sessionKey) ||
       Boolean(submission.submissionOutcomeUnknown);
     const where = resolveWhereChip({
+      hostedEnvironment: place.hostedEnvironment
+        ? { ...place.hostedEnvironment, id: place.modelControl.resolveAgentRuntime()!.id }
+        : undefined,
       environments: place.canWrite() ? gateway.environments : [],
       cloudProfiles: place.isAdmin() ? gateway.cloudProfiles : [],
       cloudProfileId: place.cloudProfileId,
       ...place.cloudSelection,
       deviceId: place.deviceId,
       autoDevice: place.autoDevice,
-      devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
+      devicePlacement: environmentPlacementRuntime(place.modelControl)?.devicePlacement,
       deviceDisabledReason:
-        place.modelControl.devicePlacementUnsupportedReason() ??
-        gateway.deviceCatalogDisabledReason,
+        environmentDeviceDisabledReason(place.modelControl) ?? gateway.deviceCatalogDisabledReason,
     });
     const machineLabel =
       where.kind === "local" ? gateway.gatewayName || t("newSession.local") : where.label;
@@ -168,11 +182,21 @@ export class PaletteSessionSettings {
       freshWorkspace: place.freshWorkspace,
     });
     const machines: MachineChoice[] = [
+      ...place.modelControl.hostedEnvironments().map((environment) => ({
+        id: "runtime:" + environment.id,
+        label: environment.label,
+        hosted: true,
+        remote: false,
+        selected: where.hostedRuntimeId === environment.id,
+        disabledReason: environment.disabledReason,
+        select: () => place.selectHostedEnvironment(environment.id),
+      })),
       {
         id: "local",
         label: gateway.gatewayName || t("newSession.local"),
         remote: false,
-        selected: !place.remotePlacement,
+        selected: !place.hostedEnvironment && !place.remotePlacement,
+        disabledReason: place.modelControl.hostEnvironmentDisabledReason(),
         select: () => place.selectDevice(""),
       },
       ...where.devices.map((device) => ({
@@ -200,7 +224,7 @@ export class PaletteSessionSettings {
         label: t("newSession.cloudWorker", { profile: profile.id }),
         remote: true,
         selected: place.cloudProfileId === profile.id,
-        disabledReason: place.modelControl.cloudRuntimeUnsupportedReason(profile),
+        disabledReason: environmentCloudDisabledReason(place.modelControl, profile),
         select: () => place.selectCloudProfile(profile.id),
       })),
     ];
@@ -209,11 +233,11 @@ export class PaletteSessionSettings {
         return;
       }
       machine.select();
-      if (projectId) {
+      if (!machine.hosted && projectId) {
         place.selectProjectId(projectId);
-      } else if (machine.remote) {
+      } else if (!machine.hosted && machine.remote) {
         place.selectNewWorkspace();
-      } else {
+      } else if (!machine.hosted) {
         place.applyFolder(place.workspacePath());
       }
       onChange();
@@ -223,21 +247,26 @@ export class PaletteSessionSettings {
     const groups = machines
       .map((machine) => ({
         machine,
-        choices: [
-          {
-            id: "",
-            label: machine.remote
-              ? t("newSession.newWorkspace")
-              : folderDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
-          },
-          ...draft.browser.projects.map((project) => ({
-            id: project.id,
-            label: project.displayName,
-          })),
-        ].filter(
-          (choice) =>
-            !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
-        ),
+        choices: machine.hosted
+          ? [{ id: "", label: t("newSession.hostedWorkspace") }].filter(
+              (choice) =>
+                !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
+            )
+          : [
+              {
+                id: "",
+                label: machine.remote
+                  ? t("newSession.newWorkspace")
+                  : pathDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
+              },
+              ...draft.browser.projects.map((project) => ({
+                id: project.id,
+                label: project.displayName,
+              })),
+            ].filter(
+              (choice) =>
+                !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
+            ),
       }))
       .filter((group) => group.choices.length);
     return html`
@@ -259,17 +288,11 @@ export class PaletteSessionSettings {
         placement="bottom-end"
         without-arrow
         .open=${this.open}
-        @wa-show=${(event: Event) => {
-          if (event.target === event.currentTarget) {
-            this.open = true;
-            this.host.requestUpdate();
-          }
-        }}
-        @wa-hide=${(event: Event) => {
-          if (event.target === event.currentTarget) {
-            this.close();
-          }
-        }}
+        @wa-show=${onOwnPopoverEvent(() => {
+          this.open = true;
+          this.host.requestUpdate();
+        })}
+        @wa-hide=${onOwnPopoverEvent(() => this.close())}
       >
         <div
           class="palette-session-settings__content"
@@ -305,7 +328,34 @@ export class PaletteSessionSettings {
                     ${groups.map(
                       ({ machine, choices }) => html` <section aria-label=${machine.label}>
                         <div class="palette-session-settings__machine">${machine.label}</div>
-                        ${choices.map((choice) => html`<button type="button" class="palette-session-settings__row" data-machine=${machine.id} data-project=${choice.id} aria-pressed=${String(machine.selected && (choice.id ? draft.browser.projectId === choice.id : !draft.browser.projectId && (machine.remote ? place.freshWorkspace : place.folder === place.workspacePath())))} title=${machine.disabledReason ?? nothing} ?disabled=${locked || Boolean(machine.disabledReason)} @click=${() => choose(machine, choice.id)}><span class="palette-session-settings__icon">${choice.id ? icons.gitBranch : icons.folder}</span><span class="palette-session-settings__label">${choice.label}</span><span class="palette-session-settings__check">${machine.selected && (choice.id ? draft.browser.projectId === choice.id : !draft.browser.projectId && (machine.remote ? place.freshWorkspace : place.folder === place.workspacePath())) ? icons.check : nothing}</span></button>`)}
+                        ${choices.map((choice) => {
+                          const selected =
+                            machine.selected &&
+                            (machine.hosted ||
+                              (choice.id
+                                ? draft.browser.projectId === choice.id
+                                : !draft.browser.projectId &&
+                                  (machine.remote
+                                    ? place.freshWorkspace
+                                    : place.folder === place.workspacePath())));
+                          return html`<button
+                            type="button"
+                            class="palette-session-settings__row"
+                            data-machine=${machine.id}
+                            data-project=${choice.id}
+                            aria-pressed=${String(selected)}
+                            title=${machine.disabledReason ?? nothing}
+                            ?disabled=${locked || Boolean(machine.disabledReason)}
+                            @click=${() => choose(machine, choice.id)}
+                          >
+                            <span class="palette-session-settings__icon"
+                              >${choice.id ? icons.gitBranch : icons.folder}</span
+                            ><span class="palette-session-settings__label">${choice.label}</span
+                            ><span class="palette-session-settings__check"
+                              >${selected ? icons.check : nothing}</span
+                            >
+                          </button>`;
+                        })}
                         ${machine.disabledReason ? html`<div class="palette-session-settings__unavailable">${machine.disabledReason}</div>` : nothing}
                       </section>`,
                     )}
@@ -332,40 +382,51 @@ export class PaletteSessionSettings {
                       onOpenChange: options.onAgentPickerOpen,
                     })}
                   </div>
-                  <button
-                    class="palette-session-settings__row palette-session-settings__workspace"
-                    type="button"
-                    ?disabled=${locked}
-                    @click=${(event: MouseEvent) => this.showPlaces(true, event.detail > 0)}
-                  >
-                    <span class="palette-session-settings__icon">${icons.folder}</span
-                    ><span class="palette-session-settings__copy"
-                      ><span class="palette-session-settings__label">${projectState.label}</span
-                      ><span class="palette-session-settings__secondary"
-                        >${machineLabel}${cloudSummary ? " · " + cloudSummary : ""}</span
-                      ></span
-                    ><span class="palette-session-settings__chevron">${icons.chevronRight}</span>
-                  </button>
                   ${
-                    place.checkoutVisible && !place.remoteRepository
-                      ? html`<button
-                          class="palette-session-settings__row palette-session-settings__worktree"
-                          type="button"
-                          role="switch"
-                          aria-checked=${String(place.worktree)}
-                          aria-label=${t("newSession.checkoutWorktree")}
-                          title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
-                          ?disabled=${locked || place.remotePlacement}
-                          @click=${() => {
-                            place.selectWorktree(!place.worktree);
-                            onChange();
-                          }}
-                        >
-                          <span class="palette-session-settings__icon">${icons.gitBranch}</span
-                          ><span>${t("newSession.checkoutWorktree")}</span
-                          ><span class="palette-session-settings__switch" aria-hidden="true"></span>
-                        </button>`
-                      : nothing
+                    placementLocked
+                      ? renderRequiredSessionPlacement(gateway)
+                      : html` <button
+                            class="palette-session-settings__row palette-session-settings__workspace"
+                            type="button"
+                            ?disabled=${locked}
+                            @click=${(event: MouseEvent) => this.showPlaces(true, event.detail > 0)}
+                          >
+                            <span class="palette-session-settings__icon">${icons.folder}</span
+                            ><span class="palette-session-settings__copy"
+                              ><span class="palette-session-settings__label"
+                                >${place.hostedEnvironment ? t("newSession.hostedWorkspace") : projectState.label}</span
+                              ><span class="palette-session-settings__secondary"
+                                >${machineLabel}${cloudSummary ? " · " + cloudSummary : ""}</span
+                              ></span
+                            ><span class="palette-session-settings__chevron"
+                              >${icons.chevronRight}</span
+                            >
+                          </button>
+                          ${
+                            place.checkoutVisible && !place.remoteRepository
+                              ? html`<button
+                                  class="palette-session-settings__row palette-session-settings__worktree"
+                                  type="button"
+                                  role="switch"
+                                  aria-checked=${String(place.worktree)}
+                                  aria-label=${t("newSession.checkoutWorktree")}
+                                  title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
+                                  ?disabled=${locked || place.remotePlacement}
+                                  @click=${() => {
+                                    place.selectWorktree(!place.worktree);
+                                    onChange();
+                                  }}
+                                >
+                                  <span class="palette-session-settings__icon"
+                                    >${icons.gitBranch}</span
+                                  ><span>${t("newSession.checkoutWorktree")}</span
+                                  ><span
+                                    class="palette-session-settings__switch"
+                                    aria-hidden="true"
+                                  ></span>
+                                </button>`
+                              : nothing
+                          }`
                   }
                 `
           }

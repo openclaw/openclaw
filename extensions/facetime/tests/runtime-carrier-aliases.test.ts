@@ -11,12 +11,27 @@ import {
   resetRuntimeTestState,
 } from "./runtime.test-support.js";
 
+async function activateCarrierAliases() {
+  const talk = createTalkDriver({});
+  mocks.startTalk.mockResolvedValueOnce(talk);
+  const runtime = await createRuntime();
+  const incoming = incomingCall(1);
+  const active = {
+    ...incoming,
+    data: { ...incoming.data, conversation_uuid: "shared-conversation" },
+  };
+  const replacement = { ...active, data: { ...active.data, call_uuid: "replacement-call" } };
+  await mocks.helperParams?.onMessage(active);
+  expect(talk.activate).toHaveBeenCalledOnce();
+  await mocks.helperParams?.onMessage(replacement);
+  expect(talk.activate).toHaveBeenCalledTimes(2);
+  return { talk, runtime, active, replacement };
+}
+
 describe("FaceTime runtime carrier aliases", () => {
   beforeEach(resetRuntimeTestState);
 
   it("falls back to a retained carrier alias when the current helper owner disappears", async () => {
-    const talk = createTalkDriver({});
-    mocks.startTalk.mockResolvedValueOnce(talk);
     mocks.helper.safetyMute.mockImplementation(async (callUUID: string) =>
       callUUID === "call-1"
         ? completeAbsence()
@@ -32,22 +47,9 @@ describe("FaceTime runtime carrier aliases", () => {
         ? completeAction({ outcome: "termination-requested" })
         : completeAbsence(),
     );
-    const runtime = await createRuntime();
-    const incoming = incomingCall(1);
-    const active = {
-      ...incoming,
-      data: { ...incoming.data, conversation_uuid: "shared-conversation" },
-    };
-
-    void mocks.helperParams?.onMessage(active);
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
-    void mocks.helperParams?.onMessage({
-      ...active,
-      data: { ...active.data, call_uuid: "replacement-call" },
-    });
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledTimes(2));
-    void mocks.helperParams?.onMessage(active);
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledTimes(3));
+    const { talk, runtime, active } = await activateCarrierAliases();
+    await mocks.helperParams?.onMessage(active);
+    expect(talk.activate).toHaveBeenCalledTimes(3);
 
     await expect(runtime.hangup()).resolves.toEqual({ callUUID: "call-1" });
 
@@ -61,25 +63,9 @@ describe("FaceTime runtime carrier aliases", () => {
   });
 
   it("ignores an ended event for a stale carrier alias", async () => {
-    const talk = createTalkDriver({});
-    mocks.startTalk.mockResolvedValueOnce(talk);
-    const runtime = await createRuntime();
-    const incoming = incomingCall(1);
-    const active = {
-      ...incoming,
-      data: { ...incoming.data, conversation_uuid: "shared-conversation" },
-    };
+    const { talk, runtime, active, replacement } = await activateCarrierAliases();
 
-    void mocks.helperParams?.onMessage(active);
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
-    const replacement = {
-      ...active,
-      data: { ...active.data, call_uuid: "replacement-call" },
-    };
-    void mocks.helperParams?.onMessage(replacement);
-    await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledTimes(2));
-
-    void mocks.helperParams?.onMessage({
+    await mocks.helperParams?.onMessage({
       ...active,
       data: { ...active.data, call_status: 6, has_ended: true },
     });
@@ -87,11 +73,11 @@ describe("FaceTime runtime carrier aliases", () => {
     expect((await runtime.status()).calls).toHaveLength(1);
     expect(talk.close).not.toHaveBeenCalled();
 
-    void mocks.helperParams?.onMessage({
+    await mocks.helperParams?.onMessage({
       ...replacement,
       data: { ...replacement.data, call_status: 6, has_ended: true },
     });
-    await vi.waitFor(async () => expect((await runtime.status()).calls).toEqual([]));
+    expect((await runtime.status()).calls).toEqual([]);
     expect(talk.close).toHaveBeenCalledWith("native-ended");
     await runtime.stop();
   });

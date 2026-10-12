@@ -30,8 +30,7 @@ const ACCOUNT_ID = "qa-codex-account";
 const MODEL = "openai/gpt-5.6-luna";
 const MISSING_PROFILE_ID = "openai:missing";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
-  "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
-  "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.";
+  "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 const PRODUCT_OUTPUT = "QA_CODEX_AUTH_PRODUCT_PROOF_OK";
 const REQUEST_TIMEOUT_MS = 60_000;
 
@@ -72,17 +71,15 @@ type GatewayEvent = { event?: string; payload?: unknown };
 
 function expectBoundedMissingProfileRecovery(
   value: unknown,
-  options?: { allowSessionTruncation?: boolean },
+  options?: { sessionError?: boolean; diagnostic?: string },
 ) {
   const serialized = JSON.stringify(value);
-  if (options?.allowSessionTruncation) {
+  if (options?.sessionError) {
     expect(typeof value).toBe("string");
-    expect(value).toContain("The selected auth profile is unavailable");
-    expect(value).toContain("`openclaw configure`");
-    expect(value).toMatch(/then retry\.$/u);
-    expect(value).toHaveLength(160);
+    expect(value).toBe(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
+    expect(String(value).length).toBeLessThanOrEqual(160);
   } else {
-    expect(serialized).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
+    expect(serialized, options?.diagnostic).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
   }
   expect(serialized).not.toContain(MISSING_PROFILE_ID);
   expect(serialized).not.toContain("was not found");
@@ -319,14 +316,22 @@ describe("Codex auth product proof", () => {
       expect(turnStartIndex).toBeGreaterThan(threadStartIndex);
       const completedTurn = await waitForAssistantHistory(instance, PRODUCT_OUTPUT);
 
-      const beforeUsage = appServerLog.read().length;
-      const status = await instance.cli(["status", "--usage", "--json", "--timeout", "60000"], {
-        timeoutMs: 120_000,
-      });
+      const usageRequestLog = instance.state.path("codex-auth-usage-app-server.jsonl");
+      const usageLog = createJsonlRequestTailer<AppServerLogEntry>(usageRequestLog);
+      // The running Gateway keeps its original log, including background catalog reads.
+      const cliEnv = instance.env;
+      cliEnv.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = usageRequestLog;
+      const status = await instance
+        .cli(["status", "--usage", "--json", "--timeout", "60000"], {
+          timeoutMs: 120_000,
+        })
+        .finally(() => {
+          cliEnv.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = requestLog;
+        });
       expect(status.code, status.stderr).toBe(0);
       expect(status.stdout).toContain("qa-codex-account@example.com");
 
-      const usageEntries = appServerLog.read().slice(beforeUsage);
+      const usageEntries = usageLog.read();
       const usageLoginIndex = usageEntries.findIndex(
         (request) => request.method === "account/login/start",
       );
@@ -410,6 +415,7 @@ describe("Codex auth product proof", () => {
       instance = await createOpenClawTestInstance({
         name: "qa-codex-missing-auth-profile",
         env: {
+          OPENCLAW_LOG_LEVEL: undefined,
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
@@ -417,6 +423,7 @@ describe("Codex auth product proof", () => {
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
+          logging: { consoleLevel: "debug" },
           plugins: {
             enabled: true,
             allow: ["codex"],
@@ -596,16 +603,16 @@ describe("Codex auth product proof", () => {
           (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId === runId &&
           (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
       );
-      expectBoundedMissingProfileRecovery(finalEvent?.payload);
+      expectBoundedMissingProfileRecovery(finalEvent?.payload, { diagnostic: instance.logs() });
       // Lifecycle metadata belongs to sessions.changed; transcript delivery has independent timing.
       expectBoundedMissingProfileRecovery(
         (lifecycleEvent?.payload as { session?: { lastRunError?: unknown } } | undefined)?.session
           ?.lastRunError,
-        { allowSessionTruncation: true },
+        { sessionError: true },
       );
       expectBoundedMissingProfileRecovery(terminal);
       expectBoundedMissingProfileRecovery(failedHistory?.sessionInfo?.lastRunError, {
-        allowSessionTruncation: true,
+        sessionError: true,
       });
       expect(JSON.stringify(failedHistory)).not.toContain(MISSING_PROFILE_ID);
       expect(JSON.stringify(failedHistory)).not.toContain("Codex app-server auth profile");

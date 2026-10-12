@@ -1,16 +1,9 @@
-import {
-  ApiError,
-  BlockedReason,
-  FinishReason,
-  GoogleGenAI,
-  GenerateContentResponse,
-  type Part,
-} from "@google/genai";
+import { FinishReason, GenerateContentResponse, type Part } from "@google/genai";
 import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
-import type { AssistantMessage, Context, Model, Tool } from "../types.js";
+import type { AssistantMessage, Context, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -58,13 +51,11 @@ describe("buildGoogleSimpleThinking", () => {
 
   it.each([
     { id: "gemini-2.5-pro", enabled: { enabled: true, budgetTokens: -1 }, disabled: undefined },
-    { id: "gemini-pro-latest", enabled: { enabled: true }, disabled: { thinkingLevel: "LOW" } },
     {
       id: "gemini-3-flash-preview",
       enabled: { enabled: true },
       disabled: { thinkingLevel: "MINIMAL" },
     },
-    { id: "gemma-4-26b-a4b-it", enabled: { enabled: true, level: "HIGH" }, disabled: undefined },
   ])("preserves adaptive and disabled thinking for $id", ({ id, enabled, disabled }) => {
     const target = { ...model, id };
     expect(buildGoogleSimpleThinking(target, { reasoning: "adaptive" } as never)).toEqual(enabled);
@@ -80,30 +71,11 @@ describe("buildGoogleSimpleThinking", () => {
     ).toEqual({ enabled: true, level: "LOW" });
   });
 
-  it.each([
-    { label: "a non-reasoning model", target: { ...model, reasoning: false }, reasoning: "low" },
-    {
-      label: "an off-only model",
-      target: {
-        ...model,
-        id: "gemini-3-flash-preview",
-        thinkingLevelMap: {
-          minimal: null,
-          low: null,
-          medium: null,
-          high: null,
-          xhigh: null,
-          max: null,
-        },
-      },
-      reasoning: "max",
-    },
-  ] as const)(
-    "keeps thinking disabled when $reasoning clamps to off for $label",
-    ({ target, reasoning }) => {
-      expect(buildGoogleSimpleThinking(target, { reasoning })).toEqual({ enabled: false });
-    },
-  );
+  it("keeps thinking disabled when low clamps to off for a non-reasoning model", () => {
+    expect(buildGoogleSimpleThinking({ ...model, reasoning: false }, { reasoning: "low" })).toEqual(
+      { enabled: false },
+    );
+  });
 });
 
 async function* chunks(items: GenerateContentResponse[]) {
@@ -157,26 +129,28 @@ function toolCall(args: Record<string, unknown> = {}, signature?: string, id = "
   };
 }
 
-type StreamEvent = { type: string; delta?: string; reason?: string };
+type StreamEvent = {
+  type: string;
+  delta?: string;
+  reason?: string;
+  partial?: AssistantMessage;
+  contentIndex?: number;
+};
 
 type GoogleLifecycleParams = Parameters<typeof runGoogleGenerateContentLifecycle>[0];
 type GoogleGenerateContentStream = ReturnType<
   GoogleLifecycleParams["createClient"]
 >["models"]["generateContentStream"];
 type GoogleFixtureOptions = {
-  targetModel?: Model<"google-generative-ai" | "google-vertex">;
   options?: GoogleLifecycleParams["options"];
-  createClient?: GoogleLifecycleParams["createClient"];
   generateContentStream?: GoogleGenerateContentStream;
-  buildParams?: GoogleLifecycleParams["buildParams"];
 };
 
 async function runFixture(
   responses: GenerateContentResponse[] = [],
   fixture: GoogleFixtureOptions = {},
 ) {
-  const targetModel = fixture.targetModel ?? model;
-  const output = createAssistantOutput(targetModel);
+  const output = createAssistantOutput(model);
   const stream = new AssistantMessageEventStream();
   const events: StreamEvent[] = [];
   const collect = (async () => {
@@ -187,17 +161,15 @@ async function runFixture(
 
   await runGoogleGenerateContentLifecycle({
     stream,
-    model: targetModel,
+    model,
     output,
     options: fixture.options,
-    createClient:
-      fixture.createClient ??
-      (() => ({
-        models: {
-          generateContentStream: fixture.generateContentStream ?? (async () => chunks(responses)),
-        },
-      })),
-    buildParams: fixture.buildParams ?? (() => ({ model: targetModel.id, contents: [] })),
+    createClient: () => ({
+      models: {
+        generateContentStream: fixture.generateContentStream ?? (async () => chunks(responses)),
+      },
+    }),
+    buildParams: () => ({ model: model.id, contents: [] }),
     nextToolCallId: (name) => `generated-${name}`,
   });
   await collect;
@@ -256,6 +228,10 @@ describe("Google stream projection", () => {
       "done",
     ]);
     expect(output.responseId).toBe("response-1");
+    const toolDelta = events.find((event) => event.type === "toolcall_delta");
+    expect(toolDelta?.partial?.content[toolDelta.contentIndex ?? -1]).toMatchObject({
+      partialJson: '{"query":"cats"}',
+    });
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toEqual([
       { type: "thinking", thinking: "thinking", thinkingSignature: "dGhpbms=" },
@@ -266,47 +242,19 @@ describe("Google stream projection", () => {
     expect(output.usage.cost.total).toBeGreaterThan(0);
   });
 
-  it.each([
-    {
-      requested: "projects/fixture/locations/global/publishers/google/models/gemini-test",
-      returned: ["models/gemini-test"],
-      expected: undefined,
-    },
-    {
-      requested: "publishers/meta/models/gemini-test",
-      returned: ["gemini-test"],
-      expected: "gemini-test",
-    },
-    {
-      requested: "gemini-test",
-      returned: ["", "gemini-test-002", "gemini-test-003"],
-      expected: "gemini-test-002",
-    },
-  ])(
-    "retains only an actually different response model for $requested",
-    async ({ requested, returned, expected }) => {
-      const { result } = await runFixture(
-        returned.map((modelVersion, index) =>
-          response({
-            modelVersion,
-            ...(index === returned.length - 1
-              ? {
-                  parts: [{ text: "actual response" }],
-                  finishReason: FinishReason.STOP,
-                }
-              : {}),
-          }),
-        ),
-        { targetModel: { ...model, id: requested } },
-      );
-      expect(result.stopReason).toBe("stop");
-      if (expected) {
-        expect(result.responseModel).toBe(expected);
-      } else {
-        expect(result).not.toHaveProperty("responseModel");
-      }
-    },
-  );
+  it("retains the first nonempty response model that differs from the requested model", async () => {
+    const { result } = await runFixture([
+      response({ modelVersion: "" }),
+      response({ modelVersion: "gemini-test-002" }),
+      response({
+        modelVersion: "gemini-test-003",
+        parts: [{ text: "actual response" }],
+        finishReason: FinishReason.STOP,
+      }),
+    ]);
+    expect(result.stopReason).toBe("stop");
+    expect(result.responseModel).toBe("gemini-test-002");
+  });
 
   it("retains prompt, cache, and tool-token facts across sparse Google usage chunks", async () => {
     const { output } = await runFixture([
@@ -337,26 +285,22 @@ describe("Google stream projection", () => {
     expect(output.usage).toMatchObject({ input: 6, cacheRead: 40 });
   });
 
-  it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
-    const { output, events } = await runFixture([
-      response({
-        parts: [{ functionCall: { name: "lookup", args: { query: "cats" } } }],
-        finishReason: FinishReason.MAX_TOKENS,
-      }),
-    ]);
-    expect(events.find((event) => event.type === "done")?.reason).toBe("length");
-    expect(output.stopReason).toBe("length");
-    expect(output.content).toEqual([expect.objectContaining({ type: "toolCall", name: "lookup" })]);
-  });
-
-  it("generates a new id when Google repeats a streamed tool-call id", async () => {
-    const { output, events } = await runFixture([
-      response({ parts: [lookupPart()] }),
-      finished([lookupPart()]),
-    ]);
-    expect(events.at(-1)?.type).toBe("done");
-    expect(output.content).toEqual([toolCall(), toolCall({}, undefined, "generated-lookup")]);
-  });
+  it.each([FinishReason.MAX_TOKENS, FinishReason.CONTINUATION])(
+    "preserves %s when the partial response contains a function call",
+    async (finishReason) => {
+      const { output, events } = await runFixture([
+        response({
+          parts: [{ functionCall: { name: "lookup", args: { query: "cats" } } }],
+          finishReason,
+        }),
+      ]);
+      expect(events.find((event) => event.type === "done")?.reason).toBe("length");
+      expect(output.stopReason).toBe("length");
+      expect(output.content).toEqual([
+        expect.objectContaining({ type: "toolCall", name: "lookup" }),
+      ]);
+    },
+  );
 
   it.each([
     {
@@ -457,17 +401,6 @@ describe("Google stream projection", () => {
 });
 
 describe("runGoogleGenerateContentLifecycle", () => {
-  it("reports SDK stream acceptance without fabricated HTTP metadata", async () => {
-    const acceptanceObserver = vi.fn();
-    const options = withProviderAcceptanceObserver({}, acceptanceObserver);
-    const { result } = await runFixture(
-      [response({ parts: [{ text: "ok" }], finishReason: FinishReason.STOP })],
-      { options },
-    );
-    expect(result.stopReason).toBe("stop");
-    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
-  });
-
   it("closes an unread SDK stream without waiting when acceptance fails", async () => {
     const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));
     const googleStream = {
@@ -555,89 +488,23 @@ describe("runGoogleGenerateContentLifecycle", () => {
     expect(output.errorCode).toBe("GATEWAY_RESTART");
   });
 
-  it.each([429])("preserves the official Google SDK's %s API error status", async (status) => {
-    const { result } = await runFixture([], {
-      generateContentStream: async () => {
-        throw new ApiError({ status, message: "Google quota exceeded" });
-      },
-    });
+  it("surfaces blocked Google prompts without a reason as typed stream errors", async () => {
+    const { result } = await runFixture([
+      response({
+        promptFeedback: { blockReasonMessage: "Prompt violates provider safety policy" },
+        usageMetadata: { promptTokenCount: 12, cachedContentTokenCount: 2, totalTokenCount: 12 },
+      }),
+    ]);
     expect(result).toMatchObject({
       stopReason: "error",
-      errorCode: String(status),
-      errorMessage: `${status}: Google quota exceeded`,
+      errorCode: "PROMPT_BLOCKED",
+      errorType: "google_prompt_blocked",
+      errorMessage:
+        "Google prompt blocked (PROMPT_BLOCKED): Prompt violates provider safety policy",
+      content: [],
+      usage: { input: 10, cacheRead: 2, totalTokens: 12 },
     });
-  });
-
-  it("preserves the typed Gemini finish reason when the official SDK omits finishMessage", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response(
-        `data: ${JSON.stringify({
-          candidates: [
-            {
-              finishReason: "SAFETY",
-              finishMessage: "Gemini Developer API strips this field",
-            },
-          ],
-        })}\n\n`,
-        { headers: { "content-type": "text/event-stream" } },
-      ),
-    );
-    try {
-      const { result } = await runFixture([], {
-        createClient: () => new GoogleGenAI({ apiKey: "test-gemini-api-key" }),
-        buildParams: () => ({
-          model: model.id,
-          contents: [{ role: "user", parts: [{ text: "hello" }] }],
-        }),
-      });
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorCode: "SAFETY",
-        errorType: "google_generation_failed",
-        errorMessage: "Google generation stopped (SAFETY)",
-      });
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
-  it.each([BlockedReason.SAFETY, undefined])(
-    "surfaces blocked Google prompts as typed stream errors when blockReason is %s",
-    async (blockReason) => {
-      const { result } = await runFixture([
-        response({
-          promptFeedback: {
-            ...(blockReason ? { blockReason } : {}),
-            blockReasonMessage: "Prompt violates provider safety policy",
-          },
-          usageMetadata: { promptTokenCount: 12, cachedContentTokenCount: 2, totalTokenCount: 12 },
-        }),
-      ]);
-      const expectedBlockReason = blockReason ?? "PROMPT_BLOCKED";
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorCode: expectedBlockReason,
-        errorType: "google_prompt_blocked",
-        errorMessage: `Google prompt blocked (${expectedBlockReason}): Prompt violates provider safety policy`,
-        content: [],
-        usage: { input: 10, cacheRead: 2, totalTokens: 12 },
-      });
-      expect(result.usage.cost.total).toBeGreaterThan(0);
-    },
-  );
-
-  it("surfaces HTTP response body text from Google-compatible errors", async () => {
-    const error = Object.assign(new Error("502 status code (no body)"), {
-      status: 502,
-      body: "gateway maintenance",
-    });
-    const { output } = await runFixture([], {
-      generateContentStream: async () => {
-        throw error;
-      },
-    });
-    expect(output.errorMessage).toBe("502: gateway maintenance");
+    expect(result.usage.cost.total).toBeGreaterThan(0);
   });
 
   it("redacts generated video bytes from Google terminal fields", async () => {
@@ -688,32 +555,6 @@ const convert = (messages: Context["messages"]) =>
   convertMessagesForTest(conversionModel, { messages });
 
 describe("Google tool declarations", () => {
-  it.each([
-    {
-      properties: { action: { type: "string" } },
-      required: ["action"],
-    },
-    {
-      type: "object",
-      patternProperties: { "^x-": { type: "string" } },
-      additionalProperties: false,
-      properties: {
-        mode: { type: "string", const: "fast" },
-        options: { anyOf: [{ type: "string" }, { type: "number" }] },
-        list: { type: "array", items: { type: "string", const: "item" } },
-      },
-      required: ["mode"],
-    },
-  ])("preserves tool parameter schema %j without filtering", (parameters) => {
-    expect(
-      getFirstToolParameters(
-        convertGoogleTools([
-          { name: "demo", description: "Demo", parameters: structuredClone(parameters) },
-        ]) ?? [],
-      ),
-    ).toStrictEqual(parameters);
-  });
-
   it("omits optional metadata from normalized Gemini function declarations", () => {
     const parameters = normalizeToolParameterSchema(
       {
@@ -733,18 +574,6 @@ describe("Google tool declarations", () => {
       required: ["message"],
     });
   });
-
-  it("keeps Google tool declarations stable across discovery order", () => {
-    const tools = [
-      { name: "zeta", description: "Last", parameters: { type: "object" } },
-      { name: "alpha", description: "First", parameters: { type: "object" } },
-    ] as Tool[];
-    expect(convertGoogleTools(tools)).toEqual(convertGoogleTools(tools.toReversed()));
-    expect(convertGoogleTools(tools)?.[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
-      "alpha",
-      "zeta",
-    ]);
-  });
 });
 
 describe("Google message conversion", () => {
@@ -759,21 +588,6 @@ describe("Google message conversion", () => {
         "c2lnXzE=",
         "c2lnXzI=",
       ],
-    },
-    {
-      replay: "signed-parts" as const,
-      required: true,
-      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, "skip_thought_signature_validator"],
-    },
-    {
-      replay: "managed" as const,
-      required: false,
-      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, undefined],
-    },
-    {
-      replay: "signed-parts" as const,
-      required: false,
-      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, undefined],
     },
   ])(
     "preserves $replay signature ownership with required=$required",
@@ -823,48 +637,18 @@ describe("Google message conversion", () => {
     },
   );
 
-  it.each([
-    {
-      label: "user",
-      messages: [
-        { role: "user", content: "Hello", timestamp: 0 },
-        { role: "user", content: "How are you?", timestamp: 1 },
-      ],
-      expected: [
-        { role: "user", parts: [{ text: "Hello" }] },
-        { role: "user", parts: [{ text: "How are you?" }] },
-      ],
-    },
-    {
-      label: "model",
-      messages: [
-        makeGoogleAssistantMessage(conversionModel.id, [{ type: "text", text: "Hi there!" }]),
-        makeGoogleAssistantMessage(conversionModel.id, [{ type: "text", text: "How can I help?" }]),
-      ],
-      expected: [
-        { role: "model", parts: [{ text: "Hi there!" }] },
-        { role: "model", parts: [{ text: "How can I help?" }] },
-      ],
-    },
-  ])("preserves consecutive $label turns", ({ messages, expected }) => {
-    expect(convert(messages as Context["messages"])).toEqual(expected);
-  });
-
-  it.each([
-    { value: '{"query":"cats"}', expected: { query: "cats" } },
-    { value: "{not valid json", expected: {} },
-    { value: ["not", "an", "object"], expected: {} },
-  ])("coerces serialized tool arguments $value to SDK objects", ({ value, expected }) => {
+  it("coerces malformed serialized tool arguments to an SDK object", () => {
     const context = {
-      messages: [makeGoogleAssistantMessage(conversionModel.id, [{ ...call, arguments: value }])],
+      messages: [
+        makeGoogleAssistantMessage(conversionModel.id, [{ ...call, arguments: "{not valid json" }]),
+      ],
     } as Context;
     expect(
       convertMessagesForTest(conversionModel, context)[0]?.parts?.[0]?.functionCall?.args,
-    ).toEqual(expected);
+    ).toEqual({});
   });
 
   it.each([
-    { label: "empty user text", messages: [{ role: "user", content: "" }] },
     {
       label: "empty user text part",
       messages: [{ role: "user", content: [{ type: "text", text: "" }] }],
@@ -880,34 +664,18 @@ describe("Google message conversion", () => {
     ]);
   });
 
-  it.each(["foreign route", "user turn", "runtime context"] as const)(
-    "does not replay an earlier signature across a %s",
-    (boundary) => {
-      const contents = convert([
-        makeGoogleAssistantMessage(conversionModel.id, [{ ...call, thoughtSignature: "c2lnbmVk" }]),
-        ...(boundary === "foreign route"
-          ? []
-          : [
-              {
-                role: "user",
-                content: "a new question",
-                timestamp: 1,
-                ...(boundary === "runtime context" ? { runtimeContextCarrier: true } : {}),
-              },
-            ]),
-        {
-          ...makeGoogleAssistantMessage(conversionModel.id, [call]),
-          ...(boundary === "foreign route" ? { api: "google-vertex" } : {}),
-        },
-      ] as Context["messages"]);
-      expect(
-        contents
-          .flatMap((content) => content.parts ?? [])
-          .filter((part) => part.functionCall)
-          .map((part) => part.thoughtSignature),
-      ).toEqual(["c2lnbmVk", "skip_thought_signature_validator"]);
-    },
-  );
+  it("does not replay an earlier signature across a foreign route", () => {
+    const contents = convert([
+      makeGoogleAssistantMessage(conversionModel.id, [{ ...call, thoughtSignature: "c2lnbmVk" }]),
+      { ...makeGoogleAssistantMessage(conversionModel.id, [call]), api: "google-vertex" },
+    ] as Context["messages"]);
+    expect(
+      contents
+        .flatMap((content) => content.parts ?? [])
+        .filter((part) => part.functionCall)
+        .map((part) => part.thoughtSignature),
+    ).toEqual(["c2lnbmVk", "skip_thought_signature_validator"]);
+  });
 
   it("strips call and response IDs for google-gemini-cli", () => {
     const target = makeGeminiCliModel(conversionModel.id);

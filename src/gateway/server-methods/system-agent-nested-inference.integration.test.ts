@@ -23,8 +23,14 @@ import {
 } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { CommandLane } from "../../process/lanes.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { runSystemAgentTurnWithDeps } from "../../system-agent/agent-turn.test-support.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import type { SystemAgentOverview } from "../../system-agent/overview.js";
@@ -46,10 +52,15 @@ vi.mock("../../agents/embedded-agent-runner/cli-backend-dispatch.js", () => ({
   // This function is called inside run-orchestrator's admitted global-lane task.
   runEmbeddedAgentViaCliBackendIfEligible: dispatch,
 }));
+// mock-isolation: Isolate machine-wide audit persistence while proving nested model admission.
 vi.mock("../../system-agent/transcript-store.js", () => ({
-  appendTranscriptTurn: vi.fn(),
-  appendTranscriptReset: vi.fn(),
-  readTranscriptTail: vi.fn(() => []),
+  createSystemAgentTranscriptStore: () => ({
+    assertCurrent: () => undefined,
+    appendTurn: vi.fn(),
+    appendReset: vi.fn(),
+    readTail: vi.fn(async () => []),
+  }),
+  readTranscriptTailAsync: vi.fn(async () => []),
 }));
 vi.mock("../../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/providers.js")>()),
@@ -84,7 +95,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const engine of engines.splice(0)) {
       await engine.dispose();
     }
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     resetCommandQueueStateForTest();
     vi.unstubAllEnvs();

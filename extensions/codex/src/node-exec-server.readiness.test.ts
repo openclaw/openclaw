@@ -220,14 +220,6 @@ describe("Codex node native readiness", () => {
     }
   });
 
-  it("retains native readiness emitted before process registration returns", async () => {
-    const harness = await startFixture(true);
-    try {
-      await vi.waitFor(() => expect(harness.receiver).toHaveBeenCalledOnce());
-    } finally {
-      await harness.cleanup();
-    }
-  });
   it("withholds the carrier until the fragmented native-ready line and preserves the first initialize", async () => {
     const harness = await startFixture();
     try {

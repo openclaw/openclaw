@@ -18,7 +18,6 @@ export * from "./schema/worker-inference.js";
 export * from "./schema/worker-gateway-tool.js";
 export * from "./schema/worker-computer.js";
 export * from "./schema/computer.js";
-export * from "./schema/skill-history.js";
 export * from "./schema/skill-library.js";
 export * from "./schema/plugin-credentials.js";
 export * from "./schema/web-search.js";
@@ -56,6 +55,11 @@ export * from "./schema/sessions-reactions.js";
 export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";
 export * from "./schema/sessions-goal.js";
+export {
+  SESSIONS_FILES_ASSETS_MAX_REFS,
+  SESSIONS_FILES_ASSET_MAX_BYTES,
+  SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES,
+} from "./schema/sessions.js";
 export * from "./schema/sessions-provider-review.js";
 export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
@@ -86,3 +90,5 @@ export {
 export type * from "./schema-types.js";
 export type { GatewayCoreRequestParams } from "./core-request-params.js";
 export type { SessionsPatchResult } from "./sessions-patch-result.js";
+
+export * from "./schema/session-processes.js";

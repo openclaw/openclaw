@@ -393,7 +393,7 @@ describe("Google Meet bidi realtime engine cleanup", () => {
       realtime: { strategy: "bidi", provider: "openai", agentId: "molty" },
     });
     const fullConfig = {
-      agents: { list: [{ id: "helper" }, { id: "molty" }] },
+      agents: { entries: { helper: {}, molty: {} } },
     } as never;
 
     const handle = await startMeetingRealtimeEngine({

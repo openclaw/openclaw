@@ -10,6 +10,7 @@ import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import * as gatewayScope from "./runtime/gateway-request-scope.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -28,6 +29,26 @@ function createOwnedInstance(id = "paired-scope") {
 }
 
 describe("independent plugin execution scope views", () => {
+  it("reuses one identity descriptor per instance across repeated invocations", async () => {
+    const instances = [createOwnedInstance(), createOwnedInstance("other-scope")];
+    const scopes = vi.spyOn(gatewayScope, "withPluginRuntimePluginScope");
+    try {
+      for (const instance of instances) {
+        for (let index = 0; index < 100; index++) {
+          instance.run(() => {
+            expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(instance.pluginId);
+          });
+        }
+      }
+      const identities = scopes.mock.calls.map(([scope]) => scope);
+      expect(identities).toHaveLength(200);
+      expect(new Set(identities).size).toBe(2);
+    } finally {
+      scopes.mockRestore();
+      await Promise.all(instances.map((instance) => instance.dispose()));
+    }
+  });
+
   it.each(["ordinary", "consumer"] as const)(
     "admits a %s callback in one independent frame and retains its closure fence",
     async (kind) => {

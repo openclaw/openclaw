@@ -19,6 +19,7 @@ import {
   waitForModelSetupDetection,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
+import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 describe("ModelSetupPage first-run application recovery", () => {
   beforeEach(async () => {
@@ -37,8 +38,8 @@ describe("ModelSetupPage first-run application recovery", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["cancelled", "running", "missing"] as const)(
-    "resumes interrupted provider input without replaying setup and releases only confirmed cancellation (%s)",
+  it.each(["cancelled", "running", "missing", "missing-detect-failed"] as const)(
+    "resumes input or reconciles a missing wizard without replaying setup (%s)",
     async (outcome) => {
       const original = createFirstRunContext();
       const result = {
@@ -77,12 +78,14 @@ describe("ModelSetupPage first-run application recovery", () => {
         .querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
         .click();
       await waitForFast(() => expect(previous.textContent).toContain("API Base URL"));
+      unmountModelSetupPage(previous);
       provider.remove();
 
       const relaunched = createFirstRunContext();
+      let failDetection = outcome === "missing-detect-failed";
       relaunched.request.mockImplementation(async (method) => {
         if (method === "wizard.next") {
-          if (outcome === "missing") {
+          if (outcome.startsWith("missing")) {
             throw new GatewayRequestError({
               code: "INVALID_REQUEST",
               message: "wizard not found",
@@ -95,6 +98,9 @@ describe("ModelSetupPage first-run application recovery", () => {
           return { status: outcome };
         }
         if (method === "openclaw.setup.detect") {
+          if (failDetection) {
+            throw new Error("Setup detection is unavailable");
+          }
           return result;
         }
         throw new Error(`Unexpected method ${method}`);
@@ -111,7 +117,7 @@ describe("ModelSetupPage first-run application recovery", () => {
           { timeoutMs: null, signal: expect.any(AbortSignal) },
         ),
       );
-      if (outcome !== "missing") {
+      if (!outcome.startsWith("missing")) {
         await waitForFast(() => expect(page.textContent).toContain("API Base URL"));
         const cancel = [
           ...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
@@ -134,11 +140,32 @@ describe("ModelSetupPage first-run application recovery", () => {
         expect(
           page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
             .disabled,
-        ).toBe(outcome !== "cancelled");
+        ).toBe(outcome === "running" || failDetection);
         expect(readFirstRunActivationReceipt(relaunched.context) === null).toBe(
-          outcome === "cancelled",
+          outcome !== "running" && !failDetection,
         );
       });
+      if (failDetection) {
+        await waitForFast(() =>
+          expect(page.textContent).toContain("Setup detection is unavailable"),
+        );
+        const close = [
+          ...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
+        ].find((button) => button.textContent?.trim() === "Close")!;
+        close.click();
+        failDetection = false;
+        const retry = [
+          ...page.querySelectorAll<HTMLButtonElement>(".model-setup__recovery button"),
+        ].find((button) => button.textContent?.trim() === "Check again")!;
+        retry.click();
+        await waitForFast(() => {
+          expect(readFirstRunActivationReceipt(relaunched.context)).toBeNull();
+          expect(
+            page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
+              .disabled,
+          ).toBe(false);
+        });
+      }
       expect(
         relaunched.request.mock.calls.some(([method]) => method === "openclaw.setup.auth.start"),
       ).toBe(false);
@@ -174,6 +201,7 @@ describe("ModelSetupPage first-run application recovery", () => {
       expect(original.request).not.toHaveBeenCalled();
       await clickCandidate(page, "openai-api-key");
       await waitForFast(() => expect(page.textContent).toContain("The Gateway is restarting"));
+      unmountModelSetupPage(page);
       provider.remove();
 
       const relaunched = createFirstRunContext();
@@ -241,6 +269,7 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(original.request).not.toHaveBeenCalled();
     await clickCandidate(previous, "openai-api-key");
     await waitForFast(() => expect(previous.textContent).toContain("The Gateway is restarting"));
+    unmountModelSetupPage(previous);
     provider.remove();
 
     const relaunched = createFirstRunContext();
@@ -318,6 +347,7 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(original.request).not.toHaveBeenCalled();
     await clickCandidate(previous, "openai-api-key");
     await waitForFast(() => expect(previous.textContent).toContain("The Gateway is restarting"));
+    unmountModelSetupPage(previous);
     provider.remove();
 
     const relaunched = createFirstRunContext();
@@ -359,6 +389,7 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(original.request).not.toHaveBeenCalled();
     await clickCandidate(previous, "openai-api-key");
     await waitForFast(() => expect(previous.textContent).toContain("The Gateway is restarting"));
+    unmountModelSetupPage(previous);
     provider.remove();
 
     const relaunched = createFirstRunContext();

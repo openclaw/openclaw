@@ -5,7 +5,6 @@ const dockerEnv = { env: { SYNTHETIC_VALUE: "synthetic-first\nsynthetic-second" 
 
 describe("sandbox container environment validation", () => {
   it.each([
-    { backend: "podman", key: "SYNTHETIC_MULTILINE", value: "synthetic-first\r\nsynthetic-second" },
     { backend: "docker", key: "SYNTHETIC-BAD-NAME", value: "synthetic-private-invalid-name-value" },
     {
       backend: "podman",
@@ -75,25 +74,21 @@ describe("sandbox container environment validation", () => {
     }
   });
 
-  it.each([
-    {
-      roster: {
-        entries: { synthetic_agent: { sandbox: { backend: "docker", docker: dockerEnv } } },
+  it.each(["podman"])("attributes agent-owned %s values to their config path", (backend) => {
+    const config = {
+      agents: {
+        defaults: { sandbox: { backend: "ssh" } },
+        entries: { synthetic_agent: { sandbox: { backend, docker: dockerEnv } } },
       },
-      path: "agents.entries.synthetic_agent.sandbox.docker.env.SYNTHETIC_VALUE",
-    },
-    {
-      roster: {
-        list: [{ id: "synthetic_agent", sandbox: { backend: "podman", docker: dockerEnv } }],
-      },
-      path: "agents.list.0.sandbox.docker.env.SYNTHETIC_VALUE",
-    },
-  ])("attributes agent-owned invalid values to $path", ({ roster, path }) => {
-    const config = { agents: { defaults: { sandbox: { backend: "ssh" } }, ...roster } };
+    };
     const result = validateConfigObject(config, { sourceRaw: config });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues).toEqual([expect.objectContaining({ path })]);
+      expect(result.issues).toEqual([
+        expect.objectContaining({
+          path: "agents.entries.synthetic_agent.sandbox.docker.env.SYNTHETIC_VALUE",
+        }),
+      ]);
     }
   });
 

@@ -21,18 +21,17 @@ export const handleNodeInvokeProgress: GatewayRequestHandler = async ({
   ) {
     return;
   }
-  const progress = params;
   const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-  if (callerNodeId && callerNodeId !== progress.nodeId) {
+  if (callerNodeId && callerNodeId !== params.nodeId) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));
     return;
   }
-  if (Buffer.byteLength(progress.chunk, "utf8") > MAX_PROGRESS_CHUNK_BYTES) {
+  if (Buffer.byteLength(params.chunk, "utf8") > MAX_PROGRESS_CHUNK_BYTES) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "progress chunk too large"));
     return;
   }
   const accepted = context.nodeRegistry.handleInvokeProgress({
-    ...progress,
+    ...params,
     connId: client?.connId,
   });
   respond(true, { ok: true, ignored: !accepted }, undefined);

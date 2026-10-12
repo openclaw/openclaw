@@ -1,15 +1,13 @@
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 
 export function sessionCategoryNames(
   result: SessionsListResult | null,
   customGroups: readonly string[],
 ): string[] {
-  const fromRows = (result?.sessions ?? [])
-    .map((row: GatewaySessionRow) => row.category?.trim())
-    .filter((name): name is string => Boolean(name));
-  return [...new Set([...customGroups, ...fromRows.toSorted((a, b) => a.localeCompare(b))])];
+  return [...new Set(collectKnownSessionGroups(customGroups, result?.sessions ?? []))];
 }
 
 type GroupMutationSessions = Pick<SessionCapability, "groupsPut" | "state">;
@@ -19,11 +17,11 @@ type SessionGroupWriteResult = "completed" | "failed" | "stale";
 export async function rememberSessionCustomGroup(options: {
   name: string;
   knownCategories: readonly string[];
-  sessions: GroupMutationSessions | undefined;
+  sessions: GroupMutationSessions;
   isCurrent: () => boolean;
   onError: (message: string) => void;
 }): Promise<SessionGroupWriteResult> {
-  if (!options.sessions || options.knownCategories.includes(options.name)) {
+  if (options.knownCategories.includes(options.name)) {
     return "completed";
   }
   try {

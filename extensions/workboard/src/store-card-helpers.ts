@@ -12,7 +12,8 @@ import {
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { definedFields } from "../record-fields.js";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
@@ -165,17 +166,10 @@ function metadataEntriesChanged(
 }
 
 export function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+  if (!isRecord(metadata) || !Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
     return undefined;
   }
-  if (!Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
-    return undefined;
-  }
-  const sourceUpdatedAt = normalizeTimestamp(
-    (metadata as Record<string, unknown>).lifecycleStatusSourceUpdatedAt,
-    0,
-  );
-  return sourceUpdatedAt;
+  return normalizeTimestamp(metadata.lifecycleStatusSourceUpdatedAt, 0);
 }
 
 function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
@@ -260,21 +254,16 @@ export function updateEvent(
     const existingAttempts = existing.metadata?.attempts ?? [];
     const nextAttempts = next.metadata?.attempts ?? [];
     const latestAttempt = nextAttempts.at(-1);
-    if (nextAttempts.length > existingAttempts.length) {
+    const attemptStarted = nextAttempts.length > existingAttempts.length;
+    const previousAttempt =
+      !attemptStarted && latestAttempt
+        ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
+        : undefined;
+    if (attemptStarted || (latestAttempt && previousAttempt?.status !== latestAttempt.status)) {
       return {
-        kind: "attempt_started",
+        kind: attemptStarted ? "attempt_started" : "attempt_updated",
         ...(latestAttempt?.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
         ...(latestAttempt?.runId ? { runId: latestAttempt.runId } : {}),
-      };
-    }
-    const previousAttempt = latestAttempt
-      ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
-      : undefined;
-    if (latestAttempt && previousAttempt?.status !== latestAttempt.status) {
-      return {
-        kind: "attempt_updated",
-        ...(latestAttempt.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
-        ...(latestAttempt.runId ? { runId: latestAttempt.runId } : {}),
       };
     }
     return {
@@ -298,10 +287,10 @@ export function updateEvent(
       ? { kind: "attachment_added" }
       : { kind: "edited" };
   }
-  if (existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state) {
-    return { kind: "orchestration" };
-  }
-  if (metadataEntriesChanged(existing, next, "workerLogs")) {
+  if (
+    existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state ||
+    metadataEntriesChanged(existing, next, "workerLogs")
+  ) {
     return { kind: "orchestration" };
   }
   if ((existing.metadata?.diagnostics?.length ?? 0) !== (next.metadata?.diagnostics?.length ?? 0)) {
@@ -329,22 +318,7 @@ export function updateEvent(
 }
 
 export function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
-  const next = { ...card };
-  for (const key of [
-    "notes",
-    "agentId",
-    "sessionKey",
-    "runId",
-    "sourceUrl",
-    "execution",
-    "startedAt",
-    "completedAt",
-    "metadata",
-  ] as const) {
-    if (next[key] === undefined) {
-      delete next[key];
-    }
-  }
+  const next = definedFields({ ...card });
   if (metadataIsEmpty(next.metadata)) {
     delete next.metadata;
   }

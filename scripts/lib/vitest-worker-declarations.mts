@@ -15,6 +15,8 @@ export const runtimeProcessDeclarationEntries = {
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
+  "worker/native-worker-entrypoints.test-support":
+    "src/worker/native-worker-entrypoints.test-support.ts",
   "extensions/acpx/src/runtime.admission-retention-entrypoint.test-support":
     "extensions/acpx/src/runtime.admission-retention-entrypoint.test-support.ts",
   "extensions/diagnostics-prometheus/src/install-runtime-entrypoints.test-support":
@@ -83,6 +85,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/infra/sqlite-worker-store.compile-cache-runtime.test-support.ts",
   "state/native-process-runtime.test-support": "src/state/native-process-runtime.test-support.ts",
   "agents/process-runtime.test-support": "src/agents/process-runtime.test-support.ts",
+  "agents/sandbox/sdk-state-owner-runtime.test-support":
+    "src/agents/sandbox/sdk-state-owner-runtime.test-support.ts",
   "agents/mcp-import-runtime.test-support": "src/agents/mcp-import-runtime.test-support.ts",
   "plugins/process-runtime.test-support": "src/plugins/process-runtime.test-support.ts",
   "plugins/retention-runtime.test-support": "src/plugins/retention-runtime.test-support.ts",
@@ -94,8 +98,8 @@ export const vitestWorkerDeclarationEntries = {
     "packages/llm-core/src/retention-runtime.test-support.ts",
   "packages/agent-core/retention-runtime.test-support":
     "packages/agent-core/src/retention-runtime.test-support.ts",
-  "packages/ai/providers/clean-for-gemini-runtime.test-support":
-    "packages/ai/src/providers/clean-for-gemini-runtime.test-support.ts",
+  "packages/ai/providers/tool-schema-depth-runtime.test-support":
+    "packages/ai/src/providers/tool-schema-depth-runtime.test-support.ts",
   "packages/terminal-core/table-runtime.test-support":
     "packages/terminal-core/src/table-runtime.test-support.ts",
   "extensions/discord/src/voice/audio-worker-entrypoints.test-support":
@@ -159,8 +163,6 @@ export const vitestWorkerDeclarationEntries = {
     "src/agents/code-mode-retention-entrypoint.test-support.ts",
   "agents/command/cli-compaction-runtime.test-support":
     "src/agents/command/cli-compaction-runtime.test-support.ts",
-  "agents/sessions/bash-output-spill-entrypoints.test-support":
-    "src/agents/sessions/bash-output-spill-entrypoints.test-support.ts",
   "agents/worktrees/service-gc-runtime.test-support":
     "src/agents/worktrees/service-gc-runtime.test-support.ts",
   "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",

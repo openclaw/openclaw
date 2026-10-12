@@ -1,9 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
@@ -11,11 +17,23 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
 import {
+  inspectAgentAuthProfileJsonCellReadOnly,
+  readAuthProfileRowsReadOnly,
+  writeAuthProfileJsonCell,
+} from "./auth-profiles/sqlite-json.js";
+import {
+  acquireAuthProfileReadDatabase,
+  closeAuthProfileReadDatabase,
+} from "./auth-profiles/sqlite-read-pool.js";
+import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import { apiKeyStore, withAgentDirEnv } from "./auth-profiles/sqlite.test-support.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { PersistedAuthProfileStoreInspection } from "./auth-profiles/types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   listExternalCliSyncProviderIds: () => [],
@@ -51,6 +69,100 @@ function withReaders(
 }
 
 describe("auth profile sqlite reader lifecycle", () => {
+  it("reuses admitted auth table facts across readers and refreshes them after owner writes", () => {
+    const databasePath = path.join(tempDirs.make("auth-schema-facts-"), "agent.sqlite");
+    const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+    const storeSchema = `CREATE TABLE auth_profile_store (
+      store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL
+    )`;
+    const first = { version: 1, profiles: {} };
+    const updated = { version: 1, profiles: { synthetic: { type: "api_key", key: "fixture" } } };
+    const missingTable = { status: "missing", reason: "table" } as const;
+    let observation: ReturnType<typeof observeSqliteReadSql> | undefined;
+    try {
+      writer.exec(storeSchema);
+      admitSqliteSchema(writer);
+      runSqliteImmediateTransactionSync(writer, () =>
+        writeAuthProfileJsonCell(writer, "store", "agent", first),
+      );
+      observation = observeSqliteReadSql(StatementSync.prototype);
+      const reads = observation;
+      const assertRows = (
+        store: PersistedAuthProfileStoreInspection,
+        state: PersistedAuthProfileStoreInspection = missingTable,
+      ) => {
+        reads.queries.length = 0;
+        expect(inspectAgentAuthProfileJsonCellReadOnly(databasePath, "store")).toEqual(store);
+        expect(readAuthProfileRowsReadOnly(databasePath)).toMatchObject({ store, state });
+        // The batched reader closes its native handle; the next read borrows the same facts.
+        expect(inspectAgentAuthProfileJsonCellReadOnly(databasePath, "store")).toEqual(store);
+        expect(
+          reads.queries.filter((sql) => /\b(?:sqlite_master|sqlite_schema)\b/iu.test(sql)),
+        ).toEqual([]);
+      };
+
+      assertRows({ status: "readable", raw: first });
+      runSqliteImmediateTransactionSync(writer, () =>
+        writeAuthProfileJsonCell(writer, "store", "agent", updated),
+      );
+      assertRows({ status: "readable", raw: updated });
+
+      writer.exec(
+        "DROP TABLE auth_profile_store; CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json",
+      );
+      assertRows({ status: "unreadable" });
+      writer.exec("DROP VIEW auth_profile_store");
+      assertRows(missingTable);
+
+      writer.exec(`${storeSchema}; CREATE TABLE auth_profile_state (
+        state_key TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL
+      )`);
+      const state = { lastGood: { fixture: "synthetic" } };
+      runSqliteImmediateTransactionSync(writer, () => {
+        writeAuthProfileJsonCell(writer, "store", "agent", updated);
+        writeAuthProfileJsonCell(writer, "state", "agent", state);
+      });
+      assertRows({ status: "readable", raw: updated }, { status: "readable", raw: state });
+    } finally {
+      observation?.restore();
+      closeAuthProfileReadDatabase(databasePath);
+      writer.close();
+    }
+  });
+
+  it("reuses format admission across pool reopen and validates a replacement file", async () => {
+    await withReaders((agentDir) => {
+      const pathname = resolveAuthProfileDatabasePath(agentDir);
+      const observed = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+      const formatQueries = () =>
+        observed.queries.filter((sql) =>
+          /sqlite_(?:schema|master)|\bPRAGMA\s+(?:user_version|schema_version|table_info|table_xinfo|index_list|index_info|index_xinfo)\b/iu.test(
+            sql,
+          ),
+        );
+      try {
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
+        closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
+        observed.queries.length = 0;
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
+        expect(formatQueries()).toEqual([]);
+        closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
+        const replacement = `${pathname}.replacement`;
+        copyFileSync(pathname, replacement);
+        {
+          using database = new DatabaseSync(replacement);
+          database.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+        }
+        renameSync(replacement, pathname);
+        observed.queries.length = 0;
+        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("unreadable");
+        expect(formatQueries().length).toBeGreaterThan(0);
+      } finally {
+        observed.restore();
+      }
+    });
+  });
+
   it("observes foreign commits through cached readers and closes them on snapshot replacement", async () => {
     await withReaders((agentDir, open) => {
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
@@ -181,65 +293,43 @@ describe("auth profile sqlite reader lifecycle", () => {
     });
   });
 
-  it("keeps exit cleanup registered when an unscoped close fails", async () => {
+  it.each(["unscoped", "root"] as const)("retains readers when a %s close fails", async (scope) => {
     await withReaders((agentDir, open) => {
       const listeners = process.listeners("exit");
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
-      const reader = expectDefined(
-        open.mock.results[0]?.value,
-        "auth reader awaiting exit cleanup",
-      );
+      const reader = expectDefined(open.mock.results[0]?.value, "auth reader awaiting cleanup");
+      const siblingAgentDir = `${agentDir}-sibling`;
+      if (scope === "root") {
+        expect(loadPersistedAuthProfileStore(siblingAgentDir)).not.toBeNull();
+      }
+      const closeScope =
+        scope === "root" ? { kind: "root" as const, rootPath: agentDir } : undefined;
       const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
-        throw new Error("native unscoped close failed");
+        throw new Error("native close failed");
       });
       try {
-        expect(() => closeAuthProfileReadPool()).toThrow("native unscoped close failed");
+        expect(() => closeAuthProfileReadPool(closeScope)).toThrow("native close failed");
         expect(reader.isOpen).toBe(true);
-        const exitClosers = process
-          .listeners("exit")
-          .filter((listener) => !listeners.includes(listener));
-        expect(exitClosers).toHaveLength(1);
-        expectDefined(exitClosers[0], "auth reader exit cleanup listener")(0);
-        expect(reader.isOpen).toBe(false);
-        expect(process.listeners("exit")).toEqual(listeners);
-      } finally {
-        close.mockRestore();
-      }
-    });
-  });
-
-  it("retains scoped readers for a retry when native close fails", async () => {
-    await withReaders((agentDir, open) => {
-      const siblingAgentDir = `${agentDir}-sibling`;
-      let reader: DatabaseSync | undefined;
-      try {
-        expect(loadPersistedAuthProfileStore(agentDir)).not.toBeNull();
-        reader = open.mock.results[0]?.value as DatabaseSync;
-        expect(loadPersistedAuthProfileStore(siblingAgentDir)).not.toBeNull();
-        const siblingReader = open.mock.results[1]?.value as DatabaseSync;
-        const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
-          throw new Error("native close failed");
-        });
-        try {
-          expect(() => closeAuthProfileReadPool({ kind: "root", rootPath: agentDir })).toThrow(
-            "native close failed",
-          );
-          expect(reader.isOpen).toBe(true);
-          closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
-          expect(reader.isOpen).toBe(false);
+        if (scope === "root") {
+          closeAuthProfileReadPool(closeScope);
+          const siblingReader = expectDefined(open.mock.results[1]?.value, "sibling auth reader");
           expect(siblingReader.isOpen).toBe(true);
           expect(loadPersistedAuthProfileStore(siblingAgentDir)).toMatchObject(
             apiKeyStore("qa-sibling"),
           );
-        } finally {
-          close.mockRestore();
+        } else {
+          const exitClosers = process
+            .listeners("exit")
+            .filter((listener) => !listeners.includes(listener));
+          expect(exitClosers).toHaveLength(1);
+          expectDefined(exitClosers[0], "auth reader exit cleanup listener")(0);
+          expect(process.listeners("exit")).toEqual(listeners);
         }
+        expect(reader.isOpen).toBe(false);
       } finally {
-        if (reader?.isOpen) {
-          reader.close();
-        }
+        close.mockRestore();
       }
-    }, true);
+    }, scope === "root");
   });
 
   it("retains failed admission handles without opening more readers until cleanup succeeds", async () => {

@@ -37,7 +37,8 @@
             "strict": false
           }
         }
-      ]
+      ],
+      "reasoning_effort": "medium"
     },
     "eventTrace": [
       {
@@ -94,14 +95,14 @@
       "model": "gpt-5.5",
       "responseId": "chatcmpl-parity",
       "responseModel": "gpt-5.5-response",
-      "openclawDelivery": {
-        "textPhaseRequiresTerminal": true
-      },
       "usage": {
         "input": 6,
         "output": 4,
         "cacheRead": 2,
         "cacheWrite": 0,
+        "cacheTelemetry": {
+          "state": "available"
+        },
         "contextUsage": {
           "state": "available",
           "promptTokens": 8,
@@ -159,7 +160,8 @@
           }
         }
       ],
-      "max_completion_tokens": 4096
+      "max_completion_tokens": 4096,
+      "reasoning_effort": "medium"
     },
     "eventTrace": [
       {
@@ -173,11 +175,6 @@
         "type": "thinking_delta",
         "contentIndex": 0,
         "delta": "Think."
-      },
-      {
-        "type": "thinking_delta",
-        "contentIndex": 0,
-        "delta": ""
       },
       {
         "type": "text_start",
@@ -211,14 +208,14 @@
       "model": "gpt-5.5",
       "responseId": "chatcmpl-parity",
       "responseModel": "gpt-5.5-response",
-      "openclawDelivery": {
-        "textPhaseRequiresTerminal": true
-      },
       "usage": {
         "input": 6,
         "output": 4,
         "cacheRead": 2,
         "cacheWrite": 0,
+        "cacheTelemetry": {
+          "state": "available"
+        },
         "reasoningTokens": 1,
         "contextUsage": {
           "state": "available",

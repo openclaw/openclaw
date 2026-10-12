@@ -1,10 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
-import type { SessionInitialization } from "../../../sessions/session-initialization.js";
 import {
-  deleteSessionUpstreamLink,
+  getSessionInitializationUpstreamLinkCurrent,
+  type SessionInitialization,
+} from "../../../sessions/session-initialization.js";
+import {
+  deleteSessionUpstreamLinkAsync,
   upsertSessionUpstreamLink,
+  upsertSessionUpstreamLinkAsync,
+  upsertSessionUpstreamLinkWithCurrentSource,
   type SessionUpstreamLink,
 } from "../../../sessions/session-upstream-links.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 
 /** Backend binding ownership redeems the existing host initializer's exact creation handle. */
 export function createNativeSessionInitializationOwner<TStore, TIdentity, TBinding>(options: {
@@ -45,6 +51,17 @@ export function createNativeSessionInitializationOwner<TStore, TIdentity, TBindi
     ) {
       const { initialization, bindingStore, identity } = params;
       initialization.assertCurrent();
+      const sourceCurrent = getSessionInitializationUpstreamLinkCurrent(initialization);
+      const context = sourceCurrent?.context ?? captureOpenClawStateWorkerContext();
+      const database = { path: context.admission.databasePath, env: context.environment };
+      const assertCurrent = () => {
+        context.admission.assertCurrent();
+        initialization.assertCurrent();
+      };
+      const assertRollbackCurrent = () => {
+        context.admission.assertCurrent();
+        initialization.assertRollbackCurrent();
+      };
       let link: SessionUpstreamLink | undefined;
       const ownership: Ownership = {
         store: bindingStore,
@@ -54,10 +71,11 @@ export function createNativeSessionInitializationOwner<TStore, TIdentity, TBindi
           initialization.assertRollbackCurrent();
           if (
             link &&
-            deleteSessionUpstreamLink(link.sessionKey, link.agentId, {
+            (await deleteSessionUpstreamLinkAsync(link.sessionKey, link.agentId, {
+              ...database,
               expected: link,
-              assertCommitAllowed: initialization.assertRollbackCurrent,
-            }) === "changed"
+              assertCommitAllowed: assertRollbackCurrent,
+            })) === "changed"
           ) {
             throw new Error(options.errors.linkChanged);
           }
@@ -68,6 +86,17 @@ export function createNativeSessionInitializationOwner<TStore, TIdentity, TBindi
       };
       initializations.set(initialization, ownership);
       const cleanup = params.prepareCleanup?.();
+      const prepareLink = (input: Parameters<typeof upsertSessionUpstreamLink>[0]) => {
+        const now = Date.now();
+        link = structuredClone({ ...input, createdAt: now, updatedAt: now });
+        return { ...database, now, ifAbsent: true as const, assertCommitAllowed: assertCurrent };
+      };
+      const acceptLink = (stored: boolean) => {
+        if (!stored) {
+          link = undefined;
+          throw new Error(options.errors.linkWriteFailed);
+        }
+      };
       return {
         assertCurrent: initialization.assertCurrent,
         async bind(binding: TBinding) {
@@ -85,21 +114,20 @@ export function createNativeSessionInitializationOwner<TStore, TIdentity, TBindi
           }
           initialization.assertCurrent();
         },
+        /** @deprecated Use linkAsync. Retained for released official harnesses until the next Plugin SDK major. */
         link(input: Parameters<typeof upsertSessionUpstreamLink>[0]) {
           initialization.assertCurrent();
-          const now = Date.now();
-          link = structuredClone({ ...input, createdAt: now, updatedAt: now });
-          if (
-            !upsertSessionUpstreamLink(input, {
-              now,
-              ifAbsent: true,
-              assertCommitAllowed: initialization.assertCurrent,
-            })
-          ) {
-            link = undefined;
-            throw new Error(options.errors.linkWriteFailed);
-          }
+          const prepared = prepareLink(input);
+          acceptLink(upsertSessionUpstreamLink(input, prepared));
           initialization.assertCurrent();
+        },
+        async linkAsync(input: Parameters<typeof upsertSessionUpstreamLinkAsync>[0]) {
+          assertCurrent();
+          const prepared = prepareLink(input);
+          acceptLink(
+            await upsertSessionUpstreamLinkWithCurrentSource(input, prepared, sourceCurrent),
+          );
+          assertCurrent();
         },
       };
     },

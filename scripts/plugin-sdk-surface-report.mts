@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 // Reports plugin SDK export surface metadata.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,6 +14,7 @@ import {
   type Project,
   type Symbol,
 } from "typescript/unstable/async";
+import { listPluginCompatRecords } from "../src/plugins/compat/registry.js";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
 import { createNativeTypeScriptProjectAsync } from "./lib/native-typescript.mts";
@@ -24,6 +26,15 @@ import {
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mts";
+import {
+  compareStableReleases,
+  evaluatePluginSdkShippedSurface,
+  formatPluginSdkShippedSurfaceFailures,
+  isStableRelease,
+  parsePluginSdkShippedSurface,
+  shippedSurfacePath,
+  typedPluginSdkSubpaths,
+} from "./lib/plugin-sdk-shipped-surface.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -33,6 +44,7 @@ type ExportEntryStats = {
   deprecatedCallableExports: number;
   deprecatedExports: number;
   exports: number;
+  exportNames: string[];
 };
 
 function usage() {
@@ -41,7 +53,7 @@ function usage() {
 Reports plugin SDK export surface metadata.
 
 Options:
-  --check     Fail when SDK surface budgets are exceeded.
+  --check     Fail on unauthorized shipped-surface removals or exceeded SDK budgets.
   -h, --help  Show this help.
 `;
 }
@@ -122,8 +134,9 @@ function readPluginSdkEntrypointBudgetEnv(
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1 each: legacy AgentHarness remains projected through the core and plugin-entry
   // compatibility barrels while external harnesses migrate to AgentHarnessV2.
-  core: 3,
-  "plugin-entry": 1,
+  // +2 each: released provider replay contracts remain while plugins adopt async V2.
+  core: 5,
+  "plugin-entry": 3,
   // Shipped synchronous capture remains available while plugins migrate to async capture.
   "proxy-capture": 9,
   routing: 1,
@@ -147,57 +160,124 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  "agent-runtime": 4,
+  // +7: released auth-store and TTS methods retain synchronous compatibility.
+  "agent-runtime": 11,
   "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
   // +1: bounded structured-input compiler/executor for native harness protocol adapters.
-  "agent-harness": 2,
-  "agent-harness-runtime": 10,
-  "command-auth": 78,
-  discord: 47,
+  // +1: owner-approved async tool construction retains the deprecated synchronous factory.
+  "agent-harness": 3,
+  // +1: owner-approved synchronous watched-session compatibility during async migration.
+  // +1: owner-approved synchronous agent-end compatibility during async migration.
+  // +1: synchronous model-auth selection during the auth worker migration.
+  "agent-harness-runtime": 13,
   // +4: deprecated media projection type, builder, and turn aliases.
-  "channel-inbound": 18,
+  "channel-inbound": 21,
+  "inbound-envelope": 3,
   // +2: Slack progress-draft render bridge (function + mode type).
   "channel-outbound": 2,
   // +2: WhatsApp ack-policy bridge (function + mode type).
   "channel-feedback": 2,
-  "channel-pairing": 0,
+  // Released synchronous allowlist compatibility during the approved worker-read migration.
+  "channel-pairing": 1,
   "channel-policy": 7,
+  // Released synchronous conversation binding APIs remain until the next Plugin SDK major.
+  "conversation-binding-inspection-runtime": 1,
+  "conversation-runtime": 3,
   "channel-send-result": 1,
   "reply-runtime": 1,
   "security-runtime": 1,
-  "session-store-runtime": 4,
+  // +2: approved released upstream-link writes retained during worker migration.
+  "session-catalog": 2,
+  "session-store-runtime": 7,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
-  "provider-auth": 19,
-  "telegram-account": 3,
+  // +7: released auth read/write/availability helpers during async migration.
+  "provider-auth": 22,
+  "models-provider-runtime": 1,
+  // Released synchronous command discovery remains while plugins adopt worker-backed preparation.
+  "command-auth-native": 3,
+  "native-command-registry": 1,
+  "skill-commands-runtime": 2,
 } satisfies Record<string, number>);
 
 export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      154,
+      // +1: the shared state-owner boundary for plugin CLIs.
+      152,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
-      3758,
+      // +4: owner-approved replay V2 types on core and plugin-entry (2026-10-01).
+      // +11: ten service-lifetime type exports and the owner-bound scheduler resolver.
+      // +1: owner-approved async watched-session preparation with retained sync compatibility.
+      // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
+      // +1: owner-approved async agent-end preparation with retained sync compatibility.
+      // +1: owner-approved async coding-tool construction with retained sync compatibility.
+      // +4: executor controller, binding, context, and resolver.
+      // +1: required session cleanup failure preserves native ownership before host reset.
+      // +2: approved async upstream-link writes with released sync compatibility.
+      // -8: retired Skill Workshop proposal hook types.
+      // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
+      // +7: approved prepared/data-only session patches and their authority contracts.
+      // +4: CLI state-owner routing, Gateway owner guards, target selection, and timeout parsing.
+      // +1: requester-bound transport effects for owner-routed plugin commands.
+      // +5: approved sync-to-async replacements: inspectConversationBinding,
+      // resolveCommandAuthorization, createApproverRestrictedNativeApprovalCapability,
+      // createChannelApprovalNativeRuntimeAdapter, and createLazyChannelApprovalNativeRuntimeAdapter.
+      // +1: approved final-delivery capture ownership predicate for channel transcript mirrors.
+      // +7: approved GitHub publication V2 requester/action contracts: five types and two preparers.
+      // +3: approved async skill-command preparation pairs on two existing entrypoints.
+      // +15: approved async auth, model, and TTS replacement pairs.
+      // +7: approved async session, command-menu, model-override, TTS-path, and list replacements.
+      // +1: preview adapters strip only normalization-owned response decoration.
+      // +1: shared stale-read cache replaces board, preview, search, and credential cache policies.
+      3696,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
-      2187,
+      // +1: resolvePluginServiceScheduler borrows an existing service/account/CLI owner.
+      // +1: owner-approved async watched-session preparation with retained sync compatibility.
+      // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
+      // +1: owner-approved async agent-end preparation with retained sync compatibility.
+      // +1: owner-approved async coding-tool construction with retained sync compatibility.
+      // +1: resolve the controller from the current invocation registry.
+      // +2: approved async upstream-link writes with released sync compatibility.
+      // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
+      // +3: approved prepared/data-only session patches and authority-bound routes.
+      // +4: the same four CLI state-owner and transport functions.
+      // +1: runWithLocalStateMutationOwner shares the existing transport authority scope.
+      // +5: the five awaited inspection, authorization, and approval factory replacements above.
+      // +1: the same final-delivery capture ownership predicate.
+      // +2: prepareGitHubPublicationRequesterV2 and preparePersonalGitHubSessionActionV2.
+      // +3: the same skill-command preparation replacements.
+      // +15: the same auth, model, and TTS replacement pairs.
+      // +7: the same session, command-menu, model-override, TTS-path, and list replacements.
+      // +1: stripReplyPayloadResponsePrefix preserves durable text while assembling previews.
+      // +1: the same bounded stale-read cache factory on collection-runtime.
+      2157,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      269,
+      // Remove deprecated sync channel envelope helpers and their compat records at the next Plugin SDK major.
+      // +2: approved synchronous upstream-link write compatibility until the next Plugin SDK major.
+      // +1: synchronous session entry getter remains until the next Plugin SDK major.
+      // +6: released session callbacks and provider replay contracts during async migration.
+      // +4: released synchronous conversation binding contracts during V2 migration.
+      // +3: released synchronous skill-command list helpers during async migration.
+      // +15: retained synchronous auth, model, and TTS compatibility exports.
+      // +7: retained synchronous session, command-menu, model-override, TTS-path, and list exports.
+      183,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
@@ -269,6 +349,7 @@ async function collectExportStats(project: Project, entrypoints: string[]) {
     if (!sourceFile) {
       byEntrypoint.set(entrypoint, {
         exports: 0,
+        exportNames: [],
         callableExports: 0,
         deprecatedExports: 0,
         deprecatedCallableExports: 0,
@@ -310,6 +391,10 @@ async function collectExportStats(project: Project, entrypoints: string[]) {
     }
     byEntrypoint.set(entrypoint, {
       exports: symbols.length,
+      exportNames: symbols
+        .map((symbol) => symbol.name)
+        .filter((name) => name !== "default")
+        .toSorted(),
       callableExports,
       deprecatedExports,
       deprecatedCallableExports,
@@ -335,6 +420,7 @@ function selectExportStats(
   };
   for (const entrypoint of entrypoints) {
     const stats = scannedStats.get(entrypoint) ?? {
+      exportNames: [],
       exports: 0,
       callableExports: 0,
       deprecatedExports: 0,
@@ -381,10 +467,14 @@ function collectDeprecatedEntrypointBudgetFailures(
 }
 
 export async function collectPluginSdkSurfaceReport() {
+  const typedSubpaths = typedPluginSdkSubpaths(
+    JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")),
+  );
   const scannedEntrypoints = [
     ...new Set([
       ...pluginSdkEntrypoints,
       ...publicPluginSdkEntrypoints,
+      ...typedSubpaths,
       ...privateLocalOnlyPluginSdkEntrypoints,
     ]),
   ];
@@ -457,6 +547,13 @@ export async function collectPluginSdkSurfaceReport() {
       }
     }
     return {
+      typedPublicSurface: new Map(
+        typedSubpaths.map((subpath) => [subpath, scannedStats.get(subpath)?.exportNames ?? []]),
+      ),
+      typedPublicMismatches: [
+        ...typedSubpaths.filter((subpath) => !publicEntrypointSet.has(subpath)),
+        ...publicPluginSdkEntrypoints.filter((subpath) => !typedSubpaths.includes(subpath)),
+      ],
       allStats,
       deprecatedBarrelMissingFromInventory,
       deprecatedBarrelWithoutReexports,
@@ -481,6 +578,11 @@ export function evaluatePluginSdkSurfaceReport(
   }: ReturnType<typeof readPluginSdkSurfaceBudgets>,
 ) {
   const failures: string[] = [];
+  if (report.typedPublicMismatches.length) {
+    failures.push(
+      `typed package exports disagree with publicPluginSdkEntrypoints: ${report.typedPublicMismatches.join(", ")}`,
+    );
+  }
   if (publicPluginSdkEntrypoints.length > budgets.publicEntrypoints) {
     failures.push(
       `public entrypoints ${publicPluginSdkEntrypoints.length} > ${budgets.publicEntrypoints}`,
@@ -560,11 +662,42 @@ async function main(argv: string[] = process.argv.slice(2), env = process.env) {
     return 0;
   }
   const budgetConfig = readPluginSdkSurfaceBudgets(env);
+  const inventory = cliArgs.check
+    ? parsePluginSdkShippedSurface(
+        JSON.parse(fs.readFileSync(path.join(repoRoot, shippedSurfacePath), "utf8")),
+      )
+    : undefined;
+  if (inventory) {
+    const tags = execFileSync("git", ["tag", "--list", "v*"], { cwd: repoRoot, encoding: "utf8" })
+      .trim()
+      .split("\n");
+    const newer = tags
+      .filter((tag) => isStableRelease(tag) && compareStableReleases(tag, inventory.release) > 0)
+      .toSorted(compareStableReleases)
+      .at(-1);
+    if (newer) {
+      process.stderr.write(
+        `WARNING: shipped Plugin SDK inventory ${inventory.release} is older than local stable tag ${newer}. Run pnpm plugin-sdk:shipped-surface:gen -- --release ${newer} after stable release closeout.\n`,
+      );
+    }
+  }
   const report = await collectPluginSdkSurfaceReport();
   process.stdout.write(`${renderPluginSdkSurfaceReport(report)}\n`);
   const failures = evaluatePluginSdkSurfaceReport(report, budgetConfig);
+  if (inventory) {
+    const shippedFailures = evaluatePluginSdkShippedSurface(
+      inventory,
+      report.typedPublicSurface,
+      listPluginCompatRecords(),
+      env.OPENCLAW_PLUGIN_SDK_SURFACE_NOW ?? new Date().toISOString().slice(0, 10),
+    );
+    failures.push(...formatPluginSdkShippedSurfaceFailures(inventory, shippedFailures));
+    if (shippedFailures.length === 0) {
+      process.stdout.write(`shipped Plugin SDK ${inventory.release}: no unauthorized removals\n`);
+    }
+  }
   if (cliArgs.check && failures.length > 0) {
-    process.stderr.write(`plugin SDK surface budget failed:\n`);
+    process.stderr.write(`plugin SDK surface check failed:\n`);
     for (const failure of failures) {
       process.stderr.write(`- ${failure}\n`);
     }

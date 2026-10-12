@@ -4,7 +4,6 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import {
   resolveCronAuthenticatedCallerOrigin,
@@ -44,27 +43,8 @@ export async function persistUpdatedJob(params: {
   const defaultAgentId = state.deps.resolveDefaultAgentId
     ? state.deps.resolveDefaultAgentId()
     : state.deps.defaultAgentId;
-  resolveCronJobEffectiveAgentId(previousJob, defaultAgentId, state.deps.legacyDefaultAgentId);
-  resolveCronJobEffectiveAgentId(nextJob, defaultAgentId, state.deps.legacyDefaultAgentId);
-  const reservation = state.queuedRunReservationsByJobId.get(nextJob.id);
-  const preservesOnExitRearm =
-    reservation?.onExit === true &&
-    reservation.lifecycleGeneration === state.lifecycleGeneration &&
-    reservation.markerAtMs === previousJob.state.queuedAtMs &&
-    previousJob.schedule.kind === "on-exit" &&
-    !previousJob.enabled &&
-    nextJob.enabled &&
-    resolveCronJobConfigRevision(previousJob) ===
-      resolveCronJobConfigRevision({ ...nextJob, enabled: false });
-  if (
-    nextJob.state.queuedAtMs !== undefined &&
-    !preservesOnExitRearm &&
-    resolveCronJobConfigRevision(previousJob) !== resolveCronJobConfigRevision(nextJob)
-  ) {
-    // A consumed on-exit arm keeps its reservation when enabling its successor.
-    // Other edits retire the queued occurrence; A→B→A cannot revive it.
-    delete nextJob.state.queuedAtMs;
-  }
+  resolveCronJobEffectiveAgentId(previousJob, defaultAgentId);
+  resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
   const nextStore = structuredClone(snapshot.store);
   nextStore.jobs = nextStore.jobs.map((entry) => (entry.id === nextJob.id ? nextJob : entry));
 
@@ -98,16 +78,8 @@ export async function persistUpdatedJob(params: {
       const currentDefaultAgentId = state.deps.resolveDefaultAgentId
         ? state.deps.resolveDefaultAgentId()
         : state.deps.defaultAgentId;
-      resolveCronJobEffectiveAgentId(
-        previousJob,
-        currentDefaultAgentId,
-        state.deps.legacyDefaultAgentId,
-      );
-      resolveCronJobEffectiveAgentId(
-        nextJob,
-        currentDefaultAgentId,
-        state.deps.legacyDefaultAgentId,
-      );
+      resolveCronJobEffectiveAgentId(previousJob, currentDefaultAgentId);
+      resolveCronJobEffectiveAgentId(nextJob, currentDefaultAgentId);
     },
     agentId: params.agentId,
     preconditionJob: params.preconditionJob,

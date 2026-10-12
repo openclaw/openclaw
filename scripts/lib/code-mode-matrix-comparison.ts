@@ -53,11 +53,10 @@ const comparableResult = z
 
 type ComparableResult = z.infer<typeof comparableResult>;
 
-type GatewayCheckEvidence = {
-  traceAvailable?: boolean;
-  behavior?: Record<string, unknown>;
-  interview?: { traceAvailable?: boolean; checks?: Record<string, unknown> };
-};
+type GatewayCheckEvidence = Pick<
+  NonNullable<ComparableResult["gateway"]>,
+  "traceAvailable" | "behavior" | "interview"
+>;
 
 function readGatewayMatrixOutcomes(gateway?: GatewayCheckEvidence) {
   const observed = (traceAvailable?: boolean, checks?: Record<string, unknown>): boolean | null => {

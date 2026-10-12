@@ -1,8 +1,7 @@
-/** LaunchAgent plist, environment-file, and atomic publication ownership. */
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
@@ -137,52 +136,61 @@ async function warnAboutLaunchAgentWrapperOverwrite(
   }
 }
 
-async function prepareLaunchAgentProgramArguments(params: {
-  env: GatewayServiceEnv;
-  label: string;
-  programArguments: string[];
-  environment: GatewayServiceEnv | undefined;
-  stdout?: NodeJS.WritableStream;
-  warn?: (message: string) => void;
-  definitionTransaction: GatewayServiceDefinitionTransactionHooks;
-}): Promise<string[]> {
+async function prepareLaunchAgentPlist(
+  params: Omit<GatewayServiceInstallArgs, "stdout"> & {
+    label: string;
+    stdoutPath: string;
+    stdout?: NodeJS.WritableStream;
+    definitionTransaction: GatewayServiceDefinitionTransactionHooks;
+  },
+): Promise<string> {
   const entries = collectLaunchAgentEnvironmentEntries(params.environment);
-  if (entries.length === 0) {
-    return params.programArguments;
+  let { programArguments } = params;
+  if (entries.length > 0) {
+    // Secret values belong to the private env file, never inline plist XML.
+    const envDir = resolveLaunchAgentEnvDir(params.env);
+    const envFilePath = resolveLaunchAgentEnvFilePath(params.env, params.label);
+    const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
+    const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
+    await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
+    await publishServiceFile({
+      filePath: envFilePath,
+      contents: buildLaunchAgentEnvironmentFile(entries),
+      mode: LAUNCH_AGENT_ENV_FILE_MODE,
+      definitionTransaction: params.definitionTransaction,
+    });
+    await warnAboutLaunchAgentWrapperOverwrite(wrapperPath, params.stdout, params.warn);
+    await publishServiceFile({
+      filePath: wrapperPath,
+      contents: generatedWrapper,
+      mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
+      definitionTransaction: params.definitionTransaction,
+    });
+    if (
+      !(
+        (programArguments[0] === wrapperPath && programArguments[1] === envFilePath) ||
+        (programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
+          programArguments[1] === wrapperPath &&
+          programArguments[2] === envFilePath)
+      )
+    ) {
+      programArguments = [
+        LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+        wrapperPath,
+        envFilePath,
+        ...programArguments,
+      ];
+    }
   }
-
-  // Environment values with secrets live in an owner-only env file instead of
-  // inline plist XML, which can be harder to rotate and audit.
-  const envDir = resolveLaunchAgentEnvDir(params.env);
-  const envFilePath = resolveLaunchAgentEnvFilePath(params.env, params.label);
-  const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
-  const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
-  await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
-  await publishServiceFile({
-    filePath: envFilePath,
-    contents: buildLaunchAgentEnvironmentFile(entries),
-    mode: LAUNCH_AGENT_ENV_FILE_MODE,
-    definitionTransaction: params.definitionTransaction,
+  return buildLaunchAgentPlist({
+    label: params.label,
+    comment: resolveGatewayServiceDescription(params),
+    programArguments,
+    workingDirectory: params.workingDirectory,
+    stdoutPath: params.stdoutPath,
+    // Diagnostics reads stdout; launchd needs both handles pointed at that same file.
+    stderrPath: params.stdoutPath,
   });
-  await warnAboutLaunchAgentWrapperOverwrite(wrapperPath, params.stdout, params.warn);
-  await publishServiceFile({
-    filePath: wrapperPath,
-    contents: generatedWrapper,
-    mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
-    definitionTransaction: params.definitionTransaction,
-  });
-
-  const { programArguments } = params;
-  if (
-    (programArguments[0] === wrapperPath && programArguments[1] === envFilePath) ||
-    (programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
-      programArguments[1] === wrapperPath &&
-      programArguments[2] === envFilePath)
-  ) {
-    return programArguments;
-  }
-
-  return [LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapperPath, envFilePath, ...programArguments];
 }
 
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
@@ -221,10 +229,16 @@ export async function readExistingLaunchAgentPlist(
 }
 
 type LaunchAgentFileState = NonNullable<Awaited<ReturnType<typeof readServiceFileState>>>;
-type LaunchAgentFilePublication = Awaited<ReturnType<typeof captureLaunchAgentFiles>>;
+type LaunchAgentFilePublication = Awaited<ReturnType<typeof captureLaunchAgentInstallFiles>>;
 
 /** Captured file identities bound rollback to this install's actual publications. */
-async function captureLaunchAgentFiles(paths: string[]) {
+export async function captureLaunchAgentInstallFiles(env: GatewayServiceEnv) {
+  const label = resolveLaunchAgentLabel(env);
+  const paths = [
+    resolveLaunchAgentPlistPath(env),
+    resolveLaunchAgentEnvFilePath(env, label),
+    resolveLaunchAgentEnvWrapperPath(env, label),
+  ];
   const originals = new Map<
     string,
     { snapshot: LaunchAgentFileSnapshot | null; state: LaunchAgentFileState | null }
@@ -238,9 +252,7 @@ async function captureLaunchAgentFiles(paths: string[]) {
         if (
           !isDeepStrictEqual(state, await readServiceFileState(file)) ||
           (state === null) !== (contents === null) ||
-          (state &&
-            contents &&
-            createHash("sha256").update(contents).digest("hex") !== state.sha256)
+          (state && contents && sha256Hex(contents) !== state.sha256)
         ) {
           throw new Error("LaunchAgent artifact changed while capturing its original definition.");
         }
@@ -305,7 +317,7 @@ async function captureLaunchAgentFiles(paths: string[]) {
         !pending ||
         !matchesServiceFilePublication(current, pending) ||
         contents === null ||
-        current?.sha256 !== createHash("sha256").update(contents).digest("hex")
+        current?.sha256 !== sha256Hex(contents)
       ) {
         throw new Error(`LaunchAgent artifact changed after publication: ${file}`);
       }
@@ -351,15 +363,6 @@ async function captureLaunchAgentFiles(paths: string[]) {
       return true;
     },
   };
-}
-
-export function captureLaunchAgentInstallFiles(env: GatewayServiceEnv) {
-  const label = resolveLaunchAgentLabel(env);
-  return captureLaunchAgentFiles([
-    resolveLaunchAgentPlistPath(env),
-    resolveLaunchAgentEnvFilePath(env, label),
-    resolveLaunchAgentEnvWrapperPath(env, label),
-  ]);
 }
 
 async function publishLaunchAgentPlist(params: {
@@ -415,7 +418,7 @@ export async function writeLaunchAgentPlist(
   const label = resolveLaunchAgentLabel(env);
   await assertNoSystemLaunchDaemonOwnership(label);
 
-  const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
+  const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env);
   await ensureSecureDirectory(logDir);
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
@@ -428,27 +431,19 @@ export async function writeLaunchAgentPlist(
   if (tmpDir) {
     await ensureSecureDirectory(tmpDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
   }
-  const prepared = await prepareLaunchAgentProgramArguments({
+  let plist = await prepareLaunchAgentPlist({
     env,
     label,
     programArguments,
+    workingDirectory,
+    description,
+    stdoutPath,
     environment,
     stdout,
     warn,
     definitionTransaction,
   });
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, description });
-  let plist = buildLaunchAgentPlist({
-    label,
-    comment: serviceDescription,
-    programArguments: prepared,
-    workingDirectory,
-    stdoutPath,
-    // Both handles target one file: launchd cannot merge streams, and darwin
-    // diagnostics reads only stdout (readLastGatewayErrorLine).
-    stderrPath: stdoutPath,
-  });
   if (definitionTransaction.preservePolicy?.length) {
     plist = preserveServicePolicyXml(
       plist,
@@ -484,7 +479,7 @@ export async function rewriteLaunchAgentPlistForRestart({
   const publication = await captureLaunchAgentInstallFiles(env);
   const definitionTransaction = publication.hooks;
   return withGatewayServiceInstallationRecovery(async () => {
-    const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
+    const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env);
     await ensureSecureDirectory(logDir);
 
     const serviceDescription = resolveGatewayServiceDescription({
@@ -496,24 +491,17 @@ export async function rewriteLaunchAgentPlistForRestart({
       ...existing.environment,
       OPENCLAW_SERVICE_VERSION: undefined,
     };
-    const prepared = await prepareLaunchAgentProgramArguments({
+    const plist = await prepareLaunchAgentPlist({
       env,
       label,
       programArguments: existing.programArguments,
+      workingDirectory: existing.workingDirectory,
+      description: serviceDescription,
+      stdoutPath,
       environment: canonicalEnvironment,
       stdout,
       warn,
       definitionTransaction,
-    });
-    const plist = buildLaunchAgentPlist({
-      label,
-      comment: serviceDescription,
-      programArguments: prepared,
-      workingDirectory: existing.workingDirectory,
-      stdoutPath,
-      // Both handles target one file: launchd cannot merge streams, and darwin
-      // diagnostics reads only stdout (readLastGatewayErrorLine).
-      stderrPath: stdoutPath,
     });
     const previousPlist = await fs.readFile(plistPath, "utf8").catch(() => "");
     if (previousPlist === plist) {

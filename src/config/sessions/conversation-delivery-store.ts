@@ -1,343 +1,190 @@
-import crypto from "node:crypto";
-import type { Selectable } from "kysely";
-import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+  runOpenClawAgentWorkerWrite,
+  runOpenClawAgentWriteAdmission,
+} from "../../state/openclaw-agent-write-admission.js";
 import {
-  getSessionKysely,
-  resolveSqliteReadScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+  ConversationDeliveryInputError,
+  ConversationDeliveryMissingError,
+  type ConversationDeliveryRecord,
+  type ConversationDeliveryInput,
+  type ConversationDeliveryBegin,
+  type ConversationDeliveryTransition,
+  type ConversationDeliveryLookup,
+} from "./conversation-delivery-store.types.js";
+import {
+  pinConversationDatabaseScope,
+  type ConversationRegistryScope,
+} from "./conversation-registry.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-type ConversationDeliveryStatus =
-  | "created"
-  | "queued"
-  | "sent"
-  | "suppressed"
-  | "rejected"
-  | "unknown"
-  | "replied";
+export { ConversationDeliveryInputError, ConversationDeliveryMissingError };
+export type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
+export type ConversationDeliveryStoreScope = ConversationRegistryScope;
 
-export type ConversationDeliveryRecord = {
-  operationId: string;
-  operationKind: "send" | "turn";
-  conversationRef: string;
-  channel: string;
-  sourceSessionKey?: string;
-  messageHash: string;
-  status: ConversationDeliveryStatus;
-  preparedMessageId?: string;
-  platformMessageId?: string;
-  queueId?: string;
-  rejectionError?: string;
-  reply?: {
-    messageId: string;
-    replyToId?: string;
-    threadId?: string;
-    text: string;
-    timestamp: number;
-  };
-  createdAt: number;
-  updatedAt: number;
-};
-
-export type ConversationDeliveryStoreScope = {
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-  storePath?: string;
-};
-
-type ConversationDeliveryRow = Selectable<
-  OpenClawAgentKyselyDatabase["conversation_deliveries"]
-> & {
-  channel: string;
-};
-
-function resolveDatabaseOptions(scope: ConversationDeliveryStoreScope) {
-  return toDatabaseOptions(
-    resolveSqliteReadScope({
-      agentId: scope.agentId,
-      ...(scope.env ? { env: scope.env } : {}),
-      ...(scope.storePath ? { storePath: scope.storePath } : {}),
-    }),
-  );
-}
-
-function normalizeOperationId(value: string): string {
-  const operationId = value.trim();
-  if (!operationId) {
-    throw new Error("Conversation delivery operation id is required");
-  }
-  return operationId;
-}
-
-function hashMessage(message: string): string {
-  return crypto.createHash("sha256").update(message).digest("hex");
-}
-
-function normalizeStatus(value: string): ConversationDeliveryStatus {
-  switch (value) {
-    case "created":
-    case "queued":
-    case "sent":
-    case "suppressed":
-    case "rejected":
-    case "unknown":
-    case "replied":
-      return value;
-    default:
-      throw new Error(`Invalid conversation delivery status: ${value}`);
+async function deliveryResult<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.name === "ConversationDeliveryInputError") {
+        throw new ConversationDeliveryInputError(error.message);
+      }
+      if (error.name === "ConversationDeliveryMissingError") {
+        throw new ConversationDeliveryMissingError(error.message);
+      }
+    }
+    throw error;
   }
 }
 
-function normalizeOperationKind(value: string): ConversationDeliveryRecord["operationKind"] {
-  if (value === "send" || value === "turn") {
-    return value;
-  }
-  throw new Error(`Invalid conversation delivery operation kind: ${value}`);
-}
-
-function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
-  const reply =
-    row.reply_message_id && row.reply_text !== null && row.reply_timestamp !== null
-      ? {
-          messageId: row.reply_message_id,
-          ...(row.reply_to_id ? { replyToId: row.reply_to_id } : {}),
-          ...(row.reply_thread_id ? { threadId: row.reply_thread_id } : {}),
-          text: row.reply_text,
-          timestamp: row.reply_timestamp,
-        }
-      : undefined;
-  return {
-    operationId: row.operation_id,
-    operationKind: normalizeOperationKind(row.operation_kind),
-    conversationRef: row.conversation_id,
-    channel: row.channel,
-    ...(row.source_session_key ? { sourceSessionKey: row.source_session_key } : {}),
-    messageHash: row.message_hash,
-    status: normalizeStatus(row.status),
-    ...(row.prepared_message_id ? { preparedMessageId: row.prepared_message_id } : {}),
-    ...(row.platform_message_id ? { platformMessageId: row.platform_message_id } : {}),
-    ...(row.queue_id ? { queueId: row.queue_id } : {}),
-    ...(row.rejection_error ? { rejectionError: row.rejection_error } : {}),
-    ...(reply ? { reply } : {}),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export class ConversationDeliveryInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ConversationDeliveryInputError";
-  }
-}
-
-export class ConversationDeliveryMissingError extends Error {}
-
-type ConversationDeliveryInput = {
-  operationKind: ConversationDeliveryRecord["operationKind"];
-  conversationRef: string;
-  sourceSessionKey?: string;
-  message: string;
-};
-
-function assertConversationDeliveryInput(
-  record: ConversationDeliveryRecord,
-  input: ConversationDeliveryInput,
-  messageHash = hashMessage(input.message),
-): void {
-  if (
-    record.conversationRef !== input.conversationRef ||
-    record.operationKind !== input.operationKind ||
-    record.sourceSessionKey !== (input.sourceSessionKey?.trim() || undefined) ||
-    record.messageHash !== messageHash
-  ) {
-    throw new ConversationDeliveryInputError(
-      `Conversation delivery operation was reused with different input: ${record.operationId}`,
+function readConversationDelivery(
+  scope: ConversationDeliveryStoreScope,
+  lookup: ConversationDeliveryLookup,
+) {
+  const memory = getSessionActorStorageBinding({
+    agentId: scope.agentId,
+    storePath: scope.storePath,
+  });
+  if (memory) {
+    return deliveryResult(() =>
+      memory.actor.storage!.read(
+        { type: "session.conversation.delivery.read", input: lookup },
+        memory.authority,
+      ),
     );
   }
-}
-
-function createOperationQuery(database: ReturnType<typeof openOpenClawAgentDatabase>["db"]) {
-  const db = getSessionKysely(database);
-  return prepareSqliteQuerySync<string>(database, (parameter) =>
-    // Session pruning removes only session_conversations. The canonical
-    // conversation row owns this delivery by foreign key and retains channel
-    // identity even when no local session remains linked.
-    db
-      .selectFrom("conversation_deliveries as delivery")
-      .innerJoin(
-        "conversations as conversation",
-        "conversation.conversation_id",
-        "delivery.conversation_id",
-      )
-      .selectAll("delivery")
-      .select("conversation.channel as channel")
-      .where(
-        "delivery.operation_id",
-        "=",
-        parameter((operationId) => operationId),
+  const { options, scope: preparedScope } = pinConversationDatabaseScope(scope);
+  const captured = structuredClone(lookup);
+  // Reads share writer admission so they cannot overtake an accepted transition.
+  return deliveryResult(() =>
+    runOpenClawAgentWriteAdmission(options, () =>
+      withSessionHistoryWorkerDatabase(
+        options,
+        (reader) => reader.readConversationDelivery({ lookup: captured, env: preparedScope.env }),
+        // Conflict cleanup retains this FIFO turn and must not drain independent readers.
+        targetDiscoveryLane,
       ),
+    ),
   );
 }
 
-const operationQueryByDatabase = new WeakMap<
-  ReturnType<typeof openOpenClawAgentDatabase>["db"],
-  ReturnType<typeof createOperationQuery>
->();
-
-function selectOperation(
-  database: ReturnType<typeof openOpenClawAgentDatabase>,
-  operationId: string,
-): ConversationDeliveryRecord | undefined {
-  let query = operationQueryByDatabase.get(database.db);
-  if (!query) {
-    query = createOperationQuery(database.db);
-    operationQueryByDatabase.set(database.db, query);
-  }
-  const row = query(operationId).rows[0] as ConversationDeliveryRow | undefined;
-  return row ? mapRow(row) : undefined;
-}
-
-/** Reads one durable conversation operation by its stable id. */
-export function getConversationDeliveryOperation(
+export async function getConversationDeliveryOperation(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
   expectedInput?: ConversationDeliveryInput,
-): ConversationDeliveryRecord | undefined {
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
-  const record = selectOperation(database, normalizeOperationId(operationId));
-  if (record && expectedInput) {
-    assertConversationDeliveryInput(record, expectedInput);
+): Promise<ConversationDeliveryRecord | undefined> {
+  return readConversationDelivery(scope, { operationId, expectedInput });
+}
+
+export async function findConversationTurnDeliveryByReplyTarget(
+  scope: ConversationDeliveryStoreScope,
+  params: { conversationRef: string; replyToId: string },
+): Promise<ConversationDeliveryRecord | undefined> {
+  return readConversationDelivery(scope, params);
+}
+
+function writeConversationDelivery(
+  scope: ConversationDeliveryStoreScope,
+  type: "conversation.delivery.begin",
+  input: ConversationDeliveryBegin,
+  assertCurrent?: () => void,
+): Promise<{ created: boolean; record: ConversationDeliveryRecord }>;
+function writeConversationDelivery(
+  scope: ConversationDeliveryStoreScope,
+  type: "conversation.delivery.transition",
+  input: ConversationDeliveryTransition,
+  assertCurrent?: () => void,
+): Promise<ConversationDeliveryRecord>;
+function writeConversationDelivery(
+  scope: ConversationDeliveryStoreScope,
+  ...[type, input, assertCurrent = () => {}]:
+    | ["conversation.delivery.begin", ConversationDeliveryBegin, (() => void)?]
+    | ["conversation.delivery.transition", ConversationDeliveryTransition, (() => void)?]
+): Promise<ConversationDeliveryRecord | { created: boolean; record: ConversationDeliveryRecord }> {
+  const memory = getSessionActorStorageBinding({
+    agentId: scope.agentId,
+    storePath: scope.storePath,
+  });
+  if (memory) {
+    return deliveryResult(async () => {
+      const authority = {
+        assertCurrent: () => memory.authority.assertCurrent(),
+        authorize: (...args: Parameters<typeof memory.authority.authorize>) => {
+          assertCurrent();
+          memory.authority.authorize(...args);
+        },
+      };
+      const outcome =
+        type === "conversation.delivery.begin"
+          ? await memory.actor.storage!.mutate(
+              { type: "session.conversation.delivery.begin", input },
+              authority,
+            )
+          : await memory.actor.storage!.mutate(
+              { type: "session.conversation.delivery.transition", input },
+              authority,
+            );
+      if (outcome.kind === "rolled-back") {
+        const error = new Error(outcome.error.message);
+        error.name = outcome.error.name;
+        throw error;
+      }
+      return outcome.value;
+    });
   }
-  return record;
-}
-
-/** Creates one idempotent delivery operation or returns its authoritative prior state. */
-export function beginConversationDeliveryOperation(
-  scope: ConversationDeliveryStoreScope,
-  params: ConversationDeliveryInput & {
-    operationId: string;
-    preparedMessageId?: string;
-  },
-): { created: boolean; record: ConversationDeliveryRecord } {
-  const operationId = normalizeOperationId(params.operationId);
-  const sourceSessionKey = params.sourceSessionKey?.trim() || undefined;
-  const messageHash = hashMessage(params.message);
-  return runOpenClawAgentWriteTransaction(
-    (database) => {
-      const existing = selectOperation(database, operationId);
-      if (existing) {
-        assertConversationDeliveryInput(existing, params, messageHash);
-        return { created: false, record: existing };
-      }
-      const now = Date.now();
-      const db = getSessionKysely(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db.insertInto("conversation_deliveries").values({
-          operation_id: operationId,
-          operation_kind: params.operationKind,
-          conversation_id: params.conversationRef,
-          source_session_key: sourceSessionKey ?? null,
-          message_hash: messageHash,
-          status: "created",
-          prepared_message_id: params.preparedMessageId ?? null,
-          platform_message_id: null,
-          queue_id: null,
-          rejection_error: null,
-          reply_message_id: null,
-          reply_to_id: null,
-          reply_thread_id: null,
-          reply_text: null,
-          reply_timestamp: null,
-          created_at: now,
-          updated_at: now,
-        }),
+  const { options } = pinConversationDatabaseScope(scope);
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const captured = structuredClone(input);
+  return deliveryResult(async () => {
+    try {
+      const result = await runOpenClawAgentWorkerWrite(options, () =>
+        execution.runExisting(
+          {
+            assertCurrent,
+            createAdmission(binding) {
+              return () => ({
+                nativeLocations: binding.nativeLocations,
+                admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                  binding.authorize(request);
+                  assertCurrent();
+                  if (!grant()) {
+                    throw new Error("Conversation delivery authority expired");
+                  }
+                }, binding.attachment),
+              });
+            },
+          },
+          (worker) => worker.execute({ type, input: captured }),
+        ),
       );
-      const record = selectOperation(database, operationId);
-      if (!record) {
-        throw new Error(`Conversation delivery operation was not persisted: ${operationId}`);
+      if (!result) {
+        throw new ConversationDeliveryMissingError("Conversation delivery database is missing");
       }
-      return { created: true, record };
-    },
-    resolveDatabaseOptions(scope),
-    { operationLabel: "conversation-delivery.begin" },
-  );
+      return result;
+    } finally {
+      await execution.release();
+    }
+  });
 }
 
-function updateConversationDeliveryOperation(
+export async function beginConversationDeliveryOperation(
   scope: ConversationDeliveryStoreScope,
-  params: {
-    operationId: string;
-    status: ConversationDeliveryStatus;
-    queueId?: string | null;
-    platformMessageId?: string | null;
-    rejectionError?: string | null;
-    reply?: ConversationDeliveryRecord["reply"];
-    allowedFrom: readonly ConversationDeliveryStatus[];
-  },
-): ConversationDeliveryRecord {
-  const operationId = normalizeOperationId(params.operationId);
-  return runOpenClawAgentWriteTransaction(
-    (database) => {
-      const current = selectOperation(database, operationId);
-      if (!current) {
-        throw new ConversationDeliveryMissingError(
-          `Conversation delivery operation not found: ${operationId}`,
-        );
-      }
-      if (!params.allowedFrom.includes(current.status)) {
-        return current;
-      }
-      const db = getSessionKysely(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("conversation_deliveries")
-          .set({
-            status: params.status,
-            ...(params.queueId !== undefined ? { queue_id: params.queueId } : {}),
-            ...(params.platformMessageId !== undefined
-              ? { platform_message_id: params.platformMessageId }
-              : {}),
-            ...(params.rejectionError !== undefined
-              ? { rejection_error: params.rejectionError }
-              : {}),
-            ...(params.reply
-              ? {
-                  reply_message_id: params.reply.messageId,
-                  reply_to_id: params.reply.replyToId ?? null,
-                  reply_thread_id: params.reply.threadId ?? null,
-                  reply_text: params.reply.text,
-                  reply_timestamp: params.reply.timestamp,
-                }
-              : {}),
-            updated_at: Date.now(),
-          })
-          .where("operation_id", "=", operationId),
-      );
-      const record = selectOperation(database, operationId);
-      if (!record) {
-        throw new Error(`Conversation delivery operation disappeared: ${operationId}`);
-      }
-      return record;
-    },
-    resolveDatabaseOptions(scope),
-    { operationLabel: `conversation-delivery.${params.status}` },
-  );
+  params: ConversationDeliveryBegin,
+  assertCurrent?: () => void,
+): Promise<{ created: boolean; record: ConversationDeliveryRecord }> {
+  return writeConversationDelivery(scope, "conversation.delivery.begin", params, assertCurrent);
 }
 
-export function markConversationDeliveryQueued(
+export async function markConversationDeliveryQueued(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
   queueId: string,
-): ConversationDeliveryRecord {
-  return updateConversationDeliveryOperation(scope, {
+): Promise<ConversationDeliveryRecord> {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "queued",
     queueId,
@@ -345,12 +192,12 @@ export function markConversationDeliveryQueued(
   });
 }
 
-export function markConversationDeliverySent(
+export async function markConversationDeliverySent(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
   platformMessageId?: string,
-): ConversationDeliveryRecord {
-  return updateConversationDeliveryOperation(scope, {
+): Promise<ConversationDeliveryRecord> {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "sent",
     ...(platformMessageId ? { platformMessageId } : {}),
@@ -358,27 +205,27 @@ export function markConversationDeliverySent(
   });
 }
 
-export function markConversationDeliverySuppressed(
+export async function markConversationDeliverySuppressed(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
-): ConversationDeliveryRecord {
-  return updateConversationDeliveryOperation(scope, {
+): Promise<ConversationDeliveryRecord> {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "suppressed",
     allowedFrom: ["created", "queued"],
   });
 }
 
-export function markConversationDeliveryRejected(
+export async function markConversationDeliveryRejected(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
   rejectionError: string,
-): ConversationDeliveryRecord {
+): Promise<ConversationDeliveryRecord> {
   const normalizedError = rejectionError.trim();
   if (!normalizedError) {
     throw new Error("Conversation delivery rejection error is required");
   }
-  return updateConversationDeliveryOperation(scope, {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "rejected",
     rejectionError: normalizedError,
@@ -386,61 +233,36 @@ export function markConversationDeliveryRejected(
   });
 }
 
-export function markConversationDeliveryUnknown(
+export async function markConversationDeliveryUnknown(
   scope: ConversationDeliveryStoreScope,
   operationId: string,
-): ConversationDeliveryRecord {
-  return updateConversationDeliveryOperation(scope, {
+): Promise<ConversationDeliveryRecord> {
+  return writeConversationDelivery(scope, "conversation.delivery.transition", {
     operationId,
     status: "unknown",
     allowedFrom: ["created", "queued"],
   });
 }
 
-export function markConversationDeliveryReplied(
+export async function markConversationDeliveryReplied(
   scope: ConversationDeliveryStoreScope,
   params: {
     operationId: string;
     reply: NonNullable<ConversationDeliveryRecord["reply"]>;
+    session?: ConversationDeliveryTransition["session"];
   },
-): ConversationDeliveryRecord {
-  return updateConversationDeliveryOperation(scope, {
-    operationId: params.operationId,
-    status: "replied",
-    reply: params.reply,
-    allowedFrom: ["queued", "sent"],
-  });
-}
-
-/** Finds the durable correlated turn associated with an inbound transport reply. */
-export function findConversationTurnDeliveryByReplyTarget(
-  scope: ConversationDeliveryStoreScope,
-  params: { conversationRef: string; replyToId: string },
-): ConversationDeliveryRecord | undefined {
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("conversation_deliveries as delivery")
-      .innerJoin(
-        "conversations as conversation",
-        "conversation.conversation_id",
-        "delivery.conversation_id",
-      )
-      .selectAll("delivery")
-      .select("conversation.channel as channel")
-      .where("delivery.conversation_id", "=", params.conversationRef)
-      .where("delivery.operation_kind", "=", "turn")
-      .where((eb) =>
-        eb.or([
-          eb("delivery.platform_message_id", "=", params.replyToId),
-          eb("delivery.prepared_message_id", "=", params.replyToId),
-        ]),
-      )
-      .where("delivery.status", "in", ["queued", "sent", "replied"])
-      .orderBy("delivery.updated_at", "desc")
-      .limit(1),
-  ).rows[0] as ConversationDeliveryRow | undefined;
-  return row ? mapRow(row) : undefined;
+  assertCurrent?: () => void,
+): Promise<ConversationDeliveryRecord> {
+  return writeConversationDelivery(
+    scope,
+    "conversation.delivery.transition",
+    {
+      operationId: params.operationId,
+      status: "replied",
+      reply: params.reply,
+      allowedFrom: ["queued", "sent"],
+      session: params.session,
+    },
+    assertCurrent,
+  );
 }

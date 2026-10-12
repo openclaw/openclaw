@@ -177,34 +177,29 @@ export async function discoverCodexMarketplacePlugins(params: {
         );
         continue;
       }
-      if (!previous) {
-        discovered.set(id, next);
-      } else {
-        const preferred =
-          (!previous.installed && next.installed) ||
-          (!previous.enabled && next.installed && next.enabled)
-            ? next
-            : previous;
-        discovered.set(id, {
-          ...preferred,
-          available: previous.available && next.available,
-          ...(preferred.remotePluginId
-            ? {
-                mustShowInstallationInterstitial:
-                  previous.mustShowInstallationInterstitial === true ||
-                  next.mustShowInstallationInterstitial === true
-                    ? true
-                    : previous.mustShowInstallationInterstitial === false &&
-                        next.mustShowInstallationInterstitial === false
-                      ? false
-                      : null,
-              }
-            : {}),
-          ...(previous.installPolicy === "NOT_AVAILABLE" || next.installPolicy === "NOT_AVAILABLE"
-            ? { installPolicy: "NOT_AVAILABLE" }
-            : {}),
-        });
+      const preferred =
+        !previous ||
+        (!previous.installed && next.installed) ||
+        (!previous.enabled && next.installed && next.enabled)
+          ? next
+          : previous;
+      if (previous) {
+        preferred.available = previous.available && next.available;
+        if (preferred.remotePluginId) {
+          preferred.mustShowInstallationInterstitial =
+            previous.mustShowInstallationInterstitial === true ||
+            next.mustShowInstallationInterstitial === true
+              ? true
+              : previous.mustShowInstallationInterstitial === false &&
+                  next.mustShowInstallationInterstitial === false
+                ? false
+                : null;
+        }
+        if (previous.installPolicy === "NOT_AVAILABLE" || next.installPolicy === "NOT_AVAILABLE") {
+          preferred.installPolicy = "NOT_AVAILABLE";
+        }
       }
+      discovered.set(id, preferred);
     }
   }
 

@@ -1,8 +1,10 @@
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
+import { normalizeCappedStringList } from "./store-string-lists.js";
 import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
@@ -15,35 +17,6 @@ import { createWorkboardOrchestrationTools } from "./tools-orchestration.js";
 
 function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
   return ctx?.agentId || ctx?.sessionKey || ctx?.sessionId || "agent";
-}
-
-function readParentIds(value: unknown): string[] {
-  if (value == null) {
-    return [];
-  }
-  const entries =
-    typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : undefined;
-  if (!entries) {
-    throw new Error("parents must be an array or comma-separated string.");
-  }
-  const parents: string[] = [];
-  for (const entry of entries) {
-    if (typeof entry !== "string") {
-      throw new Error("parents must contain only strings.");
-    }
-    const parent = entry.trim();
-    if (!parent || parents.includes(parent)) {
-      continue;
-    }
-    if (parent.length > 120) {
-      throw new Error("parents must be 120 characters or fewer.");
-    }
-    parents.push(parent);
-    if (parents.length >= 20) {
-      break;
-    }
-  }
-  return parents;
 }
 
 function summarizeCard(card: WorkboardCard) {
@@ -129,10 +102,7 @@ export function createWorkboardTools(params: {
         const agentId = typeof record.agentId === "string" ? record.agentId : undefined;
         const tenant = typeof record.tenant === "string" ? record.tenant : undefined;
         const boardId = typeof record.boardId === "string" ? record.boardId : undefined;
-        const limit =
-          typeof record.limit === "number" && Number.isFinite(record.limit)
-            ? Math.max(1, Math.min(200, Math.trunc(record.limit)))
-            : 50;
+        const limit = resolveIntegerOption(record.limit, 50, { min: 1, max: 200 });
         const cards = (await store.list({ boardId }))
           .filter((card) => record.includeArchived === true || !card.metadata?.archivedAt)
           .filter((card) => !status || card.status === status)
@@ -171,7 +141,7 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
-        readParentIds(record.parents);
+        normalizeCappedStringList(record.parents, "parents");
         return jsonResult({
           card: redactClaimToken(
             await store.create(record, { ownerId, token: record.token as string | undefined }),

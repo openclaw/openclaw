@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type TelegramMessageProcessingResult =
   | { kind: "completed" }
@@ -27,7 +29,10 @@ export type TelegramSpooledReplayDeferredParticipant = {
   key: string;
   abortSignal: AbortSignal;
   task: Promise<TelegramMessageProcessingResult>;
+  readLaneBacklogUpdates: () => Promise<readonly unknown[]>;
   isSettled: () => boolean;
+  heartbeat: () => void;
+  heartbeatIntervalMs?: number;
   wasOwnerAbortedWhilePending: () => boolean;
   /** Defers external timeout settlement while durable adoption decides ownership. */
   beginSettlementHold: () => TelegramSpooledReplaySettlementHold | undefined;
@@ -84,11 +89,25 @@ export function recordTelegramMessageProcessingResult(
   }
 }
 
+export function resolveTelegramSpooledReplayHeartbeatIntervalMs(
+  participants: readonly Pick<TelegramSpooledReplayDeferredParticipant, "heartbeatIntervalMs">[],
+): number | undefined {
+  const intervals = participants
+    .map((participant) => participant.heartbeatIntervalMs)
+    .filter(
+      (interval): interval is number =>
+        typeof interval === "number" && Number.isFinite(interval) && interval > 0,
+    );
+  return intervals.length > 0 ? Math.min(...intervals) : undefined;
+}
+
 export function createTelegramSpooledReplayParticipant(
   key: string,
+  livenessSources?: readonly TelegramSpooledReplayDeferredParticipant[],
 ): TelegramSpooledReplayDeferredParticipant {
   const abortController = new AbortController();
-  const ownerAbortSignal = telegramSpooledReplayFrames.getStore()?.lifecycle?.abortSignal;
+  const ownerLifecycle = telegramSpooledReplayFrames.getStore()?.lifecycle;
+  const ownerAbortSignal = ownerLifecycle?.abortSignal;
   const abortSignal = ownerAbortSignal
     ? AbortSignal.any([abortController.signal, ownerAbortSignal])
     : abortController.signal;
@@ -96,10 +115,7 @@ export function createTelegramSpooledReplayParticipant(
   let ownerAbortedWhilePending = ownerAbortSignal?.aborted === true;
   let settlementHeld = false;
   let pendingSettlement: TelegramMessageProcessingResult | undefined;
-  let resolveTask: (result: TelegramMessageProcessingResult) => void = () => {};
-  const task = new Promise<TelegramMessageProcessingResult>((resolve) => {
-    resolveTask = resolve;
-  });
+  const { promise: task, resolve: resolveTask } = createDeferred<TelegramMessageProcessingResult>();
   const onOwnerAbort = () => {
     if (!settled) {
       ownerAbortedWhilePending = true;
@@ -133,7 +149,28 @@ export function createTelegramSpooledReplayParticipant(
     // claim owner's pre-adoption cancellation boundary.
     abortSignal,
     task,
+    readLaneBacklogUpdates: async () => {
+      const rows = (await ownerLifecycle?.readLaneBacklog?.()) ?? [];
+      return rows.flatMap(({ payload }) =>
+        isRecord(payload) && "update" in payload ? [payload.update] : [],
+      );
+    },
     isSettled: () => settled,
+    heartbeat: () => {
+      if (settled) {
+        return;
+      }
+      if (livenessSources) {
+        for (const source of livenessSources) {
+          source.heartbeat();
+        }
+      } else {
+        ownerLifecycle?.onDeferredHeartbeat?.();
+      }
+    },
+    heartbeatIntervalMs: resolveTelegramSpooledReplayHeartbeatIntervalMs(
+      livenessSources ?? [{ heartbeatIntervalMs: ownerLifecycle?.deferredHeartbeatIntervalMs }],
+    ),
     wasOwnerAbortedWhilePending: () => ownerAbortedWhilePending,
     beginSettlementHold: () => {
       if (settled || settlementHeld) {
@@ -141,8 +178,8 @@ export function createTelegramSpooledReplayParticipant(
       }
       settlementHeld = true;
       // Timeout settlement must wait for durable adoption finalization: pause
-      // the drain stall watchdog while the hold is active.
-      telegramSpooledReplayFrames.getStore()?.lifecycle?.onAdoptionFinalizing?.();
+      // this participant's claim watchdog, not the finalizing frame's claim.
+      ownerLifecycle?.onAdoptionFinalizing?.();
       let released = false;
       return {
         release: (mode) => {

@@ -1,13 +1,27 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { ImageContent } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
-import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
+import type { AgentSession } from "../../sessions/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
+import { retainEmbeddedSessionPromptState } from "../session-prompt-state.js";
 
 export const sessionId = "attempt-prompt-submit-test";
 
 export function createSession() {
+  type PromptContext = Parameters<AgentSession[typeof agentSessionQueuePromptContext]>[0];
+  function queuePromptContext(message: PromptContext): () => void;
+  function queuePromptContext(
+    message: PromptContext,
+    options: { delivery: "current-request" },
+  ): Promise<void>;
+  function queuePromptContext(
+    _message: PromptContext,
+    options?: { delivery: "current-request" },
+  ): Promise<void> | (() => void) {
+    return options ? Promise.resolve() : () => undefined;
+  }
   const state = {
     messages: [{ role: "user", content: "transcript prompt", timestamp: 1 }] as AgentMessage[],
   };
@@ -18,6 +32,7 @@ export function createSession() {
   const agent = {
     state,
     streamFn: baseStreamFn,
+    convertToLlm,
     transformContext: originalTransformContext,
     reset: () => {
       state.messages = [];
@@ -25,7 +40,7 @@ export function createSession() {
   };
   const activeSession = {
     isCompacting: false,
-    [agentSessionQueuePromptContext]: vi.fn(() => () => undefined),
+    [agentSessionQueuePromptContext]: queuePromptContext,
     get messages() {
       return state.messages;
     },
@@ -35,7 +50,9 @@ export function createSession() {
 }
 
 export function createBaseInput() {
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
+  const lease = retainEmbeddedSessionPromptState(sessionId);
+  onTestFinished(() => lease[Symbol.dispose]());
+  const sessionPromptState = lease.state;
   return {
     attempt: { sessionId },
     appendContext: "append context",

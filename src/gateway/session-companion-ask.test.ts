@@ -39,8 +39,8 @@ const { prepareCliRunContext, executePreparedCliRun } = vi.hoisted(() => ({
 }));
 
 const { appendMessage, admitWrite, loadEntry, removeSession } = vi.hoisted(() => ({
-  appendMessage: vi.fn<(message: unknown) => void>(),
-  admitWrite: vi.fn<(manager: unknown, write: () => void) => Promise<void>>(),
+  appendMessage: vi.fn<(message: unknown) => Promise<string | undefined>>(),
+  admitWrite: vi.fn<(manager: unknown, write: () => void | Promise<void>) => Promise<void>>(),
   loadEntry: vi.fn<() => { entry: InternalSessionEntry } | undefined>(),
   removeSession:
     vi.fn<
@@ -79,7 +79,10 @@ vi.mock("../agents/internal-session-effects.js", () => ({
 }));
 vi.mock("../agents/sessions/index.js", () => ({
   SessionManager: {
-    openAsync: async () => ({ appendMessage, getSessionTarget: () => preparedTarget }),
+    openAsync: async () => ({
+      appendMessageAsync: appendMessage,
+      getSessionTarget: () => preparedTarget,
+    }),
   },
 }));
 vi.mock("../agents/simple-completion-runtime.js", () => ({
@@ -94,13 +97,13 @@ function createCompanion(cfg: OpenClawConfig = {}) {
     scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     contextReader: {
-      currentSessionId: () => "session-1",
+      currentSessionId: async () => "session-1",
       read: async () => ({
         kind: "ready",
         context: { empty: true, messages: [], sessionId: "session-1" },
       }),
     },
-    sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+    sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
     resolveUtilityModelRef: () => "test/model-a",
   });
 }
@@ -124,7 +127,7 @@ describe("session companion embedded invocation", () => {
         new ProviderAuthError("missing-provider-auth", "anthropic", "No API key found"),
       );
     resolveModelAsync.mockReset().mockResolvedValue({ model: { input: ["text", "image"] } });
-    appendMessage.mockReset();
+    appendMessage.mockReset().mockResolvedValue("seed-entry");
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
     loadEntry.mockReturnValue({ entry: { ...preparedTarget.sessionEntry } });
     removeSession.mockResolvedValue(undefined);
@@ -230,7 +233,7 @@ describe("session companion embedded invocation", () => {
         });
       } else if (phase === "dispatch") {
         admitWrite.mockImplementationOnce(async (_manager, write) => {
-          write();
+          await write();
           disable();
         });
       } else {
@@ -519,7 +522,7 @@ describe("session companion embedded invocation", () => {
     admitWrite.mockImplementationOnce(async (_manager, write) => {
       queued.resolve();
       await resume.promise;
-      write();
+      await write();
     });
     const companion = createCompanion();
     const pending = companion.ask(question);
@@ -555,7 +558,7 @@ describe("session companion embedded invocation", () => {
   ])("does not seed a session that is $name before admission", async ({ entry }) => {
     admitWrite.mockImplementationOnce(async (_manager, write) => {
       loadEntry.mockReturnValue(entry ? { entry } : undefined);
-      write();
+      await write();
     });
     const companion = createCompanion();
     try {
@@ -577,7 +580,7 @@ describe("session companion embedded invocation", () => {
     admitWrite.mockImplementationOnce(async (_manager, write) => {
       queued.resolve();
       await resume.promise;
-      write();
+      await write();
     });
     const companion = createCompanion();
     const controller = new AbortController();

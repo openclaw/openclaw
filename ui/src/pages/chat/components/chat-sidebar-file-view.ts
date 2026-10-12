@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import "../../../components/mcp-app-catalog.tsx";
 import { keyed } from "lit/directives/keyed.js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
@@ -10,7 +11,7 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import type { EditorId } from "../../../lib/editor-links.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy-controller.ts";
-import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
+import type { FileSidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
 registerCodeBlocksEnglish();
@@ -138,10 +139,17 @@ function renderFileCopyButton(action: FileCopyAction, controls?: FileViewControl
   });
 }
 
+function renderFileTextAction(label: string, onClick: () => void, disabled = false) {
+  return html`<button class="btn btn--sm" type="button" ?disabled=${disabled} @click=${onClick}>
+    ${label}
+  </button>`;
+}
+
 export function renderSidebarFile(
   content: FileSidebarContent,
   onViewRawText: () => void,
   controls?: FileViewControls,
+  runtime?: AttachmentSidebarRuntime,
 ) {
   const absolutePath = localEditorFilePath(content, controls?.execNode);
   const matchNumber = controls?.matches.length ? controls.currentMatchIndex + 1 : 0;
@@ -151,6 +159,12 @@ export function renderSidebarFile(
         <div class="sidebar-file-view__path-field">
           <span class="sidebar-file-view__path" title=${content.path}>${content.path}</span>
           ${renderFileCopyButton("path", controls)}
+          <openclaw-mcp-app-catalog
+            surface="file"
+            .sessionKey=${runtime?.sessionKey ?? content.draftContext?.sessionKey ?? ""}
+            .agentId=${runtime?.agentId ?? ""}
+            .filePath=${content.path}
+          ></openclaw-mcp-app-catalog>
         </div>
         ${
           controls
@@ -186,22 +200,12 @@ export function renderSidebarFile(
                   ${
                     controls.editing
                       ? html`
-                          <button
-                            class="btn btn--sm"
-                            type="button"
-                            ?disabled=${!controls.dirty || controls.saving}
-                            @click=${controls.onSave}
-                          >
-                            ${controls.saving ? t("common.saving") : t("common.save")}
-                          </button>
-                          <button
-                            class="btn btn--sm"
-                            type="button"
-                            ?disabled=${controls.saving}
-                            @click=${controls.onDiscard}
-                          >
-                            ${t("chat.detailPanel.discard")}
-                          </button>
+                          ${renderFileTextAction(
+                            t(controls.saving ? "common.saving" : "common.save"),
+                            controls.onSave,
+                            !controls.dirty || controls.saving,
+                          )}
+                          ${renderFileTextAction(t("chat.detailPanel.discard"), controls.onDiscard, controls.saving)}
                         `
                       : html`
                           ${
@@ -303,22 +307,8 @@ export function renderSidebarFile(
                   controls.saveNotice.kind === "conflict"
                     ? html`
                         <div class="file-view__save-notice-actions">
-                          <button
-                            class="btn btn--sm"
-                            type="button"
-                            ?disabled=${controls.saving}
-                            @click=${controls.onReload}
-                          >
-                            ${t("common.reload")}
-                          </button>
-                          <button
-                            class="btn btn--sm"
-                            type="button"
-                            ?disabled=${controls.saving}
-                            @click=${controls.onOverwrite}
-                          >
-                            ${t("chat.detailPanel.overwrite")}
-                          </button>
+                          ${renderFileTextAction(t("common.reload"), controls.onReload, controls.saving)}
+                          ${renderFileTextAction(t("chat.detailPanel.overwrite"), controls.onOverwrite, controls.saving)}
                         </div>
                       `
                     : nothing
@@ -348,9 +338,7 @@ export function renderSidebarFile(
           ? nothing
           : html`
               <div class="sidebar-file-view__footer">
-                <button @click=${onViewRawText} class="btn btn--sm" type="button">
-                  ${t("chat.detailPanel.viewRawText")}
-                </button>
+                ${renderFileTextAction(t("chat.detailPanel.viewRawText"), onViewRawText)}
               </div>
             `
       }

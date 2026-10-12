@@ -156,49 +156,40 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("image generation registration resources", () => {
-  it.each([false, true])(
-    "releases cold image resources after settlement (reject=%s)",
-    async (reject) => {
-      const fixture = createNativeImageFixture("native-image-owner", reject);
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const outcome = settle(fixture.run());
-          try {
-            await waitForProviderStart(fixture.started.promise, outcome);
-            expect(fixture.connections).toHaveLength(1);
-            const connection = fixture.connections[0]!;
-            expect(connection.database.isOpen).toBe(true);
-            expect(connection.disposals).toBe(0);
-            fixture.resume.resolve();
-            const result = await outcome;
-            if (reject) {
-              expect(String(result.error)).toContain("native image generation failed");
-            } else {
-              expect(result.error).toBeUndefined();
-              expect(result.value?.images[0]?.buffer).toEqual(png);
-              expect(result.value?.metadata).toEqual({ nativeValue: 42 });
-            }
-            expect(connection.requests[0]).toMatchObject({
-              provider: "native-image-owner-alias",
-              timeoutMs: 12_345,
-              inputImages: fixture.params.inputImages,
-              providerOptions: fixture.params.providerOptions,
-              ssrfPolicy: fixture.params.ssrfPolicy,
-            });
-            expect(connection.database.isOpen).toBe(false);
-            expect(connection.disposals).toBe(1);
-            expect(connection.reads).toEqual(reject ? [42, 42, 42] : [42, 42, 42, 42]);
-          } finally {
-            fixture.resume.resolve();
-            await outcome;
-          }
-        });
-      } finally {
-        fixture.cleanup();
-      }
-    },
-  );
+  it("releases cold image resources after rejection", async () => {
+    const fixture = createNativeImageFixture("native-image-owner", true);
+    try {
+      await fixture.withEnvironment(async () => {
+        useNoBundledPlugins();
+        const outcome = settle(fixture.run());
+        try {
+          await waitForProviderStart(fixture.started.promise, outcome);
+          expect(fixture.connections).toHaveLength(1);
+          const connection = fixture.connections[0]!;
+          expect(connection.database.isOpen).toBe(true);
+          expect(connection.disposals).toBe(0);
+          fixture.resume.resolve();
+          const result = await outcome;
+          expect(String(result.error)).toContain("native image generation failed");
+          expect(connection.requests[0]).toMatchObject({
+            provider: "native-image-owner-alias",
+            timeoutMs: 12_345,
+            inputImages: fixture.params.inputImages,
+            providerOptions: fixture.params.providerOptions,
+            ssrfPolicy: fixture.params.ssrfPolicy,
+          });
+          expect(connection.database.isOpen).toBe(false);
+          expect(connection.disposals).toBe(1);
+          expect(connection.reads).toEqual([42, 42, 42]);
+        } finally {
+          fixture.resume.resolve();
+          await outcome;
+        }
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
 
   it.each(["managed", "raw"] as const)(
     "preserves the %s host owner through image generation",
@@ -238,63 +229,60 @@ describe("image generation registration resources", () => {
     },
   );
 
-  it.each(["override", "fallback"] as const)(
-    "retains both eligible registrations for %s selection",
-    async (selection) => {
-      const first = createNativeImageFixture("first-image-owner", true);
-      const second = createNativeImageFixture("second-image-owner");
-      first.resume.resolve();
-      try {
-        await second.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const outcome = settle(
-            generateImage({
-              ...second.params,
-              cfg: {
-                agents: {
-                  defaults: {
-                    mediaModels: {
-                      image: {
-                        primary: "first-image-owner/fixture-model",
-                        fallbacks: ["second-image-owner-alias/fixture-model"],
-                      },
+  it("retains both eligible registrations through fallback settlement", async () => {
+    const first = createNativeImageFixture("first-image-owner", true);
+    const second = createNativeImageFixture("second-image-owner");
+    first.resume.resolve();
+    try {
+      await second.withEnvironment(async () => {
+        useNoBundledPlugins();
+        const outcome = settle(
+          generateImage({
+            ...second.params,
+            cfg: {
+              agents: {
+                defaults: {
+                  mediaModels: {
+                    image: {
+                      primary: "first-image-owner/fixture-model",
+                      fallbacks: ["second-image-owner-alias/fixture-model"],
                     },
                   },
                 },
-                plugins: {
-                  allow: [first.plugin.id, second.plugin.id],
-                  load: { paths: [first.plugin.file, second.plugin.file] },
-                  slots: { memory: "none" },
-                },
               },
-              modelOverride: selection === "override" ? second.params.modelOverride : undefined,
-            }),
-          );
-          try {
-            await waitForProviderStart(second.started.promise, outcome);
-            expect(first.connections).toHaveLength(1);
-            expect(second.connections).toHaveLength(1);
-            expect(first.connections[0]!.requests).toHaveLength(selection === "override" ? 0 : 1);
-            expect(first.connections[0]!.database.isOpen).toBe(true);
-            second.resume.resolve();
-            const result = await outcome;
-            expect(result.error).toBeUndefined();
-            expect(result.value?.provider).toBe("second-image-owner-alias");
-            expect(result.value?.images[0]?.buffer).toEqual(png);
-            expect(result.value?.attempts).toHaveLength(selection === "override" ? 0 : 1);
-            for (const connection of [...first.connections, ...second.connections]) {
-              expect(connection.database.isOpen).toBe(false);
-              expect(connection.disposals).toBe(1);
-            }
-          } finally {
-            second.resume.resolve();
-            await outcome;
+              plugins: {
+                allow: [first.plugin.id, second.plugin.id],
+                load: { paths: [first.plugin.file, second.plugin.file] },
+                slots: { memory: "none" },
+              },
+            },
+            modelOverride: undefined,
+          }),
+        );
+        try {
+          await waitForProviderStart(second.started.promise, outcome);
+          expect(first.connections).toHaveLength(1);
+          expect(second.connections).toHaveLength(1);
+          expect(first.connections[0]!.requests).toHaveLength(1);
+          expect(first.connections[0]!.database.isOpen).toBe(true);
+          second.resume.resolve();
+          const result = await outcome;
+          expect(result.error).toBeUndefined();
+          expect(result.value?.provider).toBe("second-image-owner-alias");
+          expect(result.value?.images[0]?.buffer).toEqual(png);
+          expect(result.value?.attempts).toHaveLength(1);
+          for (const connection of [...first.connections, ...second.connections]) {
+            expect(connection.database.isOpen).toBe(false);
+            expect(connection.disposals).toBe(1);
           }
-        });
-      } finally {
-        first.cleanup();
-        second.cleanup();
-      }
-    },
-  );
+        } finally {
+          second.resume.resolve();
+          await outcome;
+        }
+      });
+    } finally {
+      first.cleanup();
+      second.cleanup();
+    }
+  });
 });

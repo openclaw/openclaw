@@ -1,23 +1,23 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import * as diagnostics from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./rpc-error.js";
+import type { CodexAppServerClientOptions } from "./shared-client.js";
 
 const shared = vi.hoisted(() => ({
   acquire: vi.fn(),
   release: vi.fn(),
   retire: vi.fn(),
-  selectionChanged: new Error("selection changed"),
 }));
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
   createIsolatedCodexAppServerClient: shared.acquire,
   getLeasedSharedCodexAppServerClient: shared.acquire,
   releaseLeasedSharedCodexAppServerClient: shared.release,
   retireSharedCodexAppServerClientIfCurrent: shared.retire,
-  isCodexAppServerStartSelectionChangedError: (error: unknown) => error === shared.selectionChanged,
 }));
 
 const { withCodexAppServerJsonClient } = await import("./request.js");
@@ -110,9 +110,14 @@ describe("scoped Codex timeout diagnostics", () => {
     const entered = createDeferred<void>();
     const pending = createDeferred<object>();
     const privateText = "synthetic-private-prompt-token-environment";
+    let started = 0;
     const request = vi.fn(
-      (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) =>
-        method === "account/read" ? Promise.resolve({}) : pending.promise,
+      (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => {
+        if (++started === 5) {
+          entered.resolve();
+        }
+        return method === "account/read" ? Promise.resolve({}) : pending.promise;
+      },
     );
     shared.acquire.mockResolvedValue(client(request));
     const result = runWithDiagnosticTraceContext(trace, () =>
@@ -122,7 +127,6 @@ describe("scoped Codex timeout diagnostics", () => {
             (method) =>
               send({ method, requestParams: { prompt: privateText, token: privateText } }),
           );
-          entered.resolve();
           return await Promise.all(calls);
         },
         { sessionId: privateText, sessionKey: privateText },
@@ -152,6 +156,40 @@ describe("scoped Codex timeout diagnostics", () => {
     expect(shared.retire).not.toHaveBeenCalled();
     expect(records).toHaveLength(1);
   });
+
+  it.each(["before timeout", "after timeout"] as const)(
+    "preserves the acquisition boundary when cleanup starts %s",
+    async (ordering) => {
+      const entered = createDeferred<CodexAppServerClientOptions>();
+      const finish = createDeferred<ReturnType<typeof client>>();
+      shared.acquire.mockImplementation((options: CodexAppServerClientOptions) => {
+        options.onAcquireObservation?.({ boundary: "initialize", startup: "created-shared" });
+        entered.resolve(options);
+        return finish.promise;
+      });
+      const result = start(async () => undefined);
+      const options = await entered.promise;
+      if (ordering === "before timeout") {
+        options.onAcquireObservation?.({ boundary: "cleanup" });
+        options.onAcquireObservation?.({ boundary: "cleanup" });
+      }
+      await vi.advanceTimersByTimeAsync(50);
+      await result;
+      const logged = await record();
+      if (ordering === "before timeout") {
+        expect(logged.attributes).toMatchObject({
+          acquireLastObservedBoundary: "cleanup",
+          acquireBoundaryBeforeCleanup: "initialize",
+        });
+      } else {
+        options.onAcquireObservation?.({ boundary: "cleanup" });
+        expect(logged.attributes).toMatchObject({ acquireLastObservedBoundary: "initialize" });
+        expect(logged.attributes).not.toHaveProperty("acquireBoundaryBeforeCleanup");
+      }
+      finish.resolve(client());
+      await vi.advanceTimersByTimeAsync(0);
+    },
+  );
 
   it.each(["resolved", "rejected"] as const)(
     "does not retain a %s method while the callback continues",
@@ -252,40 +290,53 @@ describe("scoped Codex timeout diagnostics", () => {
     finish.resolve();
   });
 
-  it("drops the prior client and methods when the existing selection retry reacquires", async () => {
-    const entered = createDeferred<void>();
-    const second = createDeferred<ReturnType<typeof client>>();
-    shared.acquire
-      .mockResolvedValueOnce(
-        client(
-          vi.fn(async () => {
-            throw shared.selectionChanged;
-          }),
-        ),
-      )
-      .mockImplementationOnce(() => {
+  it.each(["available", "unavailable", "throwing"] as const)(
+    "preserves initialize evidence when registered transport identity is %s",
+    async (mode) => {
+      const entered = createDeferred<void>();
+      const acquired = createDeferred<ReturnType<typeof client>>();
+      const identity = { pid: 500002, startedAt: "fixture-boot:12345" };
+      const started = {
+        ...client(),
+        getInitializeDiagnostic: () => ({ boundary: "request", outcome: "pending" }),
+        getRegisteredTransportIdentity: () => {
+          if (mode === "throwing") {
+            throw new Error("private diagnostic failure");
+          }
+          return mode === "available" ? identity : undefined;
+        },
+      };
+      shared.acquire.mockImplementation((options: CodexAppServerClientOptions) => {
+        options.onStartedClient?.({
+          ...started,
+          getRegisteredTransportIdentity: () => ({ pid: 500001, startedAt: "previous-child" }),
+        } as never);
+        options.onStartedClient?.(started as never);
+        identity.pid = 500003;
         entered.resolve();
-        return second.promise;
+        return acquired.promise;
       });
-    const result = start(async (send) => send({ method: "thread/start" }));
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(50);
-    await result;
-    const logged = await record();
-    expect(logged.attributes).toMatchObject({
-      phase: "acquire-client",
-      scopeAttemptOrdinal: 2,
-      requestStartedCount: 0,
-      currentRequestCount: 0,
-      currentMethods: "[]",
-    });
-    expect(logged.attributes).not.toHaveProperty("clientInstanceId");
-    expect(shared.acquire).toHaveBeenCalledTimes(2);
-    expect(shared.retire).toHaveBeenCalledOnce();
-    second.resolve(client());
-    await vi.advanceTimersByTimeAsync(0);
-    expect(shared.release).toHaveBeenCalledTimes(2);
-  });
+      const result = start(async () => undefined);
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await result).toMatchObject({ message: "codex app-server request timed out" });
+      const logged = await record();
+      expect(logged.attributes).toMatchObject({
+        lastStartedClientInstanceId: clientInstanceId,
+        lastStartedTransportIdentity:
+          mode === "available"
+            ? JSON.stringify({ pid: 500002, startedAt: "fixture-boot:12345" })
+            : "unavailable",
+      });
+      expect(JSON.parse(String(logged.attributes?.initializeSnapshot))).toEqual({
+        boundary: "request",
+        outcome: "pending",
+      });
+      expect(JSON.stringify(logged)).not.toContain("private diagnostic failure");
+      acquired.resolve(client());
+      await vi.advanceTimersByTimeAsync(0);
+    },
+  );
 
   it("keeps the default 60 second whole-scope deadline", async () => {
     const entered = createDeferred<void>();

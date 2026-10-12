@@ -15,20 +15,17 @@ import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-job
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  finishCronRunReceiptAsync,
-  prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
-import { reserveQueuedCronRun } from "./run-admission.js";
 import { createCronRunHandle } from "./run-history.js";
 import { createCronServiceState } from "./state.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
-import { authorCronRunCompletion } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-finalization-receipts-" });
@@ -50,11 +47,8 @@ function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
   );
 }
 
-function authorOutcome(
-  state: ReturnType<typeof createCronServiceState>,
-  outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">,
-) {
-  return authorCronRunCompletion(state, outcome.job, outcome);
+function authorOutcome(outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">) {
+  return authorCronRunCompletion(outcome.job, outcome);
 }
 
 describe("cron outcome receipt finalization", () => {
@@ -95,10 +89,6 @@ describe("cron outcome receipt finalization", () => {
         runReceipt: retiredReceipt,
       }).runId;
       const retiredMarker = markCronJobActive(retired.id);
-      const reservationIdentity = reserveQueuedCronRun(state, retired.id, startedAt, {
-        runReceipt: retiredReceipt,
-        runReceiptContext,
-      });
       advanceCronActiveJobGeneration();
       const currentMarker = markCronJobActive(current.id);
       let successor: ReturnType<typeof claimReceipt> | undefined;
@@ -133,19 +123,18 @@ describe("cron outcome receipt finalization", () => {
       expect(definitionsBefore).toHaveLength(2);
       try {
         await finalizeCompletedCronRunOutcomes(state, [
-          authorOutcome(state, {
+          authorOutcome({
             jobId: retired.id,
             job: retired,
             taskRunId,
             activeJobMarker: retiredMarker,
-            reservationIdentity,
             runReceipt: retiredReceipt,
             runReceiptContext,
             status: "ok",
             startedAt,
             endedAt: startedAt,
           }),
-          authorOutcome(state, {
+          authorOutcome({
             jobId: current.id,
             job: current,
             activeJobMarker: currentMarker,
@@ -241,7 +230,7 @@ describe("cron outcome receipt finalization", () => {
     });
 
     await finalizeCompletedCronRunOutcomes(state, [
-      authorOutcome(state, {
+      authorOutcome({
         jobId: stale.id,
         job: stale,
         activeJobMarker: markCronJobActive(stale.id),
@@ -251,7 +240,7 @@ describe("cron outcome receipt finalization", () => {
         startedAt,
         endedAt: startedAt + 2,
       }),
-      authorOutcome(state, {
+      authorOutcome({
         jobId: current.id,
         job: current,
         activeJobMarker: markCronJobActive(current.id),
@@ -327,7 +316,7 @@ describe("cron outcome receipt finalization", () => {
     });
 
     await finalizeCompletedCronRunOutcomes(state, [
-      authorOutcome(state, {
+      authorOutcome({
         jobId: completed.id,
         job: completed,
         activeJobMarker: markCronJobActive(completed.id),
@@ -389,7 +378,7 @@ describe("cron outcome receipt finalization", () => {
     try {
       await expect(
         finalizeCompletedCronRunOutcomes(state, [
-          authorOutcome(state, {
+          authorOutcome({
             jobId: completed.id,
             job: completed,
             activeJobMarker: markCronJobActive(completed.id),

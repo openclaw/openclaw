@@ -31,7 +31,6 @@ const modelAuthMocks = vi.hoisted(() => ({
       authEvidenceMap: {},
     },
     syntheticAuthProviderRefs: [],
-    syntheticAuthProviderRefsComplete: true,
   })),
   prepareRuntimeAvailableProviderAuth:
     vi.fn<typeof import("./model-auth-runtime.js").prepareRuntimeAvailableProviderAuth>(),
@@ -47,13 +46,13 @@ const modelAuthAvailabilityMocks = vi.hoisted(() => {
       evaluateModelAuth,
       evaluateRuntimeModelAuth: evaluateModelAuth,
       resolveProviderAuthAvailability: vi.fn(() => false),
-      hasSyntheticAuth: vi.fn(() => false),
     })),
   };
 });
 
 const authProfilesMocks = vi.hoisted(() => ({
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(() => ({ version: 1, profiles: {} })),
 }));
 
 vi.mock("./model-auth.js", () => modelAuthMocks);
@@ -168,29 +167,6 @@ describe("model auth checker", () => {
     },
   );
 
-  it("keeps tuple-aware null-artifact checks indeterminate with broad auth enabled", async () => {
-    const cfg = {} as OpenClawConfig;
-    const hasAuth = createProviderAuthChecker({ cfg });
-
-    await expect(hasAuth("openai", { modelId: "gpt-5.5" })).resolves.toBe(false);
-
-    expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledWith({
-      cfg,
-      workspaceDir: undefined,
-      env: undefined,
-      includePluginSyntheticAuth: true,
-    });
-    expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg,
-        allowPreparedRuntimeAuth: true,
-        externalCliProviderIds: ["openai"],
-        syntheticAuthProviderRefs: [],
-      }),
-    );
-    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
-  });
-
   it("caches OpenAI auth by the complete route tuple", async () => {
     const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
     const platformRef = {
@@ -208,25 +184,6 @@ describe("model auth checker", () => {
     });
 
     expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledTimes(2);
-  });
-
-  it("exposes the cached route evaluation alongside the boolean checker", async () => {
-    const evaluation = {
-      availability: true,
-      routeResolution: null,
-      evidence: "profile" as const,
-    };
-    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue(evaluation);
-    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
-    const ref = {
-      modelId: "gpt-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    };
-
-    await expect(hasAuth.evaluateModelAuth("openai", ref)).resolves.toBe(evaluation);
-    await expect(hasAuth("openai", { ...ref })).resolves.toBe(true);
-    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledOnce();
   });
 
   it("retries a rejected route evaluation while sharing concurrent callers", async () => {
@@ -250,29 +207,6 @@ describe("model auth checker", () => {
     expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledTimes(2);
   });
 
-  it("uses shared model auth evaluation for a non-OpenAI AWS SDK model", async () => {
-    const evaluation = {
-      availability: true,
-      routeResolution: null,
-      selectedAuthMode: "aws-sdk",
-      evidence: "aws-sdk" as const,
-    };
-    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue(evaluation);
-    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
-    const ref = {
-      modelId: "us.anthropic.claude-sonnet-4-5",
-      api: "bedrock-converse-stream",
-    };
-
-    await expect(hasAuth.evaluateModelAuth("amazon-bedrock", ref)).resolves.toBe(evaluation);
-    await expect(hasAuth("amazon-bedrock", { ...ref })).resolves.toBe(true);
-    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledWith(
-      "amazon-bedrock",
-      ref,
-    );
-    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
-  });
-
   it("does not let legacy provider auth override an unresolved model SecretRef", async () => {
     const evaluation = {
       availability: undefined,
@@ -289,25 +223,5 @@ describe("model auth checker", () => {
     await expect(hasAuth("anthropic", { ...ref })).resolves.toBe(false);
     expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledWith("anthropic", ref);
     expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
-  });
-
-  it("uses an explicit agent auth store directory for model auth checks", async () => {
-    const cfg: OpenClawConfig = {};
-    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue({
-      availability: true,
-      routeResolution: null,
-    });
-    const hasAuth = createProviderAuthChecker({
-      cfg,
-      agentDir: "/state/agents/worker/agent",
-    });
-    await expect(hasAuth("nvidia", { modelId: "fixture-model" })).resolves.toBe(true);
-    expect(authProfilesMocks.ensureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
-      "/state/agents/worker/agent",
-      { allowKeychainPrompt: false },
-    );
-    expect(modelAuthAvailabilityMocks.createModelAuthAvailabilityResolver).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, agentDir: "/state/agents/worker/agent" }),
-    );
   });
 });

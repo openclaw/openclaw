@@ -6,8 +6,6 @@ package ai.openclaw.app.gateway
 object BonjourEscapes {
   /** Decodes Bonjour DNS-SD decimal escapes while preserving ordinary UTF-8. */
   fun decode(input: String): String {
-    if (input.isEmpty()) return input
-
     val bytes = mutableListOf<Byte>()
     var i = 0
     while (i < input.length) {

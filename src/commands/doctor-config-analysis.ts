@@ -5,6 +5,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
+  readAgentRosterProperty,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -12,7 +13,6 @@ import { CONFIG_PATH } from "../config/config.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -151,10 +151,7 @@ function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number
   let current: unknown = root;
   for (const part of pathLocal) {
     if (typeof part === "number") {
-      if (!Array.isArray(current)) {
-        return null;
-      }
-      if (part < 0 || part >= current.length) {
+      if (!Array.isArray(current) || part < 0 || part >= current.length) {
         return null;
       }
       current = current[part];
@@ -168,12 +165,8 @@ function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number
   return current;
 }
 
-const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
-  plugins: new Set(["installs"]),
-};
-
 /**
- * Removes unknown config keys reported by schema validation, except protected migration keys.
+ * Removes unknown config keys reported by schema validation.
  *
  * Doctor skips this while an update is in progress so partially written upgrade state is not
  * stripped before its migration can finish.
@@ -203,9 +196,6 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
     if (!isRecord(target)) {
       continue;
     }
-    const parentKey =
-      issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
-    const protectedSet = parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
       if (!(key in target)) {
         continue;
@@ -213,9 +203,6 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       // $include is authored parser syntax at every object depth, not a schema field.
       // Doctor validates raw source, so stripping it would destroy include-owned config.
       if (key === INCLUDE_KEY) {
-        continue;
-      }
-      if (protectedSet?.has(key)) {
         continue;
       }
       delete target[key];
@@ -236,16 +223,10 @@ export function noteOpencodeProviderOverrides(
     return;
   }
 
-  const overrides: string[] = [];
-  if (options.opencodePluginActive === true && providers.opencode) {
-    overrides.push("opencode");
-  }
-  if (options.opencodePluginActive === true && providers["opencode-zen"]) {
-    overrides.push("opencode-zen");
-  }
-  if (options.opencodeGoPluginActive === true && providers["opencode-go"]) {
-    overrides.push("opencode-go");
-  }
+  const overrides = [
+    ...(options.opencodePluginActive === true ? ["opencode", "opencode-zen"] : []),
+    ...(options.opencodeGoPluginActive === true ? ["opencode-go"] : []),
+  ].filter((id) => providers[id]);
   if (overrides.length === 0) {
     return;
   }
@@ -284,13 +265,26 @@ function isImplicitFallbackClobber(model: unknown): boolean {
   return false;
 }
 
-export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
-  const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+export function noteImplicitFallbackClobberWarnings(cfg: unknown): void {
+  const agents = isRecord(cfg) && isRecord(cfg.agents) ? cfg.agents : undefined;
+  const defaults = isRecord(agents?.defaults) ? agents.defaults : undefined;
+  const model = defaults?.model;
+  const defaultFallbacks = isRecord(model) && Array.isArray(model.fallbacks) ? model.fallbacks : [];
   if (defaultFallbacks.length === 0) {
     return;
   }
+  const roster = readAgentRosterProperty(cfg);
+  const rosterConfig =
+    roster?.kind === "entries" && isRecord(roster.value)
+      ? { agents: { entries: roster.value } }
+      : roster?.kind === "list" && Array.isArray(roster.value)
+        ? { agents: { list: roster.value } }
+        : undefined;
+  if (!rosterConfig) {
+    return;
+  }
   const warnings: string[] = [];
-  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(rosterConfig)) {
     if (!agent || !isImplicitFallbackClobber(agent.model)) {
       continue;
     }

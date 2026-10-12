@@ -1,14 +1,17 @@
-import { X509Certificate } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
+import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import net, { type AddressInfo } from "node:net";
 import { Duplex } from "node:stream";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { installGlobalProxy } from "@openclaw/proxyline";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -338,6 +341,502 @@ describe("node stream EOF with inbound backpressure", () => {
       await new Promise<void>((resolve) => {
         wss.close(() => resolve());
       });
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
+});
+
+describe("node stream close acknowledgement", () => {
+  it("finishes when the gateway never completes the close handshake", async () => {
+    const logCapture = createDiagnosticLogRecordCapture();
+    logCaptures.push(logCapture);
+    const gotFrame = createDeferred();
+    const gateway = net.createServer((socket) => {
+      let buffer = Buffer.alloc(0);
+      let upgraded = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (upgraded) {
+          gotFrame.resolve();
+          return;
+        }
+        buffer = Buffer.concat([buffer, chunk]);
+        const headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd === -1) {
+          return;
+        }
+        const header = buffer.subarray(0, headerEnd).toString("latin1");
+        const key = /^Sec-WebSocket-Key: ([^\r\n]+)/m.exec(header)?.[1]?.trim();
+        if (!key) {
+          socket.destroy();
+          return;
+        }
+        const accept = createHash("sha1")
+          .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+          .digest("base64");
+        socket.write(
+          "HTTP/1.1 101 Switching Protocols\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n" +
+            `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+        );
+        upgraded = true;
+        if (buffer.length > headerEnd + 4) {
+          gotFrame.resolve();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const gatewayPort = (gateway.address() as AddressInfo).port;
+    let targetPeer: net.Socket | undefined;
+    const targetServer = net.createServer((peer) => {
+      targetPeer = peer;
+    });
+    await new Promise<void>((resolve) => {
+      targetServer.listen(0, "127.0.0.1", resolve);
+    });
+    const targetPort = (targetServer.address() as AddressInfo).port;
+    const closedLog = createDeferred();
+    const stopClosedLog = onInternalDiagnosticEvent((event) => {
+      if (event.type === "log.record" && event.message === "node stream closed") {
+        closedLog.resolve();
+      }
+    });
+    const controller = new AbortController();
+    let failure: unknown;
+    let ack: (() => void) | undefined;
+    let markAckArmed: () => void = () => {};
+    const ackArmed = new Promise<void>((resolve) => {
+      markAckArmed = resolve;
+    });
+    const running = runNodeStreamTransport({
+      gatewayUrl: `ws://127.0.0.1:${gatewayPort}`,
+      attachPath: `/node-desktop/attach?ticket=${ticket}`,
+      expectedAttachPath: "/node-desktop/attach",
+      target: { port: targetPort },
+      metadata: { ok: true },
+      streamName: "desktop",
+      signal: controller.signal,
+      closeAckMs: 40,
+      scheduleCloseAck: (callback, delayMs) => {
+        if (delayMs === 40) {
+          ack = callback;
+          markAckArmed();
+          return () => {
+            if (ack === callback) {
+              ack = undefined;
+            }
+          };
+        }
+        const timer = setTimeout(callback, delayMs);
+        return () => clearTimeout(timer);
+      },
+    }).catch((error: unknown) => {
+      failure = error;
+    });
+    try {
+      await gotFrame.promise;
+      targetPeer?.end();
+      await ackArmed;
+      ack?.();
+      await running;
+      expect(failure).toBeUndefined();
+      await closedLog.promise;
+      await logCapture.flush();
+      expect(
+        logCapture.records.find((record) => record.message === "node stream closed")?.attributes,
+      ).toMatchObject({
+        streamKind: "desktop",
+        trigger: "target-close",
+        closeCode: 1006,
+      });
+    } finally {
+      controller.abort();
+      await running;
+      targetPeer?.destroy();
+      await new Promise<void>((resolve) => {
+        targetServer.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+      stopClosedLog();
+    }
+  });
+
+  async function expectFlushBudget(payload: Buffer) {
+    const gateway = createHttpServer();
+    const wss = new WebSocketServer({ server: gateway });
+    let receivedSevens = 0;
+    const received = createDeferred();
+    wss.on("connection", (ws) => {
+      ws.on("message", (data, isBinary) => {
+        if (!isBinary) {
+          return;
+        }
+        const buffer = Array.isArray(data)
+          ? Buffer.concat(data)
+          : data instanceof ArrayBuffer
+            ? Buffer.from(new Uint8Array(data))
+            : data;
+        for (const byte of buffer) {
+          if (byte === 7) {
+            receivedSevens += 1;
+          }
+        }
+        if (receivedSevens >= payload.length) {
+          received.resolve();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const connected = createDeferred<net.Socket>();
+    const targetServer = net.createServer((peer) => {
+      connected.resolve(peer);
+    });
+    await new Promise<void>((resolve) => {
+      targetServer.listen(0, "127.0.0.1", resolve);
+    });
+    const delays: number[] = [];
+    const controller = new AbortController();
+    const running = runNodeStreamTransport({
+      gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+      attachPath: "/node-desktop/attach",
+      expectedAttachPath: "/node-desktop/attach",
+      target: { port: (targetServer.address() as AddressInfo).port },
+      metadata: { ok: true },
+      streamName: "desktop",
+      signal: controller.signal,
+      closeAckMs: 40,
+      scheduleCloseAck: (callback, delayMs) => {
+        delays.push(delayMs);
+        if (delayMs >= 30_000) {
+          return () => undefined;
+        }
+        const timer = setTimeout(callback, delayMs);
+        return () => clearTimeout(timer);
+      },
+    });
+    let targetPeer: net.Socket | undefined;
+    try {
+      targetPeer = await connected.promise;
+      targetPeer.write(payload);
+      targetPeer.end();
+      await received.promise;
+      for (const client of wss.clients) {
+        client.close();
+      }
+      await running;
+      expect(delays.includes(40)).toBe(false);
+      expect(delays).not.toContain(5_000);
+      expect(receivedSevens).toBe(payload.length);
+    } finally {
+      controller.abort();
+      await running;
+      targetPeer?.destroy();
+      await new Promise<void>((resolve) => {
+        targetServer.close(() => resolve());
+      });
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  }
+
+  it("waits out a small forward instead of the short close acknowledgement", async () => {
+    await expectFlushBudget(Buffer.alloc(1024, 7));
+  });
+
+  it("waits out a large forward instead of the short close acknowledgement", async () => {
+    await expectFlushBudget(Buffer.alloc(200 * 1024, 7));
+  });
+
+  it("bounds websocket cleanup when the gateway sends a text frame", async () => {
+    const gateway = createHttpServer();
+    const wss = new WebSocketServer({ server: gateway });
+    let gatewaySocket: { send: (data: string) => void } | undefined;
+    wss.on("connection", (ws) => {
+      gatewaySocket = ws;
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const target = new Duplex({
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const delays: number[] = [];
+    const cleanups: Array<() => void> = [];
+    const controller = new AbortController();
+    try {
+      await expect(
+        runNodeStreamTransport({
+          gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+          attachPath: "/node-desktop/attach",
+          expectedAttachPath: "/node-desktop/attach",
+          target: { stream: target },
+          metadata: { ok: true },
+          streamName: "desktop",
+          signal: controller.signal,
+          emitStatus: async (status) => {
+            if (status.includes("attached")) {
+              gatewaySocket?.send("not-binary");
+            }
+          },
+          scheduleCloseAck: (callback, delayMs) => {
+            delays.push(delayMs);
+            cleanups.push(callback);
+            return () => undefined;
+          },
+        }),
+      ).rejects.toThrow(/non-binary/);
+      expect(delays).not.toContain(30_000);
+    } finally {
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+      controller.abort();
+      target.destroy();
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
+
+  it("completes a drained forward when the gateway acknowledges close", async () => {
+    const gateway = createHttpServer();
+    const wss = new WebSocketServer({ server: gateway });
+    wss.on("connection", (ws) => {
+      ws.on("message", () => undefined);
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const target = new Duplex({
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    target.on("end", () => target.destroy());
+    const delays: number[] = [];
+    const controller = new AbortController();
+    try {
+      await runNodeStreamTransport({
+        gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+        attachPath: "/node-desktop/attach",
+        expectedAttachPath: "/node-desktop/attach",
+        target: { stream: target },
+        metadata: { ok: true },
+        streamName: "desktop",
+        signal: controller.signal,
+        emitStatus: async (status) => {
+          if (status.includes("attached")) {
+            target.push(Buffer.alloc(64, 7));
+            target.push(null);
+          }
+        },
+        scheduleCloseAck: (callback, delayMs) => {
+          delays.push(delayMs);
+          const timer = setTimeout(callback, delayMs);
+          return () => clearTimeout(timer);
+        },
+      });
+      expect(delays).not.toContain(5_000);
+      expect(delays).not.toContain(30_000);
+    } finally {
+      controller.abort();
+      target.destroy();
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
+
+  it("rejects a protocol error without a node handshake timer", async () => {
+    let peer: net.Socket | undefined;
+    const gateway = net.createServer({ allowHalfOpen: true }, (socket) => {
+      peer = socket;
+      socket.on("error", () => undefined);
+      let buffer = Buffer.alloc(0);
+      let upgraded = false;
+      let sentInvalidFrame = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (!upgraded) {
+          buffer = Buffer.concat([buffer, chunk]);
+          const headerEnd = buffer.indexOf("\r\n\r\n");
+          if (headerEnd === -1) {
+            return;
+          }
+          const header = buffer.subarray(0, headerEnd).toString("latin1");
+          const key = /^Sec-WebSocket-Key: ([^\r\n]+)/m.exec(header)?.[1]?.trim();
+          if (!key) {
+            socket.destroy();
+            return;
+          }
+          const accept = createHash("sha1")
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest("base64");
+          socket.write(
+            "HTTP/1.1 101 Switching Protocols\r\n" +
+              "Upgrade: websocket\r\n" +
+              "Connection: Upgrade\r\n" +
+              `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+          );
+          upgraded = true;
+          return;
+        }
+        if (!sentInvalidFrame) {
+          sentInvalidFrame = true;
+          socket.write(Buffer.from([0x83, 0x00]));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const target = new Duplex({
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const controller = new AbortController();
+    const started = Date.now();
+    try {
+      await expect(
+        runNodeStreamTransport({
+          gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+          attachPath: "/node-desktop/attach",
+          expectedAttachPath: "/node-desktop/attach",
+          target: { stream: target },
+          metadata: { ok: true },
+          streamName: "desktop",
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow(/invalid opcode 3/);
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      controller.abort();
+      target.destroy();
+      peer?.destroy();
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
+
+  it("closes the client when a gateway close withholds TCP FIN", async () => {
+    let peer: net.Socket | undefined;
+    const receivedFin = createDeferred();
+    const gateway = net.createServer({ allowHalfOpen: true }, (socket) => {
+      peer = socket;
+      socket.on("error", () => undefined);
+      socket.once("end", () => receivedFin.resolve());
+      let buffer = Buffer.alloc(0);
+      let upgraded = false;
+      let sentClose = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (!upgraded) {
+          buffer = Buffer.concat([buffer, chunk]);
+          const headerEnd = buffer.indexOf("\r\n\r\n");
+          if (headerEnd === -1) {
+            return;
+          }
+          const header = buffer.subarray(0, headerEnd).toString("latin1");
+          const key = /^Sec-WebSocket-Key: ([^\r\n]+)/m.exec(header)?.[1]?.trim();
+          if (!key) {
+            socket.destroy();
+            return;
+          }
+          const accept = createHash("sha1")
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest("base64");
+          socket.write(
+            "HTTP/1.1 101 Switching Protocols\r\n" +
+              "Upgrade: websocket\r\n" +
+              "Connection: Upgrade\r\n" +
+              `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+          );
+          upgraded = true;
+          return;
+        }
+        if (!sentClose) {
+          sentClose = true;
+          // Close code 1000. Leave the TCP connection half-open.
+          socket.write(Buffer.from([0x88, 0x02, 0x03, 0xe8]));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const target = new Duplex({
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const closeSpy = vi.spyOn(WebSocket.prototype, "close");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const controller = new AbortController();
+    let failure: unknown;
+    const running = runNodeStreamTransport({
+      gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+      attachPath: "/node-desktop/attach",
+      expectedAttachPath: "/node-desktop/attach",
+      target: { stream: target },
+      metadata: { ok: true },
+      streamName: "desktop",
+      signal: controller.signal,
+    }).catch((error: unknown) => {
+      failure = error;
+    });
+    try {
+      await receivedFin.promise;
+      expect(target.readableEnded).toBe(false);
+      const client = closeSpy.mock.contexts[0];
+      if (!(client instanceof WebSocket)) {
+        throw new Error("Expected a client WebSocket close handshake");
+      }
+      const closed = once(client, "close");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(client.readyState).toBe(WebSocket.CLOSED);
+      await closed;
+      await running;
+      expect(failure).toBeUndefined();
+    } finally {
+      controller.abort();
+      target.destroy();
+      peer?.destroy();
+      await running;
+      closeSpy.mockRestore();
+      vi.useRealTimers();
       await new Promise<void>((resolve) => {
         gateway.close(() => resolve());
       });

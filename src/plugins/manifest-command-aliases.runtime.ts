@@ -24,13 +24,7 @@ export function resolveManifestCommandAliasOwner(params: {
   env?: NodeJS.ProcessEnv;
   registry?: PluginManifestCommandAliasRegistry;
 }): PluginManifestCommandAliasRecord | undefined {
-  const registry =
-    params.registry ??
-    loadManifestMetadataRegistry({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }).manifestRegistry;
+  const registry = params.registry ?? loadManifestMetadataRegistry(params).manifestRegistry;
   return resolveManifestCommandAliasOwnerInRegistry({
     command: params.command,
     registry,
@@ -81,11 +75,7 @@ export function resolveManifestToolOwner(params: {
   if (!normalizedToolName) {
     return undefined;
   }
-  const snapshot = loadManifestMetadataSnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const snapshot = loadManifestMetadataSnapshot(params);
   const env = params.env ?? process.env;
   for (const plugin of snapshot.plugins) {
     const tools = plugin.contracts?.tools;

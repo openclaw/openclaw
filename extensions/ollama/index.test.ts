@@ -369,7 +369,11 @@ describe("ollama plugin", () => {
       ...(customModelId ? { customModelId } : {}),
     });
     const validate = registerProvider().auth[0].validateNonInteractive;
-    await expect(validate(ctx)).resolves.toBe(!error);
+    if (error) {
+      await expect(validate(ctx)).rejects.toThrow(error);
+    } else {
+      await expect(validate(ctx)).resolves.toBe(true);
+    }
     if (customBaseUrl?.endsWith("/")) {
       expect(modelsMock).toHaveBeenCalledWith("http://ollama-host:11434");
     }
@@ -382,14 +386,19 @@ describe("ollama plugin", () => {
     if (cloud === "unauthenticated") {
       expect(showMock).not.toHaveBeenCalled();
     }
-    if (error) {
-      expect(ctx.runtime.error).toHaveBeenCalledWith(error);
-      expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
-    } else {
-      expect(ctx.runtime.exit).not.toHaveBeenCalled();
-    }
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
     expect(nonInteractiveMock).not.toHaveBeenCalled();
     expect(pullMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an ollama.com base URL before destructive reset", async () => {
+    modelsMock.mockResolvedValue({ reachable: true, models: [{ name: "kimi-k3" }] });
+    const ctx = resetContext({ customBaseUrl: "https://ollama.com", customModelId: "kimi-k3" });
+    const validate = registerProvider().auth[0].validateNonInteractive;
+
+    await expect(validate(ctx)).rejects.toThrow("--auth-choice ollama-cloud");
+    expect(modelsMock).not.toHaveBeenCalled();
   });
 
   it("classifies incomplete ollama streams as provider failures", () => {
@@ -1260,7 +1269,7 @@ describe("ollama plugin", () => {
     if (!wrapped) {
       throw new Error("expected Ollama OpenAI-compatible stream wrapper");
     }
-    await wrapped({} as never, {} as never, { onPayload });
+    await wrapped({} as never, { messages: [] }, { onPayload });
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(onPayload).toHaveBeenCalledOnce();
   });
@@ -1303,22 +1312,20 @@ describe("ollama plugin", () => {
     expect(streamFn).not.toHaveBeenCalled();
   });
 
-  it("owns replay policy for OpenAI-compatible and native Ollama routes", () => {
-    const provider = registerProvider();
-    const replay = (modelApi: "ollama" | "openai-completions") =>
-      provider.buildReplayPolicy?.({
+  it.each(["ollama", "openai-completions"] as const)(
+    "owns replay policy for %s routes",
+    (modelApi) => {
+      const provider = registerProvider();
+      const policy = provider.buildReplayPolicy?.({
         provider: "ollama",
         modelApi,
         modelId: "qwen3:32b",
       });
-    expect(replay("openai-completions")).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-    });
-    const nativePolicy = replay("ollama");
-    expect(nativePolicy?.sanitizeToolCallIds).toBe(false);
-    expect(nativePolicy?.toolCallIdMode).toBeUndefined();
-  });
+      expect(policy?.sanitizeToolCallIds).toBe(modelApi !== "ollama");
+      expect(policy?.toolCallIdMode).toBe(modelApi === "ollama" ? undefined : "strict");
+      expect(policy?.dropReasoningFromHistory ?? false).toBe(modelApi !== "ollama");
+    },
+  );
 
   it("selects cloud native transport with the default URL only for api=ollama", () => {
     const provider = registerOllamaCloudProvider();

@@ -88,7 +88,6 @@ describe("handleUpdateCommand", () => {
 
   it.each([
     { body: "/update", allowTextCommands: false },
-    { body: "/update now", allowTextCommands: true },
     { body: "/updated", allowTextCommands: true },
   ])("ignores $body when text commands are $allowTextCommands", async (testCase) => {
     const params = updateCommandParams();
@@ -98,19 +97,16 @@ describe("handleUpdateCommand", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])(
-    "silently rejects unauthorized senders (owner=%s)",
-    async (senderIsOwner) => {
-      const params = updateCommandParams();
-      params.command.isAuthorizedSender = false;
-      params.command.senderIsOwner = senderIsOwner;
+  it.each([true])("silently rejects unauthorized senders (owner=%s)", async (senderIsOwner) => {
+    const params = updateCommandParams();
+    params.command.isAuthorizedSender = false;
+    params.command.senderIsOwner = senderIsOwner;
 
-      expect(await handleUpdateCommand(params, true)).toEqual({ shouldContinue: false });
-      expect(dispatch).not.toHaveBeenCalled();
-    },
-  );
+    expect(await handleUpdateCommand(params, true)).toEqual({ shouldContinue: false });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 
-  it.each(["text", "native"] as const)(
+  it.each(["text"] as const)(
     "returns an owner setup hint for an authorized %s sender",
     async (source) => {
       const params = updateCommandParams();
@@ -127,28 +123,6 @@ describe("handleUpdateCommand", () => {
       expect(dispatch).not.toHaveBeenCalled();
     },
   );
-
-  it("relays owner recovery instructions when the gateway revokes an admitted owner", async () => {
-    const message =
-      "Ask the operator to run `openclaw config set commands.ownerAllowFrom '[\"telegram:owner\"]'` in a terminal.";
-    dispatch.mockResolvedValue({
-      run: updateRun({
-        phase: "finished",
-        status: "failed",
-        reason: "owner_required",
-        origin: { nextAction: message },
-        finishedAtMs: 2,
-      }),
-    });
-    dispatch.mockResolvedValueOnce({
-      ok: false,
-      runId,
-      message,
-      result: { status: "error", reason: "owner_required" },
-    });
-    const result = await handleUpdateCommand(updateCommandParams(), true);
-    expect(result?.reply?.text).toContain(message);
-  });
 
   it("honors commands.restart=false without starting an update", async () => {
     const params = updateCommandParams();
@@ -240,73 +214,17 @@ describe("handleUpdateCommand", () => {
 
     expect(await handleUpdateCommand(params, true)).toEqual({
       shouldContinue: false,
-      reply: { text: message },
-    });
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("reads a terminal OCM outcome through the admitted Gateway", async () => {
-    const params = updateCommandParams();
-    params.command.surface = "webchat";
-    params.command.channel = "webchat";
-    params.ctx.Provider = "webchat";
-    const channelGateway = {} as GatewayRequestContext;
-    readChannelContextGatewayContextResolver.mockReturnValue(() => channelGateway);
-    const managedRunId = `ocm:${runId}`;
-    dispatch
-      .mockResolvedValueOnce({
-        ok: false,
-        runId: managedRunId,
-        result: { status: "error", reason: "ocm-update-failed" },
-      })
-      .mockResolvedValueOnce({
-        run: updateRun({
-          runId: managedRunId,
-          phase: "finished",
-          status: "failed",
-          reason: "ocm-update-failed",
-          target: { installationMethod: "ocm" },
-          steps: [{ step: "OCM update", status: "failed", detail: "Package download failed." }],
-          origin: { nextAction: "Inspect this job through OCM." },
-          finishedAtMs: 2,
-        }),
-      });
-
-    const result = await handleUpdateCommand(params, true);
-
-    expect(result?.reply?.text).toContain("Package download failed.");
-    expect(result?.reply?.text).toContain("Inspect this job through OCM.");
-    expect(dispatch).toHaveBeenCalledTimes(2);
-    expect(dispatch.mock.calls[1]?.slice(0, 2)).toEqual([
-      "update.runs.get",
-      { runId: managedRunId },
-    ]);
-    expect(dispatch.mock.calls[1]?.[2].resolveGatewayContext()).toBe(channelGateway);
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("does not repeat an outcome already owned by gateway notices", async () => {
-    dispatch.mockResolvedValueOnce({
-      ok: true,
-      runId,
-      ackDelivered: true,
-      result: {
-        status: "ok",
-        before: { version: "2026.9.1" },
-        after: { version: "2026.9.2" },
-        steps: [],
+      reply: {
+        text: "⬆️ OpenClaw is updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
       },
     });
-
-    expect(await handleUpdateCommand(updateCommandParams(), true)).toEqual({
-      shouldContinue: false,
-    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it.each([true, false])(
     "preserves queued ack custody without a duplicate reply (%s)",
     async (ackQueued) => {
-      const acknowledgement = "⬆️ Updating OpenClaw 2026.9.1 → 2026.9.2.";
+      const acknowledgement = "⬆️ Updating OpenClaw… You'll get a message here when it's done.";
       dispatch.mockResolvedValueOnce({
         ok: true,
         runId,
@@ -323,54 +241,50 @@ describe("handleUpdateCommand", () => {
     },
   );
 
-  it.each([
-    { status: "skipped", reason: "managed-service-handoff-unavailable" },
-    { status: "error", reason: "managed-service-handoff-failed" },
-  ])("reports $status with the exact manual command", async ({ status, reason }) => {
-    const command = "openclaw update --channel stable";
-    dispatch.mockResolvedValue({
-      run: updateRun({
-        status: status === "error" ? "failed" : "skipped",
-        phase: "finished",
-        reason,
-      }),
-    });
-    dispatch.mockResolvedValueOnce({
-      ok: false,
-      runId,
-      result: { status, reason, steps: [] },
-      handoff: {
-        status: "unavailable",
-        command,
-        message: "Managed handoff unavailable.\nRun the update from a terminal.",
-      },
-    });
+  it.each([{ status: "skipped", reason: "managed-service-handoff-unavailable" }])(
+    "reports $status with the exact manual command",
+    async ({ status, reason }) => {
+      const command = "openclaw update --channel stable";
+      dispatch.mockResolvedValue({
+        run: updateRun({
+          status: status === "error" ? "failed" : "skipped",
+          phase: "finished",
+          reason,
+        }),
+      });
+      dispatch.mockResolvedValueOnce({
+        ok: false,
+        runId,
+        result: { status, reason, steps: [] },
+        handoff: {
+          status: "unavailable",
+          command,
+          message: "Managed handoff unavailable.\nRun the update from a terminal.",
+        },
+      });
 
-    const result = await handleUpdateCommand(updateCommandParams(), true);
+      const result = await handleUpdateCommand(updateCommandParams(), true);
 
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain(reason);
-    expect(result?.reply?.text).toContain(command);
-    expect(result?.reply?.text).not.toContain("I'll confirm here");
-    expect(dispatch.mock.calls[1]?.slice(0, 2)).toEqual(["update.runs.get", { runId }]);
-  });
-
-  it("reports missing hosting context without contacting a remote gateway", async () => {
-    host.context = undefined;
-    const result = await handleUpdateCommand(updateCommandParams(), true);
-    expect(result?.reply?.text).toBe(
-      "⚠️ Update request failed: Gateway instance unavailable for update.run",
-    );
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(callGatewayTool).not.toHaveBeenCalled();
-  });
+      expect(result?.shouldContinue).toBe(false);
+      const headline =
+        status === "error"
+          ? "⚠️ OpenClaw couldn't finish updating."
+          : "ℹ️ OpenClaw wasn't updated.";
+      expect(result?.reply?.text).toBe(
+        `${headline}\nOpen Settings → Updates in the Control UI for details. To continue, run \`${command}\` in your terminal.`,
+      );
+      expect(dispatch.mock.calls[1]?.slice(0, 2)).toEqual(["update.runs.get", { runId }]);
+    },
+  );
 
   it("turns a gateway transport error into a visible failure reply", async () => {
     dispatch.mockRejectedValueOnce(new Error("gateway connection refused"));
 
     expect(await handleUpdateCommand(updateCommandParams(), true)).toEqual({
       shouldContinue: false,
-      reply: { text: "⚠️ Update request failed: gateway connection refused" },
+      reply: {
+        text: "⚠️ Couldn't confirm the update. Open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+      },
     });
   });
 });

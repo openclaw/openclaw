@@ -44,19 +44,34 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
           modelId?: string;
           modelApi?: string;
           env?: NodeJS.ProcessEnv;
+          inHistorySystemUpdates?: boolean;
         }) => {
           const modelId = context?.modelId?.toLowerCase() ?? "";
           switch (provider) {
             case "env-sensitive":
+              if (context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "null") {
+                return {
+                  sanitizeMode: null,
+                  sanitizeToolCallIds: null,
+                  toolCallIdMode: null,
+                  applyAssistantFirstOrderingFix: null,
+                };
+              }
               return {
                 sanitizeToolCallIds: context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "strict",
+                applyAssistantFirstOrderingFix:
+                  context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "strict",
                 ...(context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "strict"
                   ? { toolCallIdMode: "strict" as const }
                   : {}),
               };
             case "amazon-bedrock":
             case "anthropic":
-              return replayHelpers.buildAnthropicReplayPolicyForModel(modelId);
+              return replayHelpers.buildAnthropicReplayPolicyForModel(
+                modelId,
+                undefined,
+                context?.inHistorySystemUpdates,
+              );
             case "minimax":
               return context?.modelApi === "openai-completions"
                 ? {
@@ -74,7 +89,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                     repairToolUseResultPairing: true,
                     validateAnthropicTurns: true,
                     allowSyntheticToolResults: true,
-                    ...(replayHelpers.shouldDropClaudeThinkingBlocks(modelId)
+                    ...(replayHelpers.buildAnthropicReplayPolicyForModel(modelId).dropThinkingBlocks
                       ? { dropThinkingBlocks: true }
                       : {}),
                   };
@@ -144,6 +159,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
   }
 
   function makeOpenAiCompatibleReasoningModel(
@@ -185,32 +201,19 @@ describe("resolveTranscriptPolicy", () => {
 
   it("does not reuse cached replay policies across custom env objects", () => {
     const config = {} as OpenClawConfig;
-    const strictEnv = {
-      ...process.env,
-      OPENCLAW_TEST_TRANSCRIPT_POLICY: "strict",
-    };
-    const looseEnv = {
-      ...process.env,
-      OPENCLAW_TEST_TRANSCRIPT_POLICY: "loose",
-    };
-
-    const strictPolicy = resolveTranscriptPolicy({
-      provider: "env-sensitive",
-      modelId: "env-demo",
-      config,
-      env: strictEnv,
-    });
-    const loosePolicy = resolveTranscriptPolicy({
-      provider: "env-sensitive",
-      modelId: "env-demo",
-      config,
-      env: looseEnv,
-    });
-
-    expect(strictPolicy.sanitizeToolCallIds).toBe(true);
-    expect(strictPolicy.toolCallIdMode).toBe("strict");
-    expect(loosePolicy.sanitizeToolCallIds).toBe(false);
-    expect(loosePolicy.toolCallIdMode).toBeUndefined();
+    for (const mode of ["strict", "loose", "null"]) {
+      const policy = resolveTranscriptPolicy({
+        provider: "env-sensitive",
+        modelId: "env-demo",
+        config,
+        env: { OPENCLAW_TEST_TRANSCRIPT_POLICY: mode },
+      });
+      expect(policy.sanitizeMode).toBe("images-only");
+      expect(policy.sanitizeToolCallIds).toBe(mode === "strict");
+      expect(policy.toolCallIdMode).toBe(mode === "strict" ? "strict" : undefined);
+      expect(policy.applyGoogleTurnOrdering).toBe(mode === "strict");
+      expect(policy).not.toHaveProperty("applyAssistantFirstOrderingFix");
+    }
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {
@@ -376,6 +379,114 @@ describe("resolveTranscriptPolicy", () => {
     expect(opus5.dropThinkingBlocks).toBe(false);
   });
 
+  it("gates in-history updates by authenticated route and keeps cached policies separate", () => {
+    const config = {} as OpenClawConfig;
+    const model = makeOpenAiCompatibleReasoningModel({
+      id: "claude-opus-5",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+    });
+    for (const [directApiKey, provider, api, baseUrl, expected] of [
+      [false, "anthropic", "anthropic-messages", model.baseUrl, false],
+      [true, "anthropic", "anthropic-messages", model.baseUrl, true],
+      [true, "anthropic", "anthropic-messages", "https://proxy.example.test", false],
+      [true, "amazon-bedrock", "bedrock-converse-stream", model.baseUrl, false],
+      [true, "google-vertex", "anthropic-messages", model.baseUrl, false],
+      [true, "microsoft-foundry", "anthropic-messages", model.baseUrl, false],
+    ] as const) {
+      const policy = resolveTranscriptPolicy({
+        config,
+        directApiKey,
+        provider,
+        modelApi: api,
+        modelId: model.id,
+        model: { ...model, provider, api, baseUrl },
+      });
+      expect(policy.inHistorySystemUpdates).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(expected);
+    }
+  });
+
+  it("uses the supplied environment for in-history route eligibility", () => {
+    const config = {} as OpenClawConfig;
+    for (const [baseUrl, expected] of [
+      ["https://proxy.example.test", false],
+      ["https://api.anthropic.com", true],
+    ] as const) {
+      const policy = resolveTranscriptPolicy({
+        config,
+        directApiKey: true,
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-opus-5",
+        env: { ANTHROPIC_BASE_URL: baseUrl },
+      });
+      expect(policy.inHistorySystemUpdates).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(expected);
+    }
+  });
+
+  it("limits OpenAI prompt updates to native Responses routes across cached policy reads", () => {
+    const config = {} as OpenClawConfig;
+    for (const [provider, api, baseUrl, expected] of [
+      ["openai", "openai-responses", "https://api.openai.com/v1", true],
+      ["openai", "openai-responses", "https://proxy.example.test/v1", false],
+      ["openai", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", false],
+      ["openai", "azure-openai-responses", "https://api.openai.com/v1", false],
+      ["openai", "openai-completions", "https://api.openai.com/v1", false],
+      ["custom-openai", "openai-responses", "https://api.openai.com/v1", false],
+      ["openai", "openai-responses", "https://api.openai.com/v1", true],
+    ] as const) {
+      const model = makeOpenAiCompatibleReasoningModel({ provider, api, baseUrl });
+      const policy = resolveTranscriptPolicy({
+        config,
+        provider,
+        modelApi: api,
+        modelId: model.id,
+        model,
+        runtimeHandle: {
+          provider,
+          plugin: {
+            id: provider,
+            label: provider,
+            auth: [],
+            buildReplayPolicy: () => ({ inHistorySystemUpdates: true }),
+          },
+        },
+      });
+      expect(policy.inHistorySystemUpdates).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(api === "openai-completions" || expected);
+    }
+  });
+
+  it.each([false, true])(
+    "constrains explicit plugin updates to host route eligibility (direct API key=%s)",
+    (directApiKey) => {
+      const policy = resolveTranscriptPolicy({
+        directApiKey,
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-opus-5",
+        env: { ANTHROPIC_BASE_URL: "https://api.anthropic.com" },
+        runtimeHandle: {
+          provider: "anthropic",
+          plugin: {
+            id: "anthropic",
+            label: "Anthropic",
+            auth: [],
+            buildReplayPolicy: () => ({
+              inHistorySystemUpdates: true,
+              appendOnlyRuntimeContext: false,
+            }),
+          },
+        },
+      });
+      expect(policy.inHistorySystemUpdates).toBe(directApiKey);
+      expect(policy.appendOnlyRuntimeContext).toBe(directApiKey);
+    },
+  );
+
   it("does not reuse cached unowned Anthropic policies across reasoning compat changes", () => {
     const config = {} as OpenClawConfig;
     const model = {
@@ -452,7 +563,7 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "ollama",
     });
     expect(policy.preserveSignatures).toBe(false);
-    expect(policy.appendOnlyRuntimeContext).toBe(false);
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
   });
 
   it.each([

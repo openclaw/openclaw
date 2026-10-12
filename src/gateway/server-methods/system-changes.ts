@@ -1,4 +1,3 @@
-// Reads the bounded system/config journals as one admin-facing change history.
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   ErrorCodes,
@@ -8,21 +7,14 @@ import {
   type SystemChangesListParams,
   type SystemChangesListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  CONFIG_AUDIT_MAX_ENTRIES,
-  CONFIG_AUDIT_SCOPE,
-  type ConfigAuditRecord,
-} from "../../config/io.audit.js";
+import { CONFIG_AUDIT_SCOPE, type ConfigAuditRecord } from "../../config/io.audit.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../../infra/cli-root-options.js";
-import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-store.js";
+import { createSqliteAuditRecordReader } from "../../infra/sqlite-audit-record-store.async.js";
 import type { SequencedSqliteAuditRecordEntry } from "../../infra/sqlite-audit-record.kernel.js";
-import {
-  SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-  SYSTEM_AGENT_AUDIT_SCOPE,
-  type SystemAgentAuditEntry,
-} from "../../system-agent/audit.js";
+import { SYSTEM_AGENT_AUDIT_SCOPE, type SystemAgentAuditEntry } from "../../system-agent/audit.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 const DEFAULT_CHANGE_LIMIT = 50;
 const MAX_CHANGE_LIMIT = 200;
@@ -30,6 +22,13 @@ const CHANGE_SCAN_BATCH_SIZE = MAX_CHANGE_LIMIT + 1;
 export const SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE = 1_000;
 const COLLAPSE_MAX_DELAY_MS = 60_000;
 const MAX_PENDING_COLLAPSES = MAX_CHANGE_LIMIT;
+const CONFIG_WRITE_PREFIXES = new Map<SystemChangeEntry["source"], string>([
+  ["doctor", "Doctor updated configuration"],
+  ["config-rpc", "Settings updated configuration"],
+  ["plugin-install", "Plugin installation updated configuration"],
+  ["system-agent", "OpenClaw updated configuration"],
+  ["cli", "CLI updated configuration"],
+]);
 
 type PendingCollapse = {
   transition: string;
@@ -51,11 +50,11 @@ type ChangeCandidate = {
   recordedAt: number;
   transition?: string;
   pendingCollapse?: PendingCollapse;
-  positions: Array<{ scope: ChangeScope; sequence: number }>;
+  position: { scope: ChangeScope; sequence: number };
 };
 
-type EligibleScan<T> = {
-  entries: SequencedSqliteAuditRecordEntry<T>[];
+type CandidateScan = {
+  entries: ChangeCandidate[];
   exhausted: boolean;
   nextBeforeSequence: number;
 };
@@ -64,7 +63,7 @@ type AuditStore<T> = {
   latest: (params: {
     limit: number;
     beforeSequence?: number;
-  }) => SequencedSqliteAuditRecordEntry<T>[];
+  }) => Promise<SequencedSqliteAuditRecordEntry<T>[]>;
 };
 
 function encodeCursor(cursor: ChangeCursor): string {
@@ -156,25 +155,6 @@ function summarizePaths(prefix: string, changedPaths: readonly string[] | undefi
   return `${prefix}: ${changedPaths.join(", ")}`;
 }
 
-function configWriteSummary(
-  source: SystemChangeEntry["source"],
-  changedPaths: readonly string[] | undefined,
-): string {
-  const prefix =
-    source === "doctor"
-      ? "Doctor updated configuration"
-      : source === "config-rpc"
-        ? "Settings updated configuration"
-        : source === "plugin-install"
-          ? "Plugin installation updated configuration"
-          : source === "system-agent"
-            ? "OpenClaw updated configuration"
-            : source === "cli"
-              ? "CLI updated configuration"
-              : "Configuration updated";
-  return summarizePaths(prefix, changedPaths);
-}
-
 function toSystemAgentCandidate(
   record: SequencedSqliteAuditRecordEntry<SystemAgentAuditEntry>,
 ): ChangeCandidate {
@@ -188,7 +168,7 @@ function toSystemAgentCandidate(
     },
     transition: transitionKey(record.value.configHashBefore, record.value.configHashAfter),
     recordedAt: record.createdAt,
-    positions: [{ scope: SYSTEM_AGENT_AUDIT_SCOPE, sequence: record.sequence }],
+    position: { scope: SYSTEM_AGENT_AUDIT_SCOPE, sequence: record.sequence },
   };
 }
 
@@ -196,62 +176,49 @@ function toConfigCandidate(
   record: SequencedSqliteAuditRecordEntry<ConfigAuditRecord>,
 ): ChangeCandidate | null {
   const value = record.value;
-  if (value.event === "config.observe") {
-    return null;
-  }
-  if (value.event === "config.external") {
-    const changedPaths = value.changedPaths?.length ? value.changedPaths : undefined;
-    return {
-      entry: {
-        id: `${CONFIG_AUDIT_SCOPE}:${record.sequence}`,
-        at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
-        kind: "external-edit",
-        source: "external",
-        summary: summarizePaths("Configuration edited outside OpenClaw", changedPaths),
-        ...(changedPaths ? { changedPaths } : {}),
-        ...(!value.valid ? { invalid: true } : {}),
-        ...(value.opaqueChange ? { opaqueChange: true } : {}),
-      },
-      transition: transitionKey(value.previousHash, value.nextHash),
-      recordedAt: record.createdAt,
-      positions: [{ scope: CONFIG_AUDIT_SCOPE, sequence: record.sequence }],
-    };
-  }
-  if (value.result !== "rename" && value.result !== "copy-fallback") {
+  if (
+    value.event === "config.observe" ||
+    (value.event !== "config.external" &&
+      value.result !== "rename" &&
+      value.result !== "copy-fallback")
+  ) {
     return null;
   }
   const changedPaths = value.changedPaths?.length ? value.changedPaths : undefined;
-  const source = classifyConfigWriteSource(value);
+  const source = value.event === "config.external" ? "external" : classifyConfigWriteSource(value);
   return {
     entry: {
       id: `${CONFIG_AUDIT_SCOPE}:${record.sequence}`,
       at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
-      kind: "config-write",
+      kind: value.event === "config.external" ? "external-edit" : "config-write",
       source,
-      summary: configWriteSummary(source, changedPaths),
+      summary: summarizePaths(
+        value.event === "config.external"
+          ? "Configuration edited outside OpenClaw"
+          : (CONFIG_WRITE_PREFIXES.get(source) ?? "Configuration updated"),
+        changedPaths,
+      ),
       ...(changedPaths ? { changedPaths } : {}),
+      ...(value.event === "config.external" && !value.valid ? { invalid: true } : {}),
+      ...(value.event === "config.external" && value.opaqueChange ? { opaqueChange: true } : {}),
     },
     transition: transitionKey(value.previousHash, value.nextHash),
     recordedAt: record.createdAt,
-    positions: [{ scope: CONFIG_AUDIT_SCOPE, sequence: record.sequence }],
+    position: { scope: CONFIG_AUDIT_SCOPE, sequence: record.sequence },
   };
 }
 
-function scanEligible<T>(params: {
+async function scanCandidates<T>(params: {
   beforeSequence: number;
   target: number;
-  latest: (params: {
-    limit: number;
-    beforeSequence?: number;
-  }) => SequencedSqliteAuditRecordEntry<T>[];
-  include: (entry: SequencedSqliteAuditRecordEntry<T>) => boolean;
-}): EligibleScan<T> {
-  const entries: SequencedSqliteAuditRecordEntry<T>[] = [];
+  latest: AuditStore<T>["latest"];
+  project: (entry: SequencedSqliteAuditRecordEntry<T>) => ChangeCandidate | null;
+}): Promise<CandidateScan> {
+  const entries: ChangeCandidate[] = [];
   let beforeSequence = params.beforeSequence;
   let exhausted = false;
   let loadedRawEntries = 0;
-  // Journal history is served on the gateway event loop. Bound each scope even
-  // when nearly every retained row is an ineligible observation or failed write.
+  // Bound each scope even when most rows are observations or failed writes.
   while (
     entries.length < params.target &&
     loadedRawEntries < SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE
@@ -260,7 +227,7 @@ function scanEligible<T>(params: {
       CHANGE_SCAN_BATCH_SIZE,
       SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE - loadedRawEntries,
     );
-    const page = params.latest({
+    const page = await params.latest({
       limit: pageLimit,
       beforeSequence,
     });
@@ -269,21 +236,20 @@ function scanEligible<T>(params: {
       break;
     }
     loadedRawEntries += page.length;
-    let stoppedAt = -1;
     for (let index = 0; index < page.length; index += 1) {
       const entry = page[index]!;
       // The cursor tracks every scanned raw row, including filtered records.
       beforeSequence = entry.sequence;
-      if (params.include(entry)) {
-        entries.push(entry);
+      const candidate = params.project(entry);
+      if (candidate) {
+        entries.push(candidate);
         if (entries.length >= params.target) {
-          stoppedAt = index;
+          exhausted = index === page.length - 1 && page.length < pageLimit;
           break;
         }
       }
     }
     if (entries.length >= params.target) {
-      exhausted = stoppedAt === page.length - 1 && page.length < pageLimit;
       break;
     }
     if (page.length < pageLimit) {
@@ -294,7 +260,7 @@ function scanEligible<T>(params: {
   return {
     entries,
     exhausted,
-    nextBeforeSequence: entries.at(-1)?.sequence ?? beforeSequence,
+    nextBeforeSequence: entries.at(-1)?.position.sequence ?? beforeSequence,
   };
 }
 
@@ -317,7 +283,6 @@ function planConfigMatches(
   }
 
   const planned = new Map<ChangeCandidate, ChangeCandidate>();
-  const usedConfig = new Set<ChangeCandidate>();
   let lastMatchedConfigSequence = Number.POSITIVE_INFINITY;
   for (const operation of systemCandidates) {
     if (!operation.transition) {
@@ -326,9 +291,8 @@ function planConfigMatches(
     const write = configByTransition
       .get(operation.transition)
       ?.filter((candidate) => {
-        const configSequence = candidate.positions[0]!.sequence;
+        const configSequence = candidate.position.sequence;
         return (
-          !usedConfig.has(candidate) &&
           configSequence < lastMatchedConfigSequence &&
           isWithinCollapseWindow(operation.entry.at, candidate.entry.at)
         );
@@ -338,8 +302,7 @@ function planConfigMatches(
       continue;
     }
     planned.set(operation, write);
-    usedConfig.add(write);
-    lastMatchedConfigSequence = write.positions[0]!.sequence;
+    lastMatchedConfigSequence = write.position.sequence;
   }
   return planned;
 }
@@ -349,11 +312,11 @@ function compareCandidates(left: ChangeCandidate, right: ChangeCandidate): numbe
   if (left.recordedAt !== right.recordedAt) {
     return right.recordedAt - left.recordedAt;
   }
-  const scopeOrder = right.positions[0]!.scope.localeCompare(left.positions[0]!.scope);
+  const scopeOrder = right.position.scope.localeCompare(left.position.scope);
   if (scopeOrder !== 0) {
     return scopeOrder;
   }
-  return right.positions[0]!.sequence - left.positions[0]!.sequence;
+  return right.position.sequence - left.position.sequence;
 }
 
 function isWithinCollapseWindow(operationAt: number, configAt: number): boolean {
@@ -382,7 +345,7 @@ function consumePendingCollapse(
   ) {
     return { pending: [...pending], suppressed: false };
   }
-  const sequence = candidate.positions[0]!.sequence;
+  const sequence = candidate.position.sequence;
   let markerIndex = -1;
   let markerSequence = Number.POSITIVE_INFINITY;
   for (let index = 0; index < pending.length; index += 1) {
@@ -416,7 +379,6 @@ function mergeCandidates(params: {
   systemBefore?: number;
   configBefore?: number;
   pendingCollapse: PendingCollapse[];
-  hasBufferedEntries: boolean;
   hasBufferedSystemEntries: boolean;
   hasBufferedConfigEntries: boolean;
 } {
@@ -444,7 +406,7 @@ function mergeCandidates(params: {
       const collapse = consumePendingCollapse(pendingCollapse, config);
       pendingCollapse = collapse.pending;
       if (collapse.suppressed) {
-        configBefore = config.positions[0]!.sequence;
+        configBefore = config.position.sequence;
         configIndex += 1;
         continue;
       }
@@ -455,13 +417,13 @@ function mergeCandidates(params: {
 
     entries.push(next);
     if (next === system) {
-      systemBefore = system.positions[0]!.sequence;
+      systemBefore = system.position.sequence;
       systemIndex += 1;
       if (system.pendingCollapse) {
         pendingCollapse = appendPendingCollapse(pendingCollapse, system.pendingCollapse);
       }
     } else {
-      configBefore = config!.positions[0]!.sequence;
+      configBefore = config!.position.sequence;
       configIndex += 1;
     }
   }
@@ -471,41 +433,35 @@ function mergeCandidates(params: {
     systemBefore,
     configBefore,
     pendingCollapse,
-    hasBufferedEntries:
-      systemIndex < params.systemCandidates.length || configIndex < params.configCandidates.length,
     hasBufferedSystemEntries: systemIndex < params.systemCandidates.length,
     hasBufferedConfigEntries: configIndex < params.configCandidates.length,
   };
 }
 
-function initialBefore<T>(
-  latest: (params: { limit: number }) => SequencedSqliteAuditRecordEntry<T>[],
-): number {
-  const sequence = latest({ limit: 1 })[0]?.sequence;
+async function initialBefore<T>(latest: AuditStore<T>["latest"]): Promise<number> {
+  const sequence = (await latest({ limit: 1 }))[0]?.sequence;
   return sequence === undefined ? 0 : sequence + 1;
 }
 
-export function listSystemChanges(
+export async function listSystemChanges(
   params: SystemChangesListParams,
   options: {
     env?: NodeJS.ProcessEnv;
     systemStore?: AuditStore<SystemAgentAuditEntry>;
     configStore?: AuditStore<ConfigAuditRecord>;
   } = {},
-): SystemChangesListResult {
+): Promise<SystemChangesListResult> {
   const env = options.env ?? process.env;
   const systemStore =
     options.systemStore ??
-    createSqliteAuditRecordStore<SystemAgentAuditEntry>({
+    createSqliteAuditRecordReader<SystemAgentAuditEntry>({
       scope: SYSTEM_AGENT_AUDIT_SCOPE,
-      maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
       env,
     });
   const configStore =
     options.configStore ??
-    createSqliteAuditRecordStore<ConfigAuditRecord>({
+    createSqliteAuditRecordReader<ConfigAuditRecord>({
       scope: CONFIG_AUDIT_SCOPE,
-      maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
       env,
     });
   const cursor = params.beforeCursor
@@ -514,28 +470,25 @@ export function listSystemChanges(
         version: 1 as const,
         // Freeze both journal heads before scanning so page two cannot admit a
         // record inserted into the untouched scope after page one was read.
-        systemAgentBefore: initialBefore(systemStore.latest),
-        configBefore: initialBefore(configStore.latest),
+        systemAgentBefore: await initialBefore(systemStore.latest),
+        configBefore: await initialBefore(configStore.latest),
       };
   const limit = Math.min(MAX_CHANGE_LIMIT, Math.max(1, params.limit ?? DEFAULT_CHANGE_LIMIT));
   const target = limit + 1;
-  const systemScan = scanEligible({
+  const systemScan = await scanCandidates({
     beforeSequence: cursor.systemAgentBefore,
     target,
     latest: systemStore.latest,
-    include: () => true,
+    project: toSystemAgentCandidate,
   });
-  const configScan = scanEligible({
+  const configScan = await scanCandidates({
     beforeSequence: cursor.configBefore,
     target,
     latest: configStore.latest,
-    include: (entry) => toConfigCandidate(entry) !== null,
+    project: toConfigCandidate,
   });
-  const systemCandidates = systemScan.entries.map(toSystemAgentCandidate);
-  const configCandidates = configScan.entries.flatMap((entry) => {
-    const candidate = toConfigCandidate(entry);
-    return candidate ? [candidate] : [];
-  });
+  const systemCandidates = systemScan.entries;
+  const configCandidates = configScan.entries;
   // A visible write can enrich the operation immediately. Its cursor position
   // stays in the config stream and is suppressed only when that stream reaches it.
   const plannedMatches = planConfigMatches(systemCandidates, configCandidates);
@@ -547,21 +500,16 @@ export function listSystemChanges(
       continue;
     }
     const write = plannedMatches.get(operation);
-    if (write) {
+    const maxConfigSequence = write?.position.sequence ?? unseenConfigMaxSequence;
+    if (maxConfigSequence !== undefined) {
       operation.pendingCollapse = {
         transition: operation.transition,
-        maxConfigSequence: write.positions[0]!.sequence,
+        maxConfigSequence,
         operationAt: operation.entry.at,
       };
-      if (write.entry.changedPaths?.length) {
-        operation.entry.changedPaths = [...write.entry.changedPaths];
-      }
-    } else if (unseenConfigMaxSequence !== undefined) {
-      operation.pendingCollapse = {
-        transition: operation.transition,
-        maxConfigSequence: unseenConfigMaxSequence,
-        operationAt: operation.entry.at,
-      };
+    }
+    if (write?.entry.changedPaths?.length) {
+      operation.entry.changedPaths = [...write.entry.changedPaths];
     }
   }
   const merged = mergeCandidates({
@@ -574,24 +522,23 @@ export function listSystemChanges(
   // remaining config record has passed the cursor and none was a partner.
   const pendingCollapse =
     configScan.exhausted && !merged.hasBufferedConfigEntries ? [] : merged.pendingCollapse;
-  const next = { ...cursor };
-  if (!merged.hasBufferedSystemEntries) {
-    next.systemAgentBefore = systemScan.nextBeforeSequence;
-  } else if (merged.systemBefore !== undefined) {
-    next.systemAgentBefore = merged.systemBefore;
-  }
-  if (!merged.hasBufferedConfigEntries) {
-    next.configBefore = configScan.nextBeforeSequence;
-  } else if (merged.configBefore !== undefined) {
-    next.configBefore = merged.configBefore;
-  }
+  const next = {
+    ...cursor,
+    systemAgentBefore: merged.hasBufferedSystemEntries
+      ? (merged.systemBefore ?? cursor.systemAgentBefore)
+      : systemScan.nextBeforeSequence,
+    configBefore: merged.hasBufferedConfigEntries
+      ? (merged.configBefore ?? cursor.configBefore)
+      : configScan.nextBeforeSequence,
+  };
   if (pendingCollapse.length > 0) {
     next.pendingCollapse = pendingCollapse;
   } else {
     delete next.pendingCollapse;
   }
   const hasMore =
-    merged.hasBufferedEntries ||
+    merged.hasBufferedSystemEntries ||
+    merged.hasBufferedConfigEntries ||
     pendingCollapse.length > 0 ||
     !systemScan.exhausted ||
     !configScan.exhausted;
@@ -607,23 +554,21 @@ export function listSystemChanges(
 }
 
 export const systemChangesHandlers: GatewayRequestHandlers = {
-  "openclaw.changes.list": ({ params, respond }) => {
-    if (
-      !assertValidParams(params, validateSystemChangesListParams, "openclaw.changes.list", respond)
-    ) {
-      return;
-    }
-    try {
-      respond(true, listSystemChanges(params));
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          error instanceof Error ? error.message : "invalid change-history cursor",
-        ),
-      );
-    }
-  },
+  "openclaw.changes.list": defineValidatedGatewayHandler(
+    "openclaw.changes.list",
+    validateSystemChangesListParams,
+    async (options) => {
+      const { params, respond } = options;
+      const authority = readGatewayRequestMutationAuthority(options);
+      authority.assertCurrent();
+      const result = await listSystemChanges(params);
+      authority.assertCurrent();
+      respond(true, result);
+    },
+    (error) =>
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : "invalid change-history cursor",
+      ),
+  ),
 };

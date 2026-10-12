@@ -89,17 +89,12 @@ export async function requestProgressCardRefresh(
     invocation.respond(
       false,
       undefined,
-      terminalFailure
-        ? errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "The agent could not refresh this card. Retry the refresh.",
-            { details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } },
-          )
-        : (error ??
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "The agent could not refresh this card. Retry the refresh.",
-            )),
+      (terminalFailure ? undefined : error) ??
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "The agent could not refresh this card. Retry the refresh.",
+          terminalFailure ? { details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } } : undefined,
+        ),
       meta,
     );
     return;

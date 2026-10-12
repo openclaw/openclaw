@@ -1,10 +1,10 @@
-import type { ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import type { PanelLifecycleController } from "../solid-panel-controller.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
 import type {
   BrowserRequestClient,
@@ -36,14 +36,12 @@ import { BrowserPanelViewportController } from "./browser-panel-viewport-control
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-const ACTION_REFRESH_DELAY_MS = 350;
-
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
 export type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
 
 /** Browser session, navigation, capture, and input lifecycle for the docked surface. */
-export class BrowserPanelController implements ReactiveController {
+export class BrowserPanelController implements PanelLifecycleController {
   running: boolean | null = null;
   tabs: BrowserPanelTab[] = [];
   /** Stable tab handle (plugin alias when available), not a raw CDP target id. */
@@ -271,11 +269,7 @@ export class BrowserPanelController implements ReactiveController {
       this.setState("errorText", null);
       await action(client);
       if (current() && refreshView) {
-        this.pendingInput.scheduleRefresh(ACTION_REFRESH_DELAY_MS, () => {
-          if (current() && this.activeTargetId) {
-            void this.refreshView(this.activeTargetId, epoch);
-          }
-        });
+        this.snapshot.scheduleRefresh(epoch, current);
       }
       return current();
     } catch (error) {

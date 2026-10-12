@@ -5,6 +5,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -19,14 +20,14 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
 }));
 
 vi.mock("./realtime-voice.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./realtime-voice.runtime.js")>();
   return {
     ...actual,
-    resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+    resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
   };
 });
 
@@ -80,7 +81,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 afterEach(async () => {
   await fixtureCleanup;
-  mocks.resolveConfiguredRealtimeVoiceProvider.mockReset();
+  mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReset();
   resetPluginStateStoreForTests();
 });
 
@@ -119,7 +120,7 @@ describe("voice-call realtime route ownership", () => {
         },
       ],
     ]);
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(
+    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockImplementation(
       ({ agentId }: { agentId?: string }) => {
         const registration = agentId ? registrations.get(agentId) : undefined;
         if (!registration) {
@@ -151,18 +152,19 @@ describe("voice-call realtime route ownership", () => {
       };
       const fullConfig = {
         agents: {
-          list: [{ id: "main", default: true }, { id: "sales" }, { id: "support" }],
+          entries: { main: {}, sales: {}, support: {} },
         },
       } as OpenClawConfig;
 
       runtime = await createVoiceCallRuntime({
+        scheduler: createTestPluginServiceScheduler(),
         config,
         coreConfig: fullConfig,
         fullConfig,
         agentRuntime: {} as never,
         stateRuntime: createStateRuntime(),
       });
-      expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+      expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).not.toHaveBeenCalled();
 
       const handler = runtime.webhookServer.getRealtimeHandler();
       if (!handler) {
@@ -216,7 +218,7 @@ describe("voice-call realtime route ownership", () => {
         }),
       );
       expect(
-        mocks.resolveConfiguredRealtimeVoiceProvider.mock.calls.map(
+        mocks.resolveConfiguredRealtimeVoiceProviderAsync.mock.calls.map(
           ([options]) => (options as { agentId?: string }).agentId,
         ),
       ).toEqual(["sales", "support"]);

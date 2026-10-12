@@ -13,7 +13,6 @@ import {
   redactSensitiveFieldValueWithConfig,
   redactToolPayloadTextWithConfig,
 } from "../logging/redact.js";
-import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
@@ -152,23 +151,6 @@ function redactPersistedDetailValue(
   return changed ? next : value;
 }
 
-function redactPersistedSummaryField(
-  key: string,
-  value: unknown,
-  maxStringChars: number,
-  redactionConfig?: ToolResultDetailRedactionConfig,
-): unknown {
-  if (typeof value === "string") {
-    return redactPersistedDetailString(value, maxStringChars, redactionConfig);
-  }
-  return redactPersistedDetailValue(
-    value,
-    0,
-    selectPersistedDetailRedactionKey(key, undefined),
-    redactionConfig,
-  );
-}
-
 function copyPersistedSummaryFields(params: {
   target: Record<string, unknown>;
   source: Record<string, unknown>;
@@ -179,12 +161,15 @@ function copyPersistedSummaryFields(params: {
   for (const key of params.keys) {
     const value = params.source[key];
     if (value !== undefined) {
-      params.target[key] = redactPersistedSummaryField(
-        key,
-        value,
-        params.maxChars,
-        params.redactionConfig,
-      );
+      params.target[key] =
+        typeof value === "string"
+          ? redactPersistedDetailString(value, params.maxChars, params.redactionConfig)
+          : redactPersistedDetailValue(
+              value,
+              0,
+              selectPersistedDetailRedactionKey(key, undefined),
+              params.redactionConfig,
+            );
     }
   }
 }
@@ -396,13 +381,7 @@ export function capToolResultForPersistence(
   maxChars: number,
   redactionConfig?: ToolResultDetailRedactionConfig,
 ): AgentMessage {
-  const capped =
-    msg.role === "toolResult"
-      ? truncateToolResultMessage(msg, maxChars, {
-          suffix: formatContextLimitTruncationNotice,
-          minKeepChars: 2_000,
-        })
-      : msg;
+  const capped = msg.role === "toolResult" ? truncateToolResultMessage(msg, maxChars) : msg;
   if (capped.role !== "toolResult") {
     return capped;
   }

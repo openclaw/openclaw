@@ -3,14 +3,10 @@ import { buildDashscopeVideoGenerationProvider } from "openclaw/plugin-sdk/video
 const DEFAULT_ALIBABA_VIDEO_BASE_URL = "https://dashscope-intl.aliyuncs.com";
 
 function isAlibabaVideoEndpointSupported(baseUrl: string | undefined): boolean {
-  try {
-    const hostname = new URL(baseUrl ?? DEFAULT_ALIBABA_VIDEO_BASE_URL).hostname;
-    return !/^(?:coding(?:-intl)?\.dashscope|token-plan\..+\.maas)\.aliyuncs\.com\.?$/iu.test(
-      hostname,
-    );
-  } catch {
-    return true;
-  }
+  const hostname = URL.parse(baseUrl ?? DEFAULT_ALIBABA_VIDEO_BASE_URL)?.hostname ?? "";
+  return !/^(?:coding(?:-intl)?\.dashscope|token-plan\..+\.maas)\.aliyuncs\.com\.?$/iu.test(
+    hostname,
+  );
 }
 
 export const alibabaVideoGenerationProvider = buildDashscopeVideoGenerationProvider({

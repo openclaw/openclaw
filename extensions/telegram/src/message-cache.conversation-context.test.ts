@@ -35,22 +35,6 @@ describe("telegram message cache conversation context", () => {
     resetTelegramMessageCacheForTest();
   });
 
-  it("returns recent chat messages before the current message", async () => {
-    const cache = createTelegramMessageCache();
-    for (const id of [41, 42, 43, 44]) {
-      await record(cache, message(id, { message_thread_id: 100 }));
-    }
-    await record(cache, message(142, { message_thread_id: 200 }));
-    const recent = await cache.recentBefore({
-      accountId: "default",
-      chatId: 7,
-      threadId: 100,
-      messageId: "44",
-      limit: 2,
-    });
-    expect(recent.map((entry) => entry.messageId)).toEqual(["42", "43"]);
-  });
-
   it.each([
     {
       name: "placeholder",

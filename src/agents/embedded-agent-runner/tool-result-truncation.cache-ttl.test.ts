@@ -1,12 +1,12 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import { serializeCacheTtlToolResultProjections } from "./cache-ttl-checkpoint.js";
 import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  getEmbeddedSessionPromptState,
-  serializeCacheTtlToolResultProjections,
+  retainEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
 import {
@@ -122,13 +122,14 @@ describe("cache-TTL tool-result projection", () => {
   it.each([
     ["restart", 4_000],
     ["restart", 8_000],
-    ["eviction", 4_000],
-    ["eviction", 8_000],
+    ["turn teardown", 4_000],
+    ["turn teardown", 8_000],
   ])("preserves ordinary projected bytes after %s with a %s character cap", (reset, maxChars) => {
     const sessionId = `ordinary-${reset}`;
     const sessionIds = [sessionId];
     try {
-      const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+      using initialLease = retainEmbeddedSessionPromptState(sessionId);
+      const state = initialLease.state.toolResults;
       const history: AgentMessage[] = [user("start")];
       let sent: AgentMessage[] = [];
       for (let batch = 0; batch < 3; batch++) {
@@ -160,13 +161,10 @@ describe("cache-TTL tool-result projection", () => {
       if (reset === "restart") {
         clearEmbeddedSessionPromptStates([sessionId]);
       } else {
-        for (let index = 0; index < 65; index++) {
-          const otherId = `${sessionId}-${index}`;
-          sessionIds.push(otherId);
-          getEmbeddedSessionPromptState(otherId);
-        }
+        initialLease[Symbol.dispose]();
       }
-      const restored = getEmbeddedSessionPromptState(sessionId).toolResults;
+      using restoredLease = retainEmbeddedSessionPromptState(sessionId);
+      const restored = restoredLease.state.toolResults;
       expect(restored).not.toBe(state);
       restoreCacheTtlToolResultProjections(restored, entries);
       expect(
@@ -194,7 +192,7 @@ describe("cache-TTL tool-result projection", () => {
 
   it.each(["soft", "hard"] as const)(
     "replays %s pruning after TTL refresh and restart, until compaction/reset",
-    (mode) => {
+    async (mode) => {
       const sessionId = `cache-ttl-${mode}`;
       clearEmbeddedSessionPromptStates([sessionId]);
       try {
@@ -203,7 +201,8 @@ describe("cache-TTL tool-result projection", () => {
             tool({ id: `tool-${index}`, text: `${index}:` + "x".repeat(6_000), image: true }),
           ),
         );
-        const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+        using initialLease = retainEmbeddedSessionPromptState(sessionId);
+        const state = initialLease.state.toolResults;
         truncateOversizedToolResultsInMessages(messages, 1_000, 5_500, 100_000, state);
         let pruningRounds = 0;
         const options = { projectionState: state, onPruned: () => pruningRounds++ };
@@ -227,12 +226,12 @@ describe("cache-TTL tool-result projection", () => {
         const entries: { type: string; customType: string; data: unknown }[] = [];
         const sessionManager = {
           getEntries: () => entries,
-          appendCustomEntry: (customType: string, data: unknown) => {
+          appendCustomEntryAsync: async (customType: string, data: unknown) => {
             const serialized = JSON.stringify(data);
             entries.push({ type: "custom", customType, data: JSON.parse(serialized) });
           },
         };
-        appendAttemptCacheTtlIfNeeded({
+        await appendAttemptCacheTtlIfNeeded({
           sessionManager,
           config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
           provider: "anthropic",
@@ -252,7 +251,8 @@ describe("cache-TTL tool-result projection", () => {
         // The marker carries keys only; pruned bytes never enter the transcript.
         expect(JSON.stringify(entries.at(-1)?.data)).not.toContain("x".repeat(20));
         clearEmbeddedSessionPromptStates([sessionId]);
-        const restarted = getEmbeddedSessionPromptState(sessionId).toolResults;
+        using restartedLease = retainEmbeddedSessionPromptState(sessionId);
+        const restarted = restartedLease.state.toolResults;
         restoreCacheTtlToolResultProjections(restarted, entries);
         const restored = project(messages, {
           projectionState: restarted,
@@ -273,7 +273,8 @@ describe("cache-TTL tool-result projection", () => {
         expect(restarted.replacements.size).toBe(0);
         expect(restarted.restoredCacheTtl.size).toBe(0);
         clearEmbeddedSessionPromptStates([sessionId]);
-        expect(getEmbeddedSessionPromptState(sessionId).toolResults.replacements.size).toBe(0);
+        using resetLease = retainEmbeddedSessionPromptState(sessionId);
+        expect(resetLease.state.toolResults.replacements.size).toBe(0);
       } finally {
         clearEmbeddedSessionPromptStates([sessionId]);
       }

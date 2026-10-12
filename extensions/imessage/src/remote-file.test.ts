@@ -1,7 +1,20 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const warnMock = vi.hoisted(() => vi.fn());
+const { warnMock, runCommand, randomUUIDMock } = vi.hoisted(() => ({
+  warnMock: vi.fn(),
+  runCommand: vi.fn(),
+  randomUUIDMock: vi.fn(),
+}));
+
+vi.mock("node:crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:crypto")>()),
+  randomUUID: randomUUIDMock,
+}));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandWithTimeout: runCommand,
+}));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({ warn: warnMock }),
@@ -32,6 +45,8 @@ function result(
 describe("withIMessageRemoteFile", () => {
   beforeEach(() => {
     warnMock.mockReset();
+    runCommand.mockReset();
+    randomUUIDMock.mockReturnValue("01234567-89ab-cdef-0123-456789abcdef");
   });
 
   it.each(["allocation", "upload"] as const)(
@@ -41,7 +56,7 @@ describe("withIMessageRemoteFile", () => {
       const release = createDeferred<void>();
       const retired = new Error("iMessage delivery retired");
       let current = true;
-      const runCommand = vi.fn(async (argv: string[]) => {
+      runCommand.mockImplementation(async (argv: string[]) => {
         const isHeldCommand = phase === "allocation" ? argv[0] === "ssh" : argv[0] === "scp";
         if (current && isHeldCommand) {
           entered.resolve();
@@ -58,7 +73,6 @@ describe("withIMessageRemoteFile", () => {
             throw retired;
           }
         },
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
         use,
       }).then(
         (value) => ({ value }),
@@ -82,7 +96,7 @@ describe("withIMessageRemoteFile", () => {
   );
 
   it("does not allocate or clean a directory when authority is already retired", async () => {
-    const runCommand = vi.fn(async () => result());
+    runCommand.mockResolvedValue(result());
     const use = vi.fn(async () => "sent");
     await expect(
       withIMessageRemoteFile({
@@ -91,7 +105,6 @@ describe("withIMessageRemoteFile", () => {
         assertDirectAdapterHandoff: () => {
           throw new Error("iMessage delivery retired");
         },
-        deps: { runCommand },
         use,
       }),
     ).rejects.toThrow("iMessage delivery retired");
@@ -100,8 +113,8 @@ describe("withIMessageRemoteFile", () => {
   });
 
   it("uploads into an owner-only remote directory and cleans after success", async () => {
-    const runCommand = vi
-      .fn()
+    randomUUIDMock.mockReturnValue("a1b2c3d4-e5f6-0718-293a-4b5c6d7e8f90");
+    runCommand
       .mockResolvedValueOnce(result())
       .mockResolvedValueOnce(result())
       .mockResolvedValueOnce(result());
@@ -111,7 +124,6 @@ describe("withIMessageRemoteFile", () => {
       withIMessageRemoteFile({
         remoteHost: "bot@messages-mac",
         localPath: "/gateway/private/a file;$(touch nope).png",
-        deps: { runCommand, createToken: () => "a1b2c3d4e5f60718293a4b5c6d7e8f90" },
         use,
       }),
     ).resolves.toBe("sent");
@@ -148,8 +160,7 @@ describe("withIMessageRemoteFile", () => {
 
   it("cleans after the remote file consumer fails", async () => {
     const message = "rpc failure";
-    const runCommand = vi
-      .fn()
+    runCommand
       .mockResolvedValueOnce(result())
       .mockResolvedValueOnce(result())
       .mockResolvedValueOnce(result());
@@ -158,7 +169,6 @@ describe("withIMessageRemoteFile", () => {
       withIMessageRemoteFile({
         remoteHost: "messages-mac",
         localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
         use: async () => {
           throw new Error(message);
         },
@@ -168,8 +178,7 @@ describe("withIMessageRemoteFile", () => {
   });
 
   it("cleans when upload fails", async () => {
-    const runCommand = vi
-      .fn()
+    runCommand
       .mockResolvedValueOnce(result())
       .mockResolvedValueOnce(result({ code: 1, stderr: "upload failed" }))
       .mockResolvedValueOnce(result());
@@ -178,7 +187,6 @@ describe("withIMessageRemoteFile", () => {
       withIMessageRemoteFile({
         remoteHost: "messages-mac",
         localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
         use: async () => "unused",
       }),
     ).rejects.toThrow("upload failed");
@@ -186,8 +194,7 @@ describe("withIMessageRemoteFile", () => {
   });
 
   it("cleans the token-owned parent after setup timeout", async () => {
-    const runCommand = vi
-      .fn()
+    runCommand
       .mockResolvedValueOnce(result({ code: null, termination: "timeout" }))
       .mockResolvedValueOnce(result());
 
@@ -195,7 +202,6 @@ describe("withIMessageRemoteFile", () => {
       withIMessageRemoteFile({
         remoteHost: "messages-mac",
         localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
         use: async () => "unused",
       }),
     ).rejects.toThrow("allocation failed (timeout)");
@@ -206,8 +212,7 @@ describe("withIMessageRemoteFile", () => {
   });
 
   it("warns once without replacing a successful result when cleanup fails", async () => {
-    const runCommand = vi
-      .fn()
+    runCommand
       .mockResolvedValueOnce(result())
       .mockResolvedValueOnce(result())
       .mockResolvedValueOnce(result({ code: 1, stderr: "cleanup failed" }));
@@ -216,7 +221,6 @@ describe("withIMessageRemoteFile", () => {
       withIMessageRemoteFile({
         remoteHost: "messages-mac",
         localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
         use: async () => "accepted",
       }),
     ).resolves.toBe("accepted");
@@ -226,8 +230,7 @@ describe("withIMessageRemoteFile", () => {
 
   it("warns once without replacing the primary failure when cleanup also fails", async () => {
     const primary = new Error("RPC failed");
-    const runCommand = vi
-      .fn()
+    runCommand
       .mockResolvedValueOnce(result())
       .mockResolvedValueOnce(result())
       .mockResolvedValueOnce(result({ code: 1, stderr: "cleanup failed" }));
@@ -236,7 +239,6 @@ describe("withIMessageRemoteFile", () => {
       withIMessageRemoteFile({
         remoteHost: "messages-mac",
         localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
         use: async () => {
           throw primary;
         },
@@ -244,18 +246,5 @@ describe("withIMessageRemoteFile", () => {
     ).rejects.toBe(primary);
     expect(warnMock).toHaveBeenCalledOnce();
     expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
-  });
-
-  it("rejects invalid generated tokens before spawning", async () => {
-    const runCommand = vi.fn();
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        deps: { runCommand, createToken: () => "../escape" },
-        use: async () => "unused",
-      }),
-    ).rejects.toThrow("invalid temporary token");
-    expect(runCommand).not.toHaveBeenCalled();
   });
 });

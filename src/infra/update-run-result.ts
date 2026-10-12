@@ -1,4 +1,3 @@
-import type { z } from "zod";
 import type {
   PluginUpdateIntegrityDriftParams,
   PluginUpdateSummary,
@@ -7,7 +6,8 @@ import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import type { UpdateFailureFact } from "./update-failure-facts.js";
 import type { GitRuntimeArtifactIdentity } from "./update-git-runtime.js";
 import type { UpdateRecovery } from "./update-recovery.js";
-import type { UpdateRollbackOutcome, UpdateRunRecordSchema } from "./update-run-schema.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRollbackOutcome } from "./update-run-schema.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export type UpdateRunResult = {
@@ -22,20 +22,12 @@ export type UpdateRunResult = {
   gitRuntime?: GitRuntimeArtifactIdentity;
   /** The preparation owner verified that completion needs no runtime regeneration. */
   sourceRuntimePrepared?: boolean;
-  before?: { sha?: string | null; version?: string | null; buildId?: string | null };
-  after?: {
-    sha?: string | null;
-    version?: string | null;
-    buildId?: string | null;
-    upstreamRef?: string;
-  };
+  before?: UpdateRunRecord["before"];
+  after?: UpdateRunRecord["after"] & { upstreamRef?: string };
   steps: UpdateStepResult[];
   durationMs: number;
   recovery?: UpdateRecovery;
-  verification?: Omit<
-    z.infer<typeof UpdateRunRecordSchema>["verification"],
-    "recovery" | "rollbackOutcome"
-  >;
+  verification?: Omit<UpdateRunRecord["verification"], "recovery" | "rollbackOutcome">;
   rollbackOutcome?: UpdateRollbackOutcome;
   postUpdate?: {
     plugins?: {

@@ -36,7 +36,8 @@ describe("before_tool_call isolation and approval", () => {
       {
         priority: 50,
         pluginId: "late",
-        handler: () => {
+        handler: (value) => {
+          value.params.cwd = "/unapproved";
           params.command = "mutated";
           return {
             params: { command: "late override" },
@@ -45,11 +46,14 @@ describe("before_tool_call isolation and approval", () => {
         },
       },
       {
-        handler: () => ({
-          block: true,
-          blockReason: "blocked",
-          params: { command: "blocked override" },
-        }),
+        handler: (value) => {
+          expect(value.params).toEqual({ command: "safe" });
+          return {
+            block: true,
+            blockReason: "blocked",
+            params: { command: "blocked override" },
+          };
+        },
       },
       { handler: skipped },
     ]);
@@ -59,24 +63,8 @@ describe("before_tool_call isolation and approval", () => {
       blockReason: "blocked",
       requireApproval: { ...approval, pluginId: "policy" },
     });
+    expect(event.params).toEqual({ command: "safe" });
     expect(skipped).not.toHaveBeenCalled();
-  });
-
-  it("isolates direct event mutations from the caller and later handlers", async () => {
-    const original = { toolName: "bash", params: { command: "safe" } };
-    const observer = vi.fn<Handler>(() => ({}));
-    await toolRunner([
-      { handler: () => ({ requireApproval: approval }) },
-      {
-        handler: (value) => {
-          value.params.cwd = "/unapproved";
-          return {};
-        },
-      },
-      { handler: observer },
-    ]).runBeforeToolCall(original, ctx);
-    expect(original.params).toEqual({ command: "safe" });
-    expect(observer.mock.calls[0]?.[0].params).toEqual({ command: "safe" });
   });
 
   it.each([

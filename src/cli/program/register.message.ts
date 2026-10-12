@@ -16,7 +16,6 @@ import { registerMessageSendCommand } from "./message/register.send.js";
 import { registerMessageThreadCommands } from "./message/register.thread.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
-/** Register the `message` command group with shared channel option helpers. */
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
   const message = program
     .command("message")

@@ -1,13 +1,9 @@
 import {
   channelIngressRoutes,
   type ChannelIngressContextBinding,
-  type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import type {
-  ChannelBotLoopProtectionConfig,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -146,17 +142,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   contextBinding: ChannelIngressContextBinding;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   logVerbose: (message: string) => void;
-}): Promise<
-  | {
-      ok: true;
-      channelIngress: ResolvedChannelMessageIngress;
-      commandAuthorized: boolean | undefined;
-      effectiveWasMentioned: boolean | undefined;
-      groupBotLoopProtection: ChannelBotLoopProtectionConfig | undefined;
-      groupSystemPrompt: string | undefined;
-    }
-  | { ok: false }
-> {
+}) {
   const {
     account,
     config,
@@ -320,7 +306,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   if (isGroup) {
     if (groupConfigResolved.deprecatedNameMatch) {
       logVerbose(`drop group message (deprecated mutable group key matched, space=${spaceId})`);
-      return { ok: false };
+      return { ok: false as const };
     }
     const routeBlockReason = resolvedAccess.routeAccess.reason;
     if (routeBlockReason && routeBlockReason !== "sender_empty_allowlist") {
@@ -331,13 +317,13 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       } else if (routeBlockReason === "route_disabled") {
         logVerbose(`drop group message (space disabled, space=${spaceId})`);
       }
-      return { ok: false };
+      return { ok: false as const };
     }
 
     if (senderAccess.effectiveGroupAllowFrom.length > 0 && senderAccess.decision !== "allow") {
       warnDeprecatedUsersEmailEntries(logVerbose, senderAccess.effectiveGroupAllowFrom);
       logVerbose(`drop group message (sender not allowed, ${senderId})`);
-      return { ok: false };
+      return { ok: false as const };
     }
   }
 
@@ -348,7 +334,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     effectiveWasMentioned = resolvedAccess.activationAccess.effectiveWasMentioned;
     if (resolvedAccess.activationAccess.shouldSkip) {
       logVerbose(`drop group message (mention required, space=${spaceId})`);
-      return { ok: false };
+      return { ok: false as const };
     }
   }
 
@@ -358,13 +344,13 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
         ? "groupPolicy=allowlist (empty allowlist)"
         : senderAccess.reasonCode;
     logVerbose(`drop group message (sender policy blocked, reason=${reason}, space=${spaceId})`);
-    return { ok: false };
+    return { ok: false as const };
   }
 
   if (!isGroup) {
     if (account.config.dm?.enabled === false) {
       logVerbose(`Blocked Google Chat DM from ${senderId} (dmPolicy=disabled)`);
-      return { ok: false };
+      return { ok: false as const };
     }
 
     if (senderAccess.decision !== "allow") {
@@ -391,7 +377,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       } else {
         logVerbose(`Blocked unauthorized Google Chat sender ${senderId} (dmPolicy=${dmPolicy})`);
       }
-      return { ok: false };
+      return { ok: false as const };
     }
   }
 
@@ -401,11 +387,11 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     commandAuthorized !== true
   ) {
     logVerbose(`googlechat: drop control command from ${senderId}`);
-    return { ok: false };
+    return { ok: false as const };
   }
 
   return {
-    ok: true,
+    ok: true as const,
     channelIngress: resolvedAccess,
     commandAuthorized,
     effectiveWasMentioned,

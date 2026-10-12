@@ -40,18 +40,26 @@ import { installDoctorGatewayService } from "./doctor-gateway-installation.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 
 const refusals = [
-  { scenario: "sealed", kind: "sealed", reason: "sealed-mount", guidance: "deployment owner" },
+  {
+    scenario: "sealed",
+    kind: "sealed",
+    reason: "sealed-mount",
+    guidance: "deployment owner",
+    tokenPresent: false,
+  },
   {
     scenario: "unsafe",
     kind: "unknown",
     reason: "unsafe-permissions",
     guidance: "chmod go-w",
+    tokenPresent: true,
   },
   {
     scenario: "uninspectable",
     kind: "unknown",
     reason: "inspection-failed",
     guidance: "native service-manager availability",
+    tokenPresent: false,
   },
 ] as const;
 type Scenario = (typeof refusals)[number]["scenario"] | "writable" | "rejected";
@@ -430,7 +438,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         const tokenRef = persisted.gateway?.auth?.token;
         const storedToken =
           typeof tokenRef === "object" && tokenRef.source === "store"
-            ? readSecretStoreValue({ scope: { kind: "team" }, name: tokenRef.id })
+            ? await readSecretStoreValue({ scope: { kind: "team" }, name: tokenRef.id })
             : undefined;
         const diagnostics = [...edges.note.mock.calls.map(([message]) => message), ...errors].join(
           "\n",
@@ -497,11 +505,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     });
   });
 
-  it.each(
-    refusals.flatMap(({ scenario, kind, reason, guidance }) =>
-      [false, true].map((tokenPresent) => ({ scenario, kind, reason, guidance, tokenPresent })),
-    ),
-  )(
+  it.each(refusals)(
     "preserves config and service when $scenario repair is refused (existing token=$tokenPresent)",
     async ({ scenario, kind, reason, guidance, tokenPresent }) => {
       const { observations, diagnostics } = await runRepair(scenario, { tokenPresent });

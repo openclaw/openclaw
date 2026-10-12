@@ -52,6 +52,25 @@ approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
 
+## Opted-in public child sessions
+
+The ingress resolver accepts an optional host-invocation intent,
+`childSessionPublication: { audience: "public", assertCurrent }`. Supply it only
+after explicit operator opt-in and provider-native proof that the entire
+supplied context is public. Unknown audience metadata must deny publication.
+`assertCurrent` synchronously rechecks account policy and the live ingress
+owner; never derive this field from message text, stored permalinks, or model
+arguments. The ordinary decision-only resolver does not grant authority.
+
+An exact host resolver-to-context handoff binds the intent to one admitted
+run. Only its fresh immediate isolated visible children can receive public
+grants, in their creation commits before launch. Private/draft, incognito, existing,
+forked, retargeted, and descendant sessions do not qualify. The intent cannot
+be serialized for future turns or transport fallback. This does not grant
+creator/admin authority or change Team collaboration permissions. Consumers
+of `onVisibleWorkSessions` may use `publicRead: true` as the creation receipt;
+a canonical URL alone is not proof of anonymous access.
+
 ## Walkthrough
 
 <Steps>
@@ -140,13 +159,19 @@ raw callback string. Actor and source-message checks remain channel-owned.
     for read-only diagnostics, including disabled or configured-but-unavailable
     accounts. Return `enabled`, `configured`, and applicable credential status
     fields without requiring secret resolution. Its result is not a resolved
-    account: operational hooks such as probes and account status builders receive
-    `config.resolveAccount` results instead.
+    account: operational hooks such as checks and account status builders receive
+    `config.resolveAccountAsync` or `config.resolveAccount` results instead.
     Diagnostics expose only status-safe fields from the inspection result.
     Include the same account enablement and configuration decisions used by the
     runtime, including duplicate-account suppression. If `configured` is omitted,
     diagnostics use a recorded Gateway value when available; otherwise they report
     that configuration status is unavailable.
+    Ordinary `channels.status` reads combine this metadata with the lifecycle's
+    recorded account status. Publish changing health and provider details through
+    `setStatus`; account snapshot and channel summary hooks run only for explicit
+    live checks on this RPC. All live hooks share a per-channel deadline. They
+    should also honor their supplied timeout because timing out the RPC cannot
+    cancel an already-running plugin operation.
     Selection before secret redemption also reads this metadata directly. Directory
     auto-selection requires `configured: true`; callers can still select the channel
     explicitly when configuration status is unknown.
@@ -154,11 +179,15 @@ raw callback string. Actor and source-message checks remain channel-owned.
     Operational account reads can be asynchronous. Define
     `config.resolveAccountAsync(cfg, accountId)` when account resolution reads
     durable credentials, and `config.hasConfiguredStateAsync({ cfg, env })` for
-    the matching operational configured-state check. These optional callbacks
-    return a Promise of the same result as their synchronous counterparts.
-    Core awaits them when present; a rejection stays an error and never retries
-    the synchronous callback. Keep synchronous counterparts for older hosts and
-    external consumers of the existing contract.
+    the matching operational configured-state check. Use
+    `config.describeAccountAsync(account, cfg)` for state-backed account summaries,
+    `config.resolveAllowFromAsync({ cfg, accountId })` for stored allowlists, and
+    `security.resolveDmPolicyAsync({ cfg, accountId, account })` for stored DM policy.
+    These optional callbacks return a Promise of the same result as their
+    synchronous counterparts. Core awaits the async hook whenever it is present;
+    neither a rejection nor an empty result retries the synchronous hook. Keep
+    synchronous signatures for older hosts and external consumers, and forward
+    async hooks through any adapter that wraps the channel.
 
     Prepare current credentials for each operation, and revalidate live authority
     after awaited preparation before any side effect. Account objects and registry
@@ -357,6 +386,10 @@ raw callback string. Actor and source-message checks remain channel-owned.
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.
+      `hasReplyPayloadFinalDeliveryCapture(payload)` from the same subpath identifies
+      replies whose confirmed delivery the shared dispatcher will record. Channel
+      adapters must skip their own transcript mirror for those replies, including
+      fallback sends, while still reporting the delivery outcome normally.
       When recovering a payload from earlier source text, apply
       `preserveReplyPayloadMediaSelection(current, recovered)` from
       `openclaw/plugin-sdk/channel-outbound`.
@@ -375,6 +408,16 @@ raw callback string. Actor and source-message checks remain channel-owned.
       delivered media, request entries for only the URLs confirmed accepted by the transport;
       source aliases for removed or unsent media are not delivery evidence.
 
+      A block with `ReplyPayload.textMode: "delta"` carries a disjoint text chunk.
+      Preview adapters append it within the current answer lane; omitted `textMode`
+      means a replacement snapshot. Never infer this from matching prefixes.
+      Finals always replace, and durable sends/transcripts use the payload's own
+      `text`, not an accumulated preview. A text-rewriting delivery modifier clears
+      delta mode so its replacement remains authoritative. When appending a chunk
+      to an existing preview, use `stripReplyPayloadResponsePrefix(payload, text)`
+      to remove only the response prefix recorded by normalization; retain the
+      decorated text for the first chunk and for independent durable sends.
+
       Streaming delivery can carry one `OutboundPayloadPlan` through the optional
       `onPreparedBlockReply(plan, context)`, dispatcher `sendPreparedReply(kind, plan)`,
       and adapter `deliverPrepared(plan, info)` operations. Modifiers rebuild that
@@ -382,13 +425,18 @@ raw callback string. Actor and source-message checks remain channel-owned.
       Channel turn adapters can forward the same plan through
       `deliverPreparedWithProviderMessageSending`, and durable inbound delivery uses
       `deliverStructuredInboundReplyWithMessageSendContext({ ...context, plan })`.
+      A prepared or filtered agent registry from the current Gateway publication
+      is not a reload successor: ordinary final replies use that Gateway’s live
+      channel registry and do not require a handoff callback.
       Both durable inbound helpers accept an optional synchronous
       `prepareRuntimeHandoff(cfg)` callback for final replies after an unrelated
       plugin reload. The channel must reject a changed admitted sender and return
       a config that pins the verified credential for all parts of that delivery.
       Core requires the exact retained channel registration and unchanged channel,
-      shared-default, and owning-plugin settings; channels without this callback
-      cannot transfer a final reply to a successor registry. The callback must not
+      shared-default, and owning-plugin settings for every successor handoff.
+      Channels without this callback deliver with the successor's unchanged
+      config; add the callback when the sender credential can change outside
+      config (environment, token files, SecretRef values). The callback must not
       persist credentials or change unrelated settings.
       Existing raw callbacks remain supported. An older adapter receives the
       payload through its original callback; it must adopt the prepared operation
@@ -544,6 +592,28 @@ raw callback string. Actor and source-message checks remain channel-owned.
       (for example the Microsoft Teams or Google Chat plugin package) for real patterns.
     </Note>
 
+    Direct-message adapters can use `dispatchInboundDirectDm` from
+    `openclaw/plugin-sdk/channel-inbound`. Its optional synchronous
+    `assertAuthority: () => void` callback carries the channel owner's live
+    sender and lifecycle checks through asynchronous preparation. Capture the
+    selected account, peer identity, and policy before yielding; the callback
+    must check their current authority, not just compare a saved token. On
+    current hosts, it runs before session recording,
+    at metadata transaction and commit admission, and before agent dispatch.
+    Throw to refuse the pending effect. The callback is transient authority;
+    never serialize it or replace it with `inboundAccessAuthorized: true`.
+
+    The same callback is available on channel turn plans and prepared turns.
+    Direct session-recording callers can pass `assertAuthority`; the metadata
+    owner receives it as `assertCommitAllowed` and uses its existing writer
+    admission. Metadata failures keep their existing best-effort reporting,
+    while the subsequent dispatch check still refuses revoked authority.
+    Older hosts may ignore these additive fields: their presence is not
+    capability negotiation. The checks after host preparation and at metadata
+    commit require a host that implements this contract. Plugins must also
+    check live authority at effects they initiate directly, such as notices
+    and provider requests.
+
     Routes registered with `auth: "gateway"` use the Gateway's credential
     checks. Before a handler discloses protected data, performs a mutation, or starts other side effects,
     finish reading and validating its body and waiting for queued work, then call
@@ -697,10 +767,15 @@ Microsoft Teams supports `read`, `search`, `reactions`, `list-pins`, `member-inf
 `channel-info`, and `channel-list` under the [Teams access rules](/channels/msteams/access-control).
 
 Discord's `permissions` action inspects the bot's permissions for an allowed channel.
-Guild metadata reads require the requested guild to be allowed by the selected
+Guild-wide metadata reads require the requested guild to be allowed by the selected
 account's current configuration, with unrestricted or wildcard channel access.
+The narrow exception is an active `thread-list` naming a parent `channelId`: the
+parent must be allowed and its metadata must confirm the requested guild before
+the guild-wide fetch. The result includes only allowed threads under that parent
+and member records for those returned threads. An active list without a parent
+still requires guild-wide channel access; archived lists keep their channel-scoped path.
 Only direct operators receive the filtered-results relaxation for `channel-list`;
-delegated agents still require guild-wide channel access.
+delegated `channel-list` callers still require guild-wide channel access.
 
 The transport contract is mandatory for opt-in adapters:
 
@@ -711,6 +786,60 @@ The transport contract is mandatory for opt-in adapters:
   asynchronous DNS or dispatcher preparation.
 - An absent callback means this invocation has no additional read-authority
   fence. A thrown error stops the request; do not retry with a new callback.
+
+Bundled transports also capture `captureEffectAuthority()` from
+`openclaw/plugin-sdk/fetch-runtime` before handing requests to shared queues.
+Use its `run` method to restore that captured scope in a queued continuation.
+After asynchronous preparation, call `effect.initiate(() => provider.send(...))`
+and run the existing synchronous assertion inside that callback. The owner
+releases the interval when the provider call is issued, before its response.
+Every retry or separately submitted chunk calls `initiate` again to prepare a
+fresh use. A fully prepared synchronous batch, such as Twitch's SDK calls or
+IRC's raw lines, acquires one use before its first handoff and submits all parts
+inside that callback. Never acquire multiple held uses upfront: the owner's
+FIFO waits for the preceding use to release. Library work after the SDK handoff
+belongs to the already initiated operation.
+Preserve preparation refusals unchanged when nothing was sent. Once a part is
+accepted, later refusals, transport failures, and delivery-observer failures
+must preserve all accepted receipts in a partial-delivery error, including when
+the caller omits its progress callback. Wait for an initiated batch to settle
+before reporting its outcome. Apply provider-specific failure normalization only
+after entering the SDK or transport call.
+
+The initiation boundary is the call into the provider SDK, CLI runner, or native
+transport. OpenClaw finishes its asynchronous preparation before that call and
+does not hold the interval while awaiting a provider response. Provider libraries
+can still queue, authenticate, encrypt, connect, or retry internally after the
+handoff; those windows are part of the initiated operation. Application retries
+and separately submitted chunks each acquire a new use.
+
+| Bundled transport                                                             | Initiation handoff                                                                 | Work after handoff                                                |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| A2A, Google Chat, Nextcloud Talk, Tlon, and other shared guarded HTTP callers | Fetch after DNS/proxy preparation                                                  | Fetch implementation and networking                               |
+| Buzz and Nostr                                                                | Relay `publish` or `send`                                                          | Relay connection promise, WebSocket buffering, and network I/O    |
+| ClickClack, Zalo, Zalo Personal                                               | Each fetch callback after dispatch preparation                                     | Fetch implementation and networking                               |
+| Discord                                                                       | Fetch after REST scheduler waits                                                   | Fetch implementation and networking                               |
+| Feishu                                                                        | HTTP client method after proxy and dispatch preparation                            | Axios transforms, interceptors, redirects, and networking         |
+| iMessage local CLI                                                            | CLI runner call after media/target preparation                                     | Spawn broker, CLI execution, bridge, and Messages delivery        |
+| iMessage RPC                                                                  | Write to the selected process's stdin                                              | Pipe buffering, local/SSH CLI, bridge, and Messages delivery      |
+| IRC                                                                           | Precomputed raw PRIVMSG batch; explicit outbound JOIN                              | Socket buffering and networking                                   |
+| LINE                                                                          | Each message fetch after authorization                                             | Undici and networking                                             |
+| Matrix                                                                        | Fetch after DNS, crypto, and dispatch preparation; each redirect reacquires        | Fetch implementation and networking                               |
+| Mattermost and SMS                                                            | Shared guarded fetch, or the injected fetch callback                               | Fetch implementation and networking                               |
+| Microsoft Teams                                                               | Teams Common middleware calls the SDK's next request operation                     | SDK token/config preparation, interceptors, Axios, and networking |
+| QA channel and Synology Chat                                                  | Node HTTP request and body submission                                              | Socket connection, buffering, and networking                      |
+| Reef                                                                          | Each relay fetch                                                                   | Fetch implementation and networking                               |
+| Signal HTTP/container                                                         | Node HTTP request/body submission or REST fetch                                    | HTTP transport and signal-cli processing                          |
+| Signal Unix socket                                                            | Socket write after connecting                                                      | Socket buffering and signal-cli processing                        |
+| Slack                                                                         | SDK fetch callback after queue waits                                               | Fetch implementation and networking                               |
+| Telegram                                                                      | Each Undici dispatcher submission; injected fetch callback                         | Undici or injected implementation                                 |
+| Twitch                                                                        | Precomputed batch of synchronous `ChatClient.say` calls                            | Twurple rate-limit queue, IRC client, and networking              |
+| WhatsApp                                                                      | Baileys `sendMessage` after FIFO, or `sendPresenceUpdate`; both recheck the socket | Baileys media/session preparation, encryption, and networking     |
+
+Matrix's client-owned crypto maintenance uses its client lifecycle rather than
+retaining a completed message invocation. Its message fetches still acquire their
+own current use. Independent owners can restore an explicitly captured scope with
+`withEffectAuthority`; an absent scope does not provide message authority.
 
 The host binds the callback to the selected registration and its active lifecycle.
 Local message tools and Gateway agent requests retain the originating run and

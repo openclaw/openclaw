@@ -9,7 +9,7 @@ import type {
   PluginManifestSetupProvider,
 } from "../plugins/manifest-types.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
-import { projectProviderCatalogResultToUnifiedTextRows } from "../plugins/provider-catalog-unified-text.js";
+import { copyProviderCatalogResultEntries } from "../plugins/provider-catalog-result.js";
 import {
   buildManifestModelProviderConfig,
   buildSingleProviderApiKeyCatalog,
@@ -116,7 +116,7 @@ type ManifestProviderAuthOptions = Omit<
 /**
  * Catalog configuration accepted by the single-provider entry helper.
  */
-export type SingleProviderPluginCatalogOptions =
+type SingleProviderPluginCatalogOptions =
   | {
       /**
        * Builds the live provider catalog through the shared API-key catalog path.
@@ -364,11 +364,23 @@ async function runUnifiedTextCatalog(params: {
   source: UnifiedModelCatalogEntry["source"];
 }): Promise<UnifiedModelCatalogEntry[]> {
   const result = await params.catalog.run(params.ctx);
-  return projectProviderCatalogResultToUnifiedTextRows({
+  const rows: UnifiedModelCatalogEntry[] = [];
+  // Consume the copier's validated records without copying the catalog again.
+  for (const [providerId, providerConfig] of copyProviderCatalogResultEntries({
     providerId: params.providerId,
     result,
-    source: params.source,
-  });
+  })) {
+    for (const model of providerConfig.models) {
+      rows.push({
+        kind: "text",
+        provider: providerId,
+        model: model.id,
+        ...(model.name ? { label: model.name } : {}),
+        source: params.source,
+      });
+    }
+  }
+  return rows;
 }
 
 /**

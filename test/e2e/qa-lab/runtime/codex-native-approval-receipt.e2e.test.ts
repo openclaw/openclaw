@@ -11,7 +11,10 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "../../../../src/plugin-sdk/gateway-runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../../src/state/openclaw-agent-db.js";
 import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
 import {
   createOpenClawTestInstance,
@@ -259,6 +262,7 @@ describe("Codex native approval receipt", () => {
         },
         instance.state.agentDir(),
       );
+      await closeOpenClawAgentDatabasesAsync();
       await instance.startGateway();
       const reviewer = await connectApprovalReviewer(instance);
 

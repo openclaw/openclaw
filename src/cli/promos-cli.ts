@@ -1,4 +1,3 @@
-/** CLI registration for ClawHub promotional model offers. */
 import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";

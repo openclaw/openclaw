@@ -1,13 +1,13 @@
-import {
-  WORKBOARD_STATUSES,
-  type WorkboardCard,
-  type WorkboardStatus,
-} from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import type { Command } from "commander";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
+import {
+  addGatewayClientOptions,
+  callGatewayFromCli,
+  parseTimeoutMsWithFallback,
+  isImplicitLocalGatewayTargetFromCli,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
@@ -22,6 +22,8 @@ type GatewayOptions = JsonOptions & {
   url?: string;
   token?: string;
   timeout?: string;
+  port?: string;
+  password?: string;
   expectFinal?: boolean;
   board?: string;
 };
@@ -30,18 +32,14 @@ type DispatchOptions = GatewayOptions & {
   maxStarts?: number;
 };
 
-function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
-  const error = new Error(message) as Error & { code: string; exitCode: number };
-  error.name = "InvalidArgumentError";
-  error.code = "commander.invalidArgument";
-  error.exitCode = 1;
-  return error;
-}
-
-function parsePositiveIntegerOption(value: string, flag: string): number {
+function parseMaxStarts(value: string): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
-    throw invalidCliArgument(`${flag} must be a positive integer.`);
+    throw Object.assign(new Error("--max-starts must be a positive integer."), {
+      name: "InvalidArgumentError",
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    });
   }
   return parsed;
 }
@@ -52,17 +50,6 @@ function writeJson(value: unknown): void {
 
 function writeLine(value: string): void {
   process.stdout.write(`${value}\n`);
-}
-
-function splitLabels(value: string | undefined): string[] | undefined {
-  return value
-    ?.split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function isWorkboardStatus(value: string): value is WorkboardStatus {
-  return (WORKBOARD_STATUSES as readonly string[]).includes(value);
 }
 
 function formatCardLine(card: WorkboardCard): string {
@@ -82,53 +69,43 @@ function writeCards(cards: WorkboardCard[], options: JsonOptions): void {
   }
 }
 
-async function callWorkboardGateway(
-  method: string,
-  options: GatewayOptions,
-  params?: unknown,
-): Promise<unknown> {
-  return await callGatewayFromCli(method, options, params, {
-    mode: "cli",
-    scopes: options.admin
-      ? ["operator.admin", "operator.write", "operator.read"]
-      : ["operator.write", "operator.read"],
-  });
-}
-
-function isGatewayUnavailableError(error: unknown): boolean {
-  const message = formatErrorMessage(error).toLowerCase();
-  if (
-    [
-      "econnrefused",
-      "econnreset",
-      "ehostunreach",
-      "enotfound",
-      "gateway not connected",
-      "gateway unavailable",
-    ].some((marker) => message.includes(marker))
-  ) {
-    return true;
-  }
-  const unknownMethod = message.match(/unknown method:\s*([a-z0-9._-]+)/)?.[1];
-  return unknownMethod === "workboard.cards.dispatch";
-}
-
-function hasExplicitGatewayTarget(options: GatewayOptions): boolean {
-  return Boolean(options.url?.trim() || options.token?.trim());
-}
-
-function hasConfiguredRemoteGatewayTarget(): boolean {
-  if (process.env.OPENCLAW_GATEWAY_URL?.trim()) {
-    return true;
-  }
-  try {
-    return getRuntimeConfig().gateway?.mode === "remote";
-  } catch {
-    return false;
+function writeCard(card: WorkboardCard, options: JsonOptions): void {
+  if (options.json) {
+    writeJson({ card: redactClaimToken(card) });
+  } else {
+    writeLine(formatCardLine(card));
   }
 }
 
-export function registerWorkboardCli(params: { program: Command; store: WorkboardStore }): void {
+export function registerWorkboardCli(params: {
+  program: Command;
+  withStore: <T>(action: (store: WorkboardStore) => Promise<T>) => Promise<T>;
+}): void {
+  const local = <T>(
+    method: string,
+    input: Record<string, unknown>,
+    action: (store: WorkboardStore, assertCurrent: () => void) => Promise<T>,
+    options?: Pick<
+      Parameters<typeof runWithLocalStateOwner>[0],
+      "scopes" | "timeoutMs" | "expectFinal"
+    >,
+  ) =>
+    runWithLocalStateOwner<T>({
+      method: `${method}.owner`,
+      params: input,
+      target: "Workboard",
+      ...options,
+      recoveryCommand: "openclaw workboard list --json",
+      runLocal: ({ assertCurrent }) =>
+        params.withStore(async (store) => {
+          assertCurrent();
+          return await action(store, assertCurrent);
+        }),
+    });
+  const list = (boardId?: string) =>
+    local("workboard.cards.list", { boardId }, async (store) => ({
+      cards: await store.list({ boardId }),
+    }));
   const workboard = params.program
     .command("workboard")
     .description("Manage Workboard cards and worker dispatch");
@@ -137,7 +114,11 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .command("list")
     .description("List Workboard cards")
     .option("--board <id>", "Board id")
-    .option("--status <status>", "Filter by status")
+    .addOption(
+      workboard
+        .createOption("--status <status>", "Filter by status")
+        .choices([...WORKBOARD_STATUSES]),
+    )
     .option("--include-archived", "Include archived cards (default false)")
     .option("--json", "Print JSON", false)
     .action(
@@ -150,7 +131,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       ) => {
         // Text output hides archived cards like /workboard list, while --json
         // keeps the shipped full-card contract for existing scripts.
-        let cards = await params.store.list({ boardId: options.board });
+        let cards = (await list(options.board)).cards;
         if (!options.json && options.includeArchived !== true) {
           cards = cards.filter((card) => !card.metadata?.archivedAt);
         }
@@ -184,21 +165,27 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           labels?: string;
         },
       ) => {
-        const card = await params.store.create({
+        const input = {
           title: title.join(" "),
           notes: options.notes,
           status: options.status,
           priority: options.priority,
           agentId: options.agent,
           boardId: options.board,
-          labels: splitLabels(options.labels),
-          workspaceAccess: { unrestricted: true },
-        });
-        if (options.json) {
-          writeJson({ card: redactClaimToken(card) });
-        } else {
-          writeLine(formatCardLine(card));
-        }
+          labels: options.labels,
+        };
+        const { card } = await local(
+          "workboard.cards.create",
+          input,
+          async (store, assertCurrent) => ({
+            card: await store.create(
+              { ...input, workspaceAccess: { unrestricted: true } },
+              undefined,
+              assertCurrent,
+            ),
+          }),
+        );
+        writeCard(card, options);
       },
     );
 
@@ -208,18 +195,14 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .description("Show one Workboard card")
     .option("--json", "Print JSON", false)
     .action(async (id: string, options: JsonOptions) => {
-      const cards = await params.store.list();
+      const cards = (await list()).cards;
       const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
       if (!card) {
         throw new Error(error);
       }
-      if (options.json) {
-        writeJson({ card: redactClaimToken(card) });
-      } else {
-        writeLine(formatCardLine(card));
-        if (card.notes) {
-          writeLine(card.notes);
-        }
+      writeCard(card, options);
+      if (!options.json && card.notes) {
+        writeLine(card.notes);
       }
     });
 
@@ -230,20 +213,26 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .requiredOption("--status <status>", "Target status")
     .option("--json", "Print JSON", false)
     .action(async (id: string, options: JsonOptions & { status: string }) => {
-      if (!isWorkboardStatus(options.status)) {
+      if (!(WORKBOARD_STATUSES as readonly string[]).includes(options.status)) {
         throw new Error(`--status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
       }
-      const cards = await params.store.list();
+      const cards = (await list()).cards;
       const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
       if (!card) {
         throw new Error(error);
       }
-      const updated = await params.store.move(card.id, options.status, undefined);
-      if (options.json) {
-        writeJson({ card: redactClaimToken(updated) });
-      } else {
-        writeLine(formatCardLine(updated));
-      }
+      const input = { id: card.id, status: options.status, expectedUpdatedAt: card.updatedAt };
+      const { card: updated } = await local(
+        "workboard.cards.move",
+        input,
+        async (store, assertCurrent) => ({
+          card: await store.move(card.id, options.status, undefined, undefined, {
+            expectedUpdatedAt: card.updatedAt,
+            assertOwnerCurrent: assertCurrent,
+          }),
+        }),
+      );
+      writeCard(updated, options);
     });
 
   addGatewayClientOptions(
@@ -254,43 +243,69 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       .option(
         "--max-starts <count>",
         "Maximum new worker runs to start in this pass (default 3)",
-        (value: string) => parsePositiveIntegerOption(value, "--max-starts"),
+        parseMaxStarts,
       )
       .option("--admin", "Request full-host workspace access", false)
       .option("--json", "Print JSON", false),
   ).action(async (options: DispatchOptions) => {
-    try {
-      const method =
-        options.maxStarts === undefined
-          ? "workboard.cards.dispatch"
-          : "workboard.cards.dispatchWithOptions";
-      const result = await callWorkboardGateway(method, options, {
-        boardId: options.board,
-        ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
-      });
-      if (options.json) {
-        writeJson(result);
-      } else {
-        const record = isRecord(result) ? result : {};
-        const started = Array.isArray(record.started) ? record.started.length : 0;
-        const failures = Array.isArray(record.startFailures) ? record.startFailures.length : 0;
-        writeLine(`dispatch complete: started=${started} failures=${failures}`);
-      }
-    } catch (error) {
-      if (
-        !isGatewayUnavailableError(error) ||
-        hasExplicitGatewayTarget(options) ||
-        hasConfiguredRemoteGatewayTarget()
-      ) {
-        throw error;
-      }
-      const result = redactDispatchResult(await params.store.dispatch({ boardId: options.board }));
-      if (options.json) {
-        writeJson({ ...result, gatewayUnavailable: true });
-      } else {
+    const method =
+      options.maxStarts === undefined
+        ? "workboard.cards.dispatch"
+        : "workboard.cards.dispatchWithOptions";
+    const input = {
+      boardId: options.board,
+      ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
+    };
+    const scopes: NonNullable<Parameters<typeof callGatewayFromCli>[3]>["scopes"] = options.admin
+      ? ["operator.admin", "operator.write", "operator.read"]
+      : ["operator.write", "operator.read"];
+    const result = await (!options.token?.trim() &&
+    !options.password?.trim() &&
+    (await isImplicitLocalGatewayTargetFromCli(options))
+      ? local(
+          method,
+          input,
+          async (store, assertCurrent) => ({
+            ...redactDispatchResult(
+              await store.dispatch({ boardId: options.board, assertOwnerCurrent: assertCurrent }),
+            ),
+            gatewayUnavailable: true,
+            started: [],
+            startFailures: [],
+          }),
+          {
+            scopes,
+            timeoutMs: parseTimeoutMsWithFallback(options.timeout, 30_000, {
+              invalidType: "error",
+            }),
+            expectFinal: options.expectFinal,
+          },
+        )
+      : callGatewayFromCli(method, options, input, {
+          mode: "cli",
+          scopes,
+        }));
+    if (options.json) {
+      writeJson(result);
+    } else {
+      const record = isRecord(result) ? result : {};
+      if (record.gatewayUnavailable === true) {
         writeLine(
-          `gateway unavailable; data dispatch only: promoted=${result.promoted.length} blocked=${result.blocked.length}`,
+          `gateway unavailable; data dispatch only: promoted=${Array.isArray(record.promoted) ? record.promoted.length : 0} blocked=${Array.isArray(record.blocked) ? record.blocked.length : 0}`,
         );
+        return;
+      }
+      const started = Array.isArray(record.started) ? record.started.length : 0;
+      const failures = Array.isArray(record.startFailures) ? record.startFailures : [];
+      writeLine(`dispatch complete: started=${started} failures=${failures.length}`);
+      for (const failure of failures) {
+        if (
+          isRecord(failure) &&
+          typeof failure.cardId === "string" &&
+          typeof failure.error === "string"
+        ) {
+          writeLine(`${failure.cardId.slice(0, 8)}: ${failure.error}`);
+        }
       }
     }
   });

@@ -8,9 +8,15 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
+import { markCanonicalSessionValidationPending } from "../../../../src/config/sessions/session-canonical-key.js";
+import { seedCanonicalSessionValidation } from "../../../../src/config/sessions/session-canonical-validation.js";
+import { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../../../../src/state/openclaw-agent-db-registry.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../../../src/state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
+} from "../../../../src/state/openclaw-agent-db.js";
 import { tableExists } from "../../../../src/state/openclaw-state-db-schema-helpers.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -60,7 +66,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           },
           { sessionId: "cron-thread", updatedAt: 1 },
         );
-        const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })!;
+        const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         if (!archiveTablePresent) {
           db.exec("DROP TABLE session_transcript_archives");
         }
@@ -119,7 +125,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           /^\s*select\b[\s\S]*\bfrom\s+["`]?session_nodes\b/i.test(sql) &&
           /\bentry_json\b|\*/i.test(sql.split(/\bfrom\b/i)[0]!);
         try {
-          const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })!;
+          const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           expect(
             db.prepare('select "session_key", "entry_json" from "session_nodes" where 0').all(),
           ).toEqual([]);
@@ -146,9 +152,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
               updatedAtMs: persisted?.updatedAt,
             },
           ]);
-          if (readOnly && !includeRetainedSqlite) {
-            expect(observed.queries.filter(isSummaryRead)).toEqual([]);
-          }
+          expect(observed.queries).toEqual([]);
           const decodedEntries = parse.mock.calls.filter(([json]) =>
             json.includes('"sessionId":"corpus-metadata"'),
           );
@@ -175,7 +179,8 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         { sessionKey, storePath },
         { sessionId, updatedAt: 10 },
       );
-      const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })!;
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const { db } = database;
       const options = { readOnly: true, includeContentRevision: false };
       const expected = {
         agentId: "main",
@@ -193,8 +198,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       ]);
 
       // Raw metadata edits preserve the original admitted reader's parsing contract.
+      runSqliteImmediateTransactionSync(db, () => seedCanonicalSessionValidation(database));
       db.prepare(
-        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.heartbeatIsolatedBaseSessionKey', ?) WHERE session_key = ?",
+        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.heartbeatIsolatedBaseSessionKey', ?), entry_valid = 0 WHERE session_key = ?",
       ).run("agent:main:main", sessionKey);
       const validity = () =>
         db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(sessionKey)
@@ -211,6 +217,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })?.db === db).toBe(
         true,
       );
+      runSqliteImmediateTransactionSync(db, () => {
+        markCanonicalSessionValidationPending(database, [sessionKey]);
+      });
       await closeOpenClawAgentDatabasesAsync(state.stateDir);
       expect(db.isOpen).toBe(false);
       await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).rejects.toThrow(

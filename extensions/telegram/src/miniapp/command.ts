@@ -10,8 +10,8 @@ export function registerTelegramMiniAppCommand(
   launchTickets: TelegramMiniAppLaunchTickets,
 ): void {
   api.registerCommand({
-    name: "dashboard",
-    description: "Open the OpenClaw dashboard",
+    name: "controlui",
+    description: "Open the OpenClaw Control UI",
     channels: ["telegram"],
     requireAuth: true,
     exposeSenderIsOwner: true,
@@ -21,9 +21,17 @@ export function registerTelegramMiniAppCommand(
       }
       const cfg = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
       const accountId = normalizeAccountId(ctx.accountId ?? DEFAULT_ACCOUNT_ID);
-      const userId = resolveTelegramDirectUserId(ctx);
+      const senderId = ctx.senderId?.trim() ?? "";
+      const userId = /^\d+$/.test(senderId)
+        ? senderId
+        : (/^telegram:(\d+)$/.exec(ctx.from?.trim() ?? "")?.[1] ?? "");
       if (!(await isTelegramMiniAppOwner({ cfg, accountId, userId }))) {
-        return { text: "Restricted to the bot owner." };
+        return {
+          text:
+            "Restricted to the bot owner. Ask your OpenClaw administrator to add your numeric " +
+            `Telegram user ID${userId ? ` (${userId})` : ""} to this bot account's allowFrom or ` +
+            "commands.ownerAllowFrom, then retry /controlui. Wildcards and usernames do not grant Control UI access.",
+        };
       }
       let pageUrl: URL;
       try {
@@ -36,12 +44,12 @@ export function registerTelegramMiniAppCommand(
         launchTicket: launchTickets.issue({ accountId, userId }),
       }).toString();
       return {
-        text: "Open OpenClaw dashboard.",
+        text: "Open OpenClaw Control UI.",
         presentation: {
           blocks: [
             {
               type: "buttons",
-              buttons: [{ label: "Open dashboard", webApp: { url: pageUrl.toString() } }],
+              buttons: [{ label: "Open Control UI", webApp: { url: pageUrl.toString() } }],
             },
           ],
         },
@@ -58,12 +66,4 @@ function isTelegramDirectCommand(ctx: PluginCommandContext): boolean {
     return false;
   }
   return /^telegram:\d+$/.test(from) || sessionKey.includes(":telegram:direct:");
-}
-
-function resolveTelegramDirectUserId(ctx: PluginCommandContext): string {
-  const senderId = ctx.senderId?.trim() ?? "";
-  if (/^\d+$/.test(senderId)) {
-    return senderId;
-  }
-  return /^telegram:(\d+)$/.exec(ctx.from?.trim() ?? "")?.[1] ?? "";
 }

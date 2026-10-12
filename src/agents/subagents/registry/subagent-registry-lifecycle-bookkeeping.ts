@@ -1,5 +1,4 @@
-import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayDetachedWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -7,6 +6,7 @@ import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-too
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   CleanupBookkeepingParams,
   SubagentLifecycleWakeContext,
@@ -14,76 +14,56 @@ import type {
 import {
   buildSafeLifecycleErrorMeta,
   maskLifecycleIdentifier,
-} from "./subagent-registry-lifecycle-delivery.js";
+} from "./subagent-registry-lifecycle-log.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
-
-function applyCleanupBookkeeping(
-  cleanup: CleanupBookkeepingParams,
-  suppressSessionEffects: boolean,
-  retireAfterSettle: boolean,
-): void {
-  const { entry } = cleanup;
-  entry.cleanupCompletedAt = cleanup.completedAt;
-  if (suppressSessionEffects) {
-    entry.execution = {
-      ...entry.execution,
-      restartRecovery: undefined,
-      suppressSessionEffects: true,
-    };
-    entry.terminalOwner = undefined;
-  }
-  if (entry.collect) {
-    entry.requesterSettleWake = undefined;
-  } else if (!cleanup.skipRequesterSettleWake) {
-    markRequesterSettleWakePending(entry, { retireAfterSettle });
-  }
-}
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export async function completeCleanupBookkeeping(
   context: SubagentLifecycleWakeContext,
   cleanupParams: CleanupBookkeepingParams,
 ): Promise<void> {
   const params = context.options;
+  let entry = getCurrentSubagentRunOwner(params.runs, cleanupParams.entry) ?? cleanupParams.entry;
   const stateContext = cleanupParams.stateContext ?? captureOpenClawStateWorkerContext();
   // Bookkeeping can retire the row; detached child effects refresh currency below.
-  const suppressSessionEffects = !context.sessionEffectsHostCurrent(cleanupParams.entry);
-  const assertCurrent = () => {
+  const suppressSessionEffects = !context.sessionEffectsHostCurrent(entry);
+  const assertCurrent = (current: SubagentRunRecord) => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     if (
       cleanupParams.isCurrent?.() === false ||
-      context.sessionEffectsHostCurrent(cleanupParams.entry) === suppressSessionEffects
+      context.sessionEffectsHostCurrent(current) === suppressSessionEffects
     ) {
       throw new Error("Subagent cleanup owner changed before bookkeeping.");
     }
+    entry = current;
   };
   const scheduleCleanupTails = (options: {
     allowRetiredRow: boolean;
     isDeleteCleanup: boolean;
   }) => {
-    // Retained bookkeeping requires the exact row. Immediate retirement
-    // removes it first, so absence remains ownership only while no newer
-    // child generation exists; any replacement blocks the stale cleanup.
+    // Retired cleanup may continue only while no replacement owns this execution
+    // and no newer child generation owns its session.
     const postBookkeepingEffectsAllowed = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
-      const current = params.runs.get(cleanupParams.runId);
+      const current = getCurrentSubagentRunOwner(params.runs, entry);
       const rowOwnershipMatches =
-        current === cleanupParams.entry || (options.allowRetiredRow && current === undefined);
+        current !== undefined || (options.allowRetiredRow && !params.runs.has(entry.runId));
       return (
         rowOwnershipMatches &&
         cleanupParams.isCurrent?.() !== false &&
-        !context.newerGenerationOwnsSession(cleanupParams.entry) &&
-        context.sessionEffectsHostCurrent(cleanupParams.entry)
+        !context.newerGenerationOwnsSession(entry) &&
+        context.sessionEffectsHostCurrent(entry)
       );
     };
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // Admission can outlive the caller's async scope. Own the tail's lifetime
       // and recheck row ownership after waiting; surviving tails still block snapshots.
-      void runWithGatewayDetachedWorkAdmission(async () => {
+      void runWithGatewayDetachedWorkContinuation(async () => {
         if (
-          !(await context.shouldSuppressSessionEffects(cleanupParams.entry)) &&
+          !(await context.shouldSuppressSessionEffects(entry)) &&
           postBookkeepingEffectsAllowed()
         ) {
           await run();
@@ -97,13 +77,13 @@ export async function completeCleanupBookkeeping(
     // The admitted tails report their own failures after bookkeeping has committed.
     if (!cleanupParams.preserveTranscript) {
       runCleanupTail("session cleanup", () =>
-        removeInternalSessionEffectsSession(cleanupParams.entry.execution.transcriptTarget),
+        removeInternalSessionEffectsSession(entry.execution.transcriptTarget),
       );
     }
-    if (cleanupParams.entry.spawnMode !== "session") {
+    if (entry.spawnMode !== "session") {
       runCleanupTail("bundle MCP cleanup", () =>
         retireSessionMcpRuntimeForSessionKey({
-          sessionKey: cleanupParams.entry.childSessionKey,
+          sessionKey: entry.childSessionKey,
           reason: "subagent-run-cleanup",
           preserveActiveLeases: true,
           onError: (error, sessionId) => {
@@ -111,31 +91,25 @@ export async function completeCleanupBookkeeping(
               error: buildSafeLifecycleErrorMeta(error),
               sessionId,
               runId: maskLifecycleIdentifier(cleanupParams.runId, "run"),
-              childSessionKey: maskLifecycleIdentifier(
-                cleanupParams.entry.childSessionKey,
-                "session",
-              ),
+              childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
             });
           },
         }),
       );
     }
-    if (
-      !cleanupParams.provisionalKill &&
-      (options.isDeleteCleanup || !cleanupParams.entry.collect)
-    ) {
+    if (!cleanupParams.provisionalKill && (options.isDeleteCleanup || !entry.collect)) {
       runCleanupTail("context-engine cleanup", () =>
         params.notifyContextEngineSubagentEnded(
           {
-            childSessionKey: cleanupParams.entry.childSessionKey,
+            childSessionKey: entry.childSessionKey,
             reason: options.isDeleteCleanup ? "deleted" : "completed",
-            agentDir: cleanupParams.entry.agentDir,
-            workspaceDir: cleanupParams.entry.workspaceDir,
+            agentDir: entry.agentDir,
+            workspaceDir: entry.workspaceDir,
           },
           {
             isCurrent: postBookkeepingEffectsAllowed,
             prepareCurrent: async () =>
-              !(await context.shouldSuppressSessionEffects(cleanupParams.entry)) &&
+              !(await context.shouldSuppressSessionEffects(entry)) &&
               postBookkeepingEffectsAllowed(),
           },
         ),
@@ -149,55 +123,68 @@ export async function completeCleanupBookkeeping(
     return;
   }
   const isDeleteCleanup = cleanupParams.cleanup === "delete";
-  // A cron run reads its children's results from these rows after they settle;
-  // its delete rows leave through the archive sweep instead.
-  const retireAfterSettle =
-    !cleanupParams.entry.collect &&
-    ((isDeleteCleanup && !isCronRunSessionKey(cleanupParams.entry.requesterSessionKey)) ||
-      (cleanupParams.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-        cleanupParams.entry.suppressAnnounceReason !== "killed"));
-  const retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
+  let retireAfterSettle = false;
+  let retireImmediately = false;
   const assertPublishedOwner = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    const current = params.runs.get(cleanupParams.runId);
+    const current = getCurrentSubagentRunOwner(params.runs, entry);
     if (
       cleanupParams.isCurrent?.() === false ||
-      (retireImmediately ? current !== undefined : current !== cleanupParams.entry)
+      (retireImmediately
+        ? current !== undefined || params.runs.has(entry.runId)
+        : current === undefined)
     ) {
       throw new Error("Subagent cleanup owner changed after publication.");
     }
   };
   // Collector tombstones and announcing runs share the same durable cleanup
   // boundary; only announcing runs keep a requester-settle obligation.
-  await commitSubagentLifecycleMutation(context, {
-    entry: cleanupParams.entry,
+  entry = await commitSubagentLifecycleMutation(context, {
+    entry,
     stateContext,
     assertCurrent,
-    retire: retireImmediately,
-    mutate: () => {
-      cleanupParams.discardDelivery?.();
+    retire: () => retireImmediately,
+    mutate: (draft) => {
+      // Cron reads settled child rows directly; delete rows retire through the archive sweep.
+      retireAfterSettle =
+        !draft.collect &&
+        ((isDeleteCleanup && !isCronRunSessionKey(draft.requesterSessionKey)) ||
+          (draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+            draft.suppressAnnounceReason !== "killed"));
+      retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
+      cleanupParams.discardDelivery?.(draft);
       if (!retireImmediately) {
-        applyCleanupBookkeeping(cleanupParams, suppressSessionEffects, retireAfterSettle);
+        draft.cleanupCompletedAt = cleanupParams.completedAt;
+        if (suppressSessionEffects) {
+          draft.execution.restartRecovery = undefined;
+          draft.execution.suppressSessionEffects = true;
+          draft.terminalOwner = undefined;
+        }
+        if (draft.collect) {
+          draft.requesterSettleWake = undefined;
+        } else if (!cleanupParams.skipRequesterSettleWake) {
+          markRequesterSettleWakePending(draft, { retireAfterSettle });
+        }
       }
     },
   });
   assertPublishedOwner();
   if (retireImmediately) {
-    subagentRuns.confirmRetirement(cleanupParams.entry);
+    subagentRuns.confirmRetirement(entry);
   }
-  if (retireImmediately || cleanupParams.entry.collect || cleanupParams.skipRequesterSettleWake) {
-    clearGatewayContextResolver(cleanupParams.entry);
+  if (retireImmediately || entry.collect || cleanupParams.skipRequesterSettleWake) {
+    retireSubagentGatewayBinding(entry);
   }
   if (isDeleteCleanup || retireAfterSettle) {
-    params.clearPendingLifecycleError(cleanupParams.runId);
+    params.clearPendingLifecycleError(entry.runId);
   }
   // A settle wake may retire its durably marked row before detached tails start.
   // A replacement row or newer child generation still fences these effects.
   scheduleCleanupTails({ allowRetiredRow: retireAfterSettle, isDeleteCleanup });
   assertPublishedOwner();
-  context.resumeAncestorCleanup(cleanupParams.entry);
-  if (!cleanupParams.entry.collect && !cleanupParams.skipRequesterSettleWake) {
+  context.resumeAncestorCleanup(entry);
+  if (!entry.collect && !cleanupParams.skipRequesterSettleWake) {
     assertPublishedOwner();
-    scheduleRequesterSettleWake(context, cleanupParams.runId, cleanupParams.entry, stateContext);
+    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
   }
 }

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -630,7 +631,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
       await file.hover();
       await expect.poll(() => openTooltip.count()).toBe(1);
-      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      const filePath = group.locator("openclaw-tooltip[open] .markdown-file-tooltip__path");
+      await filePath.waitFor({ state: "visible" });
+      expect(await filePath.textContent()).toBe("/workspace/tooltip-proof.txt");
       expect(await popupStyle()).toEqual(metadataStyle);
       expect(await file.getAttribute("title")).toBe("");
       await screenshot(page, "tooltip-file-hint.png");
@@ -747,7 +750,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("link", { name: "New conversation" }),
+        page.locator(".sidebar-session-toolbar .sidebar-new-session"),
         `New conversation (${newSessionShortcut})`,
       );
       await expectHoverTooltip(
@@ -755,8 +758,8 @@ describeControlUiE2e("Control UI chat message actions", () => {
         `Open command palette (${commandPaletteShortcut})`,
       );
       await expectHoverTooltip(
-        page.getByRole("button", { name: "Collapse sidebar" }),
-        `Collapse sidebar (${sidebarShortcut})`,
+        page.locator('[data-navigation-view][aria-pressed="true"]'),
+        `Sessions · Collapse sidebar (${sidebarShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open split view" }),
@@ -917,7 +920,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
-        maxChars: 500_000,
+        maxChars: CHAT_MESSAGE_MAX_CHARS,
       });
       await expect
         .poll(() => fullTextBubble.locator(".chat-text").textContent())

@@ -1,18 +1,6 @@
 /** Shared filter, sort, and page result types for cron job listing. */
 import type { CronJob, CronRunStatus } from "../types.js";
 
-/** Enabled-state filter accepted by paginated cron listing. */
-export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
-
-/** Schedule-kind filter accepted by paginated cron listing. */
-export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit" | "stream";
-
-/** Last-run status filter, including jobs that have not produced a status yet. */
-export type CronJobsLastRunStatusFilter = "all" | CronRunStatus | "unknown";
-
-/** Condition-trigger filter accepted by paginated cron listing. */
-export type CronJobsTriggerFilter = "all" | "conditional" | "unconditional";
-
 /** Stable sort keys supported by paginated cron listing. */
 export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
 
@@ -25,16 +13,16 @@ export type CronListPageOptions = {
   limit?: number;
   offset?: number;
   query?: string;
-  enabled?: CronJobsEnabledFilter;
-  scheduleKind?: CronJobsScheduleKindFilter;
-  lastRunStatus?: CronJobsLastRunStatusFilter;
-  trigger?: CronJobsTriggerFilter;
+  enabled?: "all" | "enabled" | "disabled";
+  scheduleKind?: "all" | "at" | "every" | "cron" | "on-exit" | "stream";
+  lastRunStatus?: "all" | CronRunStatus | "unknown";
+  trigger?: "all" | "conditional" | "unconditional";
   sortBy?: CronJobsSortBy;
   sortDir?: CronSortDir;
   agentId?: string;
 };
 
-/** Offset-page result returned by cron listPage callers. */
+/** Offset-page result. Rows are deeply frozen snapshots; clone before editing locally. */
 export type CronListPageResult<TJobs extends readonly CronJob[] = CronJob[]> = {
   jobs: TJobs;
   /** Opaque revision for the complete filtered, sorted result set. */

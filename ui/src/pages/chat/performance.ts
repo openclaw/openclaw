@@ -58,44 +58,27 @@ function runAfterPaint(callback: () => void, complete: () => void): () => void {
   };
 }
 
-function keepLatestBufferedEventsForType(
-  entries: unknown[],
-  event: string,
-  maxExistingForType: number,
-): unknown[] {
-  let keptForType = 0;
-  return entries.filter((entry) => {
-    if (!entry || typeof entry !== "object" || !("event" in entry) || entry.event !== event) {
-      return true;
-    }
-    keptForType += 1;
-    return keptForType <= maxExistingForType;
-  });
-}
-
 export function recordControlUiPerformanceEvent(
   host: ChatPerformanceHost,
   event: string,
   payload: Record<string, unknown>,
-  opts?: { warn?: boolean; console?: boolean; maxBufferedEventsForType?: number },
+  opts: { warn?: boolean; maxBufferedEventsForType: number },
 ): void {
-  const entry: EventLogEntry = { ts: Date.now(), event, payload };
-  if (Array.isArray(host.eventLogBuffer)) {
-    const existingBuffer =
-      typeof opts?.maxBufferedEventsForType === "number"
-        ? keepLatestBufferedEventsForType(
-            host.eventLogBuffer,
-            event,
-            Math.max(0, opts.maxBufferedEventsForType - 1),
-          )
-        : host.eventLogBuffer;
-    host.eventLogBuffer = [entry, ...existingBuffer].slice(0, EVENT_LOG_LIMIT);
+  const newEntry: EventLogEntry = { ts: Date.now(), event, payload };
+  if (host.eventLogBuffer) {
+    let keptForType = 0;
+    const existingBuffer = host.eventLogBuffer.filter((entry) => {
+      if (!entry || typeof entry !== "object" || !("event" in entry) || entry.event !== event) {
+        return true;
+      }
+      keptForType += 1;
+      return keptForType < opts.maxBufferedEventsForType;
+    });
+    host.eventLogBuffer = [newEntry, ...existingBuffer].slice(0, EVENT_LOG_LIMIT);
   }
-  if (opts?.console === false) {
-    return;
+  if (opts.warn) {
+    console.warn(`[openclaw] ${event}`, payload);
   }
-  const logger = opts?.warn === true ? console.warn : console.debug;
-  logger(`[openclaw] ${event}`, payload);
 }
 
 export function scheduleControlUiAfterPaint(

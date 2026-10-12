@@ -57,7 +57,9 @@ function createContext(): PluginCapabilityCatalogHostContext {
   };
   return {
     isProviderApiKeyConfigured: unavailable,
+    isProviderApiKeyConfiguredAsync: unavailable,
     isProviderAuthProfileConfigured: unavailable,
+    isProviderAuthProfileConfiguredAsync: unavailable,
     resolveAgentDir: unavailable,
     createRealtimeTranscriptionWebSocketSession: unavailable,
     resolveProviderRequestHeaders: unavailable,
@@ -437,13 +439,22 @@ it.each([false, true])(
       async (options, root) => {
         fs.writeFileSync(
           path.join(root, "plugin", "catalog.cjs"),
-          `let attempts = 0;
+          `const { createPluginRuntimeStore } = require("openclaw/plugin-sdk/runtime-store");
+          const store = createPluginRuntimeStore("catalog scope missing");
+          let attempts = 0;
           module.exports = () => {
             if (++attempts === ${priorSuccess ? 2 : 1}) throw new Error("catalog construction failed");
-            return { speechProviders: [{
-              id: "factory-owner", label: "Catalog owner", isConfigured: () => true,
+            store.setRuntime("Catalog owner");
+            return { get speechProviders() { return [{
+              id: "factory-owner", label: store.getRuntime(),
+              isConfigured: () => store.getRuntime() === "Catalog owner",
               synthesize: async () => { throw new Error("inspection cannot synthesize"); },
-            }] };
+              streamSynthesize: async () => ({
+                outputFormat: "pcm", fileExtension: ".pcm", voiceCompatible: true,
+                audioStream: new ReadableStream({ start(controller) { controller.close(); } }),
+                release() { store.getRuntime(); return Promise.resolve(); },
+              }),
+            }]; } };
           };`,
         );
         const cache = createPluginCache();
@@ -458,8 +469,16 @@ it.each([false, true])(
         const context = { cfg: {}, providerConfig: {}, timeoutMs: 1000 };
         try {
           const retained = priorSuccess ? load().speechProviders[0]?.provider : undefined;
+          const stream = await retained?.streamSynthesize?.({
+            ...context,
+            text: "synthetic",
+            target: "audio-file",
+          });
+          const release = stream?.release;
           if (priorSuccess) {
             expect(retained?.isConfigured(context)).toBe(true);
+            expect(release).toEqual(expect.any(Function));
+            await release?.();
           }
           expect(load).toThrow(/capabilityCatalogEntry failed.*catalog construction failed/);
           const retried = priorSuccess ? load().speechProviders[0]?.provider : undefined;
@@ -474,6 +493,7 @@ it.each([false, true])(
           if (priorSuccess) {
             expect(() => retained?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
             expect(() => retried?.isConfigured(context)).toThrow(/reloaded|disabled|retir/);
+            expect(() => release?.()).toThrow(/reloaded|disabled|retir/);
           }
         } finally {
           await retirePluginCache(cache);

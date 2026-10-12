@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import {
   calendarInspection,
@@ -135,18 +134,7 @@ describeControlUiE2e("Plugin overview", () => {
         await captureScreenshot(page, `direct-settings-${entry}-refresh.png`, "viewport");
         await gateway.resolveDeferred("plugins.inspect");
         expect(await permission.isChecked()).toBe(true);
-        // The request recorder observes dispatch; wait for the owning writer's
-        // acknowledgement before reloading the saved permission.
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () =>
-                document.querySelector<HTMLElement & { context: ApplicationContext }>(
-                  "openclaw-plugins-page",
-                )?.context.runtimeConfig.state.configAutoSaveStatus,
-            ),
-          )
-          .toBe("saved");
+        // The inspection above starts only after the config owner acknowledges the save.
         await page.reload();
         await page.getByRole("textbox", { name: "Time zone", exact: true }).waitFor();
         await expect.poll(() => permission.isChecked()).toBe(true);
@@ -155,18 +143,10 @@ describeControlUiE2e("Plugin overview", () => {
         await permissionRow
           .getByRole("button", { name: "Actions for Add context to prompts", exact: true })
           .click();
+        const resetInspections = (await gateway.getRequests("plugins.inspect")).length;
         await permissionRow.locator('wa-dropdown-item[value="reset"]').click();
         await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () =>
-                document.querySelector<HTMLElement & { context: ApplicationContext }>(
-                  "openclaw-plugins-page",
-                )?.context.runtimeConfig.state.configAutoSaveStatus,
-            ),
-          )
-          .toBe("saved");
+        await gateway.waitForRequest("plugins.inspect", { after: resetInspections });
         const writes = await gateway.getRequests("config.set");
         const saved = JSON.parse((writes.at(-1)!.params as { raw: string }).raw);
         expect(saved.plugins.entries[plugin.id].hooks).toEqual({});
@@ -305,7 +285,7 @@ describeControlUiE2e("Plugin overview", () => {
       expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
         "Skills1",
         "Tools2",
-        "MCP servers1",
+        "MCP Server1",
       ]);
       await page.getByRole("button", { name: /calendar_search/ }).click();
       await page.getByRole("dialog", { name: "calendar_search" }).waitFor();

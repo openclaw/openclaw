@@ -24,7 +24,7 @@ export function createCatalogFleetFixture(
   receiptBroadcastName?: () => string,
 ) {
   return async function createFleetFixture(
-    onBeforePublication?: (fixture: ReturnType<typeof createCatalogFixture>) => void,
+    onBeforePublication?: (fixture: Awaited<ReturnType<typeof createCatalogFixture>>) => void,
     stableCatalog = false,
     options: {
       asyncSyntheticAuth?: boolean;
@@ -33,7 +33,7 @@ export function createCatalogFleetFixture(
     } = {},
   ) {
     const broadcastName = receiptBroadcastName?.();
-    const fixture = createCatalogFixture(
+    const fixture = await createCatalogFixture(
       makeTempDir,
       0,
       {},

@@ -8,6 +8,7 @@ import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-mod
 import type {
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
+  PluginHookBeforeModelResolveResult,
 } from "../../../plugins/types.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -58,12 +59,8 @@ export function resolveAgentHarnessRunAdmissionError(params: {
   if (entry.modelSelectionLocked !== true) {
     return undefined;
   }
-  const durableEntryError = resolveAgentHarnessSessionStoreEntryError(sessionKey, entry);
-  if (durableEntryError) {
-    return durableEntryError;
-  }
   if (!isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
-    return undefined;
+    return resolveAgentHarnessSessionStoreEntryError(sessionKey, entry);
   }
   const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const durableHarnessId = resolveSessionPinnedHarnessId(entry);
@@ -90,10 +87,15 @@ export async function resolveHookModelSelection(params: {
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
-  let provider = params.provider;
-  let modelId = params.modelId;
+  const selection: { provider: string; modelId: string } & Pick<
+    PluginHookBeforeModelResolveResult,
+    "fallbacksOverride"
+  > = {
+    provider: params.provider,
+    modelId: params.modelId,
+  };
   if (params.modelSelectionLocked === true) {
-    return { provider, modelId };
+    return selection;
   }
   let modelResolveOverride: Awaited<ReturnType<HookRunnerLike["runBeforeModelResolve"]>>;
   const hookRunner = params.hookRunner;
@@ -118,18 +120,18 @@ export async function resolveHookModelSelection(params: {
   }
 
   if (modelResolveOverride?.providerOverride) {
-    provider = modelResolveOverride.providerOverride;
-    log.info(`[hooks] provider overridden to ${provider}`);
+    selection.provider = modelResolveOverride.providerOverride;
+    log.info(`[hooks] provider overridden to ${selection.provider}`);
   }
   if (modelResolveOverride?.modelOverride) {
-    modelId = modelResolveOverride.modelOverride;
-    log.info(`[hooks] model overridden to ${modelId}`);
+    selection.modelId = modelResolveOverride.modelOverride;
+    log.info(`[hooks] model overridden to ${selection.modelId}`);
+  }
+  if (modelResolveOverride?.fallbacksOverride !== undefined) {
+    selection.fallbacksOverride = modelResolveOverride.fallbacksOverride;
   }
 
-  return {
-    provider,
-    modelId,
-  };
+  return selection;
 }
 
 /**
@@ -149,25 +151,6 @@ export function buildBeforeModelResolveAttachments(
   }));
 }
 
-/** Builds structural model metadata for a harness that resolves its real model natively. */
-export function createNativeModelOwnedRuntimeModel(params: {
-  provider: string;
-  modelId: string;
-}): ProviderRuntimeModel {
-  return {
-    provider: params.provider,
-    id: params.modelId,
-    name: params.modelId,
-    baseUrl: "",
-    api: "openai-responses",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
-  };
-}
-
 /** Resolves only OpenClaw-owned context policy; native model owners keep that policy private. */
 export function resolveEmbeddedRuntimeModelPolicy(params: {
   cfg: OpenClawConfig | undefined;
@@ -181,6 +164,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
 }): {
   contextWindowInfo?: ContextWindowInfo;
   contextTokenBudget?: number;
+  contextTokensSource?: "resolved-v1";
   effectiveModel: ProviderRuntimeModel;
 } {
   if (params.nativeModelOwned) {
@@ -199,6 +183,9 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
     modelId: params.modelId,
     modelContextTokens: asFiniteNumber(params.runtimeModel.contextTokens),
     modelContextWindow: contextWindowProfile.contextTokens,
+    modelContextWindowSource: contextWindowProfile.contextWindow
+      ? undefined
+      : params.runtimeModel.contextWindowSource,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
   // resolveContextWindowInfo ranks the passed selection below both the
@@ -212,12 +199,6 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
       ? { ...resolvedCtxInfo, tokens: contextWindowProfile.contextTokens, source: "model" as const }
       : resolvedCtxInfo;
 
-  // Apply contextTokens cap to model so session runtime's auto-compaction
-  // threshold uses the effective limit, not the native context window.
-  const windowedModel =
-    ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
-      ? { ...params.runtimeModel, contextWindow: ctxInfo.tokens }
-      : params.runtimeModel;
   const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });
   const runtimeBaseUrl = params.runtimeModel.baseUrl;
   if (ctxGuard.shouldWarn) {
@@ -255,12 +236,20 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
         }
       : ctxInfo;
   const effectiveModel =
-    contextTokenBudget < (windowedModel.contextWindow ?? Infinity)
-      ? { ...windowedModel, contextWindow: contextTokenBudget }
-      : windowedModel;
+    contextTokenBudget < (params.runtimeModel.contextWindow ?? Infinity)
+      ? { ...params.runtimeModel, contextWindow: contextTokenBudget }
+      : params.runtimeModel;
   return {
     contextWindowInfo,
     contextTokenBudget,
+    // Cold readers match only provider/model/harness, so removable caps and
+    // session-selectable windows cannot become persisted model facts.
+    contextTokensSource:
+      contextWindowInfo.source === "model" &&
+      contextWindowInfo.referenceTokens === undefined &&
+      !params.runtimeModel.contextWindows?.length
+        ? "resolved-v1"
+        : undefined,
     effectiveModel,
   };
 }

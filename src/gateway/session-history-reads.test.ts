@@ -6,9 +6,9 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type {
   SessionHistoryReadParams,
   SessionHistorySnapshot,
@@ -156,14 +156,16 @@ describe("session history snapshot reads", () => {
       });
       expect(snapshot.history.items).toBe(snapshot.history.messages);
       const history = SessionHistorySseState.fromSnapshot({ target, snapshot });
-      const appended = history.appendInlineMessage({
-        message: {
-          role: "assistant",
-          content: textContent("The next reply"),
-          stopReason: "stop",
-          __openclaw: { runId: "run-pending" },
-        },
-      });
+      const appended = (
+        await history.prepareInlineMessage({
+          message: {
+            role: "assistant",
+            content: textContent("The next reply"),
+            stopReason: "stop",
+            __openclaw: { runId: "run-pending" },
+          },
+        })
+      )();
       if (fixture.assistantErrorPending) {
         expect(appended).toEqual({ shouldRefresh: true });
       } else {

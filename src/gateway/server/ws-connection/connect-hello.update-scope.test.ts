@@ -508,6 +508,9 @@ describe("sendGatewayHello update detail scope", () => {
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-model-catalog");
     expect(helloPayload(context)?.features.capabilities).toContain("profile-binding-v1");
+    expect(helloPayload(context)?.features.capabilities).toContain(
+      "sender-restricted-hidden-helpers-v1",
+    );
   });
 
   it.each([

@@ -15,12 +15,14 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingRegistry,
 } from "./provider-thinking.types.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 /** Capture policy before publication; row projections cannot activate a lazy provider. */
 export function prepareModelCatalogThinkingPolicies(params: {
   catalog: ModelCatalogSnapshot;
   metadataSnapshot: PluginMetadataSnapshot;
-  providers?: ProviderThinkingRegistry["providers"];
+  pluginRegistry?: PluginRegistry;
 }): void {
   const policies = new Map<string, PreparedThinkingPolicy | null>();
   withPluginCache(getPluginMetadataSnapshotCache(params.metadataSnapshot), () => {
@@ -32,16 +34,24 @@ export function prepareModelCatalogThinkingPolicies(params: {
       }
       const provider = normalizeProviderId(entry.thinkingPolicyProvider ?? entry.provider);
       if (!policies.has(provider)) {
-        const runtimeProvider = params.providers?.find(({ provider: candidate }) =>
+        const runtimeProvider = params.pluginRegistry?.providers.find(({ provider: candidate }) =>
           matchesProviderPluginRef(candidate, provider),
         )?.provider;
+        const resolve =
+          runtimeProvider?.resolveThinkingProfile ??
+          resolveProviderPolicySurface(provider, {
+            manifestRegistry: params.metadataSnapshot.manifestRegistry,
+          })?.resolveThinkingProfile;
         policies.set(
           provider,
-          runtimeProvider?.resolveThinkingProfile ??
-            resolveProviderPolicySurface(provider, {
-              manifestRegistry: params.metadataSnapshot.manifestRegistry,
-            })?.resolveThinkingProfile ??
-            null,
+          resolve
+            ? {
+                resolve,
+                ...(runtimeProvider?.resolveThinkingProfile && params.pluginRegistry
+                  ? { pluginRegistry: params.pluginRegistry }
+                  : {}),
+              }
+            : null,
         );
       }
       // Configured rows can be shared across generations. Bind a private copy so
@@ -82,15 +92,25 @@ export function resolveEffectiveThinkingProfile(
   // The catalog's exact provider owner outranks ambient runtime registration.
   // Keep this process-local so worker transport and public catalog JSON stay data-only.
   const preparedPolicy = params.catalogEntry?.[PREPARED_THINKING_POLICY];
-  if (preparedPolicy !== undefined) {
-    return preparedPolicy?.(params.context);
+  const preparedRegistryRetired =
+    preparedPolicy?.pluginRegistry !== undefined &&
+    isPluginRegistryRetired(preparedPolicy.pluginRegistry);
+  if (preparedPolicy !== undefined && !preparedRegistryRetired) {
+    return preparedPolicy?.resolve(params.context);
   }
-  const activeProfile = resolveActiveProviderThinkingProfile(params, options?.registry);
+  // A retired prepared registry cannot supply fallback code; resolve from the process owner.
+  const activeProfile = resolveActiveProviderThinkingProfile(
+    params,
+    preparedRegistryRetired ? undefined : options?.registry,
+  );
   if (activeProfile !== undefined) {
     return activeProfile;
   }
   // A captured owner is authoritative even when its registry has no matching hook.
-  if (options?.registry || options?.allowPublicArtifactFallback === false) {
+  if (
+    (!preparedRegistryRetired && options?.registry) ||
+    options?.allowPublicArtifactFallback === false
+  ) {
     return undefined;
   }
   return resolveProviderPublicPolicySurface(params.provider)?.resolveThinkingProfile?.(

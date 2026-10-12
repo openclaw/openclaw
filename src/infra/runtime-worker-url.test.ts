@@ -114,7 +114,10 @@ describe("resolveRuntimeWorkerArgv", () => {
       const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
       const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
       const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", tsxUrl] : [];
-      expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
+      expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([
+        ...(typescriptLoader ? loader : ["--no-install"]),
+        fileURLToPath(url),
+      ]);
       expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
         typescriptLoader && extension.endsWith("ts")
           ? ["--import", import.meta.resolve("tsx/esm")]
@@ -144,6 +147,7 @@ describe("resolveRuntimeWorkerArgv", () => {
         ]) {
           const needsLoader = typescriptLoader && extension.endsWith("ts");
           expect(resolveRuntimeWorkerArgv(url, selected)).toEqual([
+            ...(typescriptLoader ? [] : ["--no-install"]),
             ...(needsLoader ? ["--import", import.meta.resolve("tsx")] : []),
             fileURLToPath(url),
           ]);

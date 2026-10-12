@@ -30,7 +30,7 @@ Principles:
 - **Agent parity.** Everything the user can do on a board, the agent can do
   with tools: add/update/remove widgets, arrange them, manage tabs, switch the
   visible tab, and request split or expanded presentation.
-- **Native shell.** The board is Lit components in the Control UI shell
+- **Native shell.** The board uses Solid components in the Control UI shell
   (the same design system as the rest of the app). Data reports render directly.
   Custom executable widgets use sandboxed iframes; Browser dashboards reuse the
   Browser panel and its navigation controls.
@@ -54,6 +54,13 @@ Principles:
 | Pin (session)       | Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Opening a pinned session restores that browser's saved task layout. |
 
 ## UX flows
+
+The dashboard gallery requests `sessions.list` with `rowMode: "dashboard"`.
+Rows retain card display, navigation, and membership facts; model, usage,
+permission, and participant details remain available through `sessions.describe`.
+The gallery uses the shared session-event reconciler and paced fallback refresh.
+Omitted fields never clear richer session facts already held by another view.
+Other session lists retain their existing compact or full projections.
 
 - **Graduation:** agent calls `show_widget` from an inline-capable chat → widget
   renders in the transcript → hover shows **Pin to dashboard** → widget appears
@@ -382,14 +389,16 @@ It never loads plugins merely to describe their dashboard capabilities.
 
 Core's existing GitHub identity and HTTP owners serve `github.actions.runs`
 through `board.data.read`. The closed parameter contract constructs only the
-repository or workflow run-list operation at `api.github.com`. Authorization
-requires the exact normalized `github.actions.runs:<owner>/<repo>` tool grant.
+repository or workflow run-list operation at `api.github.com`. Both credential
+selection and transport stay bound to `github.com`, even when project discovery
+uses a configured Enterprise host. Enterprise credentials are never used for
+this public-host capability. Authorization requires the exact normalized `github.actions.runs:<owner>/<repo>` tool grant.
 Network-origin grants never supply GitHub identity authority. Approval discloses
 that Actions metadata, including private repository data accessible to the
 agent, is shared with the widget/session audience.
 
 Author guidance is conditional on a usable connected agent identity, not a
-tool-construction-time probe. `board.widget.put` verifies and revalidates that
+tool-construction-time check. `board.widget.put` verifies and revalidates that
 identity before saving HTML (including materialized Canvas documents) or
 registered widgets declaring this host capability. The same preparation owner
 serves pinning and reads, including source-config preview-credential scrubbing
@@ -412,14 +421,18 @@ Authenticated reads never use preview authentication or anonymous retry.
 Redirects are refused. Only this Actions read permits an upstream body up to
 1 MiB. Other GitHub JSON callers retain their 256 KiB default. The owner validates
 and projects at most 30 runs into a small response, without raw repository
-objects or secrets. A Gateway-local cache holds at most 32 successful results
-for 30 seconds. At most 32 concurrent callers can prepare or await reads.
+objects or secrets. A Gateway-local cache holds at most 32 successful results.
+For 30 seconds, reads reuse the result. Expired results return with `stale: true`
+while a single background refresh runs under the Gateway's execution owner.
+The first read still awaits GitHub. At most 32 concurrent callers can prepare
+or await reads, and at most 32 transports can remain in flight.
 The shared transport caches only validated projections under its captured
 credential scope. This internal cache write is not delivery to a widget.
 Every caller, including the initiator, followers, and cache hits, revalidates its
 own live authority before delivery. Removing one caller does not invalidate
-another authorized caller's result, and failed transport reads are not cached
-as success. See the
+another authorized caller's result. Failed refreshes log sanitized guidance and
+evict the old result; the next read retries through the normal error boundary.
+Failed transport reads are not cached as success. See the
 [authoring contract and example](/tools/show-widget#read-github-actions-runs).
 
 ### Modeled residual: WebRTC data channels
@@ -501,19 +514,26 @@ The canonical table definitions, constraints, and indexes are in
 for schema versions, migration and downgrade rules, and the review checkpoint for
 material storage changes. Do not use a copied SQL sketch as the schema contract.
 
-Ordinary disk data mutations borrow the canonical per-agent SQLite worker connection.
-The Boards backend runs the existing synchronous transaction kernels and checks
-current caller authority at transaction entry and commit. Committed changes
+Ordinary disk snapshots and widget-document reads use the existing session
+history read worker. Mutations borrow the canonical per-agent SQLite writer
+connection, where the Boards backend checks current caller authority at
+transaction entry and commit. Committed changes
 invalidate the host's exact session projection before the mutation returns;
 cleanup failures do not turn a completed write into a retryable failure.
-Existing-session preflight, source-handle acquisition, schema/bootstrap/migration,
-protected reads, and cold
-`hasBoard` projection remain with their existing native owners. Protected read turns
-join the same per-agent FIFO before checking the current widget and starting
-consumption. They release the queue before awaiting external consumer work, so
-queued revocation cannot be overtaken by a later protected publication. Incognito writes
-continue on their process-held connection. The worker never owns a second agent
-database actor, and this cut does not change board schemas or protocol payloads.
+Existing-session write preflight, source-handle acquisition,
+schema/bootstrap/migration, and board-presence projection retain their existing
+owners. Reads capture
+their physical store before waiting and join the same per-agent FIFO as writes.
+The read worker retains its admitted read-only connection and reads one coherent
+snapshot without creating missing board tables or opening a writer publication.
+The host checks the captured physical identity, native mutation witness, and
+current authority before starting consumption and releasing the queue.
+External consumer promises run without holding that queue, so queued
+revocation cannot be overtaken by a later protected publication. Gateway close
+rejects new requests and joins accepted reads and publication cleanup before
+worker teardown. Incognito reads and writes continue on their process-held
+connection. The worker never owns a second agent database actor, and this cut
+changes no board schemas, retention, update behavior, or protocol payloads.
 
 Board existence = any rows for the `sessionKey`. Deleting a session deletes its
 board rows. `/new`/`/reset` does not touch them.

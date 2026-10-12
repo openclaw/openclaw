@@ -1,5 +1,4 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -12,7 +11,6 @@ import {
   createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-  type DmPolicy,
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
@@ -47,25 +45,15 @@ function isFeishuConfigured(cfg: OpenClawConfig): boolean {
     return hasConfiguredSecretInput(value);
   };
 
-  const topLevelConfigured =
-    isAppIdConfigured(feishuCfg?.appId) && hasConfiguredSecretInput(feishuCfg?.appSecret);
-
-  const accountConfigured = Object.values(feishuCfg?.accounts ?? {}).some((account) => {
-    if (!account || typeof account !== "object") {
-      return false;
-    }
-    const hasOwnAppId = Object.hasOwn(account, "appId");
-    const hasOwnAppSecret = Object.hasOwn(account, "appSecret");
-    const accountAppIdConfigured = hasOwnAppId
-      ? isAppIdConfigured((account as Record<string, unknown>).appId)
-      : isAppIdConfigured(feishuCfg?.appId);
-    const accountSecretConfigured = hasOwnAppSecret
-      ? hasConfiguredSecretInput((account as Record<string, unknown>).appSecret)
-      : hasConfiguredSecretInput(feishuCfg?.appSecret);
-    return accountAppIdConfigured && accountSecretConfigured;
-  });
-
-  return topLevelConfigured || accountConfigured;
+  const isConfigured = (account: Pick<FeishuConfig, "appId" | "appSecret"> | undefined) =>
+    isAppIdConfigured(account?.appId) && hasConfiguredSecretInput(account?.appSecret);
+  return (
+    isConfigured(feishuCfg) ||
+    Object.values(feishuCfg?.accounts ?? {}).some(
+      (account) =>
+        account && typeof account === "object" && isConfigured({ ...feishuCfg, ...account }),
+    )
+  );
 }
 
 function patchFeishuConfig(
@@ -81,20 +69,26 @@ function patchFeishuConfig(
   });
 }
 
+function resolveFeishuSetupAccount(cfg: OpenClawConfig, requestedAccountId?: string | null) {
+  const accountId = requestedAccountId ?? resolveDefaultFeishuAccountId(cfg);
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+  const account = accountId === DEFAULT_ACCOUNT_ID ? undefined : feishuCfg?.accounts?.[accountId];
+  return {
+    accountId,
+    config: {
+      dmPolicy: account?.dmPolicy ?? feishuCfg?.dmPolicy,
+      allowFrom: account?.allowFrom ?? feishuCfg?.allowFrom,
+    },
+  };
+}
+
 async function promptFeishuAllowFrom(params: {
   cfg: OpenClawConfig;
   accountId?: string;
   prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
 }): Promise<OpenClawConfig> {
-  const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
-  const resolvedAccountId = params.accountId ?? resolveDefaultFeishuAccountId(params.cfg);
-  const account =
-    resolvedAccountId !== DEFAULT_ACCOUNT_ID
-      ? (feishuCfg?.accounts?.[resolvedAccountId] as Record<string, unknown> | undefined)
-      : undefined;
-  const existingAllowFrom = (account?.allowFrom ?? feishuCfg?.allowFrom ?? []) as Array<
-    string | number
-  >;
+  const account = resolveFeishuSetupAccount(params.cfg, params.accountId);
+  const existingAllowFrom = account.config.allowFrom ?? [];
   await params.prompter.note(
     [
       t("wizard.feishu.allowlistIntro"),
@@ -112,7 +106,7 @@ async function promptFeishuAllowFrom(params: {
       existingAllowFrom.length > 0 ? existingAllowFrom.map(String).join(", ") : undefined,
   });
   const mergedAllowFrom = mergeAllowFromEntries(existingAllowFrom, splitSetupEntries(entry));
-  return patchFeishuConfig(params.cfg, resolvedAccountId, { allowFrom: mergedAllowFrom });
+  return patchFeishuConfig(params.cfg, account.accountId, { allowFrom: mergedAllowFrom });
 }
 
 async function noteFeishuCredentialHelp(
@@ -135,23 +129,7 @@ async function noteFeishuCredentialHelp(
 const feishuDmPolicy = createChannelDmPolicy({
   label: "Feishu",
   channel,
-  resolveAccount: (cfg, accountId) => {
-    const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-    const resolvedAccountId = accountId ?? resolveDefaultFeishuAccountId(cfg);
-    const account =
-      resolvedAccountId === DEFAULT_ACCOUNT_ID
-        ? undefined
-        : (feishuCfg?.accounts?.[resolvedAccountId] as Record<string, unknown> | undefined);
-    return {
-      accountId: resolvedAccountId,
-      config: {
-        dmPolicy: (account?.dmPolicy ?? feishuCfg?.dmPolicy) as DmPolicy | undefined,
-        allowFrom: (account?.allowFrom ?? feishuCfg?.allowFrom) as
-          | Array<string | number>
-          | undefined,
-      },
-    };
-  },
+  resolveAccount: resolveFeishuSetupAccount,
   resolveAllowFrom: ({ policy }) => (policy === "open" ? ["*"] : undefined),
   applyPatch: ({ cfg, account, patch }) => patchFeishuConfig(cfg, account.accountId, patch),
   promptAllowFrom: promptFeishuAllowFrom,
@@ -159,15 +137,13 @@ const feishuDmPolicy = createChannelDmPolicy({
 
 type WizardPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 
-const loadAppRegistrationModule = createLazyRuntimeModule(() => import("./app-registration.js"));
-
 async function runScanToCreate(
   prompter: WizardPrompter,
   domain: FeishuDomain,
   beforePersistentEffect?: () => Promise<void>,
 ): Promise<AppRegistrationResult | null> {
   const { beginAppRegistration, initAppRegistration, pollAppRegistration, printQrCode } =
-    await loadAppRegistrationModule();
+    await import("./app-registration.js");
   try {
     await initAppRegistration(domain);
   } catch {
@@ -191,25 +167,17 @@ async function runScanToCreate(
     tp: SCAN_TO_CREATE_TP,
   });
 
-  let message: string;
-  switch (outcome.status) {
-    case "success":
-      message = t("wizard.feishu.scanCompleted");
-      break;
-    case "access_denied":
-      message = t("wizard.feishu.scanDenied");
-      break;
-    case "expired":
-      message = t("wizard.feishu.scanExpired");
-      break;
-    case "timeout":
-      message = t("wizard.feishu.scanTimedOut");
-      break;
-    case "error":
-      message = t("wizard.feishu.scanError", { error: outcome.message });
-      break;
-  }
-  progress.stop(message);
+  const statusMessages = {
+    success: "wizard.feishu.scanCompleted",
+    access_denied: "wizard.feishu.scanDenied",
+    expired: "wizard.feishu.scanExpired",
+    timeout: "wizard.feishu.scanTimedOut",
+  };
+  progress.stop(
+    outcome.status === "error"
+      ? t("wizard.feishu.scanError", { error: outcome.message })
+      : t(statusMessages[outcome.status]),
+  );
   return outcome.status === "success" ? outcome.result : null;
 }
 
@@ -288,7 +256,7 @@ async function runNewAppFlow(params: {
     }
 
     if (appId && appSecretProbeValue) {
-      const { getAppOwnerOpenId } = await loadAppRegistrationModule();
+      const { getAppOwnerOpenId } = await import("./app-registration.js");
       scanOpenId = await getAppOwnerOpenId({
         appId,
         appSecret: appSecretProbeValue,
@@ -312,18 +280,9 @@ async function runNewAppFlow(params: {
     setTimeout(resolve, 50);
   });
 
-  if (appId && appSecret) {
-    next = patchFeishuConfig(next, targetAccountId, {
-      appId,
-      appSecret,
-      connectionMode: "websocket",
-      ...(scanDomain ? { domain: scanDomain } : {}),
-    });
-  } else if (scanDomain) {
-    next = patchFeishuConfig(next, targetAccountId, { domain: scanDomain });
-  }
-
   next = patchFeishuConfig(next, targetAccountId, {
+    ...(appId && appSecret ? { appId, appSecret, connectionMode: "websocket" } : {}),
+    ...(scanDomain ? { domain: scanDomain } : {}),
     ...(scanOpenId ? { dmPolicy: "allowlist", allowFrom: [scanOpenId] } : {}),
     groupPolicy,
     ...(groupPolicy === "open" ? { requireMention: true } : {}),

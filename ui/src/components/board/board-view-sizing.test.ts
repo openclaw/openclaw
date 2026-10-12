@@ -117,7 +117,7 @@ describe("board widget sizing", () => {
       ]),
     );
     const cell = view.querySelector("openclaw-board-widget-cell");
-    await vi.waitFor(() => expect(Reflect.get(cell ?? {}, "actionPending")).toBe(false));
+    await vi.waitFor(() => expect(cell?.querySelector("wa-dropdown-item")?.disabled).toBe(false));
 
     // The menu item is a checkbox toggle: an auto widget pins to its current
     // effective height, a fixed widget returns to auto.

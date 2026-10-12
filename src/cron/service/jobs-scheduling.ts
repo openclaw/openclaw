@@ -5,7 +5,6 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
-import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
@@ -22,6 +21,9 @@ import {
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
+
+/** Skip reason recorded when a main-session heartbeat run is disabled. */
+export const HEARTBEAT_SKIP_DISABLED = "disabled";
 
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
@@ -79,6 +81,27 @@ function isFiniteTimestamp(value: unknown): value is number {
 /** Returns whether a stored next-run timestamp is finite and schedulable. */
 export function hasScheduledNextRunAtMs(value: unknown): value is number {
   return isFiniteTimestamp(value) && value > 0;
+}
+
+/** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
+export function resolveNextRunAtMsOrDisable(params: {
+  state: CronJobPolicyContext;
+  job: CronJob;
+  candidate: unknown;
+  deferredNotifications: DeferredCronNotifications;
+}): number | undefined {
+  const nextRunAtMs = asDateTimestampMs(params.candidate);
+  if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
+    return nextRunAtMs;
+  }
+  autoDisableCronJob({
+    job: params.job,
+    reason: "schedule-errors",
+    atMs: params.state.deps.nowMs(),
+    consecutiveErrors: 1,
+    deferredNotifications: params.deferredNotifications,
+  });
+  return undefined;
 }
 
 /** Resolves the newest persisted cron run status while older state is still readable. */
@@ -434,7 +457,10 @@ function normalizeJobTickState(params: {
   }
 
   // Event schedules cannot retain a timed slot, including one preserved by a force run.
-  if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
+  if (
+    (!isJobEnabled(job) && job.state.forcePreservedNextRunAtMs !== job.state.nextRunAtMs) ||
+    !isTimeScheduledJob(job)
+  ) {
     for (const key of TIME_SCHEDULE_STATE_FIELDS) {
       if (
         key === "forcePreservedNextRunAtMs" &&
@@ -449,13 +475,6 @@ function normalizeJobTickState(params: {
     }
   }
   if (!isJobEnabled(job)) {
-    if (
-      job.state.queuedAtMs !== undefined &&
-      !ownsCronRunMarker(ownership, job.id, job.state.queuedAtMs, true)
-    ) {
-      job.state.queuedAtMs = undefined;
-      changed = true;
-    }
     if (
       job.state.runningAtMs !== undefined &&
       !ownsCronRunMarker(ownership, job.id, job.state.runningAtMs, true) &&
@@ -490,6 +509,7 @@ function normalizeJobTickState(params: {
   if (
     typeof runningAt === "number" &&
     Math.abs(nowMs - runningAt) > CRON_STUCK_RUN_MS &&
+    !ownership.isJobActive(job.id) &&
     !ownsCronRunMarker(ownership, job.id, runningAt)
   ) {
     log.warn({ jobId: job.id, runningAtMs: runningAt }, "cron: clearing stuck running marker");
@@ -669,7 +689,18 @@ export function recomputeNextRunsForMaintenance(
   for (const job of state.store.jobs) {
     changed =
       recomputeSingleJobForMaintenance(state, job, opts, {
-        reservations: state.queuedRunReservationsByJobId,
+        reservations: new Map(
+          state.store.jobs.flatMap((entry) =>
+            typeof entry.state.queuedAtMs === "number"
+              ? [
+                  [
+                    entry.id,
+                    { markerAtMs: entry.state.queuedAtMs, preserveWhenDisabled: true },
+                  ] as const,
+                ]
+              : [],
+          ),
+        ),
         isJobActive: isCronJobActive,
       }) || changed;
   }
@@ -694,8 +725,6 @@ export function summarizeCronJobSchedule(state: CronServiceState) {
     }
     if (
       (rawEnabled ?? true) &&
-      (!state.deps.legacyDefaultAgentId ||
-        tryResolveCronJobEffectiveAgentId(job, undefined, state.deps.legacyDefaultAgentId)) &&
       hasCanonicalCronDeliveryMode(job.delivery) &&
       isTimeScheduledJob(job) &&
       hasNextRun
@@ -721,24 +750,5 @@ export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">, activeInPro
     typeof job.state.queuedAtMs === "number" ||
     typeof job.state.runningAtMs === "number" ||
     (activeInProcess ?? isCronJobActive(job.id))
-  );
-}
-
-/** Returns whether a cron job should execute at `nowMs`, honoring force mode and active runs. */
-export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
-  if (!job.state) {
-    job.state = {};
-  }
-  if (hasActiveCronRun(job)) {
-    return false;
-  }
-  if (opts.forced) {
-    return true;
-  }
-  return (
-    isJobEnabled(job) &&
-    isTimeScheduledJob(job) &&
-    hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
-    nowMs >= job.state.nextRunAtMs
   );
 }

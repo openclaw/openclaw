@@ -11,6 +11,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
@@ -44,16 +45,20 @@ describe("session groups catalog", () => {
   beforeEach(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     root = await fs.mkdtemp(path.join(tempRoot, "openclaw-session-groups-"));
-    env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    // Agent entry helpers and the group catalog must borrow the same shared-state owner.
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    env = { ...process.env };
     await ensureSessionGroupCatalog(env);
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync(root);
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   async function seedSessionStore(
@@ -62,9 +67,17 @@ describe("session groups catalog", () => {
   ): Promise<string> {
     const storePath = path.join(root, "agents", agentId, "sessions", "sessions.json");
     for (const [sessionKey, entry] of Object.entries(entries)) {
-      await replaceSessionEntry({ agentId, storePath, sessionKey }, entry);
+      await replaceSessionEntry({ agentId, env, storePath, sessionKey }, entry);
     }
     return storePath;
+  }
+
+  function useLegacyGroupSchema() {
+    // Publish fixture DDL before reopening; admitted files do not observe outside writers.
+    const { db } = openOpenClawStateDatabase({ env });
+    db.exec("ALTER TABLE session_groups DROP COLUMN cwd;");
+    db.exec("ALTER TABLE session_groups DROP COLUMN worktree;");
+    closeOpenClawStateDatabaseForTest();
   }
 
   it("replaces the ordered catalog with deduped trimmed names", async () => {
@@ -166,16 +179,10 @@ describe("session groups catalog", () => {
   });
 
   it("keeps catalog reads and reorders schema-read-only until defaults are used", async () => {
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec("ALTER TABLE session_groups DROP COLUMN cwd;");
-    legacy.exec("ALTER TABLE session_groups DROP COLUMN worktree;");
-    legacy
-      .prepare("INSERT INTO session_groups (name, position, created_at) VALUES (?, ?, ?)")
+    useLegacyGroupSchema();
+    openOpenClawStateDatabase({ env })
+      .db.prepare("INSERT INTO session_groups (name, position, created_at) VALUES (?, ?, ?)")
       .run("Client", 0, Date.now());
-    legacy.close();
 
     const beforeFeatureUse = openOpenClawStateDatabase({ env })
       .db.prepare("PRAGMA table_info(session_groups)")
@@ -241,6 +248,14 @@ describe("session groups catalog", () => {
       cwd: "/repos/client",
       worktree: true,
     });
+    await updateSessionGroupDefaults("Customer", { cwd: "/repos/updated", worktree: false }, env);
+    expect(readSessionGroupCatalog(env)).toMatchObject({
+      groups: [
+        { name: "Other", position: 0 },
+        { name: "Customer", position: 1 },
+      ],
+      defaults: [{ name: "Other" }, { name: "Customer", cwd: "/repos/updated", worktree: false }],
+    });
   });
 
   it("rejects renaming an unknown group after defaults schema activation", async () => {
@@ -276,13 +291,7 @@ describe("session groups catalog", () => {
   });
 
   it("keeps a stale defaults update schema-free on a legacy database", async () => {
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec("ALTER TABLE session_groups DROP COLUMN cwd;");
-    legacy.exec("ALTER TABLE session_groups DROP COLUMN worktree;");
-    legacy.close();
+    useLegacyGroupSchema();
 
     expect(
       await updateSessionGroupDefaults("Missing", { cwd: "/repos/missing", worktree: true }, env),

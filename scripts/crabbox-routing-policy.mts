@@ -48,7 +48,6 @@ export function crabboxProviderChain({
   const cloudFallback = ["azure", "aws"];
   switch (workload) {
     case "ci-fast":
-      return available(["blacksmith-testbox", "daytona", ...cloudFallback], providers);
     case "ci-proof":
     case "release-proof":
       return available(["blacksmith-testbox", "daytona", ...cloudFallback], providers);

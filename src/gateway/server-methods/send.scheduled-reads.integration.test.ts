@@ -36,7 +36,6 @@ import type {
 const guildId = "100000000000000001";
 const channelId = "100000000000000002";
 const messageId = "100000000000000003";
-const messageWritePath = `/api/v10/channels/${channelId}/messages/${messageId}`;
 const pinWritePath = `/api/v10/channels/${channelId}/pins/${messageId}`;
 const sessionKey = "agent:main:cron:scheduled-reads:run:fixture";
 const sessionId = "scheduled-reads-session";
@@ -148,15 +147,8 @@ async function createFixture(state: OpenClawTestState) {
       }
       if (
         url.origin === "https://discord.com" &&
-        method === "PATCH" &&
-        url.pathname === messageWritePath
-      ) {
-        return Response.json(discordMessages("edited")[0]);
-      }
-      if (
-        url.origin === "https://discord.com" &&
-        ((method === "DELETE" && url.pathname === messageWritePath) ||
-          ((method === "PUT" || method === "DELETE") && url.pathname === pinWritePath))
+        method === "PUT" &&
+        url.pathname === pinWritePath
       ) {
         return new Response(null, { status: 204 });
       }
@@ -217,7 +209,7 @@ async function createFixture(state: OpenClawTestState) {
     validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
   } as GatewayRequestContext;
   const invokeAction = async (
-    action: "read" | "edit" | "delete" | "pin" | "unpin",
+    action: "read" | "pin",
     options: {
       idempotencyKey: string;
       accountId?: string;
@@ -234,7 +226,6 @@ async function createFixture(state: OpenClawTestState) {
         params: {
           channelId,
           ...(action === "read" ? { limit: 1 } : { messageId }),
-          ...(action === "edit" ? { message: "Updated scheduled message" } : {}),
           ...(options.paramsAccountId ? { accountId: options.paramsAccountId } : {}),
         },
         ...(options.accountId ? { accountId: options.accountId } : {}),
@@ -308,7 +299,7 @@ function expectDenied(response: Parameters<RespondFn>, reason: string) {
   expect(response[2]?.message).toContain(reason);
 }
 
-describe("Gateway scheduled reads through an installed Discord plugin", () => {
+describe("Gateway scheduled message actions through an installed Discord plugin", () => {
   it("fetches fresh same-key results and rejects a repeat after permission revocation", async () => {
     await withFixture(async (fixture) => {
       const client = fixture.createClient(localAccountPolicy());
@@ -371,52 +362,55 @@ describe("Gateway scheduled reads through an installed Discord plugin", () => {
     });
   });
 
-  it.each(["account", "provider", "unknown origin", "missing origin"] as const)(
-    "does not reuse a successful key with a mismatched creator %s",
-    async (mismatch) => {
-      await withFixture(async (fixture) => {
-        expectRead(await fixture.read(), "fresh-1");
-        const requestsBeforeMismatch = fixture.httpRequests.length;
-        const policy = accountPolicy(mismatch === "provider" ? "slack" : "discord");
-        if (mismatch === "unknown origin") {
-          policy.ownerOrigin = { kind: "unknown" };
-        } else if (mismatch === "missing origin") {
-          delete policy.ownerOrigin;
-        }
-        const response = await fixture.read(
-          mismatch === "account"
-            ? { accountId: "other" }
-            : { client: fixture.createClient(policy) },
-        );
-        expectDenied(
-          response,
-          mismatch === "account" ? "another creator account" : "matching recorded creator origin",
-        );
-        expect(fixture.httpRequests).toHaveLength(requestsBeforeMismatch);
-      });
-    },
-  );
-
-  it("keeps omitted-account reads on the creator when the provider default changes", async () => {
+  it.each([
+    ["read", "account"],
+    ["read", "provider"],
+    ["read", "unknown origin"],
+    ["read", "missing origin"],
+    ["pin", "account"],
+    ["pin", "params.accountId"],
+  ] as const)("rejects %s with a mismatched creator %s", async (action, mismatch) => {
     await withFixture(async (fixture) => {
-      expectRead(await fixture.read(), "fresh-1");
-      await fixture.setDefaultAccount("other");
-      expectRead(await fixture.read(), "fresh-2");
-      expect(fixture.providerRead).toHaveBeenCalledTimes(2);
-      expect(fixture.httpRequests.every((request) => request.creatorCredentials)).toBe(true);
+      if (action === "read") {
+        expectRead(await fixture.read(), "fresh-1");
+      } else {
+        await fixture.setDefaultAccount("other");
+      }
+      const requestsBeforeMismatch = fixture.httpRequests.length;
+      const policy = accountPolicy(mismatch === "provider" ? "slack" : "discord");
+      if (mismatch === "unknown origin") {
+        policy.ownerOrigin = { kind: "unknown" };
+      } else if (mismatch === "missing origin") {
+        delete policy.ownerOrigin;
+      }
+      const response =
+        action === "read"
+          ? await fixture.read(
+              mismatch === "account"
+                ? { accountId: "other" }
+                : { client: fixture.createClient(policy) },
+            )
+          : await fixture.invokeAction("pin", {
+              idempotencyKey: `scheduled-pin-explicit-${mismatch}`,
+              accountId: mismatch === "account" ? "other" : undefined,
+              paramsAccountId: mismatch === "params.accountId" ? "other" : undefined,
+            });
+      expectDenied(
+        response,
+        action === "pin" || mismatch === "account"
+          ? "another creator account"
+          : "matching recorded creator origin",
+      );
+      expect(fixture.httpRequests).toHaveLength(requestsBeforeMismatch);
+      if (action === "pin") {
+        expect(fixture.httpRequests).toEqual([]);
+      }
     });
   });
-});
 
-describe("Gateway scheduled write accounts through an installed Discord plugin", () => {
-  it.each([
-    { action: "edit", method: "PATCH", path: messageWritePath },
-    { action: "delete", method: "DELETE", path: messageWritePath },
-    { action: "pin", method: "PUT", path: pinWritePath },
-    { action: "unpin", method: "DELETE", path: pinWritePath },
-  ] as const)(
-    "keeps omitted-account $action on the creator when the provider default changes",
-    async ({ action, method, path: requestPath }) => {
+  it.each(["read", "pin"] as const)(
+    "keeps omitted-account %s on the creator when the provider default changes",
+    async (action) => {
       await withFixture(async (fixture) => {
         for (const [phase, expectedMutationCount] of [
           ["before", 1],
@@ -425,9 +419,13 @@ describe("Gateway scheduled write accounts through an installed Discord plugin",
           if (phase === "after") {
             await fixture.setDefaultAccount("other");
           }
+          if (action === "read") {
+            expectRead(await fixture.read(), `fresh-${expectedMutationCount}`);
+            continue;
+          }
           // A fresh key forces account selection instead of replaying the first write.
-          const response = await fixture.invokeAction(action, {
-            idempotencyKey: `scheduled-${action}-${phase}-default-change`,
+          const response = await fixture.invokeAction("pin", {
+            idempotencyKey: `scheduled-pin-${phase}-default-change`,
           });
           expect(response[0], JSON.stringify(response)).toBe(true);
           expect(response[1]).toMatchObject({ ok: true });
@@ -435,32 +433,18 @@ describe("Gateway scheduled write accounts through an installed Discord plugin",
           const mutations = fixture.httpRequests.filter((request) => request.method !== "GET");
           expect(mutations).toHaveLength(expectedMutationCount);
           expect(mutations.at(-1)).toMatchObject({
-            method,
-            path: requestPath,
+            method: "PUT",
+            path: pinWritePath,
             creatorCredentials: true,
           });
+        }
+        if (action === "read") {
+          expect(fixture.providerRead).toHaveBeenCalledTimes(2);
         }
         expect(fixture.httpRequests.every((request) => request.creatorCredentials)).toBe(true);
       });
     },
   );
-
-  it.each([
-    { field: "accountId", accountId: "other", paramsAccountId: undefined },
-    { field: "params.accountId", accountId: undefined, paramsAccountId: "other" },
-  ])("does not replace an explicit $field with the saved creator", async (selection) => {
-    await withFixture(async (fixture) => {
-      await fixture.setDefaultAccount("other");
-      const response = await fixture.invokeAction("pin", {
-        idempotencyKey: `scheduled-pin-explicit-${selection.field}`,
-        accountId: selection.accountId,
-        paramsAccountId: selection.paramsAccountId,
-      });
-
-      expectDenied(response, "another creator account");
-      expect(fixture.httpRequests).toEqual([]);
-    });
-  });
 
   it("keeps same-key pins separate for different saved accounts", async () => {
     await withFixture(async (fixture) => {

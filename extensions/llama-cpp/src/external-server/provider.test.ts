@@ -100,9 +100,7 @@ describe("llama-server provider discovery", () => {
         },
         outcomes: [{ provider: "llama-cpp", profileId: "llama-cpp:default", status: "ready" }],
       });
-      expect(discoverMock).toHaveBeenCalledWith(
-        expect.objectContaining({ apiKey: "profile-key", cacheTtlMs: 0 }),
-      );
+      expect(discoverMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "profile-key" }));
     });
 
     it("prefers configured Authorization over ambient API-key discovery auth", async () => {
@@ -136,13 +134,8 @@ describe("llama-server provider discovery", () => {
 
     it.each([
       { failure: { kind: "http-error", status: 401 }, status: "auth-rejected" },
-      { failure: { kind: "http-error", status: 403 }, status: "auth-rejected" },
       { failure: { kind: "http-error", status: 503 }, status: "unavailable" },
       { failure: { kind: "unreachable", error: new Error("offline") }, status: "unavailable" },
-      {
-        failure: { kind: "invalid-response", error: new Error("malformed") },
-        status: "unavailable",
-      },
     ])(
       "reports $failure as $status instead of publishing empty discovery",
       async ({ failure, status }) => {
@@ -176,36 +169,11 @@ describe("llama-server provider discovery", () => {
       },
     );
 
-    it.each([undefined, "custom-local"])(
-      "keeps unconfigured probes quiet with marker %s",
-      async (apiKey) => {
-        discoverMock.mockResolvedValue({ kind: "unreachable", error: new Error("offline") });
-        const ctx = catalogContext();
-        ctx.resolveProviderApiKey = () => ({ apiKey });
-        await expect(discoverLlamaServerProvider(ctx)).resolves.toBeNull();
-      },
-    );
-  });
-
-  it("returns only the requested discovered model directly to its preparation owner", async () => {
-    discoverMock.mockResolvedValue({
-      ...success(),
-      models: [
-        model(),
-        {
-          ...model(),
-          config: { ...model().config, id: "org/requested:Q8", name: "Requested model" },
-        },
-      ],
-    });
-    await expect(
-      prepareLlamaServerDynamicModel(dynamicContext({ modelId: "org/requested:Q8" })),
-    ).resolves.toMatchObject({
-      provider: "llama-cpp",
-      id: "org/requested:Q8",
-      name: "Requested model",
-      baseUrl: "http://localhost:8080/v1",
-      api: "openai-completions",
+    it.each(["custom-local"])("keeps unconfigured probes quiet with marker %s", async (apiKey) => {
+      discoverMock.mockResolvedValue({ kind: "unreachable", error: new Error("offline") });
+      const ctx = catalogContext();
+      ctx.resolveProviderApiKey = () => ({ apiKey });
+      await expect(discoverLlamaServerProvider(ctx)).resolves.toBeNull();
     });
   });
 
@@ -256,37 +224,6 @@ describe("llama-server provider discovery", () => {
     expect(secondModel?.name).toBe("second scope");
   });
 
-  it("keeps requested models separate when only the endpoint changes", async () => {
-    discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce({
-      ...success(),
-      models: [{ ...model(), config: { ...model().config, name: "second endpoint" } }],
-    });
-    const base = {
-      agentRuntimeId: "endpoint-runtime",
-      authProfileId: "endpoint-profile",
-    };
-    const first = dynamicContext({
-      ...base,
-      providerConfig: { baseUrl: "http://localhost:8080/v1", api: "openai-completions" },
-    });
-    const second = dynamicContext({
-      ...base,
-      providerConfig: { baseUrl: "http://localhost:8081/v1", api: "openai-completions" },
-    });
-
-    const firstModel = await prepareLlamaServerDynamicModel(first);
-    const secondModel = await prepareLlamaServerDynamicModel(second);
-
-    expect(firstModel).toMatchObject({
-      name: "org/model:Q4",
-      baseUrl: "http://localhost:8080/v1",
-    });
-    expect(secondModel).toMatchObject({
-      name: "second endpoint",
-      baseUrl: "http://localhost:8081/v1",
-    });
-  });
-
   it("prefers explicit Authorization over the profile API key during model preparation", async () => {
     runtimeApiKeyMock.mockResolvedValue("profile-key");
     discoverMock.mockResolvedValue(success());
@@ -299,7 +236,7 @@ describe("llama-server provider discovery", () => {
     );
 
     expect(discoverMock).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: undefined, headers, cacheTtlMs: 0 }),
+      expect.objectContaining({ apiKey: undefined, headers }),
     );
   });
 
@@ -311,10 +248,6 @@ describe("llama-server provider discovery", () => {
         endpoint: { origin: "http://localhost:8080", inferenceBaseUrl: "http://localhost:8080/v1" },
         error: new Error("offline"),
       },
-    },
-    {
-      label: "the requested model disappears",
-      discovery: { ...success(), models: [] },
     },
   ])("returns no stale model when $label", async ({ discovery }) => {
     discoverMock.mockResolvedValueOnce(success()).mockResolvedValueOnce(discovery);

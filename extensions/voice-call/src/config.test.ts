@@ -14,6 +14,65 @@ import {
 } from "./config.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
+describe("errand features config", () => {
+  it("keeps delivery, callbacks and machine detection disabled unless configured", () => {
+    const config = VoiceCallConfigSchema.parse({});
+    expect(config.reports).toEqual({ enabled: false, includeTranscript: true });
+    expect(config.live).toEqual({ transcript: false, minIntervalMs: 5000 });
+    expect(config.callbacks).toEqual({ enabled: false, windowMinutes: 60 });
+    expect(config.voicemail).toEqual({
+      detection: "off",
+      onMachine: "leave-message",
+      holdOpeningMaxMs: 30000,
+      machineDetectionSpeechThresholdMs: 6000,
+      machineDetectionSpeechEndThresholdMs: 1200,
+      machineDetectionSilenceTimeoutMs: 5000,
+      machineDetectionTimeoutMs: 30000,
+    });
+    const normalized = normalizeVoiceCallConfig({
+      reports: { enabled: true },
+      live: { transcript: true },
+      callbacks: { enabled: true, brief: { task: "Take a message" } },
+      voicemail: { detection: "twilio", holdOpeningMaxMs: 45000 },
+    });
+    expect(normalized.reports.includeTranscript).toBe(true);
+    expect(normalized.live.minIntervalMs).toBe(5000);
+    expect(normalized.callbacks.windowMinutes).toBe(60);
+    expect(normalized.voicemail.onMachine).toBe("leave-message");
+    expect(normalized.voicemail.holdOpeningMaxMs).toBe(45000);
+    expect(VoiceCallConfigSchema.safeParse({ voicemail: { holdOpeningMaxMs: 0 } }).success).toBe(
+      false,
+    );
+    expect(VoiceCallConfigSchema.safeParse({ callbacks: { windowMinutes: 0 } }).success).toBe(
+      false,
+    );
+    expect(VoiceCallConfigSchema.safeParse({ live: { minIntervalMs: 0 } }).success).toBe(false);
+    expect(
+      VoiceCallConfigSchema.safeParse({ voicemail: { detection: "unsupported" } }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["machineDetectionSpeechThresholdMs", 1000, 6000, 1],
+    ["machineDetectionSpeechEndThresholdMs", 500, 5000, 1],
+    ["machineDetectionSilenceTimeoutMs", 2000, 10000, 1],
+    ["machineDetectionTimeoutMs", 3000, 59000, 1000],
+  ] as const)("accepts only Twilio's supported range for %s", (key, minimum, maximum, step) => {
+    for (const value of [minimum, maximum]) {
+      const config = normalizeVoiceCallConfig({ voicemail: { detection: "twilio", [key]: value } });
+      expect(config.voicemail[key]).toBe(value);
+    }
+    for (const value of [minimum - step, maximum + step, minimum + 0.5]) {
+      expect(VoiceCallConfigSchema.safeParse({ voicemail: { [key]: value } }).success).toBe(false);
+    }
+    if (step > 1) {
+      expect(VoiceCallConfigSchema.safeParse({ voicemail: { [key]: minimum + 1 } }).success).toBe(
+        false,
+      );
+    }
+  });
+});
+
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
   return createVoiceCallBaseConfig({ provider });
 }
@@ -757,6 +816,7 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
     expect(normalized.realtime.consultPolicy).toBe("auto");
+    expect(normalized.realtime.idleHangupMs).toBeUndefined();
     expect(normalized.realtime.fastContext).toEqual({
       enabled: false,
       timeoutMs: 800,
@@ -902,6 +962,22 @@ describe("resolveVoiceCallConfig realtime settings", () => {
 
     expect(resolved.realtime.consultThinkingLevel).toBe("ultra");
     expect(resolved.realtime.consultFastMode).toBe(true);
+  });
+
+  it("accepts only positive integer realtime idle hangup values", () => {
+    const parsed = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "mock",
+      realtime: { idleHangupMs: 45_000 },
+    });
+    expect(resolveVoiceCallConfig(parsed).realtime.idleHangupMs).toBe(45_000);
+    expect(
+      VoiceCallConfigSchema.safeParse({
+        enabled: true,
+        provider: "mock",
+        realtime: { idleHangupMs: 0 },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects invalid realtime consult thinking levels", () => {

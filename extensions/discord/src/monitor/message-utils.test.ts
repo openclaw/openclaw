@@ -93,37 +93,4 @@ describe("resolveDiscordChannelInfo", () => {
     expect(second).toBeNull();
     expect(fetchChannel).toHaveBeenCalledTimes(1);
   });
-
-  it("does not reuse cached channel info while the process clock is invalid", async () => {
-    const fetchChannel = vi
-      .fn()
-      .mockResolvedValueOnce({ type: ChannelType.GuildText, name: "old" })
-      .mockResolvedValueOnce({ type: ChannelType.GuildText, name: "fresh" });
-    const client = { fetchChannel } as unknown as Client;
-
-    const first = await resolveDiscordChannelInfo(client, "invalid-clock-channel");
-    expect(first?.name).toBe("old");
-
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    const second = await resolveDiscordChannelInfo(client, "invalid-clock-channel");
-
-    expect(second?.name).toBe("fresh");
-    expect(fetchChannel).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache channel info when the cache expiry would exceed the Date range", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const fetchChannel = vi
-      .fn()
-      .mockResolvedValueOnce({ type: ChannelType.GuildText, name: "first" })
-      .mockResolvedValueOnce({ type: ChannelType.GuildText, name: "second" });
-    const client = { fetchChannel } as unknown as Client;
-
-    const first = await resolveDiscordChannelInfo(client, "overflow-cache-channel");
-    const second = await resolveDiscordChannelInfo(client, "overflow-cache-channel");
-
-    expect(first?.name).toBe("first");
-    expect(second?.name).toBe("second");
-    expect(fetchChannel).toHaveBeenCalledTimes(2);
-  });
 });

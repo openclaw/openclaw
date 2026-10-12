@@ -30,6 +30,13 @@ type ReplyQuestionInputResult =
   | { handled: false }
   | { handled: true; payload: ReplyPayload | undefined };
 
+function questionErrorReply(text: string): ReplyQuestionInputResult {
+  return {
+    handled: true,
+    payload: markReplyPayloadForSourceSuppressionDelivery({ text, isError: true }),
+  };
+}
+
 /** Question-only runtimes accept answers without exposing ordinary steering. */
 export async function runReplyQuestionInput(
   params: ReplyQuestionInputParams,
@@ -72,7 +79,7 @@ export async function runReplyQuestionInput(
     followupRun.operatorAuthority?.assertCurrent();
   };
   const state = resolveReplyOperationRunState(opts);
-  let outcome: { status: "answered" } | { status: "indeterminate"; errorMessage: string };
+  let unconfirmedAnswer: string | undefined;
   try {
     const claimed = await claimPendingAgentQuestionAnswerFromCaller({
       sessionKey,
@@ -89,7 +96,6 @@ export async function runReplyQuestionInput(
     if (!claimed) {
       return { handled: false };
     }
-    outcome = { status: "answered" };
   } catch (error) {
     if (error instanceof QuestionDispatchUnsupportedError) {
       assertSourceCurrent();
@@ -99,13 +105,9 @@ export async function runReplyQuestionInput(
       if (state) {
         state.admission = { status: "skipped", reason: "question-response-refused" };
       }
-      return {
-        handled: true,
-        payload: markReplyPayloadForSourceSuppressionDelivery({
-          text: `The answer was not sent: ${error.message}. Use the question controls in the Control UI, or check the active run and your permissions before retrying.`,
-          isError: true,
-        }),
-      };
+      return questionErrorReply(
+        `The answer was not sent: ${error.message}. Use the question controls in the Control UI, or check the active run and your permissions before retrying.`,
+      );
     }
     // Validation precedes commitment: keep the question open and explain how to retry.
     const rejection = readQuestionRejection(error);
@@ -114,29 +116,25 @@ export async function runReplyQuestionInput(
       if (state) {
         state.admission = { status: "skipped", reason: "question-response-rejected" };
       }
-      return {
-        handled: true,
-        payload: markReplyPayloadForSourceSuppressionDelivery({
-          text: `${
-            detail
-              ? `The answer was not accepted: ${detail}.`
-              : "The answer was not accepted because a question is still unanswered."
-          } The question is still open, so reply again and answer every question by number or question id.`,
-          isError: true,
-        }),
-      };
+      return questionErrorReply(
+        `${
+          detail
+            ? `The answer was not accepted: ${detail}.`
+            : "The answer was not accepted because a question is still unanswered."
+        } The question is still open, so reply again and answer every question by number or question id.`,
+      );
     }
     if (!(error instanceof QuestionAnswerUnconfirmedError)) {
       throw error;
     }
-    outcome = { status: "indeterminate", errorMessage: error.message };
+    unconfirmedAnswer = error.message;
   }
 
   // Publish custody before adoption can fail or cancel this incoming dispatch.
   // Neither outcome permits replay or aborting the independent question creator.
   if (state) {
     state.admission =
-      outcome.status === "indeterminate"
+      unconfirmedAnswer !== undefined
         ? { status: "skipped", reason: "question-response-indeterminate" }
         : { status: "accepted", mode: "steer" };
   }
@@ -147,14 +145,7 @@ export async function runReplyQuestionInput(
   } finally {
     completeFollowupRunLifecycle(followupRun, "consumed");
   }
-  return {
-    handled: true,
-    payload:
-      outcome.status === "indeterminate"
-        ? markReplyPayloadForSourceSuppressionDelivery({
-            text: outcome.errorMessage,
-            isError: true,
-          })
-        : undefined,
-  };
+  return unconfirmedAnswer !== undefined
+    ? questionErrorReply(unconfirmedAnswer)
+    : { handled: true, payload: undefined };
 }

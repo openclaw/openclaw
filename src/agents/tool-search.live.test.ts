@@ -180,7 +180,7 @@ module.exports = {
           },
         },
         agents: {
-          list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
           defaults: {
             skipBootstrap: true,
             models: { [`openai/${modelId}`]: { params: { transport: "sse" } } },

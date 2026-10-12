@@ -8,6 +8,7 @@ import { loadModelsConfig } from "./load-config.js";
 import {
   ensureFlagCompatibility,
   resolveModelTarget,
+  requireKnownModelProvider,
   upsertCanonicalModelConfigEntry,
   updateConfig,
 } from "./shared.js";
@@ -58,10 +59,16 @@ export async function modelsAliasesAddCommand(
   const alias = normalizeAlias(aliasRaw);
   const normalizedAlias = alias.toLowerCase();
   let target = modelRaw;
+  let warning: string | undefined;
   await updateConfig(
     (cfgLocal, context) => {
       // Alias resolution must share the snapshot whose hash fences this write.
       const resolved = resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig });
+      warning = requireKnownModelProvider(
+        context.runtimeConfig,
+        resolved,
+        context.providerRegistryAvailable,
+      ).warning;
       const nextModels = { ...cfgLocal.agents?.defaults?.models };
       const modelKey = upsertCanonicalModelConfigEntry(nextModels, resolved, context);
       target = modelKey;
@@ -73,20 +80,17 @@ export async function modelsAliasesAddCommand(
         }
       }
       nextModels[modelKey] = { ...nextModels[modelKey], alias };
-      return {
-        ...cfgLocal,
-        agents: {
-          ...cfgLocal.agents,
-          defaults: {
-            ...cfgLocal.agents?.defaults,
-            models: nextModels,
-          },
-        },
-      };
+      cfgLocal.agents ??= {};
+      cfgLocal.agents.defaults ??= {};
+      cfgLocal.agents.defaults.models = nextModels;
+      return cfgLocal;
     },
     (_cfg, context) => [resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig })],
   );
 
+  if (warning) {
+    runtime.error?.(warning);
+  }
   logConfigUpdated(runtime);
   runtime.log(`Alias ${alias} -> ${target}`);
 }
@@ -104,16 +108,8 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
       }
     }
     if (!found) {
-      // A built-in alias is materialized into the resolved config by applyModelDefaults
-      // when (a) the alias name is in DEFAULT_MODEL_ALIASES and (b) the target model
-      // entry exists in the user's source config without an explicit alias set. In that
-      // case the user sees the alias in `models aliases list` but it cannot be removed
-      // because it isn't actually stored in the config file.
-      //
-      // applyModelDefaults materializes those aliases against the *normalized* model map
-      // (provider ids and retired Google preview keys are canonicalized first), so an
-      // entry whose only matching key is un-normalized still surfaces the alias in `list`.
-      // Match that contract here so `remove` recognizes the same built-in aliases.
+      // Built-in aliases are runtime defaults, not authored config. Match list output's
+      // normalized model keys while retaining explicit alias opt-outs.
       const builtinTarget = DEFAULT_MODEL_ALIASES[normalizedAlias];
       const normalizedModels = normalizeAgentModelMapForConfig(nextModels);
       if (
@@ -129,22 +125,15 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
         `Alias not found: ${alias}. Run ${formatCliCommand("openclaw models aliases list")} to see configured aliases.`,
       );
     }
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models: nextModels,
-        },
-      },
-    };
+    cfg.agents ??= {};
+    cfg.agents.defaults ??= {};
+    cfg.agents.defaults.models = nextModels;
+    return cfg;
   });
 
   logConfigUpdated(runtime);
   if (
-    !updated.agents?.defaults?.models ||
-    Object.values(updated.agents.defaults.models).every((entry) => !entry?.alias?.trim())
+    Object.values(updated.agents?.defaults?.models ?? {}).every((entry) => !entry?.alias?.trim())
   ) {
     runtime.log("No aliases configured.");
   }

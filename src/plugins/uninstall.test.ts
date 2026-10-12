@@ -18,10 +18,7 @@ import {
 } from "./test-helpers/fs-fixtures.js";
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
-import {
-  prepareConfigForDisabledPluginSet,
-  recordPluginPackageUninstallPlan,
-} from "./uninstall-package-plan.js";
+import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   planPluginUninstall,
@@ -268,26 +265,6 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
     },
   });
 }
-
-it("disables only runtime child entries for a package uninstall", () => {
-  const staged = prepareConfigForDisabledPluginSet(
-    {
-      plugins: {
-        entries: {
-          "pack/one": { enabled: true },
-          "pack/two": { enabled: true },
-        },
-      },
-    },
-    ["pack/one", "pack/two"],
-  );
-
-  expect(staged.plugins?.entries).toEqual({
-    "pack/one": { enabled: false },
-    "pack/two": { enabled: false },
-  });
-  expect(staged.plugins?.entries).not.toHaveProperty("pack");
-});
 
 async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   const pluginDir = path.join(baseDir, pluginId);
@@ -1509,7 +1486,7 @@ describe("uninstallPlugin", () => {
 
     expect(applied).toEqual({
       directoryRemoved: false,
-      warnings: [`Refused to remove npm path without canonical package ownership: ${pluginDir}`],
+      warnings: [`Refused to remove npm path without verified package ownership: ${pluginDir}`],
     });
     await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
     await expect(fs.lstat(pluginDir).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
@@ -1571,7 +1548,7 @@ describe("uninstallPlugin", () => {
 
       expect(applied.directoryRemoved).toBe(false);
       expect(applied.warnings).toEqual([
-        `Refused to remove npm path without canonical package ownership: ${plan.directoryRemoval.target}`,
+        `Refused to remove npm path without verified package ownership: ${plan.directoryRemoval.target}`,
       ]);
       await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
     },
@@ -1629,7 +1606,7 @@ describe("uninstallPlugin", () => {
 
       expect(applied.directoryRemoved).toBe(false);
       expect(applied.warnings).toEqual([
-        `Refused to remove npm path without canonical package ownership: ${expectedTarget}`,
+        `Refused to remove npm path without verified package ownership: ${expectedTarget}`,
       ]);
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
       await expect(fs.readFile(outsideManifest, "utf8")).resolves.toBe('{"preserve":true}\n');

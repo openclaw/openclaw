@@ -35,7 +35,8 @@ vi.mock("../../infra/node-sqlite.js", () => ({
   requireNodeSqlite: edge.forbidden,
   openNodeSqliteDatabase: edge.forbidden,
 }));
-vi.mock("../../infra/kysely-sync.js", () => ({
+vi.mock("../../infra/kysely-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/kysely-sync.js")>()),
   getNodeSqliteKysely: edge.forbidden,
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,

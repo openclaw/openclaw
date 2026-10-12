@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -81,7 +82,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
             [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
       messages: { queue: { mode: "followup", debounceMsByChannel: { webchat: 0 } } },
       models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
@@ -133,12 +134,14 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         ],
         restartRecoveryDeliveryRunId: sourceRunId,
         restartRecoveryDeliverySourceRunId: sourceRunId,
-        restartRecoveryDeliveryRequestFingerprint: createRestartSafeChatRequest({
-          cfg,
-          eligible: true,
-          message: priorMessage,
-          senderIsOwner: true,
-        })?.fingerprint,
+        restartRecoveryDeliveryRequestFingerprint: (
+          await createRestartSafeChatRequest({
+            cfg,
+            eligible: true,
+            message: priorMessage,
+            senderIsOwner: true,
+          })
+        )?.fingerprint,
         restartRecoverySourceIngress: "control-ui",
       });
       await appendTranscriptMessage(
@@ -214,7 +217,14 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       expect(recovered?.archivedAt).toBeUndefined();
       expect(recovered?.mainRestartRecovery).toBeUndefined();
       expect(recovered?.restartRecoveryRuns).toBeUndefined();
-      const transcript = JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }));
+      // Captured model-prompt metadata can repeat text without creating another user turn.
+      const transcript = JSON.stringify(
+        (await loadTranscriptEvents({ ...target, sessionId })).flatMap((event) =>
+          isRecord(event) && event.type === "message" && isRecord(event.message)
+            ? [event.message.content]
+            : [],
+        ),
+      );
       expect(transcript.split(priorMessage)).toHaveLength(2);
       expect(transcript.split(nextMessage)).toHaveLength(retry ? 1 : 2);
     }

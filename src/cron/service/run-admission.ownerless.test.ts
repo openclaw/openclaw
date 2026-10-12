@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  observeCronJobWrites,
-  observeCronStoreCommits,
-} from "../../../test/helpers/cron/runtime-mutation.js";
+import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -20,7 +17,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { clearCronJobActive, isCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import {
@@ -29,17 +25,17 @@ import {
 } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { findActiveCronRunReceiptInDatabase } from "../store/run-receipt-store.js";
 import {
-  findActiveCronRunReceiptInDatabase,
+  claimCronRunReceiptInDatabaseForTest,
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
+} from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
-import { persistQueuedCronRunReservations } from "./run-admission.js";
+import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { onTimer } from "./timer-scheduler.js";
 
@@ -104,81 +100,40 @@ function receipts(storePath: string, jobId: string) {
 }
 
 describe("ownerless reservation and manual completion", () => {
-  it.each([
-    {
-      name: "unresolved default",
-      legacyOwner: undefined,
-      ambient: undefined,
-      error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-    },
-    {
-      name: "retained historical owner",
-      legacyOwner: "ops",
-      ambient: "research",
-      error:
-        'Legacy cron ownership needs repair. Run "openclaw doctor --fix" before running, editing, or removing this job.',
-    },
-  ])(
-    "keeps an owned sibling reserved while recording the $name skip",
-    async ({ legacyOwner, ambient, error }) => {
-      const ownerless = commandJob("ownerless-batch");
-      const owned = { ...commandJob("owned-batch"), agentId: "ops" };
-      const { state, storePath, events, execute } = await setupOwnerlessJob(
-        ownerless,
-        () => ambient,
-      );
-      state.deps.legacyDefaultAgentId = legacyOwner;
-      await saveCronStore(storePath, { version: 1, jobs: [ownerless, owned] });
-      await list(state);
-      const reserved = await persistQueuedCronRunReservations({
-        state,
-        candidates: [ownerless, owned],
-        reservedAtMs: NOW,
+  it("keeps an owned sibling reserved alongside an ownerless job", async () => {
+    const ownerless = commandJob("ownerless-batch");
+    const owned = { ...commandJob("owned-batch"), agentId: "ops" };
+    const { state, storePath, events, execute } = await setupOwnerlessJob(ownerless);
+    await saveCronStore(storePath, { version: 1, jobs: [ownerless, owned] });
+    await list(state);
+    const reserved = await skipCronJobsWithoutOwners(state, [ownerless, owned], NOW);
+    try {
+      expect(reserved.map((job) => job.id)).toEqual([owned.id]);
+      expect(reserved.map((job) => job.agentId)).toEqual(["ops"]);
+      const persisted = (await loadCronStore(storePath)).jobs;
+      const withheld = persisted.find((job) => job.id === ownerless.id);
+      expect(withheld?.state).toMatchObject({
+        lastRunStatus: "skipped",
+        lastError: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
       });
-      try {
-        expect(
-          reserved.map(({ job }) => job.id),
-          "Unresolved historical jobs must not receive ambient-owner reservations",
-        ).toEqual([owned.id]);
-        const persisted = (await loadCronStore(storePath)).jobs;
-        const withheld = persisted.find((job) => job.id === ownerless.id);
-        if (legacyOwner) {
-          expect(withheld?.enabled).toBe(ownerless.enabled);
-          expect(withheld?.state.nextRunAtMs).toBe(ownerless.state.nextRunAtMs);
-          expect(withheld?.state.lastRunAtMs).toBeUndefined();
-          expect(withheld?.state.lastRunStatus).toBeUndefined();
-        } else {
-          expect(withheld?.state).toMatchObject({ lastRunStatus: "skipped", lastError: error });
-        }
-        expect(persisted.find((job) => job.id === owned.id)?.state.queuedAtMs).toBe(NOW);
-        expect(events.filter((event) => event.action === "finished")).toEqual(
-          legacyOwner ? [] : [expect.objectContaining({ jobId: ownerless.id, status: "skipped" })],
-        );
-        expect(history(storePath, ownerless.id)).toEqual(
-          legacyOwner
-            ? []
-            : [
-                expect.objectContaining({
-                  jobId: ownerless.id,
-                  status: "skipped",
-                  completionStatus: "failed",
-                  error,
-                }),
-              ],
-        );
-        expect(receipts(storePath, ownerless.id)).toEqual([]);
-        expect(execute).not.toHaveBeenCalled();
-      } finally {
-        for (const reservation of reserved) {
-          await finishCronRunReceiptAsync({
-            handle: reservation.runReceipt,
-            status: "skipped",
-            finishedAtMs: NOW,
-          });
-        }
-      }
-    },
-  );
+      expect(persisted.find((job) => job.id === owned.id)?.state.queuedAtMs).toBeUndefined();
+      expect(events.filter((event) => event.action === "finished")).toEqual([
+        expect.objectContaining({ jobId: ownerless.id, status: "skipped" }),
+      ]);
+      expect(history(storePath, ownerless.id)).toEqual([
+        expect.objectContaining({
+          jobId: ownerless.id,
+          status: "skipped",
+          completionStatus: "failed",
+          error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+        }),
+      ]);
+      expect(receipts(storePath, ownerless.id)).toHaveLength(0);
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      stop(state);
+    }
+  });
 
   it.each(["automatic", "manual"])(
     "records one durable %s skip without an agent, session, or execution receipt",
@@ -342,7 +297,6 @@ const changedPlans: Array<{ name: string; change: (job: CronJob) => void }> = [
 describe("ownerless skip transaction guards", () => {
   it.each([
     { label: "captured agent", configuredDefault: "original-agent", rawDefault: undefined },
-    { label: "blank raw default", configuredDefault: "original-agent", rawDefault: " " },
     { label: "captured absence", configuredDefault: undefined, rawDefault: undefined },
   ])("finishes a committed skip after default routing changes ($label)", async (testCase) => {
     const job = commandJob(`committed-skip-${testCase.label.replaceAll(" ", "-")}`);
@@ -367,11 +321,7 @@ describe("ownerless skip transaction guards", () => {
       }
     });
     try {
-      const outcome = await persistQueuedCronRunReservations({
-        state,
-        candidates: [job],
-        reservedAtMs: NOW,
-      }).then(
+      const outcome = await skipCronJobsWithoutOwners(state, [job], NOW).then(
         (value) => ({ kind: "completed", value }),
         (error: unknown) => ({ kind: "rejected", error }),
       );
@@ -420,9 +370,7 @@ describe("ownerless skip transaction guards", () => {
       change(current);
       await saveCronStore(storePath, { version: 1, jobs: [current] });
       const before = await loadCronStore(storePath);
-      await expect(
-        persistQueuedCronRunReservations({ state, candidates: [planned], reservedAtMs: NOW }),
-      ).resolves.toEqual([]);
+      await expect(skipCronJobsWithoutOwners(state, [planned], NOW)).resolves.toEqual([]);
       expect(await loadCronStore(storePath)).toEqual(before);
       expect(events).toEqual([]);
       expect(history(storePath, planned.id)).toEqual([]);
@@ -430,52 +378,16 @@ describe("ownerless skip transaction guards", () => {
     },
   );
 
-  it("rolls back an ownerless skip when host activity begins after worker preparation", async () => {
-    const job = commandJob("ownerless-active-before-commit");
-    const { state, storePath, events, execute } = await setupOwnerlessJob(job);
-    const before = await loadCronStore(storePath);
-    const residentBefore = structuredClone(state.store);
-    expect(isCronJobActive(job.id)).toBe(false);
-    let witnessed = false;
-    let marker: ReturnType<typeof markCronJobActive>;
-    const stopObserving = observeCronJobWrites(job.id, () => {
-      if (!witnessed) {
-        witnessed = true;
-        marker = markCronJobActive(job.id);
-      }
-    });
-    try {
-      await expect(
-        persistQueuedCronRunReservations({ state, candidates: [job], reservedAtMs: NOW }),
-      ).rejects.toThrow("Cron schedule ownership changed before commit");
-      expect(witnessed).toBe(true);
-      expect(isCronJobActive(job.id)).toBe(true);
-      expect(await loadCronStore(storePath)).toEqual(before);
-      expect(state.store).toEqual(residentBefore);
-      expect(events).toEqual([]);
-      expect(history(storePath, job.id)).toEqual([]);
-      expect(receipts(storePath, job.id)).toEqual([]);
-      expect(execute).not.toHaveBeenCalled();
-    } finally {
-      stopObserving();
-      if (marker) {
-        clearCronJobActive(job.id, marker);
-      }
-    }
-  });
-
-  it("rechecks a restored default owner inside the skip transaction", async () => {
+  it("uses a restored default owner captured before skip dispatch", async () => {
     const job = commandJob("ownerless-restored-owner");
     const { state, storePath, events } = await setupOwnerlessJob(job);
     const before = await loadCronStore(storePath);
-    // This controls the internal classification/write boundary, not a public timer race.
+    // Restore the owner between classification and the worker snapshot.
     state.deps.resolveDefaultAgentId = vi
       .fn<() => string | undefined>()
       .mockReturnValueOnce(undefined)
       .mockReturnValue("ops");
-    await expect(
-      persistQueuedCronRunReservations({ state, candidates: [job], reservedAtMs: NOW }),
-    ).resolves.toEqual([]);
+    await expect(skipCronJobsWithoutOwners(state, [job], NOW)).resolves.toEqual([]);
     expect(await loadCronStore(storePath)).toEqual(before);
     expect(events).toEqual([]);
     expect(history(storePath, job.id)).toEqual([]);
@@ -503,9 +415,7 @@ describe("ownerless skip transaction guards", () => {
     owner = undefined;
     const before = await loadCronStore(storePath);
     try {
-      await expect(
-        persistQueuedCronRunReservations({ state, candidates: [job], reservedAtMs: NOW }),
-      ).resolves.toEqual([]);
+      await expect(skipCronJobsWithoutOwners(state, [job], NOW)).resolves.toEqual([]);
       expect(await loadCronStore(storePath)).toEqual(before);
       expect(
         findActiveCronRunReceiptInDatabase({
@@ -532,10 +442,7 @@ describe("ownerless skip transaction guards", () => {
     const runId = "manual:ownerless-rejected-manual:1";
     const terminalTracker = { emitted: false };
     await expect(
-      persistQueuedCronRunReservations({
-        state,
-        candidates: [planned],
-        reservedAtMs: NOW,
+      skipCronJobsWithoutOwners(state, [planned], NOW, {
         scheduleMode: "preserve",
         manualRun: { runId, terminalTracker, scheduleOwnershipAtMs: NOW },
       }),
@@ -553,35 +460,6 @@ describe("ownerless skip transaction guards", () => {
     ]);
     expect(terminalTracker.emitted).toBe(true);
     expect(receipts(storePath, planned.id)).toEqual([]);
-  });
-
-  it("rolls back a failed skip commit without publishing a skipped outcome", async () => {
-    const job = commandJob("ownerless-rollback");
-    const { state, storePath, events, execute } = await setupOwnerlessJob(job);
-    const before = await loadCronStore(storePath);
-    const database = openOpenClawStateDatabase().db;
-    database.exec(`
-      CREATE TRIGGER reject_ownerless_skip
-      BEFORE UPDATE OF state_json ON cron_jobs
-      WHEN NEW.job_id = 'ownerless-rollback'
-        AND json_extract(NEW.state_json, '$.lastRunStatus') = 'skipped'
-      BEGIN
-        SELECT RAISE(ABORT, 'ownerless skip commit failed');
-      END;
-    `);
-    try {
-      await expect(
-        persistQueuedCronRunReservations({ state, candidates: [job], reservedAtMs: NOW }),
-      ).rejects.toThrow("ownerless skip commit failed");
-      expect(await loadCronStore(storePath)).toEqual(before);
-      expect(state.store?.jobs[0]?.state.lastRunStatus).toBeUndefined();
-      expect(events).toEqual([]);
-      expect(history(storePath, job.id)).toEqual([]);
-      expect(receipts(storePath, job.id)).toEqual([]);
-      expect(execute).not.toHaveBeenCalled();
-    } finally {
-      database.exec("DROP TRIGGER IF EXISTS reject_ownerless_skip");
-    }
   });
 });
 

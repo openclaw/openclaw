@@ -120,6 +120,8 @@ export async function finalizeCommittedConfigWrite(params: {
       configPath: io.configPath,
       snapshot: expectDefined(canonicalRead, "canonical config reread").snapshot,
       sourceConfig: canonicalSourceConfig,
+      previousSourceConfig: baseSnapshot.sourceConfig,
+      writtenSourceConfig: params.nextCfg,
       runtimeConfig: canonicalRuntimeConfig,
       persistedHash: canonicalPersistedHash,
       deferRuntimeActivation,
@@ -187,7 +189,7 @@ export async function finalizeCommittedConfigWrite(params: {
       configPath: io.configPath,
       cause: error,
       restoreFile: async () => rollback?.restoreFile(() => params.assertPostCommitCurrent?.()),
-      restoreEffects: () => {
+      restoreEffects: async () => {
         params.assertPostCommitCurrent?.();
         recordUpdateDoctorConfigWrite(
           io.configPath,
@@ -201,7 +203,7 @@ export async function finalizeCommittedConfigWrite(params: {
           before: envBeforeCanonicalRead,
           after: envAfterCanonicalRead,
         });
-        rollback?.restoreEffects(() => params.assertPostCommitCurrent?.());
+        await rollback?.restoreEffects(() => params.assertPostCommitCurrent?.());
       },
     });
   }

@@ -1,4 +1,5 @@
 // Migrate Hermes tests cover model.plan plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -182,13 +183,11 @@ describe("Hermes migration model planning", () => {
           workspace: workspaceDir,
           model: "openai/gpt-5.4",
         },
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             model: "anthropic/claude-sonnet-4.6",
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 
@@ -215,7 +214,7 @@ describe("Hermes migration model planning", () => {
         agents: {
           defaults: { workspace: workspaceDir },
           entries: {
-            main: { default: true, model: main },
+            main: { model: main },
             research: { workspace: workspaceDir, model },
           },
         },

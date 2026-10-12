@@ -36,14 +36,9 @@ function parseParameterValue(value: string): string | null {
   return escaped ? null : parsed;
 }
 
-type ParsedMediaType = {
-  type: string;
-  subtype: string;
-  parameters: Map<string, string>;
-  quality: number;
-};
+type ParsedMediaType = NonNullable<ReturnType<typeof parseMediaType>>;
 
-function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType | null {
+function parseMediaType(value: string, allowQuality: boolean) {
   const segments = splitHttpHeaderValue(value, ";", "quoted-string");
   if (!segments) {
     return null;
