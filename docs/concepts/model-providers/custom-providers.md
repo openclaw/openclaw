@@ -282,6 +282,36 @@ llmman serve
 
 See [/providers/llmman](/providers/llmman) for setup, hybrid local + hosted routing, vision, and troubleshooting.
 
+### Grokified
+
+[Grokified](https://grokified.com) is a hosted OpenAI-compatible API for Grok models at 50% of the list price. It is configured via `models.providers`, with no plugin:
+
+- Provider: `grokified` (custom; `api: "openai-completions"`)
+- Auth: set `GROKIFIED_API_KEY` (keys start with `gk_live_`) and use `apiKey: "${GROKIFIED_API_KEY}"`
+- Base URL: `https://api.grokified.com/v1`
+- Example model: `grokified/grok-build-0.1`
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "grokified/grok-build-0.1" } },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      grokified: {
+        baseUrl: "https://api.grokified.com/v1",
+        apiKey: "${GROKIFIED_API_KEY}",
+        api: "openai-completions",
+        models: [{ id: "grok-build-0.1", name: "Grok Build 0.1", contextWindow: 256000 }],
+      },
+    },
+  },
+}
+```
+
+A new account's free signup credit works on the API with no card and no separate activation step. Until the account buys credit, each request is capped at 32,000 input tokens and a larger one returns a 413 `free_tier_request_too_large`; buying credit removes the cap. `grok-4.6` (500K context) is configured the same way; `grok-4.7` needs a Basic or higher Grokified plan and returns a 403 `plan_capability_required` without one. See the [Grokified OpenClaw guide](https://grokified.com/openclaw) for account setup.
+
 ### LM Studio
 
 LM Studio ships as a bundled provider plugin which uses the native API:
