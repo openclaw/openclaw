@@ -962,6 +962,12 @@ Write descriptions with the concrete trigger first: the compact catalog uses
 their first 60 characters. Put additional details after the trigger; no separate
 trigger field is required.
 
+An explicit `skills.limits.maxSkillsPromptChars` or per-agent
+`skillsLimits.maxSkillsPromptChars` can lower the compact cap below 4,000
+characters. A value of `0` omits the catalog and shows only the installed count
+and search hint. `skills.limits.maxSkillsInPrompt` also limits listed entries.
+These presentation limits do not remove skills from search or deny reads.
+
 Other runtimes retain the existing XML directory and its default 18,000-character
 budget. Its cost follows a fixed formula and scales linearly per skill:
 

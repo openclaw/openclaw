@@ -1,6 +1,6 @@
 ---
 name: coding-agent
-description: "Background coding, PR reviews, and large refactors."
+description: "Delegate coding work to Codex, Claude Code, or OpenCode as background workers; not simple edits or read-only code lookup."
 metadata:
   {
     "openclaw":

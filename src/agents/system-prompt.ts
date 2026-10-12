@@ -301,6 +301,7 @@ export function buildAgentSystemPrompt(params: {
   skillsPrompt?: string;
   installedSkills?: readonly { name: string; description: string }[];
   compactSkills?: boolean;
+  skillsPromptLimits?: { maxSkillsPromptChars?: number; maxSkillsInPrompt?: number };
   /** Records the catalog selected by the renderer without changing prompt bytes. */
   onRenderedSkillsPrompt?: (skillsPrompt: string) => void;
   codeModeActive?: boolean;
@@ -520,6 +521,7 @@ export function buildAgentSystemPrompt(params: {
     ? buildSkillsSection({
         skillsPrompt,
         installedSkills: params.installedSkills,
+        skillsPromptLimits: params.skillsPromptLimits,
         readToolName,
         codeModeActive: params.codeModeActive,
         installedSkillSearch: availableTools.has("skills_search"),

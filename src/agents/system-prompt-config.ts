@@ -5,6 +5,7 @@
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveEffectiveAgentSkillsLimits } from "../skills/discovery/agent-filter.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
@@ -51,6 +52,12 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
     renderParams.promptMode !== "minimal" && renderParams.promptMode !== "none";
   return buildAgentSystemPrompt({
     ...renderParams,
+    skillsPromptLimits: {
+      maxSkillsPromptChars:
+        resolveEffectiveAgentSkillsLimits(config, agentId)?.maxSkillsPromptChars ??
+        config.skills?.limits?.maxSkillsPromptChars,
+      maxSkillsInPrompt: config.skills?.limits?.maxSkillsInPrompt,
+    },
     ownerDisplay: "raw",
     ownerDisplaySecret: undefined,
     subagentDelegationMode: resolveMainSessionDelegationMode({

@@ -1,6 +1,6 @@
 ---
 name: node-connect
-description: "Control UI or native-node connection and pairing failures."
+description: "Diagnose OpenClaw Control UI browser and native Android, iOS, or macOS node connection failures across route, auth, pairing, QR/setup-code, and reconnect states."
 ---
 
 # Node Connect

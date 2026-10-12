@@ -6,6 +6,7 @@ import { formatSkillsForPromptCore } from "../skills/loading/skill-contract.js";
 import { prepareSkillsForPrompt } from "../skills/loading/skill-prompt-limits.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { composeSystemPromptWithHookContext } from "./embedded-agent-runner/run/attempt-thread-helpers.js";
+import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 const model: Model<"openai-completions"> = {
@@ -115,6 +116,61 @@ const unlistedPrompts = [
 ];
 
 describe("installed skill prompt guidance", () => {
+  it.each([
+    {
+      name: "smaller character cap",
+      limits: { maxSkillsPromptChars: 20 },
+      agentCap: undefined,
+      expected: "- alpha\n- zebra",
+      excluded: "trigger marker",
+    },
+    {
+      name: "zero character cap",
+      limits: { maxSkillsPromptChars: 0 },
+      agentCap: undefined,
+      expected: "2 skills installed; use `skills_search`.",
+      excluded: "- alpha",
+    },
+    {
+      name: "count limit",
+      limits: { maxSkillsInPrompt: 1 },
+      agentCap: undefined,
+      expected: "- alpha: alpha trigger marker",
+      excluded: "- zebra",
+    },
+    {
+      name: "per-agent override",
+      limits: { maxSkillsPromptChars: 2000 },
+      agentCap: 0,
+      expected: "2 skills installed; use `skills_search`.",
+      excluded: "- alpha",
+    },
+  ])("honors the configured $name", ({ limits, agentCap, expected, excluded }) => {
+    let rendered = "";
+    buildConfiguredAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      agentId: "main",
+      config: {
+        skills: { limits },
+        ...(agentCap === undefined
+          ? {}
+          : {
+              agents: { entries: { main: { skillsLimits: { maxSkillsPromptChars: agentCap } } } },
+            }),
+      },
+      toolNames: ["skills_search", "skills_read"],
+      installedSkills: [
+        { name: "zebra", description: "zebra trigger marker" },
+        { name: "alpha", description: "alpha trigger marker" },
+      ],
+      onRenderedSkillsPrompt: (value) => {
+        rendered = value;
+      },
+    });
+    expect(rendered).toContain(expected);
+    expect(rendered).not.toContain(excluded);
+  });
+
   it.each([false, true])("uses Code Mode skill access only when admitted (%s)", (admitted) => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

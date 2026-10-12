@@ -8,27 +8,36 @@ export function buildSkillsSection(params: {
   installedSkillRead?: boolean;
   installedSkills?: readonly { name: string; description: string }[];
   compactSkills?: boolean;
+  skillsPromptLimits?: { maxSkillsPromptChars?: number; maxSkillsInPrompt?: number };
 }) {
   const trimmed = params.skillsPrompt?.trim();
   if (params.compactSkills !== false && params.installedSkillSearch && params.installedSkillRead) {
     const skills = params.installedSkills ?? parseSkillsPromptCatalog(trimmed ?? "", true);
     const ordered = skills.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const charLimit = Math.min(4000, params.skillsPromptLimits?.maxSkillsPromptChars ?? 4000);
+    const countLimit = params.skillsPromptLimits?.maxSkillsInPrompt;
+    if (countLimit !== undefined) {
+      ordered.length = Math.min(ordered.length, countLimit);
+    }
     const search = params.codeModeActive
       ? "`skills.search(query)` inside `exec`"
       : "`skills_search`";
     const read = params.codeModeActive
       ? '`skills.read("<name>")` inside `exec`'
       : "`skills_read` with its exact name";
+    if (charLimit === 0 || countLimit === 0) {
+      return ["## Skills", `${skills.length} skills installed; use ${search}.`, ""];
+    }
     let catalog = ordered
       .map(({ name, description }) => {
         const trigger = (description ?? "").replace(/\s+/gu, " ").trim().slice(0, 60);
         return trigger ? `- ${name}: ${trigger}` : `- ${name}`;
       })
       .join("\n");
-    if (catalog.length > 4000) {
+    if (catalog.length > charLimit) {
       catalog = ordered.map(({ name }) => `- ${name}`).join("\n");
     }
-    if (catalog.length > 4000) {
+    if (catalog.length > charLimit) {
       catalog = `${skills.length} skills installed; use ${search}.`;
     }
     return [

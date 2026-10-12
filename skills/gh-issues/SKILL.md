@@ -1,6 +1,6 @@
 ---
 name: gh-issues
-description: "Automate GitHub issue fixes and PR review responses."
+description: "Fetch GitHub issues, select candidates, spawn background fix agents, open PRs, and optionally process PR review comments."
 user-invocable: true
 metadata:
   {
