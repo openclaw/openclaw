@@ -299,7 +299,7 @@ function configuredOpenAIProviderIsTrustedForModelBackedReview(
     hasNonEmptyRecord(openAIProvider.headers) ||
     hasNonEmptyRecord(openAIProvider.request) ||
     typeof openAIProvider.authHeader === "boolean" ||
-    !isNativeOpenAIBaseUrl(openAIProvider.baseUrl)
+    !isNativeConfiguredOpenAIBaseUrl(openAIProvider.baseUrl)
   ) {
     return false;
   }
@@ -319,7 +319,7 @@ function configuredOpenAIProviderIsTrustedForModelBackedReview(
     if (
       hasNonEmptyRecord(model.headers) ||
       hasNonEmptyRecord(model.request) ||
-      !isNativeOpenAIBaseUrl(model.baseUrl)
+      !isNativeConfiguredOpenAIBaseUrl(model.baseUrl)
     ) {
       return false;
     }
@@ -348,6 +348,11 @@ function hasNonEmptyRecord(value: unknown): boolean {
 
 function isNativeOpenAIBaseUrl(value: unknown): boolean {
   return isNativeReviewerBaseUrl(value, "api.openai.com");
+}
+
+function isNativeConfiguredOpenAIBaseUrl(value: unknown): boolean {
+  // OpenClaw provider/model routes also include ChatGPT OAuth; native API overrides do not.
+  return isNativeOpenAIBaseUrl(value) || isNativeReviewerBaseUrl(value, "chatgpt.com");
 }
 
 function isNativeReviewerBaseUrl(value: unknown, hostname: string): boolean {
