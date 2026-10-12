@@ -2325,6 +2325,7 @@
     "partial-json": "0.1.7",
     "pg": "8.23.1",
     "playwright-core": "1.63.0",
+    "proxy-from-env": "2.1.0",
     "qrcode": "1.5.4",
     "rastermill": "0.4.0",
     "semver": "7.8.5",
