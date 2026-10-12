@@ -189,6 +189,59 @@ it("preserves local Code Mode instruction reads after a document-only adapter st
   expect(readFile).not.toHaveBeenCalled();
 });
 
+it("keeps learned Workshop skills readable under an allowlist and calls a missing skill unavailable", async () => {
+  const root = temps.make("skills-read-allowlist-");
+  const bundled = path.join(root, "bundled");
+  await fs.mkdir(bundled);
+  vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", bundled);
+  vi.stubEnv("HOME", root);
+  vi.stubEnv("OPENCLAW_HOME", root);
+  const workspace = path.join(root, "workspace");
+  const agentDir = path.join(root, "agent");
+  await writeSkill({
+    dir: path.join(workspace, "skills", "listed"),
+    name: "listed",
+    description: "Allowlisted guide",
+    body: "Listed instructions",
+  });
+  await writeSkill({
+    dir: path.join(
+      resolveWorkshopSkillsDir({ agents: { entries: { main: { agentDir } } } }, "main"),
+      "learned",
+    ),
+    name: "learned",
+    description: "Workshop guide",
+    body: "Learned instructions",
+  });
+  const prepare = async (skills: string[]) => {
+    const config = {
+      plugins: { enabled: false },
+      agents: { entries: { main: { agentDir, skills } } },
+    };
+    const snapshot = await buildSkillSnapshot(workspace, { config, agentId: "main" });
+    return await prepareEmbeddedSkills({
+      attempt: { config, skillsSnapshot: snapshot },
+      effectiveWorkspace: workspace,
+      sandbox: undefined,
+      sessionAgentId: "main",
+      includeCodeModeSkills: false,
+      applySkillEnvironment: false,
+    });
+  };
+
+  // Learned skills belong to the agent that learned them, so an allowlist never hides them.
+  const allowlisted = await prepare(["listed"]);
+  expect(allowlisted.installedSkills.map((skill) => skill.name)).toEqual(["learned", "listed"]);
+  const read = expectDefined(createInstalledSkillTools(allowlisted.installedSkills)[1], "read");
+  expect(getTextContent(await read.execute("learned", { name: "learned" }))).toContain(
+    "Learned instructions",
+  );
+  await expect(read.execute("absent", { name: "absent" })).rejects.toThrow(
+    'Skill "absent" is not available to this agent.',
+  );
+  expect((await prepare([])).installedSkills.map((skill) => skill.name)).toEqual(["learned"]);
+});
+
 it.each([
   ["SKILL.md", true],
   ["refs/support.txt", false],

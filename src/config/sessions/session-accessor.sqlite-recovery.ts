@@ -1,7 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   retainSessionEntryWorkerPublication,
   type SessionEntryReplacementPublication,
@@ -17,8 +19,11 @@ import {
   prepareSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 export type { RestartTombstoneRecoveryResult } from "./session-accessor.sqlite-recovery.types.js";
+
+const log = createSubsystemLogger("sessions/recovery");
 
 /** Clone and publish through the canonical worker while retaining the caller's live authority. */
 export async function recoverSessionEntryFromRestartTombstone(
@@ -91,6 +96,20 @@ export async function recoverSessionEntryFromRestartTombstone(
             );
             error.cause = outcome.ok ? undefined : outcome.error;
             throw error;
+          }
+          if (receipt) {
+            try {
+              execution.assertCurrent();
+              startSessionTranscriptIndexReconcile({
+                ...options,
+                preferredSessionId: input.successorEntry.sessionId,
+              });
+            } catch (error) {
+              // Retirement cannot replace the acknowledged recovery or its delivery error.
+              log.warn(
+                `Recovery committed; transcript repair remains pending: ${formatErrorMessage(error)}`,
+              );
+            }
           }
         }
         if (!outcome.ok) {

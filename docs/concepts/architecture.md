@@ -162,6 +162,12 @@ scope; the Gateway lifecycle owns the outer shutdown budget and resource teardow
 Request deadlines, stream-local timers, and child-process cleanup stay with their
 operation owners. SQLite WAL checkpoint timers stay with the storage owner.
 
+Plugins receive the versioned `PluginServiceSchedulerV1` capability through their
+service or channel-account lifetime. Its `beginClose()` cancels pending work and
+closes admission; `stop()` joins running callbacks and child scopes before the host
+releases the lifetime. Plugins still own domain cleanup ordering, including socket
+closure and durable flushes. See [Service scheduling](/plugins/sdk-runtime/gateway-and-nodes#service-scheduling).
+
 ## Invariants
 
 - Exactly one Gateway controls a single Baileys session per host.

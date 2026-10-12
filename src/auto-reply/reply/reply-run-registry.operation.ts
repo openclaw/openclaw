@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError as createSupersededError,
   isAgentRunRestartAbortReason,
@@ -7,6 +8,7 @@ import {
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -25,6 +27,7 @@ import {
 import {
   abortFrozenOperations,
   attachedBackendByOperation,
+  backendReadyByOperation,
   clearReplyOperationByOperation,
   clearReplyRunState,
   evictReplyOperationByOperation,
@@ -51,7 +54,11 @@ import {
 import { createReplyOperationToolAuthority } from "./reply-run-registry.tool-authority.js";
 
 type ReplyOperationResult = NonNullable<ReplyOperation["result"]>;
-type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }>["code"];
+const REPLY_OPERATION_ABORT_CODES = {
+  user_abort: "aborted_by_user",
+  restart: "aborted_for_restart",
+  superseded: "aborted_for_supersession",
+} as const;
 
 export function createReplyOperation(params: {
   sessionKey: string;
@@ -104,9 +111,36 @@ export function createReplyOperation(params: {
   const toolAuthority = createReplyOperationToolAuthority({
     isOpen: () => result === null,
     ownsRunSlot: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
+    captureCurrent: () => {
+      const key = currentSessionKey;
+      const id = currentSessionId;
+      const backend = getAttachedBackend(operation);
+      const assertCurrent = () => {
+        if (
+          result ||
+          controller.signal.aborted ||
+          currentSessionKey !== key ||
+          currentSessionId !== id ||
+          getAttachedBackend(operation) !== backend ||
+          replyRunState.activeRunsByKey.get(key) !== operation ||
+          getAgentEventLifecycleGeneration() !== lifecycleGeneration
+        ) {
+          throw new Error("Reply operation tool authority is no longer active");
+        }
+      };
+      assertCurrent();
+      return assertCurrent;
+    },
   });
   const ownerSettlement = createDeferredCore();
-  const producerCompletion = createDeferredCore();
+  const producerCompletion = createDeferredCore<unknown>();
+  let producerError: unknown;
+  let backendReady = createDeferredCore();
+  const notifyBackendReady = () => {
+    if (phase === "running" && getAttachedBackend(operation)) {
+      backendReady.resolve();
+    }
+  };
   let ownerCompletionBarrier: Promise<void> | undefined;
   const settleOwner = (): void => {
     const pending = ownerCompletionBarrier;
@@ -138,6 +172,9 @@ export function createReplyOperation(params: {
     result = next;
     toolAuthority.close();
     recordActivity();
+    phase = next.kind;
+    backendReady.resolve();
+    notifyGatewayWorkMetricsChanged();
   };
   const markProgress = (reason: string) => {
     markDiagnosticRunProgress({
@@ -145,6 +182,13 @@ export function createReplyOperation(params: {
       sessionKey: currentSessionKey,
       reason,
     });
+  };
+  const warnForcedRelease = (label: string, reason?: string) => {
+    diag.warn(
+      `reply run ${label}: forced release sessionKey=${currentSessionKey}${reason === undefined ? "" : ` reason=${reason}`} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
+        result,
+      )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+    );
   };
 
   const clearState = (
@@ -155,6 +199,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    backendReady.resolve();
     toolAuthority.close();
     terminalSettleTimer.clear();
     finalizationLease.clear();
@@ -175,11 +220,7 @@ export function createReplyOperation(params: {
     // otherwise that successor can snapshot durable state the handoff then mutates.
     startReplyOperationSuccessorBarriers(operation);
     markProgress("reply_operation:ended");
-    clearReplyRunState({
-      sessionKey: currentSessionKey,
-      sessionId: currentSessionId,
-      operation,
-    });
+    clearReplyRunState(operation);
     if (!registeredBarrier) {
       flushReplyOperationAfterClear(operation, currentSessionId);
       return;
@@ -196,14 +237,34 @@ export function createReplyOperation(params: {
     terminalSettleTimer.scheduleOnce(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
   };
 
-  const abortOperation = (
-    reason: ReplyBackendCancelReason,
-    abortReason: unknown,
-    abortedCode: ReplyOperationAbortCode,
+  const complete = (
+    barrier?: PromiseLike<unknown>,
+    timeoutMs?: number | ReplyFollowupAdmissionBarrierTimeoutPolicy,
   ) => {
+    producerCompletion.resolve(producerError);
+    if (barrier) {
+      // Admission may time out to free a slot; the old writer settles only when
+      // its actual delivery/persistence barriers finish, including repeated complete().
+      const completed = Promise.resolve(barrier).then(
+        () => {},
+        () => {},
+      );
+      ownerCompletionBarrier = ownerCompletionBarrier
+        ? Promise.all([ownerCompletionBarrier, completed]).then(() => {})
+        : completed;
+    }
+    if (!result) {
+      setResult({ kind: "completed" });
+    }
+    clearState(barrier, timeoutMs);
+    // Stale expiry can clear the slot before the old owner's durable work settles.
+    settleOwner();
+  };
+
+  const abortOperation = (reason: ReplyBackendCancelReason, abortReason: unknown) => {
     const phaseBeforeAbort = phase;
     if (!result) {
-      setResult({ kind: "aborted", code: abortedCode });
+      setResult({ kind: "aborted", code: REPLY_OPERATION_ABORT_CODES[reason] });
       detachUpstreamAbort();
     }
     phase = "aborted";
@@ -222,6 +283,17 @@ export function createReplyOperation(params: {
         scheduleTerminalSettle();
       }
     }
+  };
+
+  const abortIfAllowed = (reason: "user_abort" | "restart") => {
+    if (!isReplyOperationAbortable(operation)) {
+      return false;
+    }
+    abortOperation(
+      reason,
+      reason === "restart" ? createAgentRunRestartAbortError() : createAgentRunDirectAbortError(),
+    );
+    return true;
   };
 
   const operation: ReplyOperation = {
@@ -298,12 +370,15 @@ export function createReplyOperation(params: {
       }
       recordActivity();
       phase = next;
+      notifyBackendReady();
+      notifyGatewayWorkMetricsChanged();
     },
     markWaitingForDeferredMaintenance() {
       if (result || phase !== "queued") {
         return;
       }
       phase = "waiting_for_deferred_maintenance";
+      notifyGatewayWorkMetricsChanged();
       markProgress("deferred_maintenance:waiting");
     },
     markDeferredMaintenanceWaitEnded() {
@@ -311,6 +386,7 @@ export function createReplyOperation(params: {
         return;
       }
       phase = "queued";
+      notifyGatewayWorkMetricsChanged();
       markProgress("deferred_maintenance:wait_ended");
     },
     markWaitingForGlobalLane() {
@@ -321,6 +397,7 @@ export function createReplyOperation(params: {
       // lets stale recovery silently drop replies while global capacity is busy.
       phaseBeforeGlobalLaneWait = phase;
       phase = "waiting_for_global_lane";
+      notifyGatewayWorkMetricsChanged();
       markProgress("global_lane:waiting");
     },
     markGlobalLaneWaitEnded() {
@@ -329,6 +406,8 @@ export function createReplyOperation(params: {
       }
       phase = phaseBeforeGlobalLaneWait ?? "queued";
       phaseBeforeGlobalLaneWait = undefined;
+      notifyBackendReady();
+      notifyGatewayWorkMetricsChanged();
       markProgress("global_lane:wait_ended");
     },
     markTerminalRecovery() {
@@ -342,8 +421,11 @@ export function createReplyOperation(params: {
       sourceReplyDelivered = true;
     },
     bindToolAuthoritySnapshot: toolAuthority.bindToolAuthoritySnapshot,
+    bindToolAuthoritySnapshotAsync: toolAuthority.bindToolAuthoritySnapshotAsync,
     projectToolAuthorityFingerprint: toolAuthority.projectToolAuthorityFingerprint,
+    projectToolAuthorityFingerprintAsync: toolAuthority.projectToolAuthorityFingerprintAsync,
     bindToolAuthorityRoute: toolAuthority.bindToolAuthorityRoute,
+    bindToolAuthorityRouteAsync: toolAuthority.bindToolAuthorityRouteAsync,
     updateSessionId(nextSessionId) {
       if (result) {
         return;
@@ -367,9 +449,9 @@ export function createReplyOperation(params: {
       ownedSessionIds.add(currentSessionId);
       updateFollowupAdmissionSessionId(operation);
       updateSuccessorAdmissionSessionId(operation, currentSessionId);
-      replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
       replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
+      notifyGatewayWorkMetricsChanged();
       markProgress("reply_operation:session_updated");
     },
     updateSessionKey(nextSessionKey, agentId) {
@@ -380,14 +462,16 @@ export function createReplyOperation(params: {
       recordActivity();
       currentAgentId = update.agentId;
       if (update.sessionKey === currentSessionKey) {
+        notifyGatewayWorkMetricsChanged();
         return;
       }
       const previousKey = currentSessionKey;
       replyRunState.activeRunsByKey.delete(previousKey);
-      replyRunState.activeSessionIdsByKey.delete(previousKey);
       currentSessionKey = update.sessionKey;
+      backendReady.resolve();
+      backendReady = createDeferredCore();
+      backendReadyByOperation.set(operation, backendReady.promise);
       replyRunState.activeRunsByKey.set(currentSessionKey, operation);
-      replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
       // Wait/abort lookups resolve keys via owned session IDs; move them so
       // waitForReplyRunEndBySessionId keeps finding this operation.
@@ -396,6 +480,7 @@ export function createReplyOperation(params: {
           replyRunState.waitKeysBySessionId.set(ownedSessionId, currentSessionKey);
         }
       }
+      notifyGatewayWorkMetricsChanged();
       // The previous key's slot is idle now; wake turns waiting on it.
       notifyReplyRunEnded(previousKey);
       markProgress("reply_operation:session_key_adopted");
@@ -416,6 +501,7 @@ export function createReplyOperation(params: {
       recordActivity();
       toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       attachedBackendByOperation.set(operation, handle);
+      notifyBackendReady();
       if (controller.signal.aborted) {
         handle.cancel("superseded");
       }
@@ -435,43 +521,17 @@ export function createReplyOperation(params: {
     },
     ownerSettlement: ownerSettlement.promise,
     complete() {
-      producerCompletion.resolve();
-      if (!result) {
-        setResult({ kind: "completed" });
-        phase = "completed";
-      }
-      clearState();
-      settleOwner();
+      complete();
     },
-    completeWithAfterClearBarrier(barrier, timeoutMs) {
-      // Producer work is done; delivery may still need a successor operation.
-      producerCompletion.resolve();
-      // Admission may time out to free a slot; the old writer settles only when
-      // its actual delivery/persistence barrier finishes, including repeated complete().
-      const completed = Promise.resolve(barrier).then(
-        () => {},
-        () => {},
-      );
-      ownerCompletionBarrier = ownerCompletionBarrier
-        ? Promise.all([ownerCompletionBarrier, completed]).then(() => {})
-        : completed;
-      if (!result) {
-        setResult({ kind: "completed" });
-        phase = "completed";
-      }
-      clearState(barrier, timeoutMs);
-      // This barrier owns dispatch delivery and terminal persistence. Stale
-      // expiry may have already cleared the slot, but recovery must still wait
-      // for that old owner's durable work before admitting a queued turn.
-      settleOwner();
-    },
+    completeWithAfterClearBarrier: complete,
     fail(code, cause) {
+      // Cancellation can win the outcome before the producer rejects its buffered output.
+      producerError ??= cause;
       abortFrozenOperations.add(operation);
       detachUpstreamAbort();
       finalizationLease.clear();
       if (!result) {
         setResult({ kind: "failed", code, cause });
-        phase = "failed";
       }
       if (!retainFailureUntilComplete && !retainStateUntilCompleteOperations.has(operation)) {
         clearState();
@@ -479,24 +539,8 @@ export function createReplyOperation(params: {
         scheduleTerminalSettle();
       }
     },
-    abortByUser() {
-      if (!isReplyOperationAbortable(operation)) {
-        return false;
-      }
-      abortOperation(
-        "user_abort",
-        createAbortError("Reply operation aborted by user"),
-        "aborted_by_user",
-      );
-      return true;
-    },
-    abortForRestart() {
-      if (!isReplyOperationAbortable(operation)) {
-        return false;
-      }
-      abortOperation("restart", createAgentRunRestartAbortError(), "aborted_for_restart");
-      return true;
-    },
+    abortByUser: () => abortIfAllowed("user_abort"),
+    abortForRestart: () => abortIfAllowed("restart"),
     supersede(beforeSupersede) {
       const abortFrozen = abortFrozenOperations.has(operation);
       if (result || stateCleared || (!abortFrozen && !isReplyOperationAbortable(operation))) {
@@ -505,17 +549,17 @@ export function createReplyOperation(params: {
       beforeSupersede?.();
       if (abortFrozen) {
         setResult({ kind: "aborted", code: "aborted_for_supersession" });
-        phase = "aborted";
         scheduleTerminalSettle();
         return true;
       }
-      abortOperation("superseded", createSupersededError(), "aborted_for_supersession");
+      abortOperation("superseded", createSupersededError());
       return true;
     },
   };
 
   clearReplyOperationByOperation.set(operation, clearState);
   producerCompletionByOperation.set(operation, producerCompletion.promise);
+  backendReadyByOperation.set(operation, backendReady.promise);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
     if (
       replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||
@@ -533,7 +577,6 @@ export function createReplyOperation(params: {
       // from post-output stalls (finalization/terminal cleanup; feedback is noise).
       staleExpiryReason = reason;
       setResult({ kind: "failed", code: "run_stalled" });
-      phase = "failed";
     }
     if (options?.afterClearBarrier) {
       // Prepare the recovery fence before cancellation, but retain exact lane
@@ -556,11 +599,7 @@ export function createReplyOperation(params: {
     }
     controller.abort(createAbortError("Reply operation expired as stale"));
     if (stateCleared) {
-      diag.warn(
-        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
+      warnForcedRelease("stale takeover", reason);
       return true;
     }
     // cancel() only requests shutdown. A missing backend can also be a live
@@ -582,11 +621,7 @@ export function createReplyOperation(params: {
     onActivity: recordActivity,
     onFinalizationProgress: () => markProgress("reply_operation:finalizing_progress"),
     onExpire: () => {
-      diag.warn(
-        `reply run finalization settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
+      warnForcedRelease("finalization settle");
       const expired = expireReplyOperationByOperation.get(operation)?.("finalization_stalled");
       if (expired === false && replyRunState.activeRunsByKey.get(currentSessionKey) === operation) {
         // This lease is the finalization owner's bounded shutdown deadline.
@@ -599,11 +634,7 @@ export function createReplyOperation(params: {
     canExpire: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
     onExpire: () => {
       // Retained terminal results get one delivery grace window, not a second lifetime.
-      diag.warn(
-        `reply run terminal settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
+      warnForcedRelease("terminal settle");
       clearState();
     },
   });
@@ -614,7 +645,6 @@ export function createReplyOperation(params: {
     }
     if (!result) {
       setResult({ kind: "aborted", code: "aborted_for_restart" });
-      phase = "aborted";
     }
     controller.abort(createAgentRunRestartAbortError());
     try {
@@ -630,9 +660,9 @@ export function createReplyOperation(params: {
   });
 
   replyRunState.activeRunsByKey.set(sessionKey, operation);
-  replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
   replyRunState.waitKeysBySessionId.set(currentSessionId, sessionKey);
+  notifyGatewayWorkMetricsChanged();
   markProgress("reply_operation:queued");
   if (upstreamAbortSignal) {
     operationsByUpstreamAbortSignal.set(upstreamAbortSignal, operation);
@@ -645,11 +675,6 @@ export function createReplyOperation(params: {
       abortOperation(
         restart ? "restart" : superseded ? "superseded" : "user_abort",
         upstreamAbortSignal.reason,
-        restart
-          ? "aborted_for_restart"
-          : superseded
-            ? "aborted_for_supersession"
-            : "aborted_by_user",
       );
     };
     if (upstreamAbortSignal.aborted) {

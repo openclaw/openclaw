@@ -38,7 +38,6 @@ export const MAX_SESSION_ID_LENGTH = 256;
 const MAX_SESSION_NAME_LENGTH = 500;
 const MAX_SESSION_PREVIEW_LENGTH = 500;
 const SESSION_PREVIEW_PREFIX_LENGTH = 2_048;
-const MAX_SESSION_KEY_LENGTH = 1024;
 const MAX_METADATA_LENGTH = 500;
 const MAX_ACTIVE_FLAGS = 16;
 export const DEFAULT_TRANSCRIPT_PAGE_LIMIT = 20;
@@ -78,14 +77,6 @@ export function boundedCatalogString(
     : undefined;
 }
 
-function catalogPreview(value: unknown, sanitize: typeof sanitizeTerminalText): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const singleLine = sanitize(value.replace(/\s+/g, " "));
-  return boundedCatalogString(singleLine, MAX_SESSION_PREVIEW_LENGTH, "truncate");
-}
-
 /** Select a bounded input only for the canonical terminal sanitizer. */
 export function selectCodexCatalogPreviewInput(value: string): string {
   if (value.length <= SESSION_PREVIEW_PREFIX_LENGTH) {
@@ -102,7 +93,15 @@ export function truncateCodexCatalogPreview(
   value: unknown,
   sanitize: typeof sanitizeTerminalText,
 ): string {
-  return Buffer.from(catalogPreview(value, sanitize) ?? "", "utf8").toString("utf8");
+  const preview =
+    typeof value === "string"
+      ? boundedCatalogString(
+          sanitize(value.replace(/\s+/g, " ")),
+          MAX_SESSION_PREVIEW_LENGTH,
+          "truncate",
+        )
+      : undefined;
+  return Buffer.from(preview ?? "", "utf8").toString("utf8");
 }
 
 function normalizeInteractiveThreadSource(source: unknown) {
@@ -146,9 +145,7 @@ export function codexCatalogThreadStatus(
 
 export function toCatalogSession(
   thread: CodexThread,
-  archived: boolean,
-  sanitize: typeof sanitizeTerminalText,
-  preparedPreview?: { value: string | undefined },
+  preparedPreview: string | undefined,
 ): CodexSessionCatalogSession | undefined {
   // Codex models Atlas and ChatGPT as custom sources but includes both in its
   // interactive default. Normalize those objects for the string-only catalog.
@@ -163,11 +160,7 @@ export function toCatalogSession(
   const gitInfo = isRecord(thread.gitInfo) ? thread.gitInfo : undefined;
   const sessionId = boundedCatalogString(thread.sessionId, MAX_SESSION_ID_LENGTH);
   const name = codexCatalogThreadName(thread.name);
-  const fallbackName = name
-    ? undefined
-    : preparedPreview
-      ? preparedPreview.value
-      : catalogPreview(thread.preview, sanitize);
+  const fallbackName = name ? undefined : preparedPreview;
   const cwd = boundedCatalogString(thread.cwd, MAX_CWD_LENGTH);
   const modelProvider = boundedCatalogString(thread.modelProvider, MAX_METADATA_LENGTH, "truncate");
   const cliVersion = boundedCatalogString(thread.cliVersion, MAX_METADATA_LENGTH, "truncate");
@@ -175,7 +168,7 @@ export function toCatalogSession(
   return {
     threadId,
     ...codexCatalogThreadStatus(thread.status),
-    archived,
+    archived: false,
     ...(sessionId ? { sessionId } : {}),
     ...(thread.name === null ? { name: null } : name ? { name } : {}),
     ...(fallbackName ? { fallbackName } : {}),
@@ -357,13 +350,9 @@ const CATALOG_SESSION_STRINGS = [
   ["modelProvider", "model provider", MAX_METADATA_LENGTH],
   ["cliVersion", "CLI version", MAX_METADATA_LENGTH],
   ["gitBranch", "Git branch", MAX_METADATA_LENGTH],
-  ["sessionKey", "OpenClaw session key", MAX_SESSION_KEY_LENGTH],
 ] as const;
 
-function parseCatalogSession(
-  value: unknown,
-  options: { allowSessionKey?: boolean } = {},
-): CodexSessionCatalogSession {
+function parseCatalogSession(value: unknown): CodexSessionCatalogSession {
   if (
     !isRecord(value) ||
     typeof value.threadId !== "string" ||
@@ -398,9 +387,6 @@ function parseCatalogSession(
     archived: value.archived,
   };
   for (const [key, label, limit] of CATALOG_SESSION_STRINGS) {
-    if (key === "sessionKey" && !options.allowSessionKey) {
-      continue;
-    }
     if (key === "name" && value.name === null) {
       session.name = null;
       continue;
@@ -424,10 +410,7 @@ function parseCatalogSession(
   return session;
 }
 
-export function parseCatalogPage(
-  value: unknown,
-  options: { allowSessionKey?: boolean } = {},
-): CodexSessionCatalogPage {
+export function parseCatalogPage(value: unknown): CodexSessionCatalogPage {
   if (
     !isRecord(value) ||
     !Array.isArray(value.sessions) ||
@@ -447,7 +430,7 @@ export function parseCatalogPage(
     MAX_CURSOR_LENGTH,
   );
   return {
-    sessions: value.sessions.map((session) => parseCatalogSession(session, options)),
+    sessions: value.sessions.map(parseCatalogSession),
     ...(sourceHomeId ? { sourceHomeId } : {}),
     ...(typeof value.canContinueCodex === "boolean"
       ? { canContinueCodex: value.canContinueCodex }

@@ -13,7 +13,7 @@ import {
   startLocalOtlpReceiver,
 } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
-import { createOtelContext, emitRealSdkSignals, startOtelService } from "./service.test-helpers.js";
+import { createOtelContext, emitRealSdkSignals } from "./service.test-helpers.js";
 
 const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
 const OWNERSHIP_ENV_KEYS = [
@@ -141,6 +141,9 @@ test("flushes each private generation on restart and leaves global providers unt
   const portA = await receiverA.listen();
   const portB = await receiverB.listen();
   releaseOtelGlobals();
+  const messages = captureOtelDiagnostics();
+  const hostDiagOwner = registeredOtelGlobals()?.diag;
+  process.env.OTEL_LOG_LEVEL = "debug";
   const globalProviders = {
     logs: registeredOtelLogs(),
     metrics: registeredOtelGlobals()?.metrics,
@@ -174,6 +177,7 @@ test("flushes each private generation on restart and leaves global providers unt
     expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
     expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
     expect(registeredOtelLogs()).toBe(globalProviders.logs);
+    expect(registeredOtelGlobals()?.diag).toBe(hostDiagOwner);
 
     await emitRealSdkSignals("after-a-stop");
     await waitForDiagnosticEventsDrained();
@@ -194,39 +198,18 @@ test("flushes each private generation on restart and leaves global providers unt
     expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
     expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
     expect(registeredOtelLogs()).toBe(globalProviders.logs);
+    expect(registeredOtelGlobals()?.diag).toBe(hostDiagOwner);
 
     await emitRealSdkSignals("after-b-stop");
     await waitForDiagnosticEventsDrained();
     await sleep(50);
     expect(receiverB.capturedRequests).toHaveLength(bRequestsAfterStop);
+    diag.warn("host diagnostic logger remains active");
+    expect(messages).toContain("host diagnostic logger remains active");
   } finally {
     await service.stop?.(ctxA);
     await service.stop?.(ctxB);
     await receiverA.close();
     await receiverB.close();
-  }
-}, 30_000);
-
-test("leaves OTEL_LOG_LEVEL and the process diagnostic logger under host ownership", async () => {
-  releaseOtelGlobals();
-  const messages = captureOtelDiagnostics();
-  const hostDiagOwner = registeredOtelGlobals()?.diag;
-  process.env.OTEL_LOG_LEVEL = "debug";
-  const receiver = startLocalOtlpReceiver();
-  const port = await receiver.listen();
-  const { service, ctx } = await startOtelService({
-    endpoint: `http://127.0.0.1:${port}`,
-    traces: true,
-  });
-
-  try {
-    await emitRealSdkSignals("diag-owner");
-    await service.stop?.(ctx);
-    expect(registeredOtelGlobals()?.diag).toBe(hostDiagOwner);
-    diag.warn("host diagnostic logger remains active");
-    expect(messages).toContain("host diagnostic logger remains active");
-  } finally {
-    await service.stop?.(ctx);
-    await receiver.close();
   }
 }, 30_000);

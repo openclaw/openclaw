@@ -9,7 +9,7 @@ import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelPlugin,
-} from "../src/channels/plugins/types.js";
+} from "../src/channels/plugins/types.public.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,

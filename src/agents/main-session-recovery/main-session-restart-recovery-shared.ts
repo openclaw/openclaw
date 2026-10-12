@@ -7,8 +7,8 @@ import {
   type InternalSessionEntry as SessionEntry,
   type SessionStoreTarget,
 } from "../../config/sessions.js";
-import { hasSessionEntriesByStatusReadOnly } from "../../config/sessions/session-accessor.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
+import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import { prepareSessionStoreTargetInventory } from "../../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,15 +36,16 @@ export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
 export function resolveRestartRecoveryTerminalClientRunId(
   entry: Pick<SessionEntry, "restartRecoveryDeliverySourceRunId" | "restartRecoverySourceIngress">,
 ): string | undefined {
-  return entry.restartRecoverySourceIngress === "control-ui"
+  return entry.restartRecoverySourceIngress === "control-ui" ||
+    entry.restartRecoverySourceIngress === "internal"
     ? normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
     : undefined;
 }
 
 export async function discoverRestartRecoveryStoreTargets(params: {
   cfg?: OpenClawConfig;
+  agentIds?: ReadonlySet<string>;
   stateDir?: string;
-  statuses?: Parameters<typeof hasSessionEntriesByStatusReadOnly>[1];
   shouldContinue?: () => boolean;
 }): Promise<SessionStoreTarget[]> {
   if (params.shouldContinue?.() === false) {
@@ -58,6 +59,9 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     // because its old directory still exists on disk. Those stores are intentionally fenced
     // by the deletion journal, and stale auth-probe directories are not agent roster entries.
     const configuredAgentIds = listConfiguredSessionStoreAgentIds(params.cfg);
+    const selectedAgentIds = configuredAgentIds.filter(
+      (agentId) => !params.agentIds || params.agentIds.has(agentId),
+    );
     const configuredStorePaths = new Set(
       configuredAgentIds.map((agentId) =>
         path.resolve(resolveSessionStorePathCore(params.cfg?.session?.store, { agentId, env })),
@@ -65,7 +69,14 @@ export async function discoverRestartRecoveryStoreTargets(params: {
     );
     const configuredAgentIdSet = new Set(configuredAgentIds);
     const inventory = prepareSessionStoreTargetInventoryRead(
-      prepareSessionStoreTargetInventory(params.cfg, configuredAgentIds, env, "recovery"),
+      prepareSessionStoreTargetInventory(
+        params.cfg,
+        isPerAgentSessionStoreConfig(params.cfg.session?.store)
+          ? selectedAgentIds
+          : [...new Set([...configuredAgentIds, ...(params.agentIds ?? [])])],
+        env,
+        "recovery",
+      ),
     );
     const targets = await inventory.withRead(async (snapshot) =>
       snapshot.agents.flatMap(({ result }) => (result.available ? result.targets : [])),
@@ -81,6 +92,9 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       if (!configuredAgentIdSet.has(target.agentId) && !configuredStorePaths.has(storePath)) {
         continue;
       }
+      if (params.agentIds && !params.agentIds.has(target.agentId)) {
+        continue;
+      }
       storeTargets.push({ ...target, storePath });
     }
   } else {
@@ -94,26 +108,15 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       });
     }
   }
-  const eligibleTargets: SessionStoreTarget[] = [];
-  for (const target of storeTargets) {
-    if (params.shouldContinue?.() === false) {
-      return [];
-    }
-    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
-      continue;
-    }
-    const hasStatus =
-      !params.statuses ||
-      (await hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses));
-    if (params.shouldContinue?.() === false) {
-      return [];
-    }
-    if (hasStatus) {
-      eligibleTargets.push(target);
-    }
+  if (params.shouldContinue?.() === false) {
+    return [];
   }
-  return eligibleTargets
-    .filter((target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env }))
+  return storeTargets
+    .filter(
+      (target) =>
+        (params.cfg !== undefined || !params.agentIds || params.agentIds.has(target.agentId)) &&
+        !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
+    )
     .toSorted(
       (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
     );

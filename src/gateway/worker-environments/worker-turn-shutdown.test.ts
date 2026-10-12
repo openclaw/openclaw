@@ -143,7 +143,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     if (!claim) {
       throw new Error("Expected live worker claim");
     }
-    expect(placements.listPendingWorkspaceResults()).toEqual([]); // No finishing ACK yet.
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]); // No finishing ACK yet.
     await expect(fs.readFile(path.join(accepted, "restart-proof.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -159,36 +159,39 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     resetGatewayWorkAdmission();
     const recovered = createWorkerSessionPlacementStore({ database });
     const published = vi.fn(async () => {
-      expect(recovered.listPendingWorkspaceResults()[0]?.workspaceAcceptedAtMs).toEqual(
-        expect.any(Number),
-      );
+      expect(
+        (await recovered.listPendingWorkspaceResultsAsync())[0]?.workspaceAcceptedAtMs,
+      ).toEqual(expect.any(Number));
     });
-    const recovery = createPlacementRecoveryActions({
-      placements: recovered,
-      environments: {
-        ...environments,
-        fenceWorkerTurnForRecovery: unexpected,
-        reconcileEnvironment: async () => {},
-        reconcileOnce: async () => {},
-        supportsProviderExecutionMode: () => true,
+    const recovery = createPlacementRecoveryActions(
+      {
+        placements: recovered,
+        environments: {
+          ...environments,
+          fenceWorkerTurnForRecovery: unexpected,
+          reconcileEnvironment: async () => {},
+          reconcileOnce: async () => {},
+          supportsProviderExecutionMode: () => true,
+        },
+        failure: {
+          failActive: unexpected,
+          failDraining: unexpected,
+          reclaimActive: unexpected,
+          retryFailedTeardown: unexpected,
+          teardownEnvironment: unexpected,
+        },
+        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+        ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace, reportFailure: unexpected }),
+        publishAcceptedWorkspace: published,
       },
-      failure: {
-        failActive: unexpected,
-        failDraining: unexpected,
-        reclaimActive: unexpected,
-        retryFailedTeardown: unexpected,
-        teardownEnvironment: unexpected,
-      },
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace, reportFailure: unexpected }),
-      publishAcceptedWorkspace: published,
-    });
+      await recovered.listAsync(),
+    );
     await recovery.reconcile("startup");
     await expect(fs.readFile(path.join(accepted, "restart-proof.txt"), "utf8")).resolves.toBe(
       "slept-ok\n",
     );
     expect(published).toHaveBeenCalledOnce();
-    expect(recovered.listPendingWorkspaceResults()).toEqual([]);
+    expect(await recovered.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(recovered.get(SESSION_ID)).toMatchObject({
       state: "active",
       turnClaim: null,

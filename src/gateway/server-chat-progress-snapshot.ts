@@ -11,6 +11,13 @@ const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
 const CHAT_RUN_PROGRESS_MAX_BYTES = 128 * 1024;
 const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
 const CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL = 16;
+const TOOL_PROGRESS_FIELDS = new Map<string, readonly string[]>([
+  ["start", ["args"]],
+  ["input_delta", ["diff"]],
+  ["update", ["partialResult"]],
+  ["review", ["review", "approvalReviewOutcome"]],
+  ["result", ["approvalReviewOutcome", "isError", "result"]],
+]);
 const retainedEventBytes = new WeakMap<AgentEventPayload, number>();
 const isRawJSON =
   "isRawJSON" in JSON && typeof JSON.isRawJSON === "function" ? JSON.isRawJSON : undefined;
@@ -137,10 +144,11 @@ export function updateChatRunProgressSnapshot(
       : typeof data.id === "string" && data.id.trim()
         ? data.id.trim()
         : "";
+  const toolFields = TOOL_PROGRESS_FIELDS.get(phase);
   const isTool =
     event.stream === "tool" &&
     Boolean(toolCallId) &&
-    ["start", "input_delta", "update", "review", "result"].includes(phase) &&
+    toolFields !== undefined &&
     (phase !== "review" || (mode === "full" && Boolean(reviewId)));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
   const isItem = event.stream === "item" && (Boolean(preambleItemId) || isPreamble);
@@ -282,32 +290,7 @@ export function updateChatRunProgressSnapshot(
   }
 
   const storedData: Record<string, unknown> = isTool
-    ? mode === "summary"
-      ? {
-          phase,
-          name: typeof data.name === "string" ? data.name : undefined,
-          toolCallId,
-        }
-      : {
-          phase,
-          name: typeof data.name === "string" ? data.name : undefined,
-          toolCallId,
-          ...(phase === "start"
-            ? { args: data.args }
-            : phase === "update"
-              ? { partialResult: data.partialResult }
-              : phase === "input_delta"
-                ? { diff: data.diff }
-                : phase === "review"
-                  ? { review: data.review, approvalReviewOutcome: data.approvalReviewOutcome }
-                  : phase === "result"
-                    ? {
-                        approvalReviewOutcome: data.approvalReviewOutcome,
-                        isError: data.isError,
-                        result: data.result,
-                      }
-                    : {}),
-        }
+    ? { phase, name: typeof data.name === "string" ? data.name : undefined, toolCallId }
     : isAssistant
       ? {} // Reconnect needs the progress sequence, not another copy of buffered assistant text.
       : isPreamble
@@ -320,6 +303,11 @@ export function updateChatRunProgressSnapshot(
             progressText: data.progressText,
           }
         : { ...previousUsage?.data, ...data };
+  if (isTool && mode === "full") {
+    for (const field of toolFields) {
+      storedData[field] = data[field];
+    }
+  }
   for (const key of Object.keys(storedData)) {
     if (storedData[key] === undefined) {
       delete storedData[key];

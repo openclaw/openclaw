@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 struct CommandCenterTab: View {
@@ -7,7 +8,7 @@ struct CommandCenterTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    var headerTitle: String = "OpenClaw"
+    private let headerTitle = "Overview"
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var dashboardModel: RootSidebarModel
     var openChat: () -> Void
@@ -305,14 +306,14 @@ struct CommandCenterTab: View {
                     self.gatewayFact(
                         icon: "network",
                         title: "Connection",
-                        value: self.gatewayConnectionText,
+                        value: self.gatewayDisplayState.statusPresentation.title,
                         color: self.gatewayStatusColor)
                     Divider().frame(height: 38)
                     self.gatewayFact(
                         icon: "server.rack",
                         title: "Address",
                         value: self.gatewayAddressText,
-                        color: OpenClawBrand.accentForeground)
+                        color: OpenClawBrand.accent)
                     Divider().frame(height: 38)
                     self.gatewayFact(
                         icon: "person.2.fill",
@@ -399,15 +400,18 @@ struct CommandCenterTab: View {
                                 canArchive: ChatSessionSidebarModel.canArchiveSession(
                                     session,
                                     mainSessionKey: self.appModel.mainSessionKey),
-                                actions: .gateway(
-                                    session: session,
-                                    performMutation: self.performSessionMutation,
-                                    fork: { self.forkSession(session) }))
+                                performMutation: self.performSessionMutation,
+                                fork: { self.forkSession(session) })
                         }
 
                         if self.hasMoreRecentSessions {
                             Button(action: self.openSessions) {
-                                CommandViewMoreRow()
+                                Label("View More", systemImage: "chevron.right")
+                                    .font(OpenClawType.subheadBold)
+                                    .foregroundStyle(OpenClawBrand.accent)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -434,35 +438,14 @@ struct CommandCenterTab: View {
         GatewayStatusBuilder.build(appModel: self.appModel)
     }
 
-    private var gatewayConnectionText: String {
-        switch self.gatewayDisplayState {
-        case .connected:
-            String(localized: "Online")
-        case .connecting:
-            String(localized: "Connecting")
-        case .error:
-            String(localized: "Attention")
-        case .disconnected:
-            String(localized: "Offline")
-        }
-    }
-
     private var gatewayStatusColor: Color {
-        switch self.gatewayDisplayState {
-        case .connected:
-            OpenClawBrand.ok
-        case .connecting:
-            OpenClawBrand.accent
-        case .error:
-            OpenClawBrand.warn
-        case .disconnected:
-            .secondary
-        }
+        let state = self.gatewayDisplayState
+        return state == .disconnected ? .secondary : state.statusPresentation.tone.color
     }
 
     private var gatewayAddressText: String {
-        Self.normalized(self.appModel.gatewayRemoteAddress)
-            ?? Self.normalized(self.appModel.gatewayServerName)
+        self.appModel.gatewayRemoteAddress?.trimmedNonEmpty
+            ?? self.appModel.gatewayServerName?.trimmedNonEmpty
             ?? String(localized: "Unknown")
     }
 
@@ -585,16 +568,16 @@ struct CommandCenterTab: View {
     }
 
     static func sessionTitle(_ session: OpenClawChatSessionEntry) -> String {
-        if let label = self.normalized(session.label) {
+        if let label = session.label?.trimmedNonEmpty {
             return label
         }
-        if let displayName = self.normalized(session.displayName) {
+        if let displayName = session.displayName?.trimmedNonEmpty {
             return Self.redactedSessionTitle(for: displayName) ?? displayName
         }
-        if let autoLabel = self.normalized(session.autoLabel) {
+        if let autoLabel = session.autoLabel?.trimmedNonEmpty {
             return autoLabel
         }
-        if let subject = self.normalized(session.subject) {
+        if let subject = session.subject?.trimmedNonEmpty {
             return Self.redactedSessionTitle(for: subject) ?? subject
         }
         // Generic key placeholders only after real topic names are absent.
@@ -707,25 +690,19 @@ struct CommandCenterTab: View {
     }
 
     private var gatewaySubtitle: String {
-        if let server = Self.normalized(appModel.gatewayServerName) {
+        if let server = appModel.gatewayServerName?.trimmedNonEmpty {
             return String(
                 format: String(localized: "%@ on %@"),
                 self.appModel.activeAgentName,
                 server)
         }
-        if let address = Self.normalized(appModel.gatewayRemoteAddress) {
+        if let address = appModel.gatewayRemoteAddress?.trimmedNonEmpty {
             return String(
                 format: String(localized: "%@ via %@"),
                 self.appModel.activeAgentName,
                 address)
         }
         return self.appModel.gatewayDisplayStatusText
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -1168,11 +1145,9 @@ struct CommandSessionsScreen: View {
             canArchive: ChatSessionSidebarModel.canArchiveSession(
                 session,
                 mainSessionKey: self.appModel.mainSessionKey),
-            actions: .gateway(
-                session: session,
-                archivesSession: { self.statusScope != .archived && session.archived != true },
-                performMutation: self.performMutation,
-                fork: { self.forkSession(session) }))
+            archivesSession: { self.statusScope != .archived && session.archived != true },
+            performMutation: self.performMutation,
+            fork: { self.forkSession(session) })
     }
 
     private func openSessionKey(_ key: String) {

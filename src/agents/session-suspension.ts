@@ -1,8 +1,3 @@
-/**
- * Session suspension persistence and lifecycle helpers.
- *
- * Records quota/manual/circuit suspensions for diagnostics and recovery flows.
- */
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -31,18 +26,14 @@ type SessionSuspensionRuntimeState = {
  * Bundled gateway chunks share one write queue and shutdown fence so one
  * module copy cannot persist a suspension after another copy cleaned up.
  */
-const SESSION_SUSPENSION_STATE_KEY = Symbol.for("openclaw.sessionSuspensionRuntimeState");
-
-function getSessionSuspensionState(): SessionSuspensionRuntimeState {
-  return resolveGlobalSingleton<SessionSuspensionRuntimeState>(
-    SESSION_SUSPENSION_STATE_KEY,
-    () => ({
-      suspensionWriteChain: Promise.resolve(),
-      cleanupGeneration: 0,
-      cleanupActive: false,
-    }),
-  );
-}
+const suspensionState = resolveGlobalSingleton<SessionSuspensionRuntimeState>(
+  Symbol.for("openclaw.sessionSuspensionRuntimeState"),
+  () => ({
+    suspensionWriteChain: Promise.resolve(),
+    cleanupGeneration: 0,
+    cleanupActive: false,
+  }),
+);
 
 const deferredSessionSuspension = new AsyncLocalStorage<{
   claimed: boolean;
@@ -94,23 +85,19 @@ export function resolveSessionSuspensionTarget(): SessionSuspensionTarget {
 }
 
 export function fenceSessionSuspensionWritesForGatewayShutdown(): void {
-  const state = getSessionSuspensionState();
-  state.cleanupGeneration += 1;
-  state.cleanupActive = true;
+  suspensionState.cleanupGeneration += 1;
+  suspensionState.cleanupActive = true;
 }
 
 export function enableSessionSuspensionWritesForGatewayStart(): void {
-  const state = getSessionSuspensionState();
-  state.cleanupGeneration += 1;
-  state.cleanupActive = false;
+  suspensionState.cleanupGeneration += 1;
+  suspensionState.cleanupActive = false;
 }
 
 export async function suspendSession(params: SessionSuspensionParams) {
-  const state = getSessionSuspensionState();
+  const state = suspensionState;
   const queuedGeneration = state.cleanupGeneration;
-  const run = state.suspensionWriteChain
-    .catch(() => undefined)
-    .then(() => suspendSessionQueued(params, queuedGeneration));
+  const run = state.suspensionWriteChain.then(() => suspendSessionQueued(params, queuedGeneration));
   // Suspension persistence is per-process and rare; serialize it so cleanup
   // rollback has one winner and cannot erase another in-flight suspension.
   state.suspensionWriteChain = run.then(
@@ -143,21 +130,19 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
   const ttlMs = resolveTimerTimeoutMs(params.ttlMs, DEFAULT_QUOTA_SUSPENSION_RESUME_MS, 0);
   const now = Date.now();
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
-  const state = getSessionSuspensionState();
+  const state = suspensionState;
   if (state.cleanupActive || state.cleanupGeneration !== queuedGeneration) {
     return;
   }
   const suspensionGeneration = state.cleanupGeneration;
   let previousQuotaSuspension: QuotaSuspension | undefined;
-  // Assigned at the end of the try; the catch path returns, so every read
-  // below sees the real patch outcome.
   let persistedSuspension: boolean;
 
   try {
     const patchedEntry = await patchSessionEntryCore(
       { storePath, sessionKey },
       (entry) => {
-        if (getSessionSuspensionState().cleanupGeneration !== suspensionGeneration) {
+        if (state.cleanupGeneration !== suspensionGeneration) {
           return null;
         }
         previousQuotaSuspension = entry.quotaSuspension;
@@ -185,10 +170,9 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
     return;
   }
 
-  const postPatchState = getSessionSuspensionState();
   if (
     persistedSuspension &&
-    (postPatchState.cleanupActive || suspensionGeneration !== postPatchState.cleanupGeneration)
+    (state.cleanupActive || suspensionGeneration !== state.cleanupGeneration)
   ) {
     try {
       await patchSessionEntryCore(
@@ -215,7 +199,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
 }
 
 function resetSessionSuspensionStateForTest(): void {
-  const state = getSessionSuspensionState();
+  const state = suspensionState;
   // Invalidate in-flight writes before clearing test state. Rewinding to a
   // reused generation lets a fire-and-forget suspension regain ownership.
   state.cleanupGeneration += 1;
@@ -224,7 +208,7 @@ function resetSessionSuspensionStateForTest(): void {
 }
 
 function isSessionSuspensionWriteCleanupActiveForTest(): boolean {
-  return getSessionSuspensionState().cleanupActive;
+  return suspensionState.cleanupActive;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

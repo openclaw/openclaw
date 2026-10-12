@@ -1,7 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { mapSessionResultRows } from "./reconcile.ts";
 import type { createSessionRowProvenance } from "./session-row-provenance.ts";
-import { isOlderSessionSnapshot } from "./session-row-reconcile.ts";
 
 type HeldSessionRows = {
   state: { resultCached?: boolean };
@@ -36,33 +35,19 @@ export function createSessionRosterProjection(
     rows: readonly GatewaySessionRow[],
     agentId?: string | null,
     sourceAgentId?: string | null,
-    incomingRows?: ReadonlyMap<string, GatewaySessionRow>,
   ) => {
     if (!result || rows.length === 0) {
       return result;
     }
     const offered = indexRows(rows, sourceAgentId);
-    const sessions = result.sessions.map((current) => {
+    return mapSessionResultRows(result, (current) => {
       const key = identity(current, agentId);
       const row = key && offered.get(key);
       if (!row) {
         return current;
       }
-      const incoming = key && incomingRows?.get(key);
-      // A held descriptor rejects older full rows before they can donate
-      // previously unseen presentation fields. List-to-list merges retain
-      // their independent field observations.
-      const rejectedRead =
-        incoming &&
-        (rowRevision(row) > rowRevision(incoming) || isOlderSessionSnapshot(incoming, row));
-      const held = rejectedRead && projectFields(row, sourceAgentId);
-      return held
-        ? held.key === current.key
-          ? held
-          : inheritRow({ ...held, key: current.key }, held)
-        : mergeRow(current, row, agentId);
+      return mergeRow(current, row, agentId);
     });
-    return projectSessionResultRows(result, sessions);
   };
   const prepareProjection = (requestedRows?: readonly GatewaySessionRow[]) => {
     // Identity includes the verbatim session ID; other IDs cannot donate facts.
@@ -78,12 +63,8 @@ export function createSessionRosterProjection(
       }
       let current = row;
       const primary = primaryRows.get(key);
-      if (primary) {
-        // Identical live reads reuse the primary row; cache-only fields lose ties to live input.
-        current =
-          state.resultCached && rowRevision(primary) === 0
-            ? mergeRow(current, primary, agentId)
-            : mergeRow(primary, current, agentId);
+      if (primary && (!state.resultCached || rowRevision(primary) > 0)) {
+        current = mergeRow(primary, current, agentId);
       }
       for (const offered of observedRows.get(key) ?? []) {
         current = mergeRow(current, offered, agentId);
@@ -99,16 +80,12 @@ export function createSessionRosterProjection(
   };
   const projectFields = (row: GatewaySessionRow, agentId?: string | null) =>
     prepareProjection([row]).projectFields(row, agentId);
-  const heldRowsFor = (
-    row: GatewaySessionRow,
-    agentId?: string | null,
-    held?: ReturnType<typeof captureHeldRows>,
-  ) => {
+  const heldRowsFor = (row: GatewaySessionRow, agentId?: string | null) => {
     const key = identity(row, agentId);
     if (!key) {
       return [];
     }
-    const { primaryRows, observedRows } = held ?? captureHeldRows();
+    const { primaryRows, observedRows } = captureHeldRows();
     const primary = primaryRows.get(key);
     return [...(primary ? [primary] : []), ...(observedRows.get(key) ?? [])];
   };
@@ -121,7 +98,6 @@ export function createSessionRosterProjection(
     merge,
     prepareProjection,
     projectFields,
-    heldRowsFor,
     currentRow,
   };
 }

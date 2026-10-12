@@ -439,24 +439,6 @@ struct RootTabsPresentationTests {
             isCaptureInFlight: false))
     }
 
-    @Test func `chat view model rebuilds only when its transport owner changes`() {
-        #expect(!IOSChatViewModelOwner.requiresViewModelRebuild(
-            currentOwnerID: "gateway-a",
-            nextOwnerID: "gateway-a",
-            currentTransportAgentID: "main",
-            nextTransportAgentID: "main"))
-        #expect(IOSChatViewModelOwner.requiresViewModelRebuild(
-            currentOwnerID: "gateway-a",
-            nextOwnerID: "gateway-b",
-            currentTransportAgentID: "main",
-            nextTransportAgentID: "main"))
-        #expect(IOSChatViewModelOwner.requiresViewModelRebuild(
-            currentOwnerID: "gateway-a",
-            nextOwnerID: "gateway-a",
-            currentTransportAgentID: "main",
-            nextTransportAgentID: "work"))
-    }
-
     @Test func `localized QR status matcher accepts positional placeholders`() {
         #expect(SettingsProTab.localizedFormat(
             "qr loaded. connecting to %1$@:%2$@...",

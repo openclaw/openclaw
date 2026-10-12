@@ -171,8 +171,8 @@ extension OpenClawChatMessage {
         }
         let blocks = self.content.filter { ChatMessageVisibleText.isVisibleContentType($0.type, role: "assistant") }
         let phases = blocks.map { block -> String? in
-            guard let data = block.textSignature?.data(using: .utf8),
-                  let signature = try? JSONDecoder().decode(Signature.self, from: data),
+            guard let text = block.textSignature,
+                  let signature = try? JSONDecoder().decode(Signature.self, from: Data(text.utf8)),
                   signature.v == 1,
                   let phase = signature.phase,
                   ["commentary", "final_answer"].contains(phase)
@@ -193,7 +193,7 @@ extension OpenClawChatMessage {
     }
 
     fileprivate var isCollapsibleWork: Bool {
-        !self.hasWorkMedia && !self.isForwardedTurnBoundary &&
+        !self.hasWorkMedia && !self.isForwardedTurnBoundary && !self.isRealtimeVoiceTranscript &&
             (["tool", "toolresult", "tool_result"].contains(self.role.lowercased()) ||
                 (self.role.lowercased() == "assistant" && self.workPhase != "final_answer"))
     }
@@ -209,5 +209,12 @@ extension OpenClawChatMessage {
             block.isToolCall &&
                 !results.contains { $0.id != nil && $0.id == block.id }
         }
+    }
+}
+
+extension OpenClawChatMessage {
+    /// A spoken realtime-voice rendition: its own footer identity, never collapsible work.
+    var isRealtimeVoiceTranscript: Bool {
+        self.provenance?.kind == "realtime_voice" || self.model == "realtime-voice"
     }
 }

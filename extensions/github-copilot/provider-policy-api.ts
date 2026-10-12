@@ -9,6 +9,7 @@ export function resolveThinkingProfile(context: ProviderDefaultThinkingPolicyCon
     context.modelId,
     context.compat,
     context.api,
+    context.params,
   );
   const extendedLevels = (["xhigh", "max"] as const).filter((id) => thinkingLevelMap?.[id]);
 

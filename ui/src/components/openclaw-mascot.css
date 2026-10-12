@@ -1,0 +1,23 @@
+openclaw-mascot {
+  display: inline-block;
+  width: var(--openclaw-mascot-size, 120px);
+  height: var(--openclaw-mascot-size, 120px);
+  overflow: visible;
+  contain: layout style;
+  pointer-events: none;
+  line-height: 0;
+}
+
+openclaw-mascot > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+}
+
+openclaw-mascot > .openclaw-mascot--neutral,
+openclaw-mascot > .openclaw-mascot--neutral svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

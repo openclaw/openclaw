@@ -105,8 +105,7 @@ final class WebChatManager {
     @ObservationIgnored private var sessionObserverMonitors: [ObjectIdentifier: Task<Void, Never>] = [:]
     @ObservationIgnored private var sessionObserverRequests: [ObjectIdentifier: (id: UUID, task: Task<Void, Never>)] =
         [:]
-    @ObservationIgnored private var sessionObserverDeclarations:
-        [ObjectIdentifier: (lease: GatewayConnection.ServerLease, visible: Bool)] = [:]
+    @ObservationIgnored private var sessionObserverDeclarations: [ObjectIdentifier: GatewayConnection.ServerLease] = [:]
 
     var onChatWindowVisibilityChanged: ((Bool) -> Void)?
 
@@ -441,6 +440,14 @@ final class WebChatManager {
         self.gatewayWindowOrder.count { self.gatewayWindows[$0]?.target == target }
     }
 
+    var openProfileIDs: Set<String> {
+        // Hidden windows still retain their saved route until the window owner closes them.
+        Set(self.gatewayWindows.values.compactMap {
+            guard case let .profile(id) = $0.target else { return nil }
+            return id
+        })
+    }
+
     func closeGatewayWindows(profileID: String) {
         self.unavailableProfileIDs.insert(profileID)
         self.closeGatewayWindows(target: .profile(profileID))
@@ -566,9 +573,8 @@ final class WebChatManager {
                   self.sessionObserverOwners.isVisible(connection: connectionID) == visible
             else { return }
 
-            if let declaration = self.sessionObserverDeclarations[connectionID],
-               declaration.visible == visible,
-               await connection.isCurrentServerLease(declaration.lease)
+            if visible, let lease = self.sessionObserverDeclarations[connectionID],
+               await connection.isCurrentServerLease(lease)
             { return }
 
             // A timed-out mutation may already have changed the Gateway. Clear
@@ -588,7 +594,7 @@ final class WebChatManager {
                     request, ifCurrentServerLease: lease)
                 guard !Task.isCancelled else { return }
                 if visible {
-                    self.sessionObserverDeclarations[connectionID] = (lease: lease, visible: true)
+                    self.sessionObserverDeclarations[connectionID] = lease
                 } else {
                     self.sessionObserverDeclarations.removeValue(forKey: connectionID)
                     if !self.sessionObserverOwners.isVisible(connection: connectionID) {
@@ -628,7 +634,7 @@ final class WebChatManager {
     static func promptForGatewayProfile(
         profiles: [MacGatewayProfile],
         preferredID: String?,
-        local: DashboardGatewayEntry? = nil) -> GatewayProfileSelection?
+        local: DashboardGatewayEntry? = nil) async -> GatewayProfileSelection?
     {
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
         if let local { popup.addItem(withTitle: local.name) }
@@ -644,7 +650,7 @@ final class WebChatManager {
         alert.addButton(withTitle: "Open Window")
         alert.addButton(withTitle: "Manage Gateways…")
         alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
+        switch await AppActivation.shared.response(to: alert) {
         case .alertFirstButtonReturn:
             if local != nil, popup.indexOfSelectedItem == 0 { return .local }
             let index = popup.indexOfSelectedItem - offset
@@ -664,7 +670,7 @@ final class WebChatManager {
     private static func showProfileError(_ error: Error, message: String) {
         let alert = NSAlert(error: error)
         alert.messageText = message
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     #if DEBUG

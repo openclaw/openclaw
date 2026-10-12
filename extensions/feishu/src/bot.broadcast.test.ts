@@ -86,17 +86,29 @@ describe("broadcast dispatch", () => {
     });
   }
 
-  it("keeps the observer adapter isolated from active delivery", async () => {
+  it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
+    mockDispatchReply.mockImplementation(async ({ ctx }) =>
+      String(ctx.SessionKey).startsWith("agent:main:")
+        ? {
+            queuedFinal: true,
+            counts: { final: 1 },
+            settledReceipt: failedFinalReceipt,
+          }
+        : { queuedFinal: false, counts: { final: 1 } },
+    );
+    const ensureNoVisibleReplyFallback = vi.fn();
     const activeDeliver = vi.fn(async () => undefined);
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
       dispatcherOptions: {},
       delivery: { deliver: activeDeliver },
       replyOptions: {},
-      ensureNoVisibleReplyFallback: vi.fn(),
+      ensureNoVisibleReplyFallback,
     });
+    await dispatchBroadcast("msg-broadcast-final-failed");
 
-    await dispatchBroadcast("msg-broadcast-observer-isolation");
-
+    expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith(
+      "broadcast-dispatch-complete-no-visible-reply",
+    );
     const observerTurn = resolvedTurnCalls.find(
       (turn) => (turn["admission"] as { kind?: string } | undefined)?.kind === "observeOnly",
     );
@@ -108,37 +120,17 @@ describe("broadcast dispatch", () => {
     expect(activeDeliver).not.toHaveBeenCalled();
   });
 
-  it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
-    mockDispatchReply
-      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
-      .mockResolvedValueOnce({
-        queuedFinal: true,
-        counts: { final: 1 },
-        settledReceipt: failedFinalReceipt,
-      });
-    const ensureNoVisibleReplyFallback = vi.fn();
-    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
-      replyOptions: {},
-      ensureNoVisibleReplyFallback,
-    });
-    await dispatchBroadcast("msg-broadcast-final-failed");
-
-    expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith(
-      "broadcast-dispatch-complete-no-visible-reply",
-    );
-  });
-
   it("skips no-visible-reply fallback for source-suppressed active broadcast dispatch", async () => {
-    mockDispatchReply
-      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
-      .mockResolvedValueOnce({
-        queuedFinal: false,
-        counts: { final: 0 },
-        sourceReplyDeliveryMode: "message_tool_only",
-        noVisibleReplyFallbackEligible: true,
-      });
+    mockDispatchReply.mockImplementation(async ({ ctx }) =>
+      String(ctx.SessionKey).startsWith("agent:main:")
+        ? {
+            queuedFinal: false,
+            counts: { final: 0 },
+            sourceReplyDeliveryMode: "message_tool_only",
+            noVisibleReplyFallbackEligible: true,
+          }
+        : { queuedFinal: false, counts: { final: 1 } },
+    );
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
       dispatcherOptions: {},

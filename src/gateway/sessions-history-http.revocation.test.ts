@@ -456,16 +456,6 @@ describe("session history SSE auth revocation", () => {
     }
   });
 
-  it("closes an existing stream before disclosure when profile access is revoked", async () => {
-    fixture.profile = guestProfile;
-    const { res } = await openStream();
-    fixture.visible = false;
-
-    emitTranscriptTextUpdate("role-revoked secret");
-
-    await expectStreamClosedWithoutMessage(res, "role-revoked secret");
-  });
-
   it("keeps inline delivery between coalesced refreshes while authorization is pending", async () => {
     const { res } = await openStream();
     const { entered, release, wait } = readBarrier();

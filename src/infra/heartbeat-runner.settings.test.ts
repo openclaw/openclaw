@@ -1,120 +1,104 @@
 import { describe, expect, it } from "vitest";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatIntervalMs } from "./heartbeat-config.js";
 import { resolveConfiguredHeartbeatPrompt } from "./heartbeat-runner-config.js";
 import { resolveHeartbeatSummaryForAgent } from "./heartbeat-summary.js";
+import {
+  inferHeartbeatWakeSourceFromReason,
+  resolveHeartbeatWakePayloadFlags,
+} from "./heartbeat-wake-policy.js";
 
-describe("resolveHeartbeatIntervalMs", () => {
-  it("reports owner as the default delivery target", () => {
-    expect(resolveHeartbeatSummaryForAgent({}).target).toBe("owner");
-  });
-
-  it("reports the merged per-agent heartbeat session", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { heartbeat: { session: "telegram:default" } },
-        list: [{ id: "main", heartbeat: { session: "telegram:alerts" } }],
-      },
-    };
-
-    expect(resolveHeartbeatSummaryForAgent(cfg, "main").session).toBe("telegram:alerts");
-  });
-
+describe("heartbeat settings", () => {
   it.each([
+    { name: "default target", cfg: {}, agentId: undefined, expected: { target: "owner" } },
     {
-      label: "global",
+      name: "per-agent session",
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { session: "telegram:default" } },
+          entries: { main: { heartbeat: { session: "telegram:alerts" } } },
+        },
+      },
+      agentId: "main",
+      expected: { session: "telegram:alerts" },
+    },
+    {
+      name: "disabled global",
       cfg: {
         agents: {
           defaults: {
-            heartbeat: { every: "0m", target: "last", session: "telegram:default" },
+            heartbeat: {
+              every: "0m",
+              target: "last",
+              session: "telegram:default",
+            },
           },
         },
       },
-      session: "telegram:default",
-    },
-    {
-      label: "per-agent",
-      cfg: {
-        agents: {
-          defaults: {
-            heartbeat: { every: "30m", target: "last", session: "telegram:default" },
-          },
-          list: [{ id: "main", heartbeat: { every: "0m", session: "telegram:alerts" } }],
-        },
-      },
-      session: "telegram:alerts",
-    },
-  ] satisfies Array<{ label: string; cfg: OpenClawConfig; session: string }>)(
-    "reports a disabled $label heartbeat as disabled",
-    ({ cfg, session }) => {
-      expect(resolveHeartbeatSummaryForAgent(cfg, "main")).toMatchObject({
+      agentId: "main",
+      expected: {
         enabled: false,
         every: "disabled",
         everyMs: null,
         target: "last",
-        session,
-      });
+        session: "telegram:default",
+      },
     },
-  );
-
-  it("returns default when unset", () => {
-    expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
+  ] satisfies Array<{
+    name: string;
+    cfg: OpenClawConfig;
+    agentId: string | undefined;
+    expected: Partial<ReturnType<typeof resolveHeartbeatSummaryForAgent>>;
+  }>)("reports $name", ({ cfg, agentId, expected }) => {
+    expect(resolveHeartbeatSummaryForAgent(cfg, agentId)).toMatchObject(expected);
   });
 
-  it("returns null when invalid or zero", () => {
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "0m" } } },
-      }),
-    ).toBeNull();
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "oops" } } },
-      }),
-    ).toBeNull();
+  it("resolves default, configured, invalid, and overridden intervals", () => {
+    const cases = [
+      { every: undefined, expected: 30 * 60_000 },
+      { every: "0m", expected: null },
+      { every: "oops", expected: null },
+      { every: "5m", expected: 5 * 60_000 },
+      { every: "5", expected: 5 * 60_000 },
+      { every: "2h", expected: 2 * 60 * 60_000 },
+      { every: "30m", override: "5m", expected: 5 * 60_000 },
+    ];
+    for (const { every, override, expected } of cases) {
+      const cfg = every === undefined ? {} : { agents: { defaults: { heartbeat: { every } } } };
+      expect(
+        resolveHeartbeatIntervalMs(cfg, undefined, override ? { every: override } : undefined),
+      ).toBe(expected);
+    }
   });
 
-  it("parses duration strings with minute defaults", () => {
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "5m" } } },
-      }),
-    ).toBe(5 * 60_000);
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "5" } } },
-      }),
-    ).toBe(5 * 60_000);
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "2h" } } },
-      }),
-    ).toBe(2 * 60 * 60_000);
-  });
-
-  it("uses explicit heartbeat overrides when provided", () => {
-    expect(
-      resolveHeartbeatIntervalMs(
-        { agents: { defaults: { heartbeat: { every: "30m" } } } },
-        undefined,
-        { every: "5m" },
-      ),
-    ).toBe(5 * 60_000);
-  });
-});
-
-describe("resolveConfiguredHeartbeatPrompt", () => {
   it.each([
-    { name: "default prompt", cfg: {} as OpenClawConfig, expected: HEARTBEAT_PROMPT },
     {
       name: "trimmed override prompt",
-      cfg: {
-        agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
-      } as OpenClawConfig,
+      cfg: { agents: { defaults: { heartbeat: { prompt: "  ping  " } } } },
       expected: "ping",
     },
-  ])("uses $name", ({ cfg, expected }) => {
-    expect(resolveConfiguredHeartbeatPrompt(cfg)).toBe(expected);
+  ] satisfies Array<{ name: string; cfg: OpenClawConfig; expected: string }>)(
+    "uses $name",
+    ({ cfg, expected }) => {
+      expect(resolveConfiguredHeartbeatPrompt(cfg)).toBe(expected);
+    },
+  );
+});
+
+describe("session-state heartbeat wakes", () => {
+  it("infers the source and marks the wake as payload-bearing", () => {
+    expect(inferHeartbeatWakeSourceFromReason("session-state:agent:main:child")).toBe(
+      "session-state",
+    );
+    expect(
+      resolveHeartbeatWakePayloadFlags({
+        reason: "session-state:agent:main:child",
+      }),
+    ).toMatchObject({ isWakePayload: true });
+    expect(
+      resolveHeartbeatWakePayloadFlags({
+        source: "session-state",
+      }),
+    ).toMatchObject({ isWakePayload: true });
   });
 });

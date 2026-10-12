@@ -94,12 +94,6 @@ function fixture(config: OpenClawConfig = {}) {
   return { read, reauthorize, commitGuard, run };
 }
 
-function expectNoWrites() {
-  expect(mocks.create).not.toHaveBeenCalled();
-  expect(mocks.preserve).not.toHaveBeenCalled();
-  expect(mocks.record).not.toHaveBeenCalled();
-}
-
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.visibility.mockReturnValue(visibility);
@@ -108,95 +102,10 @@ beforeEach(() => {
 });
 
 describe("session catalog import orchestration", () => {
-  it("leaves creation visibility to the Gateway default when drafts are disabled", async () => {
+  it.each(["completed", "failed"] as const)("handles %s post-commit import", async (status) => {
     const config: OpenClawConfig = { session: { sharing: { drafts: false } } };
-    mocks.visibilityAllowed.mockReturnValue(false);
-    mocks.create.mockResolvedValue({
-      ok: true,
-      agentId: "main",
-      key: "agent:main:imported",
-      entry: { sessionId: "imported", updatedAt: 1 },
-      resolved: { modelProvider: "fixture", model: "fixture" },
-      resetExisting: false,
-      postCommit: { status: "completed" },
-    });
-    await expect(fixture(config).run()).resolves.toMatchObject({ ok: true });
-    expect(mocks.visibilityAllowed).toHaveBeenCalledWith(config, "draft");
-    expect(mocks.create.mock.calls[0]?.[0]).not.toHaveProperty("defaultVisibility");
-  });
-
-  it("returns destination authorization failures without creating or recording an import", async () => {
-    mocks.authorize.mockReturnValue({ error: denied });
-    await expect(fixture().run()).resolves.toEqual({ ok: false, error: denied });
-    expectNoWrites();
-  });
-
-  it("discards fetched history when source reauthorization denies access", async () => {
-    const subject = fixture();
-    subject.reauthorize.mockResolvedValue(null);
-    await expect(subject.run()).resolves.toBeNull();
-    expect(subject.read).toHaveBeenCalledOnce();
-    expectNoWrites();
-  });
-
-  it("stops before reading another page after request custody is revoked", async () => {
-    const subject = fixture();
-    subject.read.mockImplementationOnce(async ({ hostId, threadId }) => {
-      subject.commitGuard.mockImplementation(() => {
-        throw new Error("Request custody revoked");
-      });
-      return {
-        hostId,
-        threadId,
-        items: [{ id: "newest", type: "userMessage", text: "Newest page" }],
-        nextCursor: "older-page",
-      };
-    });
-    await expect(subject.run()).rejects.toThrow("Request custody revoked");
-    expect(subject.read).toHaveBeenCalledOnce();
-    expect(subject.reauthorize).not.toHaveBeenCalled();
-    expectNoWrites();
-  });
-
-  it("rechecks the source grant at the creation commit boundary", async () => {
-    mocks.create.mockImplementation(async ({ commitGuard }) => {
-      mocks.visibility.mockReturnValue({ kind: "unrestricted", cacheKey: "replacement-grant" });
-      commitGuard?.();
-      throw new Error("Stale source grant reached creation");
-    });
-    await expect(fixture().run()).rejects.toThrow("Session catalog source visibility changed");
-    expect(mocks.preserve).not.toHaveBeenCalled();
-    expect(mocks.record).not.toHaveBeenCalled();
-  });
-
-  it("retains destination authority in the creation commit guard", async () => {
-    mocks.authorize.mockReturnValue({
-      error: null,
-      authorization: {
-        assertCurrent: () => {
-          throw new Error("Destination authority revoked");
-        },
-        assertTargetCurrent: vi.fn(),
-      },
-    });
-    mocks.create.mockImplementation(async ({ commitGuard }) => {
-      commitGuard?.();
-      throw new Error("Revoked destination reached creation");
-    });
-    await expect(fixture().run()).rejects.toThrow("Destination authority revoked");
-    expect(mocks.preserve).not.toHaveBeenCalled();
-    expect(mocks.record).not.toHaveBeenCalled();
-  });
-
-  it("returns creation refusal without a successful import event", async () => {
-    mocks.create.mockResolvedValue({ ok: false, error: denied });
-    await expect(fixture().run()).resolves.toEqual({ ok: false, error: denied });
-    expect(mocks.preserve).not.toHaveBeenCalled();
-    expect(mocks.record).not.toHaveBeenCalled();
-  });
-
-  it("reports a post-commit import failure instead of recording success", async () => {
     const failure = new Error("Transcript write failed");
+    mocks.visibilityAllowed.mockReturnValue(status === "failed");
     mocks.create.mockResolvedValue({
       ok: true,
       agentId: "main",
@@ -204,9 +113,82 @@ describe("session catalog import orchestration", () => {
       entry: { sessionId: "imported", updatedAt: 1 },
       resolved: { modelProvider: "fixture", model: "fixture" },
       resetExisting: false,
-      postCommit: { status: "failed", error: failure },
+      postCommit: status === "completed" ? { status } : { status, error: failure },
     });
-    await expect(fixture().run()).rejects.toBe(failure);
+    if (status === "completed") {
+      await expect(fixture(config).run()).resolves.toMatchObject({ ok: true });
+      expect(mocks.visibilityAllowed).toHaveBeenCalledWith(config, "draft");
+      expect(mocks.create.mock.calls[0]?.[0]).not.toHaveProperty("defaultVisibility");
+    } else {
+      await expect(fixture().run()).rejects.toBe(failure);
+      expect(mocks.record).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["destination", "source", "custody", "creation"] as const)(
+    "does not preserve or record an import after %s refusal",
+    async (stage) => {
+      const subject = fixture();
+      if (stage === "destination") {
+        mocks.authorize.mockReturnValue({ error: denied });
+      } else if (stage === "source") {
+        subject.reauthorize.mockResolvedValue(null);
+      } else if (stage === "creation") {
+        mocks.create.mockResolvedValue({ ok: false, error: denied });
+      } else {
+        subject.read.mockImplementationOnce(async ({ hostId, threadId }) => {
+          subject.commitGuard.mockImplementation(() => {
+            throw new Error("Request custody revoked");
+          });
+          return {
+            hostId,
+            threadId,
+            items: [{ id: "newest", type: "userMessage", text: "Newest page" }],
+            nextCursor: "older-page",
+          };
+        });
+      }
+      if (stage === "custody") {
+        await expect(subject.run()).rejects.toThrow("Request custody revoked");
+        expect(subject.reauthorize).not.toHaveBeenCalled();
+      } else if (stage === "source") {
+        await expect(subject.run()).resolves.toBeNull();
+      } else {
+        await expect(subject.run()).resolves.toEqual({ ok: false, error: denied });
+      }
+      expect(subject.read).toHaveBeenCalledOnce();
+      if (stage !== "creation") {
+        expect(mocks.create).not.toHaveBeenCalled();
+      }
+      expect(mocks.preserve).not.toHaveBeenCalled();
+      expect(mocks.record).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["source", "Session catalog source visibility changed"],
+    ["destination", "Destination authority revoked"],
+  ] as const)("rechecks %s authority at the creation commit boundary", async (authority, error) => {
+    if (authority === "destination") {
+      mocks.authorize.mockReturnValue({
+        error: null,
+        authorization: {
+          assertCurrent: () => {
+            throw new Error("Destination authority revoked");
+          },
+          assertTargetCurrent: vi.fn(),
+        },
+      });
+    }
+    mocks.create.mockImplementation(async ({ commitGuard }) => {
+      if (authority === "source") {
+        mocks.visibility.mockReturnValue({ kind: "unrestricted", cacheKey: "replacement-grant" });
+      }
+      commitGuard?.();
+      throw new Error("Revoked authority reached creation");
+    });
+    await expect(fixture().run()).rejects.toThrow(error);
+    expect(mocks.preserve).not.toHaveBeenCalled();
     expect(mocks.record).not.toHaveBeenCalled();
   });
 });

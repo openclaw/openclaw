@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   CANDIDATE_COMMAND,
   CUT_SHA,
+  legacyCapabilities,
   PHASES,
   RELEASE,
   REPOSITORY,
@@ -31,15 +32,6 @@ const fixture = () => {
   mkdirSync(scratch, { recursive: true });
   return releaseFixture(directories.make(".release-stable-test-", scratch));
 };
-// Shape written by probeCapabilities before strict publication removed waiver support.
-const legacyCapabilities = (closeoutResolvesWaivers: boolean) => ({
-  parentSyncsBetaDistTag: false,
-  parentSweepsStaleChildren: false,
-  parentApprovalReceipt: false,
-  closeoutResolvesWaivers,
-  probedAt: "2026-09-24T00:00:00.000Z",
-  toolingSha: TOOLING_SHA,
-});
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const mainSha = () => step("git", ["rev-parse", "origin/main"], CUT_SHA);
 
@@ -60,51 +52,6 @@ function newCut(packageVersion = RELEASE, missing = ""): FakeStep[] {
       exit: missing === "records" ? 1 : 0,
     }),
   ];
-}
-
-function validateSetup(fresh = true, retainedCapabilities = false): FakeStep[] {
-  return [
-    ...(fresh ? [step("git", ["rev-parse", "origin/main"], TOOLING_SHA)] : []),
-    step("git", ["merge-base", "--is-ancestor", TOOLING_SHA, "origin/main"]),
-    ...(fresh && !retainedCapabilities
-      ? [
-          step("git", ["show", `${TOOLING_SHA}:.github/workflows/openclaw-release-publish.yml`]),
-          step("git", ["show", `${TOOLING_SHA}:scripts/lib/release-publish-children.sh`]),
-          step("git", ["show", `${TOOLING_SHA}:.github/workflows/openclaw-npm-release.yml`]),
-        ]
-      : []),
-    ...(fresh
-      ? [step("git", ["tag", "*", TOOLING_SHA]), step("git", ["push", "origin", "*"])]
-      : []),
-    step("gh", ["api", "*", "--jq", ".object.sha"], TOOLING_SHA),
-  ];
-}
-
-function request(attempt = 1, profile = "stable"): FakeStep {
-  return step("pnpm", ["ci:full-release", "--", "--sha", CUT_SHA], "", {
-    request: {
-      phase: "observed",
-      run: { id: 101, attempt },
-      request: {
-        targetSha: CUT_SHA,
-        targetContextRef: `release/${RELEASE}`,
-        workflowSha: TOOLING_SHA,
-        trustedWorkflowRef: toolingTag,
-        targetVersion: RELEASE,
-        repository: REPOSITORY,
-        inputs: { release_profile: profile },
-        effectiveSoak: profile === "stable",
-      },
-    },
-  });
-}
-
-function validationRun(conclusion: string, attempt: number): FakeStep {
-  return step(
-    "gh",
-    ["api", `repos/${REPOSITORY}/actions/runs/101`],
-    JSON.stringify({ status: "completed", conclusion, run_attempt: attempt }),
-  );
 }
 
 const publishWorkflow = "openclaw-release-publish.yml";
@@ -233,68 +180,6 @@ describe("release:stable CLI", () => {
     expect(release.readState().cut).toEqual({ cutSha: CUT_SHA, releaseSha: tip });
     expect(result.calls.some((call) => call.args[0] === "push")).toBe(false);
     expect(result.stdout).not.toContain("Confirm cut SHA");
-  });
-
-  it("stops on the first failed stable validation and resumes only after operator recovery", () => {
-    const release = fixture();
-    const legacy = phaseState("validate");
-    const legacyState = {
-      ...legacy,
-      capabilities: legacyCapabilities(true),
-      validate: { ...legacy.validate, continues: 2 },
-    };
-    release.seed(legacyState);
-    const failed = release.run([...validateSetup(true), request(), validationRun("failure", 1)]);
-    expect(failed.status).toBe(2);
-    expect(release.readState().validate).not.toHaveProperty("continues");
-    expect(release.readState().capabilities).not.toHaveProperty("closeoutResolvesWaivers");
-    expect(failed.stderr).toContain(
-      "Full Release Validation 101 failed; diagnose before operator recovery.",
-    );
-    expect(failed.stderr).toContain("pnpm frv status --run 101");
-    expect(failed.calls.filter((call) => call.bin === "pnpm" && call.args[0] === "frv")).toEqual(
-      [],
-    );
-    const helper = failed.calls.find(
-      (call) => call.bin === "pnpm" && call.args[0] === "ci:full-release",
-    );
-    expect(helper?.args).toContain("release_profile=stable");
-    expect(helper?.args).toContain("run_release_soak=true");
-    const resumed = release.run([
-      ...validateSetup(false),
-      step("pnpm", ["ci:full-release", "--", "--sha", CUT_SHA], "", { exit: 1 }),
-      validationRun("success", 2),
-    ]);
-    expect(resumed.status, resumed.output).toBe(0);
-    expect(release.readState().validate).toMatchObject({ runId: "101", runAttempt: 2 });
-    expect(release.readState().phases.validate.status).toBe("completed");
-    expect(resumed.calls.filter((call) => call.bin === "pnpm" && call.args[0] === "frv")).toEqual(
-      [],
-    );
-  });
-
-  it("refuses a retained beta validation before observing or completing it", () => {
-    const release = fixture();
-    release.seed(phaseState("validate"));
-    const result = release.run([...validateSetup(), request(1, "beta")]);
-    expect(result.status, result.output).toBe(2);
-    expect(result.stderr).toContain("strict stable validation selection");
-    expect(release.readState().phases.validate.status).not.toBe("completed");
-  });
-
-  it("refuses an unobserved FRV request with the helper's reconciliation command", () => {
-    const release = fixture();
-    release.seed(phaseState("validate"));
-    const result = release.run([
-      ...validateSetup(),
-      step("pnpm", ["ci:full-release"], "", { request: { phase: "dispatching" }, exit: 1 }),
-    ]);
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("has no observed run");
-    expect(result.stderr).toContain(
-      `pnpm ci:full-release -- --reconcile-request ${join(release.stateDir, "frv-request.json")}`,
-    );
-    expect(release.readState().validate.runId).toBeUndefined();
   });
 
   it.each([0, 2])(

@@ -10,6 +10,7 @@ import {
 import type { MemorySearchManager } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 
 const loadManagerRuntime = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
 
@@ -20,12 +21,13 @@ type MemorySearchManagerParams = {
   purpose?: MemorySearchManagerPurpose;
   inspectSources?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
 };
 
 type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
   error?: string;
-  debug?: {
+  debug: {
     backend: "builtin";
     purpose: MemorySearchManagerPurpose;
     managerMs: number;

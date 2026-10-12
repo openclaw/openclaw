@@ -1,6 +1,6 @@
 /** Detects reminder commitments that were not backed by scheduled cron jobs. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { loadCronJobsStore, resolveCronJobsStorePath } from "../../cron/store.js";
+import { loadCronJobsStore } from "../../cron/store.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -31,16 +31,11 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
  * current session key. Used to suppress the "no reminder scheduled" guard note
  * when an existing cron (created in a prior turn) already covers the commitment.
  */
-export async function hasSessionRelatedCronJobs(params: {
-  cronStorePath?: string;
-  sessionKey?: string;
-}): Promise<boolean> {
+export async function hasSessionRelatedCronJobs(sessionKey: string | undefined): Promise<boolean> {
   try {
-    const storePath = resolveCronJobsStorePath(params.cronStorePath);
-    const store = await loadCronJobsStore(storePath);
+    const store = await loadCronJobsStore();
     return Boolean(
-      params.sessionKey &&
-      store.jobs.some((job) => job.enabled && job.sessionKey === params.sessionKey),
+      sessionKey && store.jobs.some((job) => job.enabled && job.sessionKey === sessionKey),
     );
   } catch {
     // If we cannot read the cron store, do not suppress the note.
@@ -59,10 +54,9 @@ export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPa
       return payload;
     }
     appended = true;
-    const trimmed = payload.text.trimEnd();
     return copyReplyPayloadMetadata(payload, {
       ...payload,
-      text: `${trimmed}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
+      text: `${payload.text.trimEnd()}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
     });
   });
 }

@@ -212,13 +212,8 @@ export function startBrowserAuthRecovery(
   }
 
   const stopFailures = subscribeBrowserHttpFailures((url) => {
-    let request: URL;
-    try {
-      request = new URL(url, window.location.href);
-    } catch {
-      return;
-    }
-    if (request.origin === root.origin && request.pathname.startsWith(root.pathname)) {
+    const request = URL.parse(url, window.location.href);
+    if (request?.origin === root.origin && request.pathname.startsWith(root.pathname)) {
       void check();
     }
   });

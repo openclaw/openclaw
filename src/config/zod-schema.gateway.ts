@@ -14,6 +14,7 @@ import {
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
 } from "../gateway/operator-scopes.js";
+import { normalizeGitHubLogin } from "../utils/github-login.js";
 import {
   isValidPortalIngressDomain,
   portalIngressConflictsWithOrigin,
@@ -38,7 +39,47 @@ const OperatorScopeSchema = z.enum([
   TALK_SCOPE,
   TALK_SECRETS_SCOPE,
 ]);
-const GatewayOperatorRoleDefinitionSchema = z.strictObject({
+const GatewayGitHubEndpointSchema = z
+  .strictObject({
+    host: z.string().trim().min(1).optional(),
+    apiBaseUrl: z.string().url().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.host && !value.apiBaseUrl) {
+      return;
+    }
+    const host = value.host?.toLowerCase();
+    if (!host || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(host) || host.includes("..")) {
+      ctx.addIssue({ code: "custom", path: ["host"], message: "GitHub host must be a hostname" });
+      return;
+    }
+    if (!value.apiBaseUrl) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["apiBaseUrl"],
+        message: "GitHub API base URL is required with host",
+      });
+      return;
+    }
+    const api = new URL(value.apiBaseUrl);
+    const cloudApi = api.hostname === `api.${host}` && api.pathname === "/";
+    const serverApi = api.hostname === host && ["/api/v3", "/api/v3/"].includes(api.pathname);
+    if (
+      api.protocol !== "https:" ||
+      api.username ||
+      api.password ||
+      api.search ||
+      api.hash ||
+      (!cloudApi && !serverApi)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["apiBaseUrl"],
+        message: "GitHub API base URL must match the configured HTTPS host",
+      });
+    }
+  });
+export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
   sessions: z.strictObject({
     /** Maximum access to another person's sessions without explicit membership. */
     others: z.enum(["none", "view", "suggest", "write"]),
@@ -138,6 +179,18 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+    github: GatewayGitHubEndpointSchema.optional(),
+    projects: z
+      .strictObject({
+        defaultRepository: z
+          .strictObject({
+            url: z.string().trim().min(1),
+            ref: z.string().trim().min(1).max(255).optional(),
+          })
+          .optional(),
+        nativeGitHubSearch: z.boolean().optional(),
+      })
+      .optional(),
     controlUi: z
       .strictObject({
         // Shipped legacy input. Doctor removes it after recording migration state.
@@ -154,6 +207,8 @@ export const GatewayConfigSchema = z
           .strictObject({
             /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
             customPlugins: z.boolean().optional(),
+            /** Enable experimental speech bubbles in the Control UI (default false). */
+            chatBubbles: z.boolean().optional(),
           })
           .optional(),
         /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
@@ -171,7 +226,14 @@ export const GatewayConfigSchema = z
         newSessionModelDefaults: z.enum(["last-used", "configured"]).optional(),
         /** Optional service credential used only for Control UI GitHub previews and discovery. */
         github: z
-          .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
+          .strictObject({
+            host: z
+              .string()
+              .trim()
+              .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/iu)
+              .optional(),
+            token: SecretInputSchema.optional().register(sensitive),
+          })
           .optional(),
         /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
         sessionObserver: z.boolean().optional(),
@@ -334,8 +396,14 @@ export const GatewayConfigSchema = z
     /** Optional profile-bound operator roles; omitted preserves legacy authorization. */
     roles: z
       .strictObject({
-        /** Required validated default for profiles without a valid assigned role. */
+        /** Required default for profiles without a valid explicit or GitHub login assignment. */
         default: GatewayOperatorRoleNameSchema,
+        assignments: z
+          .strictObject({
+            /** Case-insensitive GitHub login assignments; explicit profile assignments win. */
+            byGithubLogin: z.record(z.string(), GatewayOperatorRoleNameSchema).optional(),
+          })
+          .optional(),
         /** Closed capability bundles indexed by administrator-selected role names. */
         definitions: z
           .record(GatewayOperatorRoleNameSchema, GatewayOperatorRoleDefinitionSchema)
@@ -351,6 +419,26 @@ export const GatewayConfigSchema = z
             message: "gateway.roles.default must name a configured role definition",
             path: ["default"],
           });
+        }
+        const githubLogins = new Set<string>();
+        for (const [login, role] of Object.entries(roles.assignments?.byGithubLogin ?? {})) {
+          const normalizedLogin = normalizeGitHubLogin(login)?.toLowerCase();
+          const path = ["assignments", "byGithubLogin", login];
+          if (!normalizedLogin) {
+            ctx.addIssue({ code: "custom", message: "Invalid GitHub login", path });
+          } else if (githubLogins.has(normalizedLogin)) {
+            ctx.addIssue({ code: "custom", message: "Duplicate GitHub login", path });
+          } else {
+            githubLogins.add(normalizedLogin);
+          }
+          if (!Object.hasOwn(roles.definitions, role)) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                "gateway.roles.assignments.byGithubLogin must name a configured role definition",
+              path,
+            });
+          }
         }
       })
       .optional(),

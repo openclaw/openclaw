@@ -184,18 +184,18 @@ describe("auth profile catalog credential removal", () => {
             }),
           },
         });
-        const update = storeRuntime.updateAuthProfileStoreWithLock;
-        const updating = vi
-          .spyOn(storeRuntime, "updateAuthProfileStoreWithLock")
-          .mockImplementation(async (params) => {
+        const save = storeRuntime.saveAuthProfileStoreIfPersistenceSnapshotMatches;
+        const saving = vi
+          .spyOn(storeRuntime, "saveAuthProfileStoreIfPersistenceSnapshotMatches")
+          .mockImplementation((params) => {
             if (params.agentDir !== child) {
               expect(loadPersistedAuthProfileStore(child)?.profiles[profileId]).toBeUndefined();
               if (exit === "failure") {
                 throw new Error("synthetic second-owner failure");
               }
-              return null;
+              throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
             }
-            return update(params);
+            return save(params);
           });
         try {
           const removing = removeAuthProfilesAcrossOwnerStores({
@@ -213,7 +213,7 @@ describe("auth profile catalog credential removal", () => {
           expect(persisted).toContain("retained");
           expect(persisted).not.toContain(credential.access);
         } finally {
-          updating.mockRestore();
+          saving.mockRestore();
         }
       });
     },

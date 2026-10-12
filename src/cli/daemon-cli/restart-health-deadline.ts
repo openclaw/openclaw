@@ -1,4 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { scheduleAbsoluteDeadline } from "../../utils/absolute-deadline.js";
@@ -24,16 +25,6 @@ export function createGatewayRestartDeadline(params: { timeoutMs: number; signal
   let expiredElapsedMs: number | undefined;
   let cleanupStatus: GatewayRestartCleanup | undefined;
   let cleanup: Promise<Exclude<GatewayRestartCleanup, "pending">> | undefined;
-  const expired = new Promise<never>((_resolve, reject) => {
-    controller.signal.addEventListener(
-      "abort",
-      () =>
-        reject(toErrorObject(controller.signal.reason, "Gateway restart observation canceled.")),
-      { once: true },
-    );
-  });
-  // Expiry can happen between reads; the next read still observes the same rejection.
-  void expired.catch(() => undefined);
   const expire = () => {
     if (!controller.signal.aborted) {
       expiredPhase = activePhase ?? lastPhase;
@@ -90,7 +81,9 @@ export function createGatewayRestartDeadline(params: { timeoutMs: number; signal
           expire();
         }
         controller.signal.throwIfAborted();
-        const result = await Promise.race([expired, operation()]);
+        const result = await racePromiseWithAbortSignal(operation(), controller.signal, (signal) =>
+          toErrorObject(signal.reason, "Gateway restart observation canceled."),
+        );
         if (performance.now() >= deadlineMs) {
           expire();
         }

@@ -65,9 +65,23 @@ describe("artifact session authorization", () => {
     const unavailable = new Error("session projection is unavailable");
     const projection: Pick<
       SessionRowProjection,
-      "ensureMaterialized" | "findBySessionId" | "sharingRevision"
+      | "ensureMaterialized"
+      | "findBySessionId"
+      | "sharingRevision"
+      | "sharingTarget"
+      | "sharingTargetState"
+      | "readSource"
+      | "readMembership"
+      | "needsMembershipPreparation"
+      | "prepareMembership"
     > = {
       sharingRevision: undefined,
+      sharingTarget: vi.fn(),
+      sharingTargetState: vi.fn(),
+      readSource: vi.fn(),
+      readMembership: vi.fn(),
+      needsMembershipPreparation: vi.fn(),
+      prepareMembership: vi.fn(),
       ensureMaterialized: vi
         .fn<SessionRowProjection["ensureMaterialized"]>()
         .mockRejectedValue(unavailable),
@@ -89,7 +103,7 @@ describe("artifact session authorization", () => {
   it("denies direct and indirect incognito selectors while preserving admin access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:incognito-artifacts";
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ApiError } from "grammy/types";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -116,7 +116,7 @@ class TelegramFloodGate {
   }
 }
 
-async function sleepForFloodGate(waitMs: number, signal: TelegramApiSignal): Promise<void> {
+function bridgeTelegramAbortSignal(signal: TelegramApiSignal) {
   // grammY may supply the legacy node-fetch signal; bridge only its abort event.
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -125,19 +125,23 @@ async function sleepForFloodGate(waitMs: number, signal: TelegramApiSignal): Pro
   } else {
     signal?.addEventListener("abort", abort, { once: true });
   }
+  return { controller, detach: () => signal?.removeEventListener("abort", abort) };
+}
+
+async function sleepForFloodGate(waitMs: number, signal: TelegramApiSignal): Promise<void> {
+  const { controller, detach } = bridgeTelegramAbortSignal(signal);
   try {
     await sleepWithAbort(waitMs, controller.signal);
   } finally {
-    signal?.removeEventListener("abort", abort);
+    detach();
   }
 }
 
 function callThroughFloodGate(
   gate: TelegramFloodGate,
-  scope: TelegramRequestScope | undefined,
+  replaceable: boolean,
   prev: TelegramApiCall,
 ): TelegramApiCall {
-  const replaceable = scope?.replaceable === true;
   return async (method, payload, signal) => {
     // The ingress worker owns getUpdates flood waits (and long polls must not stall here).
     if (method === "getUpdates") {
@@ -209,8 +213,8 @@ type QueuedApiRequest<T> = {
 
 class GroupRequestScheduler {
   private readonly lanes = new Map<string, Array<QueuedApiRequest<unknown>>>();
-  private laneOrder: string[] = [];
-  private nextLaneIndex = 0;
+  // Live iteration visits newly appended lanes before wrapping to the first lane.
+  private laneCursor = this.lanes.entries();
   private pendingPriority = 0;
   private running = false;
   private actionTail = Promise.resolve();
@@ -220,14 +224,7 @@ class GroupRequestScheduler {
     run: () => Promise<T>,
     signal: Parameters<ApiThrottlerTransformer>[3],
   ): Promise<T> {
-    // grammY may supply the legacy node-fetch signal; bridge only its abort event.
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    if (signal?.aborted) {
-      abort();
-    } else {
-      signal?.addEventListener("abort", abort, { once: true });
-    }
+    const { controller, detach } = bridgeTelegramAbortSignal(signal);
     const result = this.actionTail.then(async () => {
       controller.signal.throwIfAborted();
       const waitMs = this.nextActionAtMs - Date.now();
@@ -251,7 +248,7 @@ class GroupRequestScheduler {
         throw new DOMException("Chat action canceled", "AbortError");
       }),
     ]).finally(() => {
-      signal?.removeEventListener("abort", abort);
+      detach();
       controller.abort();
     });
   }
@@ -288,7 +285,6 @@ class GroupRequestScheduler {
         existing.push(request);
       } else {
         this.lanes.set(laneKey, [request]);
-        this.laneOrder.push(laneKey);
       }
       this.start();
     });
@@ -317,33 +313,22 @@ class GroupRequestScheduler {
       }
     } finally {
       this.running = false;
-      if (this.laneOrder.length > 0) {
-        this.start();
-      }
     }
   }
 
   private takeNext(): QueuedApiRequest<unknown> | undefined {
-    for (let remaining = this.laneOrder.length; remaining > 0; remaining -= 1) {
-      this.nextLaneIndex %= this.laneOrder.length;
-      const laneKey = expectDefined(
-        this.laneOrder[this.nextLaneIndex],
-        "non-empty Telegram throttle lane order",
-      );
-      const queue = this.lanes.get(laneKey);
-      if (!queue || queue.length === 0) {
-        this.lanes.delete(laneKey);
-        this.laneOrder.splice(this.nextLaneIndex, 1);
-        if (this.laneOrder.length === 0) {
-          this.nextLaneIndex = 0;
-          return undefined;
-        }
+    while (this.lanes.size > 0) {
+      const next = this.laneCursor.next();
+      if (next.done) {
+        this.laneCursor = this.lanes.entries();
         continue;
       }
-
+      const [laneKey, queue] = next.value;
       const request = queue.shift();
-      this.nextLaneIndex += 1;
-      return request;
+      if (request) {
+        return request;
+      }
+      this.lanes.delete(laneKey);
     }
     return undefined;
   }
@@ -361,17 +346,15 @@ function resolveGroupChatKey(payload: TelegramApiPayload): string | undefined {
 }
 
 function resolveForumLaneKey(payload: TelegramApiPayload): string {
-  const threadId = parseStrictInteger(payload.message_thread_id);
-  if (threadId !== undefined) {
-    return `topic:${threadId}`;
-  }
-  const directTopicId = parseStrictInteger(payload.direct_messages_topic_id);
-  if (directTopicId !== undefined) {
-    return `direct-topic:${directTopicId}`;
-  }
-  const messageId = parseStrictInteger(payload.message_id);
-  if (messageId !== undefined) {
-    return `message:${messageId}`;
+  for (const [field, prefix] of [
+    ["message_thread_id", "topic"],
+    ["direct_messages_topic_id", "direct-topic"],
+    ["message_id", "message"],
+  ] as const) {
+    const id = parseStrictInteger(payload[field]);
+    if (id !== undefined) {
+      return `${prefix}:${id}`;
+    }
   }
   return "main";
 }
@@ -431,13 +414,14 @@ function createTelegramAccountThrottler(
   const transformer: ApiThrottlerTransformer = (prev, method, payload, signal) => {
     // Classify at the call site: queued work later runs in the drain's async context.
     const callerScope = requestScopes.getStore();
+    const effect = captureEffectAuthority();
     const replaceable = method === "sendChatAction" || callerScope?.replaceable === true;
     const scope = replaceable ? { ...callerScope, replaceable: true as const } : callerScope;
     // Waiting and retry policy runs outside the queues; admission runs at the network edge.
-    const admitted = admitAtNetwork(floodGate, scope, prev);
+    const admitted = admitAtNetwork(floodGate, scope, (...args) => effect.run(() => prev(...args)));
     const send = callThroughFloodGate(
       floodGate,
-      scope,
+      replaceable,
       (queuedMethod, queuedPayload, queuedSignal) =>
         scheduleRequest(replaceable)(admitted, queuedMethod, queuedPayload, queuedSignal),
     );

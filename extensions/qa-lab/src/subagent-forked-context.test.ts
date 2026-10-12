@@ -92,27 +92,33 @@ function rawCompletionInput(result: string, status = "completed; ready for paren
   );
 }
 
-type EvidenceCase =
-  | "inherited"
-  | "code-mode"
-  | "settled-batch"
-  | "settled-wrong-run"
-  | "settled-wrong-requester"
-  | "settled-wrong-result"
-  | "settled-wrong-parent"
-  | "plain-parent"
-  | "wrong-plain-parent"
-  | "projected-tool"
-  | "projected"
-  | "projected-assistant"
-  | "projected-missing-history"
-  | "missing-child"
-  | "missing-history"
-  | "task-leak"
-  | "instructions-only"
-  | "wrong-child"
-  | "missing-completion"
-  | "wrong-parent";
+const forkEvidenceCases = [
+  ["inherited", "direct", undefined],
+  ["plain-parent", "direct", undefined],
+  ["projected", "direct", undefined],
+  ["projected-tool", "direct", undefined],
+  ["code-mode", "direct", undefined],
+  ["plain-parent", "catalog", undefined],
+  ["settled-batch", "catalog", undefined],
+  ["settled-wrong-run", "catalog", /parent completion request/i],
+  ["settled-wrong-requester", "catalog", /parent completion request/i],
+  ["settled-wrong-result", "catalog", /parent completion request/i],
+  ["settled-wrong-parent", "catalog", /parent completion request/i],
+  ["plain-parent", "other-catalog-tool", /successful fork receipt/i],
+  ["plain-parent", "unmatched-catalog-call", /successful fork receipt/i],
+  ["wrong-child", "catalog", /child provider request/i],
+  ["missing-child", "direct", /child provider request/i],
+  ["missing-history", "direct", /child provider request/i],
+  ["projected-assistant", "direct", /child provider request/i],
+  ["projected-missing-history", "direct", /child provider request/i],
+  ["task-leak", "direct", /child provider request/i],
+  ["instructions-only", "direct", /child provider request/i],
+  ["missing-completion", "direct", /parent completion request/i],
+  ["wrong-parent", "direct", "test condition was not met"],
+  ["wrong-plain-parent", "direct", "test condition was not met"],
+] as const;
+
+type EvidenceCase = (typeof forkEvidenceCases)[number][0];
 
 async function runForkEvidence(
   evidence: EvidenceCase,
@@ -405,31 +411,34 @@ describe("subagent forked-context evidence", () => {
     },
   );
 
-  it("does not dispatch a new spawn or completion from projected historical requests", async () => {
-    const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
-    try {
-      const history = `[user]\n${prompt}\n\n[user]\n${settledInput(childResult).content[0].text}`;
-      const response = await fetch(`${server.baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          stream: false,
-          tools: [{ type: "function", name: "sessions_spawn" }],
-          input: [projectedInput(history, "A fresh unrelated request.")],
-        }),
-      });
-      expect(response.status).toBe(200);
-      const output: { output: Array<{ type: string; name?: string }> } = await response.json();
-      expect(
-        output.output.some(
-          (item) => item.type === "function_call" && item.name === "sessions_spawn",
-        ),
-      ).toBe(false);
-      expect(JSON.stringify(output)).not.toContain(childResult);
-    } finally {
-      await server.stop();
-    }
-  });
+  it.each([settledInput, completionInput])(
+    "does not dispatch projected historical %s",
+    async (completion) => {
+      const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
+      try {
+        const history = `[user]\n${prompt}\n\n[user]\n${completion(childResult).content[0].text}`;
+        const response = await fetch(`${server.baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            stream: false,
+            tools: [{ type: "function", name: "sessions_spawn" }],
+            input: [projectedInput(history, "A fresh unrelated request.")],
+          }),
+        });
+        expect(response.status).toBe(200);
+        const output: { output: Array<{ type: string; name?: string }> } = await response.json();
+        expect(
+          output.output.some(
+            (item) => item.type === "function_call" && item.name === "sessions_spawn",
+          ),
+        ).toBe(false);
+        expect(JSON.stringify(output)).not.toContain(childResult);
+      } finally {
+        await server.stop();
+      }
+    },
+  );
 
   it("does not manufacture a child result from the parent prompt and spawn acceptance", () => {
     const input = [
@@ -450,8 +459,11 @@ describe("subagent forked-context evidence", () => {
   it.each([
     {
       name: "native timestamped task",
-      input: [userInput(prompt), userInput(`[Mon 2026-08-31 12:00 UTC] ${childTask}`)],
-      result: childResult,
+      input: [
+        userInput(prompt.replaceAll(code, "FORKED-CONTEXT-BETA")),
+        userInput(`[Mon 2026-08-31 12:00 UTC] ${childTask}`),
+      ],
+      result: "FORKED-CONTEXT-CHILD: FORKED-CONTEXT-BETA",
     },
     {
       name: "Codex projected history",
@@ -461,11 +473,6 @@ describe("subagent forked-context evidence", () => {
         ),
       ],
       result: childResult,
-    },
-    {
-      name: "a different inherited code",
-      input: [userInput(prompt.replaceAll(code, "FORKED-CONTEXT-BETA")), userInput(childTask)],
-      result: "FORKED-CONTEXT-CHILD: FORKED-CONTEXT-BETA",
     },
   ])("recovers history through $name", ({ input, result }) => {
     expect(buildAssistantText(input, {})).toBe(result);
@@ -519,16 +526,6 @@ describe("subagent forked-context evidence", () => {
     );
   });
 
-  it.each([
-    { name: "all-settled wake", completion: settledInput },
-    { name: "individual event", completion: completionInput },
-  ])("ignores a historical $name inside Codex projected context", ({ completion }) => {
-    const history = `[user]\n${completion(childResult).content[0].text}`;
-    expect(
-      buildAssistantText([projectedInput(history, "A fresh unrelated request.")], {}),
-    ).not.toContain(childResult);
-  });
-
   it("does not borrow another settled child's successful status or result", () => {
     const other = settledInput(childResult).content[0].text.replace(
       "qa-fork-context",
@@ -540,73 +537,15 @@ describe("subagent forked-context evidence", () => {
     );
   });
 
-  it.each(["inherited", "plain-parent", "projected", "projected-tool", "code-mode"] as const)(
-    "accepts %s child history and parent-owned completion",
-    async (evidence) => {
-      await expect(runForkEvidence(evidence)).resolves.toMatchObject({ status: "pass" });
-    },
-  );
-
-  it("accepts the catalog-dispatched fork receipt and exact direct parent final", async () => {
-    await expect(runForkEvidence("plain-parent", "catalog")).resolves.toMatchObject({
-      status: "pass",
-    });
-  });
-
-  it("binds a header-free settled batch to the accepted native run and child result", async () => {
-    await expect(runForkEvidence("settled-batch", "catalog")).resolves.toMatchObject({
-      status: "pass",
-    });
-  });
-
-  it.each([
-    "settled-wrong-run",
-    "settled-wrong-requester",
-    "settled-wrong-result",
-    "settled-wrong-parent",
-  ] as const)("rejects %s despite matching completion text", async (evidence) => {
-    await expect(runForkEvidence(evidence, "catalog")).rejects.toThrow(
-      /parent completion request/i,
-    );
-  });
-
-  it.each(["other-catalog-tool", "unmatched-catalog-call"] as const)(
-    "rejects %s despite otherwise valid child evidence",
-    async (receiptWire) => {
-      await expect(runForkEvidence("plain-parent", receiptWire)).rejects.toThrow(
-        /successful fork receipt/i,
-      );
-    },
-  );
-
-  it("rejects another child's history after accepting a catalog receipt", async () => {
-    await expect(runForkEvidence("wrong-child", "catalog")).rejects.toThrow(
-      /child provider request/i,
-    );
-  });
-
-  it.each([
-    "missing-child",
-    "missing-history",
-    "projected-assistant",
-    "projected-missing-history",
-    "task-leak",
-    "instructions-only",
-    "wrong-child",
-  ] as const)("rejects %s even when the outbound child result is correct", async (evidence) => {
-    await expect(runForkEvidence(evidence)).rejects.toThrow(/child provider request/i);
-  });
-
-  it("rejects a missing completion despite valid child history and outbound result", async () => {
-    await expect(runForkEvidence("missing-completion")).rejects.toThrow(
-      /parent completion request/i,
-    );
-  });
-
-  it.each(["wrong-parent", "wrong-plain-parent"] as const)(
-    "rejects %s even with the parent's prompt retained",
-    async (evidence) => {
-      await expect(runForkEvidence(evidence)).rejects.toThrow("test condition was not met");
+  it.each(forkEvidenceCases)(
+    "validates %s evidence with a %s receipt",
+    async (evidence, wire, failure) => {
+      const result = runForkEvidence(evidence, wire);
+      if (failure === undefined) {
+        await expect(result).resolves.toMatchObject({ status: "pass" });
+      } else {
+        await expect(result).rejects.toThrow(failure);
+      }
     },
   );
 });

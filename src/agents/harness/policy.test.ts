@@ -87,19 +87,6 @@ describe("resolveAgentHarnessPolicy", () => {
     ).toEqual({ runtime, runtimeSource: runtimeSource ?? "implicit" });
   });
 
-  it("keeps explicit runtime policy authoritative", () => {
-    const config = openAIProviderConfig({ agentRuntime: { id: "codex" } });
-    config.agents = { defaults: { params: { temperature: 0.2 } } };
-    expect(
-      resolveAgentHarnessPolicy({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        config,
-        env: {},
-      }),
-    ).toEqual({ runtime: "codex", runtimeSource: "provider" });
-  });
-
   it.each(["default", "auto"] as const)(
     "treats configured %s runtime policy as implicit route selection",
     (runtime) => {
@@ -168,13 +155,13 @@ describe("resolveAgentHarnessPolicy", () => {
     },
     {
       name: "agent params",
-      agents: { list: [{ id: "writer", params: { temperature: 0.2 } }] },
+      agents: { entries: { writer: { params: { temperature: 0.2 } } } },
       agentId: "writer",
       sessionKey: undefined,
     },
     {
       name: "session agent params",
-      agents: { list: [{ id: "writer", params: { temperature: 0.2 } }] },
+      agents: { entries: { writer: { params: { temperature: 0.2 } } } },
       agentId: undefined,
       sessionKey: "agent:writer:main",
     },

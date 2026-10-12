@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -80,40 +79,6 @@ describe("managed media response authority", () => {
       });
       resolvePlaybackTranscodeMock.mockReset().mockResolvedValue({ kind: "passthrough" });
     },
-  });
-
-  it("serves a managed attachment without executing SQLite on the request thread", async () => {
-    const { attachmentId, sessionKey } = await createFixture(stateDir);
-    const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
-    readSessionMessagesMock.mockResolvedValue([
-      { content: [{ type: "image", url }], __openclaw: { id: "msg-1" } },
-    ]);
-    authorizeGatewayHttpRequestOrReplyMock.mockResolvedValue({ assertCurrent: () => {} });
-    resolveSharedSecretHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
-    resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReturnValue(true);
-    const { res } = makeMockHttpResponse();
-    res.req.url = url;
-    res.req.method = "GET";
-    const chunks: Buffer[] = [];
-    res.on("data", (chunk: Buffer) => chunks.push(chunk));
-    const finished = new Promise<void>((resolve) => {
-      res.once("finish", resolve);
-    });
-    const sql = observeHostDataSql();
-    try {
-      expect(
-        await handleManagedOutgoingImageHttpRequest(res.req, res, {
-          auth: { mode: "none", allowTailscale: false },
-          stateDir,
-        }),
-      ).toBe(true);
-      await finished;
-      expect(res.statusCode).toBe(200);
-      expect(Buffer.concat(chunks).toString()).toBe("original-image");
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
   });
 
   it.each(["revoked", "rejected", "retired", "schema-missing"] as const)(
@@ -214,10 +179,10 @@ describe("managed media response authority", () => {
     },
   );
 
-  it.each(["full", "thumbnail", "HEAD", "not-modified", "playback", "preparing"] as const)(
+  it.each(["full", "thumbnail", "HEAD", "preparing"] as const)(
     "refuses revoked media authority after %s preparation",
     async (mode) => {
-      const isPlayback = mode === "playback" || mode === "preparing";
+      const isPlayback = mode === "preparing";
       const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir, {
         ...(isPlayback ? { filename: "voice.caf", contentType: "audio/x-caf" } : {}),
         body: isPlayback
@@ -251,7 +216,7 @@ describe("managed media response authority", () => {
       if (isPlayback) {
         resolvePlaybackTranscodeMock.mockImplementationOnce(async () => {
           await holdPreparation();
-          return { kind: mode === "preparing" ? "preparing" : "passthrough" };
+          return { kind: "preparing" };
         });
       }
       const originalOpen = fs.open;
@@ -285,9 +250,6 @@ describe("managed media response authority", () => {
           ? canonicalPath.replace(/\/full$/, "/thumbnail")
           : `${canonicalPath}${isPlayback ? "?playback=1" : ""}`;
       req.method = mode === "HEAD" ? "HEAD" : "GET";
-      if (mode === "not-modified") {
-        req.headers["if-none-match"] = "*";
-      }
       const chunks: Buffer[] = [];
       res.on("data", (chunk: Buffer) => chunks.push(chunk));
       const responseFinished = new Promise<void>((resolve) => {

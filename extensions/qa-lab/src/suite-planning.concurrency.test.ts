@@ -1,11 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY } from "./qa-channel-transport.js";
-import {
-  mapQaSuiteWithConcurrency,
-  normalizeQaSuiteConcurrency,
-  resolveQaSuiteWorkerStartStaggerMs,
-} from "./suite-planning.js";
+import { mapQaSuiteWithConcurrency, normalizeQaSuiteConcurrency } from "./suite-planning.js";
 
 describe("qa suite concurrency", () => {
   it("normalizes suite concurrency to a bounded integer", () => {
@@ -204,37 +200,5 @@ describe("qa suite concurrency", () => {
     const result = await resultPromise;
     expect(result).toEqual([1, 2, 3, 4]);
     expect(sleeps).toEqual([25, 25, 25]);
-  });
-
-  it("resolves a default worker startup stagger for concurrent suite workers", () => {
-    expect(resolveQaSuiteWorkerStartStaggerMs(1, {})).toBe(0);
-    expect(resolveQaSuiteWorkerStartStaggerMs(4, {})).toBe(1500);
-    expect(
-      resolveQaSuiteWorkerStartStaggerMs(4, {
-        OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "0",
-      }),
-    ).toBe(0);
-    expect(
-      resolveQaSuiteWorkerStartStaggerMs(4, {
-        OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "25",
-      }),
-    ).toBe(25);
-    for (const value of ["0x10", "1e3", "10.5"]) {
-      expect(
-        resolveQaSuiteWorkerStartStaggerMs(4, {
-          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: value,
-        }),
-      ).toBe(1500);
-    }
-    expect(resolveQaSuiteWorkerStartStaggerMs(4, {}, 500)).toBe(500);
-    expect(
-      resolveQaSuiteWorkerStartStaggerMs(
-        4,
-        {
-          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "25",
-        },
-        500,
-      ),
-    ).toBe(25);
   });
 });

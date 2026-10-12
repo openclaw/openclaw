@@ -55,7 +55,7 @@ function endedRun(
 }
 
 function mockEndedRun(run: ReturnType<typeof endedRun>) {
-  getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(run);
+  getLatestSubagentRunByChildSessionKeyMock.mockResolvedValue(run);
   getLatestLiveSubagentRunByChildSessionKeyMock.mockReturnValue(run);
 }
 

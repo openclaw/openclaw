@@ -129,6 +129,12 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
+Outside the `"provider-config"` view, rows that the
+[recommended models list](/concepts/recommended-models) names for their provider
+carry `recommended: true`. Each provider's recommended rows come before its other
+rows, in list order, after the session's selected model. Pickers may collapse the
+remaining rows behind an "All models" control.
+
 Clients that advertise `model-selection-policy` in connect `caps` receive
 `manualSelectionAllowed` on every `models.list` row. The same fact appears in
 their initial `models.snapshot`. Filter rows with `false` only when deriving
@@ -187,8 +193,22 @@ compatible rows remain usable; recovery clears it. A successful empty catalog
 remains empty.
 
 The Gateway advertises `session-scoped-model-catalog` for this contract.
-`chat.metadata` remains available to legacy clients; the Control UI reads models
-directly and keeps commands in its metadata cache. Opening a conversation picker
+`chat.metadata` remains available to legacy clients. Clients that read models
+directly can pass `includeModels: false` to skip the duplicate catalog, account
+selection, and runtime-selection projection. Commands and swarm availability
+remain available. Compact responses include an opaque `revision`; pass it as
+`ifRevision` on a later compact read to receive `unchanged: true` instead of
+another command list. The revision describes prepared command and swarm facts.
+The bundled Control UI reads these agent-scoped facts without a session or
+account selection and retains them across session activity. Session-scoped model
+results and full session rows can carry `sessionModelRevision`, an opaque token
+for the saved model, account, runtime, and lifecycle inputs. The UI keeps its
+catalog when that token matches; missing tokens and explicit `catalogChanged`
+notifications retain an authoritative read. Shared catalog, auth, config, and
+connection changes invalidate independently. Harness-owned, model-locked sessions
+omit this token because their native owner can replace a private model binding
+independently of the saved row. Native clients that also support older Gateways retain the default
+request shape. Opening a conversation picker
 performs a passive read, without a model-cache timer or implicit provider refresh.
 Metadata refresh publishes model-owner facts without preparing every agent's
 commands and model projections. Requests prepare their agent's metadata on demand;
@@ -198,6 +218,8 @@ is projected for the current session even when its model catalog is shared.
 Provider renewal with unchanged inventory and auth metadata preserves cached metadata
 without broadcasting `chat.metadata.changed`. Discovery progress alone does not
 invalidate metadata; catalog changes and `refreshFailed` transitions still do.
+Discovery progress retires shared RPC response bytes without rebuilding metadata
+or sending another client broadcast.
 Shared model or account replacement still gates these reads, and history
 uses only already-prepared catalogs without starting or waiting for preparation.
 The Models settings page uses `preparedOnly: true` for its initial load, then
@@ -213,6 +235,25 @@ does not make a reopened Settings picker refresh. The Gateway shares concurrent
 provider acquisition.
 
 `preparedOnly: true` and `refresh: true` remain mutually exclusive.
+
+The WebSocket dispatcher shares identical `cron.list`, `cron.status`, `sessions.list`,
+`models.list`, and `chat.metadata` responses between eligible human connections.
+Each request still checks its own current authority. Sharing keys separate user
+and profile identity, scopes, client capabilities, and request parameters,
+including agent, session, and account selection. Explicit model refreshes,
+synthetic callers, and cron reads with restricted session visibility do not share.
+Session, cron, and model metadata broadcasts retire the relevant responses before
+clients can refetch. Config, access, and session-row revisions also fence reuse.
+These methods currently use a one-second absolute ceiling; this bounds
+personal model metadata changes that do not publish a broadcast. This adds no
+client polling or provider refresh. Session catalogs and workboard reads do not use this response-sharing owner.
+
+The running cron owner retains immutable job read views and aggregate status until
+a committed revision, loaded store replacement, or scheduler mutation changes them.
+Each list request still applies its current visibility filters. Delivery previews
+keep their session and configuration dependencies; a cron revision alone does not
+make them reusable. Passive cron readers retain their store refresh behavior.
+
 The Gateway advertises these published-read and details controls as
 `published-model-catalog`. Clients that require this contract must check the
 capability before sending the new fields; an older Gateway requires an update

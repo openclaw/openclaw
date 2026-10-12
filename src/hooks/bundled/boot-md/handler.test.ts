@@ -75,7 +75,7 @@ describe("boot-md handler", () => {
   });
 
   it("deduplicates agents sharing the same workspaceDir (#74072)", async () => {
-    const cfg = { agents: { list: [{ id: "main" }, { id: "alias" }] } };
+    const cfg = { agents: { entries: { main: {}, alias: {} } } };
     listAgentIds.mockReturnValue(["main", "alias"]);
     resolveAgentWorkspaceDir.mockReturnValue(MAIN_WORKSPACE_DIR);
     runBootOnce.mockResolvedValue({ status: "ran" });

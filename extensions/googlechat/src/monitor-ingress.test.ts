@@ -10,11 +10,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { createGoogleChatIngressMonitor } from "./monitor-ingress.js";
 
-type GoogleChatIngressQueue = NonNullable<
-  Parameters<typeof createGoogleChatIngressMonitor>[0]["queue"]
+type GoogleChatIngressPayload = { version: 1; rawEvent: string };
+type GoogleChatIngressQueue = ReturnType<
+  typeof createChannelIngressQueueForTests<GoogleChatIngressPayload>
 >;
-type GoogleChatIngressPayload = Parameters<GoogleChatIngressQueue["enqueue"]>[1];
 type GoogleChatIngressDispatch = Parameters<typeof createGoogleChatIngressMonitor>[0]["dispatch"];
+
+const { openChannelIngressQueue } = vi.hoisted(() => ({ openChannelIngressQueue: vi.fn() }));
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getGoogleChatRuntime: () => ({ state: { openChannelIngressQueue } }),
+}));
 
 function messageEvent(params?: { messageName?: string; spaceName?: string; text?: string }) {
   const spaceName = params?.spaceName ?? "spaces/AAA";
@@ -61,13 +67,11 @@ function cardClickEvent(messageName = "spaces/AAA/messages/message-1") {
 }
 
 function startIngress(queue: GoogleChatIngressQueue, dispatch: GoogleChatIngressDispatch) {
+  openChannelIngressQueue.mockReturnValue(queue);
   const ingress = createGoogleChatIngressMonitor({
     accountId: "default",
-    queue,
     dispatch,
     runtime: createRuntimeSpies(),
-    pollIntervalMs: 10,
-    adoptionStallTimeoutMs: 5_000,
   });
   ingress.start();
   return ingress;
@@ -333,44 +337,6 @@ describe("Google Chat durable ingress", () => {
           expect((await queue.enqueue(id, {} as GoogleChatIngressPayload)).kind).toBe("failed");
         });
         expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("keeps unrelated downstream authentication failures retryable", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async () => {
-        throw Object.assign(new Error("model provider unauthorized"), { status: 401 });
-      });
-      const ingress = startIngress(queue, dispatch);
-      try {
-        await ingress.receive(messageEvent({ messageName: "spaces/AAA/messages/model-auth" }));
-        await vi.waitFor(async () => {
-          expect(await queue.listPending({ limit: "all" })).toEqual([
-            expect.objectContaining({ id: "spaces/AAA/messages/model-auth" }),
-          ]);
-        });
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("leaves transient dispatch failures retryable", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async () => {
-        throw Object.assign(new Error("Google Chat unavailable"), { status: 503 });
-      });
-      const ingress = startIngress(queue, dispatch);
-      try {
-        await ingress.receive(messageEvent({ messageName: "spaces/AAA/messages/transient" }));
-        await vi.waitFor(async () => {
-          expect(await queue.listPending({ limit: "all" })).toEqual([
-            expect.objectContaining({ id: "spaces/AAA/messages/transient" }),
-          ]);
-        });
       } finally {
         await ingress.stop();
       }

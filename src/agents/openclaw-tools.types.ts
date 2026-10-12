@@ -3,7 +3,8 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
-import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
@@ -16,7 +17,11 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
-import type { SessionsYieldCallback } from "./tools/sessions-yield-tool.js";
+import type {
+  SessionsYieldCallback,
+  SessionsYieldRuntimeClaim,
+} from "./tools/sessions-yield-tool.js";
+import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factory.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
@@ -32,6 +37,10 @@ export type OpenClawSharedToolsOptions = {
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
+  /** Host-resolved memory partition shared by plugin tools for this turn. */
+  memoryAudience?: MemoryAudience;
+  /** Stable mutation identity supplied only for a provider-owned memory flush. */
+  memoryFlush?: { flushId: string };
   /** Trusted platform-native conversation id for the active inbound turn. */
   nativeChannelId?: string;
   /** Producer-authored bare upload handles mapped to exact sandbox paths. */
@@ -64,10 +73,12 @@ export type OpenClawSharedToolsOptions = {
    * boundary should opt out explicitly.
    */
   wrapBeforeToolCallHook?: boolean;
-  /** Internal review-run restrictions and proposal provenance. */
+  /** Run-owned Workshop authority: review guard and personal library access. */
   skillWorkshop?: SkillWorkshopRunOptions;
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
+  /** Construction fact for prompt guidance; never contains credentials or diagnostics. */
+  onWebSearchConfiguration?: (configured: boolean) => void;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Dynamic audio state for runs that can accept steered input after tool creation. */
@@ -82,6 +93,7 @@ export type OpenClawSharedToolsOptions = {
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
+  computerExecutionId?: string;
   /** Registers run-owned cleanup for tools that hold node resources. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   inboundEventKind?: InboundEventKind;
@@ -94,7 +106,7 @@ export type OpenClawSharedToolsOptions = {
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: SessionsYieldCallback;
-  claimYieldCompletion?: () => boolean | Promise<boolean>;
+  claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
   recordToolPrepStage?: (name: string) => void;
 };
@@ -177,6 +189,7 @@ export type OpenClawToolsOptions = {
   requesterSenderId?: string | null;
   /** Prepared exec/process isolation key for this run. */
   processScopeKey?: string;
+  inputProvenance?: InputProvenance;
 } & OpenClawSharedToolsOptions &
   AgentRunClientContext &
   AgentRunMessageContext &

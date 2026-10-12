@@ -100,26 +100,27 @@ export function useQueuedCollectorFixture() {
         const { storePath, entry } = loadGatewaySessionEntryReadOnly(sessionKey);
         await upsertSessionEntryCore(
           { storePath, sessionKey },
-          buildAgentSessionPatch({
-            freshEntry: entry,
-            initialEntry: entry,
-            cfg: getRuntimeConfig(),
-            sessionAgentId: "main",
-            canonicalSessionKey: sessionKey,
-            storePath,
-            requestLabel: typeof params.label === "string" ? params.label : undefined,
-            normalizedSpawned: {},
-            requestDeliveryHint: undefined,
-            expectedExistingSessionId: entry?.sessionId,
-            hasRestoredCronContinuation: false,
-            resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
-            now: Date.now(),
-            isSystemGatewayRun: true,
-            visibleRequest: false,
-            fallbackSessionId: expectDefined(entry?.sessionId, "created child identity"),
-            touchInteraction: false,
-            failedSessionTranscriptMissing: () => false,
-          }).patch,
+          (
+            await buildAgentSessionPatch({
+              freshEntry: entry,
+              initialEntry: entry,
+              cfg: getRuntimeConfig(),
+              sessionAgentId: "main",
+              canonicalSessionKey: sessionKey,
+              storePath,
+              requestLabel: typeof params.label === "string" ? params.label : undefined,
+              normalizedSpawned: {},
+              requestDeliveryHint: undefined,
+              expectedExistingSessionId: entry?.sessionId,
+              hasRestoredCronContinuation: false,
+              resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
+              now: Date.now(),
+              isSystemGatewayRun: true,
+              visibleRequest: false,
+              fallbackSessionId: expectDefined(entry?.sessionId, "created child identity"),
+              touchInteraction: false,
+            })
+          ).patch,
         );
         launchedRunIds.push(runId);
         registerAgentRunContext(runId, { sessionKey, projectSessionActive: true });

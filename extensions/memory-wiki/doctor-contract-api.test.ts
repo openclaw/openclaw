@@ -25,7 +25,6 @@ import { resolveMemoryWikiConfig } from "./src/config.js";
 import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
-  readMemoryWikiImportRunRecord,
 } from "./src/import-runs-state.js";
 import {
   createMemoryWikiSourceSyncStateStore,
@@ -51,7 +50,9 @@ function migrationParams(params: { stateDir: string; vaultRoot: string; agentIds
   const env = { ...process.env, HOME: params.stateDir, OPENCLAW_STATE_DIR: params.stateDir };
   return {
     config: {
-      ...(params.agentIds ? { agents: { list: params.agentIds.map((id) => ({ id })) } } : {}),
+      ...(params.agentIds
+        ? { agents: { entries: Object.fromEntries(params.agentIds.map((id) => [id, {}])) } }
+        : {}),
       plugins: {
         entries: {
           "memory-wiki": {
@@ -171,6 +172,24 @@ describe("memory-wiki Doctor state compatibility", () => {
     configureMemoryWikiImportRunStateStore(undefined);
     resetPluginBlobStoreForTests();
     resetPluginStateStoreForTests();
+  });
+
+  it("declares active cache files without reviving retired JSON inventory", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-capture-");
+    const vaultRoot = path.join(stateDir, "selected-vault");
+    const params = migrationParams({ stateDir, vaultRoot });
+    const resources = stateMigrations.map((migration) =>
+      migration.collectBackupResources?.(params),
+    );
+    expect(resources).toEqual([
+      [
+        { path: path.join(vaultRoot, ".openclaw-wiki/cache/agent-digest.json"), kind: "file" },
+        { path: path.join(vaultRoot, ".openclaw-wiki/cache/claims.jsonl"), kind: "file" },
+      ],
+      [],
+      [],
+    ]);
+    await expect(fs.stat(vaultRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("deletes rebuildable compiled cache files without importing them", async () => {
@@ -423,15 +442,11 @@ describe("memory-wiki Doctor state compatibility", () => {
       warnings: [],
     });
     const store = createMemoryWikiImportRunStateStore(params.context.openPluginStateKeyedStore);
-    await expect(
-      readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-empty", store),
-    ).resolves.toMatchObject({
+    await expect(store.read(vaultRoot, "chatgpt-empty")).resolves.toMatchObject({
       createdPaths: [],
       updatedPaths: [],
     });
-    await expect(
-      readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-alpha", store),
-    ).resolves.toMatchObject({
+    await expect(store.read(vaultRoot, "chatgpt-alpha")).resolves.toMatchObject({
       createdPaths: [{ path: "sources/legacy.md" }],
       updatedPaths: [{ path: "sources/existing.md", snapshotPath: "snapshots/alpha.md" }],
     });
@@ -454,9 +469,7 @@ describe("memory-wiki Doctor state compatibility", () => {
     ).resolves.toBe(legacyPageContent);
     await expect(fs.readFile(existingPagePath, "utf8")).resolves.toBe("previous page\n");
     await expect(fs.readFile(snapshotPath, "utf8")).resolves.toBe("previous page\n");
-    await expect(
-      readMemoryWikiImportRunRecord(vaultRoot, "chatgpt-alpha", store),
-    ).resolves.toMatchObject({
+    await expect(store.read(vaultRoot, "chatgpt-alpha")).resolves.toMatchObject({
       rollbackStartedAt: expect.any(String),
       rollbackTargetsFinalizedAt: expect.any(String),
       rolledBackAt: expect.any(String),

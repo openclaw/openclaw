@@ -7,10 +7,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-function firstHeader(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
-}
+import { firstHeader } from "./http-auth.js";
 
 function isMutatingMethod(method: string): boolean {
   const m = (method || "").trim().toUpperCase();
@@ -39,18 +36,9 @@ function shouldRejectBrowserMutation(params: {
     return true;
   }
 
-  const origin = (params.origin ?? "").trim();
-  if (origin) {
-    return !isLoopbackUrl(origin);
-  }
-
-  const referer = (params.referer ?? "").trim();
-  if (referer) {
-    return !isLoopbackUrl(referer);
-  }
-
   // Non-browser clients (curl/undici/Node) typically send no Origin/Referer.
-  return false;
+  const source = (params.origin ?? "").trim() || (params.referer ?? "").trim();
+  return source ? !isLoopbackUrl(source) : false;
 }
 
 /** Create middleware that rejects unsafe browser-control mutations. */
@@ -60,22 +48,12 @@ export function browserMutationGuardMiddleware(): (
   next: NextFunction,
 ) => void {
   return (req: Request, res: Response, next: NextFunction) => {
-    // OPTIONS is used for CORS preflight. Even if cross-origin, the preflight isn't mutating.
-    const method = (req.method || "").trim().toUpperCase();
-    if (method === "OPTIONS") {
-      return next();
-    }
-
-    const origin = firstHeader(req.headers.origin);
-    const referer = firstHeader(req.headers.referer);
-    const secFetchSite = firstHeader(req.headers["sec-fetch-site"]);
-
     if (
       shouldRejectBrowserMutation({
-        method,
-        origin,
-        referer,
-        secFetchSite,
+        method: req.method,
+        origin: firstHeader(req.headers.origin),
+        referer: firstHeader(req.headers.referer),
+        secFetchSite: firstHeader(req.headers["sec-fetch-site"]),
       })
     ) {
       res.status(403).send("Forbidden");

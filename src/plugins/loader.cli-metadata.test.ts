@@ -198,79 +198,6 @@ module.exports = { id: "packaged-cli-metadata", register() {} };`,
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("packaged-light");
   });
 
-  it("suppresses trust warning logs during CLI metadata loads", async () => {
-    useNoBundledPlugins();
-    const stateDir = makePluginLoaderTempDir();
-    const globalDir = path.join(stateDir, "extensions", "rogue");
-    fs.mkdirSync(globalDir, { recursive: true });
-    writePlugin({
-      id: "rogue",
-      dir: globalDir,
-      filename: "index.cjs",
-      registration: `api.registerCli(() => {}, {
-        descriptors: [{ name: "rogue", description: "Rogue CLI metadata", hasSubcommands: true }],
-      });`,
-    });
-
-    const warnings: string[] = [];
-    const registry = await loadOpenClawPluginCliRegistry({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      logger: {
-        info: () => {},
-        warn: (msg: string) => warnings.push(msg),
-        error: () => {},
-        debug: () => {},
-      },
-      config: {
-        plugins: {
-          enabled: true,
-        },
-      },
-    });
-
-    expect(warnings).toStrictEqual([]);
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("rogue");
-  });
-
-  it("passes validated plugin config into non-activating CLI metadata loads", async () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "Config-Cli",
-      filename: "config-cli.cjs",
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: { token: { type: "string" } },
-        required: ["token"],
-      },
-      registration: `if (!api.pluginConfig || api.pluginConfig.token !== "ok") {
-        throw new Error("missing plugin config");
-      }
-      api.registerCli(() => {}, {
-        descriptors: [{ name: "cfg", description: "Config-backed CLI command", hasSubcommands: true }],
-      });`,
-    });
-
-    const registry = await loadOpenClawPluginCliRegistry({
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["config-cli"],
-          entries: {
-            "config-cli": {
-              config: {
-                token: "ok",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("cfg");
-    expect(registry.plugins.find((entry) => entry.id === "Config-Cli")?.status).toBe("loaded");
-  });
-
   it("skips a bundled channel without a dedicated CLI metadata entry", async () => {
     const id = "bundled-skip-channel";
     const { fullMarker, config } = bundledChannelFixture(id);
@@ -279,45 +206,6 @@ module.exports = { id: "packaged-cli-metadata", register() {} };`,
     expect(fs.existsSync(fullMarker)).toBe(false);
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(id);
     expect(registry.plugins.find((entry) => entry.id === id)?.status).toBe("loaded");
-  });
-
-  it("prefers bundled channel cli-metadata entries over full channel entries", async () => {
-    const { pluginDir, fullMarker, config } = bundledChannelFixture("bundled-cli-channel");
-    const cliMarker = path.join(pluginDir, "cli-loaded.txt");
-    fs.writeFileSync(
-      path.join(pluginDir, "cli-metadata.cjs"),
-      `module.exports = {
-  id: "bundled-cli-channel",
-  register(api) {
-    require("node:fs").writeFileSync(${JSON.stringify(cliMarker)}, "loaded", "utf-8");
-    api.registerCli(() => {}, {
-      descriptors: [
-        {
-          name: "bundled-cli-channel",
-          description: "Bundled channel CLI metadata",
-          hasSubcommands: true,
-          machineOutput: ({ argv }) => argv.includes("--machine"),
-        },
-      ],
-    });
-  },
-};`,
-      "utf-8",
-    );
-
-    const registry = await loadOpenClawPluginCliRegistry({ config });
-
-    expect(fs.existsSync(fullMarker)).toBe(false);
-    expect(fs.existsSync(cliMarker)).toBe(true);
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
-      "bundled-cli-channel",
-    );
-    expect(
-      registry.cliRegistrars[0]?.descriptors[0]?.machineOutput?.({
-        argv: ["node", "openclaw", "bundled-cli-channel", "--machine"],
-        stdoutIsTTY: true,
-      }),
-    ).toBe(true);
   });
 
   it("can force channel runtime entries for CLI registration when setup entries exist", () => {

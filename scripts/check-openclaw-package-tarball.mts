@@ -454,27 +454,12 @@ function isLegacyLifecycleMarkerCompatVersion(version: string): boolean {
 }
 
 function readTarEntry(entryPath: string): string {
-  const candidates = [
-    path.join(extractDir, entryPath),
-    path.join(extractDir, "package", entryPath),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return fs.readFileSync(candidate, "utf8");
-    }
-  }
-  return "";
+  const filePath = path.join(extractDir, "package", entryPath);
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
 }
 
-const extractedPackageRoot = fs.realpathSync(
-  fs.existsSync(path.join(extractDir, "package", "package.json"))
-    ? path.join(extractDir, "package")
-    : extractDir,
-);
+const extractedPackageRoot = fs.realpathSync(path.join(extractDir, "package"));
 
-if (!entrySet.has("package.json")) {
-  errors.push("missing package.json");
-}
 if (!normalized.some((entry) => entry.startsWith("dist/"))) {
   errors.push("missing dist/ entries");
 }
@@ -488,26 +473,24 @@ for (const requiredPrefix of REQUIRED_TARBALL_ENTRY_PREFIXES) {
     errors.push(`missing required tar entries under ${requiredPrefix}`);
   }
 }
-let packageVersion = "";
+let packageVersion: string;
 let packageJson: PackageManifest | null = null;
-if (entrySet.has("package.json")) {
-  try {
-    packageJson = JSON.parse(readTarEntry("package.json")) as PackageManifest;
-    packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
-    errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
-    errors.push(
-      ...collectBundledDependencyErrors({
-        packageJson,
-        entries: entrySet,
-        files: normalized,
-        packageRoot: extractedPackageRoot,
-        readText: readTarEntry,
-        requireBundledWorkspaceDeps: cliArgs.requireBundledWorkspaceDeps,
-      }),
-    );
-  } catch {
-    packageVersion = "";
-  }
+try {
+  packageJson = JSON.parse(readTarEntry("package.json")) as PackageManifest;
+  packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
+  errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
+  errors.push(
+    ...collectBundledDependencyErrors({
+      packageJson,
+      entries: entrySet,
+      files: normalized,
+      packageRoot: extractedPackageRoot,
+      readText: readTarEntry,
+      requireBundledWorkspaceDeps: cliArgs.requireBundledWorkspaceDeps,
+    }),
+  );
+} catch {
+  packageVersion = "";
 }
 if (packageJson) {
   errors.push(...collectMissingDeclaredPackageFileErrors(packageJson, new Set(tarFileEntries)));
@@ -663,11 +646,7 @@ if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
       }
 
       const parity = comparePackageDistInventory({
-        files: normalized.filter(
-          (entry) =>
-            entry.startsWith("dist/") &&
-            fs.statSync(path.join(extractedPackageRoot, entry)).isFile(),
-        ),
+        files: tarFileEntries.filter((entry) => entry.startsWith("dist/")),
         inventory: inventoryEntries,
       });
       if (typeof packageJson?.scripts?.postinstall === "string") {

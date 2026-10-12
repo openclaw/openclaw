@@ -104,10 +104,8 @@ function renderCaptureFormPayload(payload: string): string {
 
 function renderCaptureSsePayload(
   payload: string,
-  options?: {
-    sort?: UiState["capturePayloadEventSort"];
-    filterText?: string;
-  },
+  sortMode: UiState["capturePayloadEventSort"] = "stream",
+  filterText = "",
 ): { body: string; eventCount: number; visibleCount: number } {
   const frames = payload
     .split(/\n\n+/)
@@ -139,7 +137,6 @@ function renderCaptureSsePayload(
         .join(" ")
         .toLowerCase();
       return {
-        id: index,
         index,
         eventName,
         rows,
@@ -147,12 +144,11 @@ function renderCaptureSsePayload(
         searchable,
       };
     });
-  const normalizedFilter = options?.filterText?.trim().toLowerCase() ?? "";
+  const normalizedFilter = filterText.trim().toLowerCase();
   const filteredFrames =
     normalizedFilter.length === 0
       ? frames
       : frames.filter((frame) => frame.searchable.includes(normalizedFilter));
-  const sortMode = options?.sort ?? "stream";
   const sortedFrames = filteredFrames.toSorted((left, right) => {
     if (sortMode === "name") {
       return left.eventName.localeCompare(right.eventName) || left.index - right.index;
@@ -228,10 +224,11 @@ export function renderCapturePayload(
     };
   }
   if (contentType?.includes("text/event-stream") || /^event:|^data:/m.test(trimmed)) {
-    const sse = renderCaptureSsePayload(payload, {
-      sort: options?.payloadEventSort,
-      filterText: options?.payloadEventFilter,
-    });
+    const sse = renderCaptureSsePayload(
+      payload,
+      options?.payloadEventSort,
+      options?.payloadEventFilter,
+    );
     return {
       body: sse.body,
       mode: "sse",

@@ -146,7 +146,7 @@ export class WorkerLiveEventClient {
       if (generation !== this.replayGeneration || !this.buffered.includes(entry)) {
         return;
       }
-      const response = await this.connection.requestLiveEvent({
+      const response = await this.connection.rpc.request("live-event", {
         runEpoch: this.options.runEpoch,
         lastAckedSeq: entry.resyncFromSeq ?? this.ackedSeqValue,
         seq: sentSeq,

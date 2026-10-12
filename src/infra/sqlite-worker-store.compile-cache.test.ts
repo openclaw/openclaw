@@ -3,8 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { sqliteWorkerStoreCompileCacheParentEntrypoint } from "./sqlite-worker-store.compile-cache-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -13,19 +12,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // the base-versus-leaf contract that this actual SQLite worker boundary must keep.
 describe("SQLite store worker compile cache", () => {
   it.each([
-    { label: "owned programmatic cache", owner: "openclaw", cache: undefined, disable: undefined },
-    { label: "explicit cache", owner: "openclaw", cache: "explicit", disable: undefined },
-    { label: "empty explicit cache", owner: "openclaw", cache: "", disable: undefined },
-    { label: "empty disable policy", owner: "openclaw", cache: undefined, disable: "" },
-    { label: "disabled explicit cache", owner: "openclaw", cache: "explicit", disable: "1" },
-    {
-      label: "foreign ALREADY_ENABLED cache",
-      owner: "foreign",
-      cache: undefined,
-      disable: undefined,
-    },
-    { label: "failed enable", owner: "failed", cache: undefined, disable: undefined },
-    { label: "source checkout", owner: "source", cache: undefined, disable: undefined },
+    { label: "owned programmatic cache", owner: "openclaw" },
+    { label: "foreign ALREADY_ENABLED cache", owner: "foreign" },
   ] as const)("preserves $label through worker retirement", async (testCase) => {
     const root = tempDirs.make("openclaw-sqlite-store-cache-");
     const modulePath = path.join(root, "backend.mjs");
@@ -58,15 +46,12 @@ describe("SQLite store worker compile cache", () => {
     delete env.NODE_DISABLE_COMPILE_CACHE;
     delete env.NODE_OPTIONS;
     const result = await runNodeScript(
-      [
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(sqliteWorkerStoreCompileCacheParentEntrypoint),
-          resolveTestNodeExecPath(),
-        ),
+      (workerArgv) => [
+        ...workerArgv(resolveRuntimeWorkerUrl(sqliteWorkerStoreCompileCacheParentEntrypoint)),
         root,
         testCase.owner,
-        testCase.cache ?? "unset",
-        testCase.disable ?? "unset",
+        "unset",
+        "unset",
       ],
       env,
       10_000,

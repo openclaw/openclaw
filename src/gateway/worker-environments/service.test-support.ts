@@ -26,15 +26,16 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import * as inferenceManager from "./inference.js";
 import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
-  bindWorkerTurnToolSurface,
+  bindWorkerTurnCapabilities,
   getWorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
@@ -52,7 +53,11 @@ export function waitForFast<T>(
 }
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
-export type WorkerEnvironmentServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
+export type WorkerEnvironmentServiceOptions = Parameters<
+  typeof createWorkerEnvironmentService
+>[0] & {
+  executeInference: WorkerInferenceExecutor;
+};
 export type WorkerEnvironmentServiceError = Error & { code: string };
 export const SSH_ENDPOINT: WorkerSshEndpoint = {
   host: "worker.example.test",
@@ -129,15 +134,13 @@ export const testState = {} as {
   config: OpenClawConfig;
   nowMs: number;
   providersEnabled: boolean;
-  reuseReadWorkers: boolean;
   releaseTurnOwners: Array<() => void | Promise<void>>;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?: boolean } = {}) {
+export function setupWorkerEnvironmentServiceSuite() {
   beforeEach(async () => {
-    testState.reuseReadWorkers = options.reuseReadWorkers === true;
     testState.releaseTurnOwners = [];
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
@@ -186,21 +189,15 @@ export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?:
     await fs.rm(testState.root, { recursive: true, force: true });
   });
 
-  if (options.reuseReadWorkers) {
-    afterAll(async () => {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    });
-  }
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
 }
 
 async function closeWorkerEnvironmentDatabase() {
-  if (testState.reuseReadWorkers) {
-    // Close native handles and admission for this case; retain only the reader worker code.
-    await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
-  } else {
-    await closeOpenClawStateDatabaseAsync();
-  }
+  // Close native handles and admission for this case; retain only the reader worker code.
+  await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
   closeOpenClawStateDatabaseForTest();
 }
 
@@ -264,6 +261,11 @@ export function createService(
     >
   > = {},
 ) {
+  const { executeInference, ...options } = serviceOptions;
+  vi.spyOn(inferenceManager, "executeWorkerInference").mockImplementation(
+    executeInference ??
+      (async () => ({ type: "error", reason: "cancelled", message: "Inference cancelled" })),
+  );
   testState.service = createWorkerEnvironmentService({
     scheduler: createTestGatewayScheduler(),
     store: testState.store,
@@ -277,18 +279,13 @@ export function createService(
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
     generateWorkerCredential: () => CREDENTIAL,
-    executeInference: async () => ({
-      type: "error",
-      reason: "cancelled",
-      message: "Inference cancelled",
-    }),
     inferenceStore: createWorkerInferenceStore({
       path: testState.stateDb.path,
       now: () => testState.nowMs,
     }),
     now: () => testState.nowMs,
     reconcileIntervalMs: 25,
-    ...serviceOptions,
+    ...options,
   });
   return testState.service;
 }
@@ -669,7 +666,7 @@ export async function bindPlacementHarness(
       getWorkerTurnExecutionIdentityCapability(executionStore, current),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(async () => {}),
-    prepareWorkspaceResultOwnerRevocation: vi.fn(),
+    prepareWorkspaceResultOwnerRevocation: vi.fn(async () => {}),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const instance = createOperationalRunInstanceRef(claim.runId);
@@ -713,7 +710,7 @@ export async function bindPlacementHarness(
     workerService,
     source,
     releaseSource,
-    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnToolSurface>[2]) =>
-      bindWorkerTurnToolSurface(executionStore, claim, surface),
+    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
+      bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
   };
 }

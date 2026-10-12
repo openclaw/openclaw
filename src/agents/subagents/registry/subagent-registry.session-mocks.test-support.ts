@@ -1,7 +1,10 @@
 import { vi } from "vitest";
 import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
 import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
-import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "../../../config/sessions/session-entry-read-runtime.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 
 const { prepareSessionGenerationFacts: prepareCanonicalSessionGenerationFacts } =
@@ -32,6 +35,16 @@ export function resetSubagentRegistrySessionMocks(
       args[0].storePath === mocks.resolveStorePath()
         ? mocks.withSessionEntryReadOnlyInWorker(...args)
         : readCanonicalSessionEntry(...args),
+    );
+  vi.mocked(readSessionEntryReadOnlyInWorker)
+    .mockReset()
+    .mockImplementation((scope, assertCurrent = () => {}) =>
+      withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        return read.value;
+      }),
     );
   vi.mocked(captureSessionEntryCurrentRead)
     .mockReset()

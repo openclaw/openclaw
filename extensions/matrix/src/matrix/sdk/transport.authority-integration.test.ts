@@ -12,11 +12,26 @@ const boundary = vi.hoisted(() => ({
   closed: 0,
   dns: undefined as (() => Promise<void>) | undefined,
   afterRead: undefined as (() => Promise<void>) | undefined,
+  prepareEffect: undefined as (() => Promise<void>) | undefined,
   fetch: async (_url: string, _init: RequestInit): Promise<Response> => new Response("{}"),
 }));
-vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
-  captureChannelReadAuthority: () => undefined,
-}));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureChannelReadAuthority: () => undefined,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      return {
+        ...authority,
+        initiate: async <T>(effect: () => T | Promise<T>) => {
+          await boundary.prepareEffect?.();
+          return authority.initiate(effect);
+        },
+      };
+    },
+  };
+});
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({ parseMediaContentLength: Number }));
 vi.mock("openclaw/plugin-sdk/response-limit-runtime", () => ({
   readResponseWithLimit: async (response: Response) => {
@@ -59,6 +74,7 @@ beforeEach(() =>
     closed: 0,
     dns: undefined,
     afterRead: undefined,
+    prepareEffect: undefined,
     fetch: async () => new Response("{}"),
   }),
 );
@@ -68,11 +84,26 @@ test.each([
   { stage: "wire guard", dispatches: 0, stamps: 1, closed: 1 },
   { stage: "response read", dispatches: 1, stamps: 1, closed: 1 },
   { stage: "redirect DNS", dispatches: 1, stamps: 1, closed: 2 },
+  { stage: "effect preparation", dispatches: 0, stamps: 1, closed: 1 },
+  { stage: "redirect effect preparation", dispatches: 1, stamps: 2, closed: 2 },
 ])("revoked authority at $stage preserves dispatch custody", async (expected) => {
   let current = true;
   let stamps = 0;
   let dns = 0;
+  let preparations = 0;
   const revoked = new Error("request owner revoked");
+  boundary.prepareEffect = async () => {
+    if (
+      ++preparations ===
+      (expected.stage === "effect preparation"
+        ? 1
+        : expected.stage === "redirect effect preparation"
+          ? 2
+          : 0)
+    ) {
+      throw revoked;
+    }
+  };
   boundary.dns = async () => {
     dns++;
     if (expected.stage === "DNS" || (expected.stage === "redirect DNS" && dns === 2)) {
@@ -84,7 +115,7 @@ test.each([
       current = false;
     }
   };
-  if (expected.stage === "redirect DNS") {
+  if (expected.stage.startsWith("redirect")) {
     boundary.fetch = async () =>
       new Response(null, { status: 307, headers: { location: "/next" } });
   }
@@ -149,6 +180,22 @@ test("redirect rechecks original transaction through the canonical registry", as
   assert.equal(boundary.closed, 2);
   assert.equal(await guards.beforeRequest(url, init), undefined);
 });
+
+test.each([false, true])(
+  "preserves transport failure identity after redirect=%s",
+  async (redirect) => {
+    const failure = new Error("transport disconnected");
+    let requests = 0;
+    boundary.fetch = async () => {
+      if (redirect && ++requests === 1) {
+        return new Response(null, { status: 307, headers: { location: "/next" } });
+      }
+      throw failure;
+    };
+    await assert.rejects(createMatrixGuardedFetch({})(url, init), (error) => error === failure);
+    assert.equal(boundary.dispatched.length, redirect ? 2 : 1);
+  },
+);
 
 test("per-request abort remains effective with a client signal", async () => {
   const client = new AbortController();

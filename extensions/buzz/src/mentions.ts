@@ -9,8 +9,6 @@ export type BuzzMentionMember = {
 };
 
 const HEX_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/u;
-const NIP_27_PREFIX = "nostr:npub1";
-const NPUB_LENGTH = 63;
 
 function asciiLowercase(value: string): string {
   return value.replace(/[A-Z]/gu, (character) => character.toLowerCase());
@@ -76,45 +74,29 @@ function stripCodeRegions(content: string): string {
 }
 
 function extractNostrPubkeys(content: string): string[] {
-  const publicKeys: string[] = [];
-  const seen = new Set<string>();
-  let searchFrom = 0;
-  while (searchFrom < content.length) {
-    const start = content.indexOf(NIP_27_PREFIX, searchFrom);
-    if (start === -1) {
-      break;
-    }
-    const npubStart = start + "nostr:".length;
-    const candidate = content.slice(npubStart, npubStart + NPUB_LENGTH);
-    searchFrom = start + NIP_27_PREFIX.length;
-    if (candidate.length !== NPUB_LENGTH || !/^[0-9a-z]+$/iu.test(candidate)) {
-      continue;
-    }
+  const publicKeys = new Set<string>();
+  for (const match of content.matchAll(/nostr:npub1[0-9a-zA-Z]{58}/gu)) {
     try {
-      const decoded = nip19.decode(asciiLowercase(candidate));
+      const decoded = nip19.decode(asciiLowercase(match[0].slice("nostr:".length)));
       if (decoded.type !== "npub" || typeof decoded.data !== "string") {
         continue;
       }
       const publicKey = decoded.data.toLowerCase();
-      if (HEX_PUBLIC_KEY_PATTERN.test(publicKey) && !seen.has(publicKey)) {
-        seen.add(publicKey);
-        publicKeys.push(publicKey);
+      if (HEX_PUBLIC_KEY_PATTERN.test(publicKey)) {
+        publicKeys.add(publicKey);
       }
     } catch {
       // Invalid NIP-27 references remain presentation text, matching Buzz.
     }
   }
-  return publicKeys;
+  return [...publicKeys];
 }
 
 function extractMentionNames(content: string, knownNames: readonly string[]): string[] {
   if (!content.includes("@")) {
     return [];
   }
-  const sortedNames = knownNames
-    .map((name) => name.trim())
-    .filter(Boolean)
-    .toSorted((left, right) => right.length - left.length);
+  const sortedNames = knownNames.toSorted((left, right) => right.length - left.length);
   const names: string[] = [];
   const seen = new Set<string>();
 
@@ -153,17 +135,7 @@ function extractMentionNames(content: string, knownNames: readonly string[]): st
 }
 
 function hasAtMentionCandidate(content: string): boolean {
-  for (let index = 0; index < content.length; index += 1) {
-    if (
-      content[index] === "@" &&
-      (index === 0 || isAsciiWhitespace(content[index - 1])) &&
-      index + 1 < content.length &&
-      !isAsciiWhitespace(content[index + 1])
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return /(?:^|[\t-\r ])@[^\t-\r ]/u.test(content);
 }
 
 function normalizeMembers(members: readonly BuzzMentionMember[]): Map<string, BuzzMentionMember> {
@@ -199,8 +171,8 @@ export function resolveBuzzMessageMentions(params: {
 }): string[] {
   const stripped = stripCodeRegions(params.text);
   const explicitPublicKeys = extractNostrPubkeys(stripped);
-  const hasMentionText = hasAtMentionCandidate(stripped) || explicitPublicKeys.length > 0;
-  if (!hasMentionText) {
+  const hasAtMention = hasAtMentionCandidate(stripped);
+  if (!hasAtMention && explicitPublicKeys.length === 0) {
     return [];
   }
   if (!params.members) {
@@ -209,12 +181,7 @@ export function resolveBuzzMessageMentions(params: {
 
   const members = normalizeMembers(params.members);
   const senderPublicKey = params.senderPublicKey.trim().toLowerCase();
-  const mentions: string[] = [];
-  for (const publicKey of explicitPublicKeys) {
-    if (publicKey !== senderPublicKey && !mentions.includes(publicKey)) {
-      mentions.push(publicKey);
-    }
-  }
+  const mentions = explicitPublicKeys.filter((publicKey) => publicKey !== senderPublicKey);
   if (mentions.length > BUZZ_MENTION_MAX_COUNT) {
     throw new Error(`Buzz messages support at most ${BUZZ_MENTION_MAX_COUNT} mentions`);
   }
@@ -235,13 +202,8 @@ export function resolveBuzzMessageMentions(params: {
     matches.push(member.publicKey);
     namesToPublicKeys.set(name, matches);
   }
-  const names = extractMentionNames(
-    stripped,
-    [...members.values()]
-      .map((member) => member.displayName)
-      .filter((name): name is string => Boolean(name)),
-  );
-  if (hasAtMentionCandidate(stripped) && names.length === 0 && explicitPublicKeys.length === 0) {
+  const names = extractMentionNames(stripped, [...namesToPublicKeys.keys()]);
+  if (hasAtMention && names.length === 0 && explicitPublicKeys.length === 0) {
     throw new Error(
       "Buzz mention does not match a current room member; use nostr:npub... for an explicit identity",
     );
@@ -270,15 +232,13 @@ export function resolveBuzzMessageMentions(params: {
         `Buzz mention "@${name}" is ambiguous; candidates: ${visibleCandidates}${candidateSuffix}. Use nostr:npub... for an explicit identity`,
       );
     }
-    const publicKey = matches[0];
-    if (!publicKey) {
-      throw new Error("Buzz mention resolution lost its unique room member");
-    }
-    if (publicKey !== senderPublicKey && !mentions.includes(publicKey)) {
-      if (mentions.length >= BUZZ_MENTION_MAX_COUNT) {
-        throw new Error(`Buzz messages support at most ${BUZZ_MENTION_MAX_COUNT} mentions`);
+    for (const publicKey of matches) {
+      if (publicKey !== senderPublicKey && !mentions.includes(publicKey)) {
+        if (mentions.length >= BUZZ_MENTION_MAX_COUNT) {
+          throw new Error(`Buzz messages support at most ${BUZZ_MENTION_MAX_COUNT} mentions`);
+        }
+        mentions.push(publicKey);
       }
-      mentions.push(publicKey);
     }
   }
   return mentions;

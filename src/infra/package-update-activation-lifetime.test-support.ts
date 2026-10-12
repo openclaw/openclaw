@@ -22,8 +22,8 @@ import {
 import { preparePackageActivationJournal } from "./package-update-activation-prepare.js";
 import { packageActivationRuntimeEntrypoint } from "./package-update-activation-runtime-assets.js";
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
+import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
-import type { PackageActivationRuntime } from "./package-update-swap-contract.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as runtimeWorker from "./runtime-worker-url.js";
 
@@ -50,7 +50,7 @@ export function createPackageActivationLifetimeFixture() {
   }
 
   async function prepare(
-    cut?: (anchor: string) => void,
+    cut?: (anchor: string) => void | Promise<void>,
     onCustody?: (retained: boolean) => void,
     runtime: PackageActivationRuntime = packageActivationRuntimeForTest(),
   ) {
@@ -59,7 +59,7 @@ export function createPackageActivationLifetimeFixture() {
     const previous = await createPackageIntegrityReader().tree(f.packageRoot);
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(f.packageRoot);
-      cut?.(anchor);
+      await cut?.(anchor);
       await preparePackageActivationJournal({
         options: { fence, runtime, onPrepared: () => {} },
         liveRoot: f.packageRoot,

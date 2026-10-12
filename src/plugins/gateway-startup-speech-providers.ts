@@ -73,9 +73,7 @@ function addProviderIfEnabled(
 function findActivePersona(
   ttsConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const personaId = normalizeOptionalLowercaseString(
-    typeof ttsConfig.persona === "string" ? ttsConfig.persona : undefined,
-  );
+  const personaId = normalizeOptionalLowercaseString(ttsConfig.persona);
   if (!personaId || !isRecord(ttsConfig.personas)) {
     return undefined;
   }

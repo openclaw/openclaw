@@ -55,26 +55,17 @@ async function finalizeSessionDeliverySettlement(params: {
   outcome: SessionDeliverySettledOutcome;
   queueContext: OpenClawStateWorkerContext;
 }): Promise<boolean> {
+  let phase = "settled callback";
   try {
     params.queueContext.admission.assertCurrent();
     await params.onSettled?.(params.entry, params.outcome, params.queueContext);
-  } catch (error) {
-    params.log.error(
-      `session delivery: settled callback failed for ${params.entry.id}: ${String(error)}`,
-    );
-    return false;
-  }
-  try {
-    if (params.outcome === "recovered") {
-      await completeSessionDelivery(params.entry.id, params.queueContext);
-    } else {
-      await moveSessionDeliveryToFailed(params.entry.id, params.queueContext);
-    }
+    phase = `${params.outcome} finalization`;
+    const finalize =
+      params.outcome === "recovered" ? completeSessionDelivery : moveSessionDeliveryToFailed;
+    await finalize(params.entry.id, params.queueContext);
     return true;
   } catch (error) {
-    params.log.error(
-      `session delivery: ${params.outcome} finalization failed for ${params.entry.id}: ${String(error)}`,
-    );
+    params.log.error(`session delivery: ${phase} failed for ${params.entry.id}: ${String(error)}`);
     return false;
   }
 }

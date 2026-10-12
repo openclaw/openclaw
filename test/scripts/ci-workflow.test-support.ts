@@ -64,6 +64,7 @@ export function evaluateWorkflowExpression(
       | "schedule";
     failed?: boolean;
     env?: Record<string, string>;
+    secrets?: Record<string, string>;
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
     headRepository?: string;
@@ -209,6 +210,7 @@ export function evaluateWorkflowExpression(
       windows_ci_replay: context.windowsCiReplay ?? "",
     },
     env: context.env ?? {},
+    secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "" },
     steps: {

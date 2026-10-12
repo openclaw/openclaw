@@ -215,10 +215,11 @@ afterEach(async ({ signal }) => {
 });
 
 describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", () => {
-  it.for([false, true])(
-    "kills a TERM-resistant descendant after root settlement, worker thread: %s",
+  it(
+    "kills a TERM-resistant worker-thread descendant after root settlement",
     { timeout: 30_000 },
-    async (workerThread, { signal: testSignal }) => {
+    async ({ signal: testSignal }) => {
+      const workerThread = true;
       vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
       const cwd = tempDirs.make("openclaw-no-detach-proof-");
       const {

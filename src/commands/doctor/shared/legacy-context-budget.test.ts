@@ -6,96 +6,75 @@ import { migrateLegacyContextBudgetConfig } from "./legacy-context-budget.js";
 const noCachedValue = () => undefined;
 
 describe("legacy context-budget config migration", () => {
-  it("bakes provider defaults into explicit models without overwriting model values", () => {
+  it.each([true, false])("migrates provider defaults with explicit models=%s", (hasModels) => {
+    const models = [
+      { id: "default", name: "Default" },
+      { id: "custom", name: "Custom", contextTokens: 8_000, contextWindow: 16_000 },
+    ];
     const raw = {
       models: {
         providers: {
           example: {
             contextTokens: 32_000,
             contextWindow: 64_000,
-            models: [
-              { id: "default", name: "Default" },
-              { id: "custom", name: "Custom", contextTokens: 8_000, contextWindow: 16_000 },
-            ],
+            ...(hasModels ? { models } : {}),
           },
         },
       },
     };
-
     const migrated = migrateLegacyContextBudgetConfig(raw);
     const config = migrated.config as OpenClawConfig;
     const provider = config.models?.providers?.example;
-    const beforeBudget = resolveContextTokensForModelFromCache(
-      { provider: "example", model: "default", modelContextTokens: 32_000 },
-      noCachedValue,
-      noCachedValue,
-    );
-    const afterBudget = resolveContextTokensForModelFromCache(
-      { cfg: config, provider: "example", model: "default" },
-      noCachedValue,
-      noCachedValue,
-    );
-
-    expect(afterBudget).toBe(beforeBudget);
     expect(provider).not.toHaveProperty("contextTokens");
     expect(provider).not.toHaveProperty("contextWindow");
-    expect(provider?.models).toMatchObject([
-      { contextTokens: 32_000, contextWindow: 64_000 },
-      { contextTokens: 8_000, contextWindow: 16_000 },
-    ]);
-    expect(migrated.changes).toEqual([
-      {
-        path: "models.providers.example.contextTokens",
-        message:
-          "models.providers.example.contextTokens → models.providers.example.models[0].contextTokens.",
-      },
-      {
-        path: "models.providers.example.contextTokens",
-        message:
-          "Removed models.providers.example.contextTokens after baking it into explicit model entries.",
-      },
-      {
-        path: "models.providers.example.contextWindow",
-        message:
-          "models.providers.example.contextWindow → models.providers.example.models[0].contextWindow.",
-      },
-      {
-        path: "models.providers.example.contextWindow",
-        message:
-          "Removed models.providers.example.contextWindow after baking it into explicit model entries.",
-      },
-    ]);
-    expect(migrated.warnings).toEqual([]);
-  });
-
-  it("removes provider defaults without model entries and names the replacement", () => {
-    const migrated = migrateLegacyContextBudgetConfig({
-      models: { providers: { example: { contextTokens: 32_000, contextWindow: 64_000 } } },
+    if (hasModels) {
+      expect(
+        resolveContextTokensForModelFromCache(
+          { cfg: config, provider: "example", model: "default" },
+          noCachedValue,
+          noCachedValue,
+        ),
+      ).toBe(
+        resolveContextTokensForModelFromCache(
+          { provider: "example", model: "default", modelContextTokens: 32_000 },
+          noCachedValue,
+          noCachedValue,
+        ),
+      );
+      expect(provider?.models).toMatchObject([
+        { contextTokens: 32_000, contextWindow: 64_000 },
+        { contextTokens: 8_000, contextWindow: 16_000 },
+      ]);
+    } else {
+      expect(config).toEqual({ models: { providers: { example: {} } } });
+    }
+    expect(migrated.changes).toEqual(
+      ["contextTokens", "contextWindow"].flatMap((key) => {
+        const path = `models.providers.example.${key}`;
+        return hasModels
+          ? [
+              { path, message: `${path} → models.providers.example.models[0].${key}.` },
+              { path, message: `Removed ${path} after baking it into explicit model entries.` },
+            ]
+          : [{ path, message: `Removed ${path}.` }];
+      }),
+    );
+    expect(migrated.warnings).toEqual(
+      hasModels
+        ? []
+        : ["contextTokens", "contextWindow"].map((key) => ({
+            path: `models.providers.example.${key}`,
+            message: `models.providers.example.${key} had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.`,
+          })),
+    );
+    const repeated = migrateLegacyContextBudgetConfig(migrated.config);
+    expect(repeated.config).toBe(migrated.config);
+    expect(repeated).toEqual({
+      config: migrated.config,
+      changed: false,
+      changes: [],
+      warnings: [],
     });
-
-    expect(migrated.config).toEqual({ models: { providers: { example: {} } } });
-    expect(migrated.changes).toEqual([
-      {
-        path: "models.providers.example.contextTokens",
-        message: "Removed models.providers.example.contextTokens.",
-      },
-      {
-        path: "models.providers.example.contextWindow",
-        message: "Removed models.providers.example.contextWindow.",
-      },
-    ]);
-    expect(migrated.warnings).toEqual([
-      {
-        path: "models.providers.example.contextTokens",
-        message:
-          "models.providers.example.contextTokens had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.",
-      },
-      {
-        path: "models.providers.example.contextWindow",
-        message:
-          "models.providers.example.contextWindow had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.",
-      },
-    ]);
   });
 
   it("removes every agent-level cap surface and is idempotent", () => {
@@ -134,16 +113,5 @@ describe("legacy context-budget config migration", () => {
       warnings: [],
     });
     expect(raw.agents.defaults).toHaveProperty("contextTokens", 128_000);
-  });
-
-  it("returns the original canonical config without cloning or changes", () => {
-    const canonical = {
-      models: { providers: { example: { models: [{ id: "model", contextTokens: 16_000 }] } } },
-    };
-
-    const migrated = migrateLegacyContextBudgetConfig(canonical);
-
-    expect(migrated.config).toBe(canonical);
-    expect(migrated).toEqual({ config: canonical, changed: false, changes: [], warnings: [] });
   });
 });

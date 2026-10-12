@@ -18,7 +18,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
@@ -65,9 +65,9 @@ export function projectResolvedProfileAuth(params: {
   const credential = params.store.profiles[params.profileId];
   const ref =
     credential?.type === "api_key"
-      ? coerceSecretRef(credential.keyRef)
+      ? parseSecretRef(credential.keyRef)
       : credential?.type === "token"
-        ? coerceSecretRef(credential.tokenRef)
+        ? parseSecretRef(credential.tokenRef)
         : null;
   return {
     apiKey:
@@ -143,11 +143,7 @@ export function getCustomProviderApiKey(
   if (!ref) {
     return normalizeOptionalSecretInput(providerConfig?.apiKey);
   }
-  if (ref.source === "env") {
-    const envId = ref.id.trim();
-    return envId || NON_ENV_SECRETREF_MARKER;
-  }
-  return NON_ENV_SECRETREF_MARKER;
+  return (ref.source === "env" && ref.id.trim()) || NON_ENV_SECRETREF_MARKER;
 }
 
 type ResolvedCustomProviderApiKey = {
@@ -215,7 +211,6 @@ export function resolveUsableCustomProviderApiKey(params: {
   }
   if (
     customProviderConfig &&
-    isCustomLocalProviderConfig(customProviderConfig) &&
     (customProviderConfig.api === "openai-completions" || customProviderConfig.api === "ollama") &&
     customProviderConfig.baseUrl &&
     isLocalAuthProviderBaseUrl(customProviderConfig.baseUrl)
@@ -341,15 +336,14 @@ function normalizeProviderEntryBaseUrlForBinding(baseUrl: string | undefined): s
   if (!trimmed) {
     return undefined;
   }
-  try {
-    const parsed = new URL(trimmed);
-    parsed.hash = "";
-    parsed.search = "";
-    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
-    return parsed.toString().replace(/\/+$/, "");
-  } catch {
+  const parsed = URL.parse(trimmed);
+  if (!parsed) {
     return trimmed.toLowerCase().replace(/\/+$/, "");
   }
+  parsed.hash = "";
+  parsed.search = "";
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+  return parsed.toString().replace(/\/+$/, "");
 }
 
 function providerEntriesShareBaseUrl(params: {
@@ -373,7 +367,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
 }
 
 /** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
-export function canUseProfileAsProviderEntryApiKey(params: {
+function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
@@ -382,14 +376,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
   if (!isBearerProfileCredential(params.credential)) {
     return false;
   }
-  if (
-    isStoredCredentialCompatibleWithAuthProvider({
-      cfg: params.cfg,
-      authAliasLookupParams: params.authAliasLookupParams,
-      provider: params.provider,
-      credential: params.credential,
-    })
-  ) {
+  if (isStoredCredentialCompatibleWithAuthProvider(params)) {
     return true;
   }
   // Split-provider entries may intentionally point at the same upstream endpoint
@@ -534,7 +521,7 @@ function isLocalAuthProviderBaseUrl(baseUrl: string): boolean {
 function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
   return (
     normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
-    coerceSecretRef(providerConfig.apiKey) !== null
+    parseSecretRef(providerConfig.apiKey) !== null
   );
 }
 
@@ -658,7 +645,7 @@ export function sentinelizeConfigSecretRefEnvApiKey(params: {
   }
   const sourceConfig = resolveProviderSourceConfig(params.cfg, params.provider);
   const configured = resolveMergedModelProviderConfig(sourceConfig, params.provider)?.apiKey;
-  const ref = coerceSecretRef(configured);
+  const ref = parseSecretRef(configured);
   const envId =
     ref?.source === "env"
       ? ref.id

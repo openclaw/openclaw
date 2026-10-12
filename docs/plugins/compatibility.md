@@ -127,6 +127,12 @@ cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for
 triage; use the published-artifact sweep before authorizing removal.
 
+The deprecated `sourceVisibleReplies` harness field remains supported because
+July 2026 releases of `@openclaw/codex` still produce it. Use
+[`deliveryDefaults.visibleReplies`](/plugins/sdk-agent-harness/sessions-and-results#harness-delivery-defaults)
+in new plugins. Terminal-result aliases also remain supported for published
+producers, including `openclaw-deepseek-harness@0.2.0`.
+
 ### Session-store bridge retirement
 
 The SDK owner approved retiring `deprecated-session-store-beta5-api` on
@@ -150,10 +156,11 @@ and legacy-state import and Doctor migrations remain unchanged.
 ### Synchronous plugin state
 
 `plugin-state-sync-keyed-store` names the existing synchronous keyed-store adapter.
-Its September 11, 2026 deprecation uses the `next-plugin-sdk-major` removal gate,
-with editor annotations and documentation rather than new runtime warnings.
+Its September 11, 2026 deprecation uses the `next-plugin-sdk-major` removal gate.
+Actual legacy calls emit one diagnostic per plugin and capability family per
+Gateway process; module imports remain silent.
 Existing synchronous methods, plugin trust eligibility, and transactional callback
-semantics remain unchanged. Migrate to awaited `openKeyedStore` operations using
+semantics remain unchanged. Migrate to data-only `openKeyedStoreV2` operations using
 the [state-store migration guide](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
 Removal still requires a supported external-plugin migration and explicit
 breaking-release approval.

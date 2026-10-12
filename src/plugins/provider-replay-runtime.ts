@@ -8,7 +8,6 @@ import {
 import type {
   ProviderReasoningOutputMode,
   ProviderReasoningOutputModeContext,
-  ProviderSanitizeReplayHistoryContext,
   ProviderSanitizeReplayHistoryContextV2,
   ProviderValidateReplayTurnsContext,
 } from "./provider-replay.types.js";
@@ -17,13 +16,6 @@ type ProviderReplayRuntimeLookup = Pick<
   Parameters<typeof resolveProviderRuntimePlugin>[0],
   "provider" | "config" | "workspaceDir" | "env"
 >;
-
-export async function sanitizeProviderReplayHistoryWithPlugin(
-  params: ProviderReplayRuntimeLookup & { context: ProviderSanitizeReplayHistoryContext },
-): Promise<AgentMessage[] | null | undefined> {
-  const plugin = resolveProviderRuntimePlugin(params);
-  return await plugin?.sanitizeReplayHistory?.(params.context);
-}
 
 /** Prefer worker-backed hooks; retain the legacy hook solely for third-party providers. */
 export async function sanitizeProviderReplayHistoryWithPluginAsync(
@@ -37,6 +29,7 @@ export async function sanitizeProviderReplayHistoryWithPluginAsync(
     warnSessionPersistenceDeprecation(
       "ProviderPlugin.sanitizeReplayHistory",
       "sanitizeReplayHistoryAsync",
+      plugin.pluginId ? { pluginId: plugin.pluginId } : undefined,
     );
     return await plugin.sanitizeReplayHistory(params.context);
   }

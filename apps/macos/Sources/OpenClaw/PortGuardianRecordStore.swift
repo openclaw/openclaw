@@ -71,6 +71,9 @@ final class PortGuardianRecordStore: @unchecked Sendable {
         let database: OpenClawNativeStateSQLite
         do {
             database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
+            try database.withImmediateTransaction {
+                try database.ensureCanonicalTable(.macosPortGuardianRecords)
+            }
         } catch {
             Self.closeLegacyLock(legacyLockDescriptor)
             throw Self.storeError(error)
@@ -78,35 +81,21 @@ final class PortGuardianRecordStore: @unchecked Sendable {
         self.database = database
         self.legacyLockDescriptor = legacyLockDescriptor
         self.removeLegacySource = removeLegacySource
-        do {
-            try self.database.withImmediateTransaction {
-                try self.database.ensureCanonicalTable(.macosPortGuardianRecords)
-            }
-        } catch {
-            Self.closeLegacyLock(legacyLockDescriptor)
-            throw Self.storeError(error)
-        }
     }
 
     deinit {
         Self.closeLegacyLock(self.legacyLockDescriptor)
     }
 
-    func records() throws -> [PortGuardian.Record] {
-        try self.readRecords()
-    }
-
     @discardableResult
     func upsert(_ record: PortGuardian.Record) throws -> PortGuardian.Record {
         try Self.validate(record)
-        return try self.mapDatabaseError {
-            try self.withValidatedMutationTransaction {
-                try self.upsertUnlocked(record)
-                guard try self.readRecord(pid: record.pid) == record else {
-                    throw PortGuardianStoreError("SQLite did not preserve the PortGuardian record receipt")
-                }
-                return record
+        return try self.withValidatedMutationTransaction {
+            try self.upsertUnlocked(record)
+            guard try self.readRecord(pid: record.pid) == record else {
+                throw PortGuardianStoreError("SQLite did not preserve the PortGuardian record receipt")
             }
+            return record
         }
     }
 
@@ -118,14 +107,8 @@ final class PortGuardianRecordStore: @unchecked Sendable {
     @discardableResult
     func deleteIfMatches(_ records: [PortGuardian.Record]) throws -> [PortGuardian.Record] {
         try records.forEach(Self.validate)
-        return try self.mapDatabaseError {
-            try self.withValidatedMutationTransaction {
-                var deleted: [PortGuardian.Record] = []
-                for record in records where try self.deleteIfMatchesUnlocked(record) {
-                    deleted.append(record)
-                }
-                return deleted
-            }
+        return try self.withValidatedMutationTransaction {
+            try records.filter { try self.deleteIfMatchesUnlocked($0) }
         }
     }
 
@@ -149,7 +132,7 @@ final class PortGuardianRecordStore: @unchecked Sendable {
         guard let legacyLockDescriptor else {
             throw PortGuardianStoreError("Legacy PortGuardian migration requires its compatibility lock")
         }
-        return try self.withLegacyCoordinationLock {
+        return try self.legacyCoordinationLock.withLock {
             guard let source = try Self.withExclusiveLegacyLock(legacyLockDescriptor, body: {
                 try Self.readLegacySource(recordURL)
             }) else { return 0 }
@@ -176,12 +159,6 @@ final class PortGuardianRecordStore: @unchecked Sendable {
                 return byPID.count
             }
         }
-    }
-
-    private func withLegacyCoordinationLock<T>(_ body: () throws -> T) rethrows -> T {
-        self.legacyCoordinationLock.lock()
-        defer { self.legacyCoordinationLock.unlock() }
-        return try body()
     }
 
     private static func decodeLegacyRecords(_ data: Data) throws -> [Int32: PortGuardian.Record] {
@@ -225,33 +202,31 @@ final class PortGuardianRecordStore: @unchecked Sendable {
     }
 
     private func applyLegacyMigration(_ plans: [LegacyMigrationPlan]) throws {
-        try self.mapDatabaseError {
-            try self.withValidatedMutationTransaction {
-                for plan in plans {
-                    let authoritative = try self.readRecord(pid: plan.legacy.pid)
-                    guard authoritative == plan.expected else {
-                        throw PortGuardianStoreError(
-                            "SQLite PortGuardian row changed while migrating pid \(plan.legacy.pid)")
-                    }
-                    switch (authoritative, plan.selected) {
-                    case let (existing?, selected?) where existing != selected:
-                        try self.upsertUnlocked(selected)
-                    case let (existing?, nil):
-                        guard try self.deleteIfMatchesUnlocked(existing) else {
-                            throw PortGuardianStoreError(
-                                "Could not retire stale PortGuardian pid \(existing.pid)")
-                        }
-                    case (nil, let selected?):
-                        try self.upsertUnlocked(selected)
-                    default:
-                        break
-                    }
+        try self.withValidatedMutationTransaction {
+            for plan in plans {
+                let authoritative = try self.readRecord(pid: plan.legacy.pid)
+                guard authoritative == plan.expected else {
+                    throw PortGuardianStoreError(
+                        "SQLite PortGuardian row changed while migrating pid \(plan.legacy.pid)")
                 }
-                for plan in plans {
-                    guard try self.readRecord(pid: plan.legacy.pid) == plan.selected else {
+                switch (authoritative, plan.selected) {
+                case let (existing?, selected?) where existing != selected:
+                    try self.upsertUnlocked(selected)
+                case let (existing?, nil):
+                    guard try self.deleteIfMatchesUnlocked(existing) else {
                         throw PortGuardianStoreError(
-                            "SQLite did not preserve migrated PortGuardian record pid \(plan.legacy.pid)")
+                            "Could not retire stale PortGuardian pid \(existing.pid)")
                     }
+                case (nil, let selected?):
+                    try self.upsertUnlocked(selected)
+                default:
+                    break
+                }
+            }
+            for plan in plans {
+                guard try self.readRecord(pid: plan.legacy.pid) == plan.selected else {
+                    throw PortGuardianStoreError(
+                        "SQLite did not preserve migrated PortGuardian record pid \(plan.legacy.pid)")
                 }
             }
         }
@@ -260,11 +235,13 @@ final class PortGuardianRecordStore: @unchecked Sendable {
     /// A store can outlive another runtime's schema upgrade. Revalidate under the
     /// write lock so an older native client never mutates a newer database contract.
     private func withValidatedMutationTransaction<T>(_ body: () throws -> T) throws -> T {
-        try self.database.withImmediateTransaction {
-            try self.database.ensureCanonicalTable(
-                .macosPortGuardianRecords,
-                allowVersionZeroCreation: false)
-            return try body()
+        try self.mapDatabaseError {
+            try self.database.withImmediateTransaction {
+                try self.database.ensureCanonicalTable(
+                    .macosPortGuardianRecords,
+                    allowVersionZeroCreation: false)
+                return try body()
+            }
         }
     }
 
@@ -279,7 +256,7 @@ final class PortGuardianRecordStore: @unchecked Sendable {
         return LegacySource(snapshot: before, data: data)
     }
 
-    private func readRecords() throws -> [PortGuardian.Record] {
+    func records() throws -> [PortGuardian.Record] {
         try self.mapDatabaseError {
             let statement = try self.database.prepare("""
             SELECT port, pid, command, mode, timestamp
@@ -396,7 +373,6 @@ final class PortGuardianRecordStore: @unchecked Sendable {
     }
 
     private static func storeError(_ error: Error) -> Error {
-        if let error = error as? PortGuardianStoreError { return error }
         if let error = error as? OpenClawNativeStateError {
             return PortGuardianStoreError(error.message)
         }

@@ -6,6 +6,7 @@ import {
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import {
   extractCanvasShortcodes,
   isCanvasBoardWidgetName,
@@ -280,71 +281,57 @@ function inferAttachmentKind(url: string): {
   return { kind, mimeType, label };
 }
 
-function coerceAudioContentBlock(
-  item: Record<string, unknown>,
-): Extract<MessageContentItem, { type: "attachment" }> | null {
-  if (item.type !== "audio") {
-    return null;
-  }
-  const source = asOptionalRecord(item.source);
-  if (!source) {
-    return null;
-  }
-  const rawMediaType = readStringField(source, "media_type")?.trim();
-  const mediaType = rawMediaType?.toLowerCase().startsWith("audio/") ? rawMediaType : "audio/mpeg";
-  const type = source.type;
-  const data = readStringField(source, type === "base64" ? "data" : "url")?.trim();
-  if (!data || (type !== "base64" && type !== "url")) {
-    return null;
-  }
-  const url =
-    type === "base64" && !data.startsWith("data:") ? `data:${mediaType};base64,${data}` : data;
-  return {
-    type: "attachment",
-    attachment: {
-      url,
-      kind: "audio",
-      label: readStringField(item, "label")?.trim() || "Audio",
-      mimeType: mediaType,
-      ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
-    },
-  };
-}
-
-function coerceManagedMediaContentBlock(
+function coerceMediaContentBlock(
   item: Record<string, unknown>,
 ): Extract<MessageContentItem, { type: "attachment" }> | null {
   const kind = item.type;
-  const url = readStringField(item, "url")?.trim();
-  if ((kind !== "audio" && kind !== "video") || !url) {
+  const managedUrl = readStringField(item, "url")?.trim();
+  if (kind !== "audio" && kind !== "video") {
     return null;
+  }
+  let url = managedUrl;
+  let mimeType = managedUrl ? readStringField(item, "mimeType") : undefined;
+  if (!url) {
+    const source = kind === "audio" ? asOptionalRecord(item.source) : undefined;
+    if (!source) {
+      return null;
+    }
+    const rawMediaType = readStringField(source, "media_type")?.trim();
+    mimeType = rawMediaType?.toLowerCase().startsWith("audio/") ? rawMediaType : "audio/mpeg";
+    const type = source.type;
+    const data = readStringField(source, type === "base64" ? "data" : "url")?.trim();
+    if (!data || (type !== "base64" && type !== "url")) {
+      return null;
+    }
+    url = type === "base64" && !data.startsWith("data:") ? `data:${mimeType};base64,${data}` : data;
   }
   const attachment: Extract<MessageContentItem, { type: "attachment" }>["attachment"] = {
     url,
     kind,
     label:
-      readStringField(item, "fileName")?.trim() ||
+      (managedUrl ? readStringField(item, "fileName")?.trim() : undefined) ||
       readStringField(item, "label")?.trim() ||
       (kind === "audio" ? "Audio" : "Video"),
+    ...(mimeType !== undefined ? { mimeType } : {}),
   };
-  for (const key of ["mimeType", "artifactId"] as const) {
-    const value = readStringField(item, key);
-    if (value !== undefined) {
-      attachment[key] = value;
-    }
+  const artifactId = managedUrl ? readStringField(item, "artifactId") : undefined;
+  if (artifactId !== undefined) {
+    attachment.artifactId = artifactId;
   }
   if (kind === "audio" && item.isVoiceNote === true) {
     attachment.isVoiceNote = true;
   }
-  const playback = item.playback;
-  if (playback === "native" || playback === "transcode") {
-    attachment.playback = playback;
-  }
-  for (const key of ["sizeBytes", "durationMs", "width", "height"] as const) {
-    const value = asFiniteNumber(item[key]);
-    const dimension = key === "width" || key === "height";
-    if (value !== undefined && (dimension ? kind === "video" && value > 0 : value >= 0)) {
-      attachment[key] = value;
+  if (managedUrl) {
+    const playback = item.playback;
+    if (playback === "native" || playback === "transcode") {
+      attachment.playback = playback;
+    }
+    for (const key of ["sizeBytes", "durationMs", "width", "height"] as const) {
+      const value = asFiniteNumber(item[key]);
+      const dimension = key === "width" || key === "height";
+      if (value !== undefined && (dimension ? kind === "video" && value > 0 : value >= 0)) {
+        attachment[key] = value;
+      }
     }
   }
   return { type: "attachment", attachment };
@@ -363,13 +350,22 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
+function stripMessageDisplayMetadata(
+  items: MessageContentItem[],
+  role: string,
+): MessageContentItem[] {
   return items
     .map((item) => {
       if (item.type !== "text" || typeof item.text !== "string") {
         return item;
       }
-      return { ...item, text: stripInboundMetadata(item.text) };
+      return {
+        ...item,
+        text:
+          role.toLowerCase() === "user"
+            ? stripUserEnvelopeForDisplay(item.text)
+            : stripInboundMetadata(item.text),
+      };
     })
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
@@ -389,10 +385,7 @@ function expandTextContent(
   text: string,
   delivery: MessageDelivery | undefined,
   projectedCanvasPreviews: readonly CanvasPreview[],
-): {
-  content: MessageContentItem[];
-  audioAsVoice: boolean;
-} {
+): MessageContentItem[] {
   const extracted = extractCanvasShortcodes(text);
   const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
   const parts: MessageContentItem[] = [];
@@ -434,15 +427,11 @@ function expandTextContent(
 
   const content = mergeAdjacentTextItems(parts);
 
-  return {
-    content:
-      content.length > 0
-        ? content
-        : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
-          ? [{ type: "text", text: parsed.text }]
-          : [],
-    audioAsVoice,
-  };
+  return content.length > 0
+    ? content
+    : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
+      ? [{ type: "text", text: parsed.text }]
+      : [];
 }
 
 const normalizedMessages = new WeakMap<object, NormalizedMessage>();
@@ -476,15 +465,16 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   let content: MessageContentItem[] = [];
   let audioAsVoice = false;
   let replyTarget = resolveDeliveryReplyTarget(delivery);
+  const normalizeText = (text: string, block = false): MessageContentItem[] => {
+    if (!isAssistantMessage) {
+      return [{ type: "text", text, ...(block ? { name: undefined, args: undefined } : {}) }];
+    }
+    audioAsVoice = delivery?.audioAsVoice === true;
+    return expandTextContent(text, delivery, projectedCanvasPreviews);
+  };
 
   if (typeof contentRaw === "string") {
-    if (isAssistantMessage) {
-      const expanded = expandTextContent(contentRaw, delivery, projectedCanvasPreviews);
-      content = expanded.content;
-      audioAsVoice = expanded.audioAsVoice;
-    } else {
-      content = [{ type: "text", text: contentRaw }];
-    }
+    content = normalizeText(contentRaw);
   } else if (contentItems) {
     content = contentItems.flatMap((value) => {
       const item = asOptionalRecord(value);
@@ -510,13 +500,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         return thinking === undefined ? [] : [{ type, thinking }];
       }
       if (isAssistantMessage) {
-        const managedMediaAttachment = coerceManagedMediaContentBlock(item);
-        if (managedMediaAttachment) {
-          return [managedMediaAttachment];
-        }
-        const audioAttachment = coerceAudioContentBlock(item);
-        if (audioAttachment) {
-          return [audioAttachment];
+        const attachment = coerceMediaContentBlock(item);
+        if (attachment) {
+          return [attachment];
         }
       } else if (type === "audio") {
         return [];
@@ -543,19 +529,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           (role === "user" && type === "input_text") ||
           (role === "assistant" && (type === "input_text" || type === "output_text")))
       ) {
-        if (isAssistantMessage) {
-          const expanded = expandTextContent(text, delivery, projectedCanvasPreviews);
-          audioAsVoice = audioAsVoice || expanded.audioAsVoice;
-          return expanded.content;
-        }
-        return [
-          {
-            type: "text" as const,
-            text,
-            name: undefined,
-            args: undefined,
-          },
-        ];
+        return normalizeText(text, true);
       }
       return [
         {
@@ -587,7 +561,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];
 
-  content = stripMessageDisplayMetadata(content);
+  content = stripMessageDisplayMetadata(content, role);
   const senderSession = readMessageSenderSession(m.senderSession);
 
   const normalized: NormalizedMessage = {

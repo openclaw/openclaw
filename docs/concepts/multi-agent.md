@@ -317,6 +317,7 @@ DM access control (pairing/allowlist) is global per WhatsApp account, not per ag
 Bindings are deterministic and most-specific wins. See [Channel routing](/channels/channel-routing#routing-rules-how-an-agent-is-chosen) for the full tier order (exact peer, parent peer, peer wildcard, guild+roles, guild, team, account, channel, fallback owner). A few rules worth calling out here:
 
 - If multiple bindings match within the same tier, the first one in config order wins.
+- With more than one configured agent and no explicit owner, a message that matches no binding is not given to an arbitrary first-listed agent. A configured `agents.defaults.systemAgent.agentId`, retained legacy owner, or caller-supplied owner still catches that unbound traffic; only when no binding matches and no such fallback owner remains is the message left undispatched. A channel that keeps inbound messages for retry (Telegram, for example) may then deliver it later once a binding gives that account an owner, but delivery is not guaranteed. A retryable message is dead-lettered once it reaches both the attempt limit and the minimum age (24 hours by default), and a channel like Telegram can reject an ownerless account at startup, so rebinding delivers the message only while it is still queued and the account is running.
 - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields must match (`AND` semantics).
 - A binding that omits `accountId` matches only the default account, not every account. Use `accountId: "*"` for a channel-wide fallback, or `accountId: "<name>"` for one account. Adding the same binding again with an explicit account id upgrades the existing channel-only binding instead of duplicating it.
 
@@ -354,7 +355,7 @@ Channels that support multiple accounts (e.g. WhatsApp) use `accountId` to ident
 
 Set `channels.<channel>.defaultAccount` to choose the account used when `accountId` is omitted. When unset, OpenClaw falls back to `default` if present, otherwise the first configured account id (sorted).
 
-Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `mattermost`, `matrix`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `telegram`, `whatsapp`, `zalo`, `zalouser`.
+Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `mattermost`, `matrix`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `telegram`, `whatsapp`, `zalo`, `zalouser`.
 
 ## Concepts
 

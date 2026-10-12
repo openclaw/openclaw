@@ -58,28 +58,15 @@ export function shouldUseCodexSyntheticUsageForRuntime(params: {
   );
 }
 
-function hasDisplayableUsageSnapshot(snapshot: ProviderUsageSnapshot): boolean {
-  return (
+function usageSnapshotRank(snapshot: ProviderUsageSnapshot): number {
+  if (
     snapshot.windows.length > 0 ||
     Boolean(snapshot.billing?.length) ||
     Boolean(snapshot.summary?.trim())
-  );
-}
-
-function usageSnapshotRank(snapshot: ProviderUsageSnapshot): number {
-  if (hasDisplayableUsageSnapshot(snapshot)) {
+  ) {
     return 2;
   }
   return snapshot.error ? 0 : 1;
-}
-
-type Precedence<T> = [preferred: T, secondary: T];
-function byPrecedence<T>(candidate: T, existing: T, rank: (value: T) => number): Precedence<T> {
-  const candidateRank = rank(candidate);
-  const existingRank = rank(existing);
-  return candidateRank >= existingRank && !(candidateRank === 0 && existingRank === 0)
-    ? [candidate, existing]
-    : [existing, candidate];
 }
 
 function billingEntryKey(entry: ProviderUsageBilling): string {
@@ -87,9 +74,16 @@ function billingEntryKey(entry: ProviderUsageBilling): string {
   return [entry.type, entry.label ?? "", entry.unit, period].join("\0");
 }
 
-function mergeBilling([preferred, secondary]: Precedence<ProviderUsageSnapshot>):
-  | ProviderUsageBilling[]
-  | undefined {
+function mergeUsageSnapshots(
+  candidate: ProviderUsageSnapshot,
+  existing: ProviderUsageSnapshot,
+): ProviderUsageSnapshot {
+  const candidateRank = usageSnapshotRank(candidate);
+  const existingRank = usageSnapshotRank(existing);
+  const preferCandidate =
+    candidateRank >= existingRank && !(candidateRank === 0 && existingRank === 0);
+  const preferred = preferCandidate ? candidate : existing;
+  const secondary = preferCandidate ? existing : candidate;
   const entries = new Map<string, ProviderUsageBilling>();
   for (const entry of secondary.billing ?? []) {
     entries.set(billingEntryKey(entry), entry);
@@ -97,12 +91,7 @@ function mergeBilling([preferred, secondary]: Precedence<ProviderUsageSnapshot>)
   for (const entry of preferred.billing ?? []) {
     entries.set(billingEntryKey(entry), entry);
   }
-  return entries.size > 0 ? [...entries.values()] : undefined;
-}
-
-function mergeUsageSnapshots(precedence: Precedence<ProviderUsageSnapshot>): ProviderUsageSnapshot {
-  const [preferred, secondary] = precedence;
-  const billing = mergeBilling(precedence);
+  const billing = entries.size > 0 ? [...entries.values()] : undefined;
   // Preserve complementary plan/billing data while the preferred source owns windows/errors.
   return {
     ...secondary,
@@ -138,10 +127,7 @@ export function mergeUsageSummaries(
       continue;
     }
     // Preserve concrete endpoint errors; synthetic data wins equal displayable ranks.
-    providersById.set(
-      provider.provider,
-      mergeUsageSnapshots(byPrecedence(provider, existing, usageSnapshotRank)),
-    );
+    providersById.set(provider.provider, mergeUsageSnapshots(provider, existing));
   }
   return {
     updatedAt: base.updatedAt,

@@ -104,7 +104,7 @@ export type RepositoryGitHubPublicationStatusRow = ReturnType<
   typeof projectRepositoryGitHubPublicationStatus
 >;
 
-type RepositoryGitHubPublicationFilter = {
+export type RepositoryGitHubPublicationFilter = {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
@@ -120,27 +120,17 @@ function selectRepositoryGitHubPublications(
   filter: RepositoryGitHubPublicationFilter,
 ) {
   let selection = query(db).selectFrom(table).selectAll();
-  if (filter.sessionId !== undefined) {
-    selection = selection.where("session_id", "=", filter.sessionId);
-  }
-  if (filter.sessionKey !== undefined) {
-    selection = selection.where("session_key", "=", filter.sessionKey);
-  }
-  if (filter.agentId !== undefined) {
-    selection = selection.where("agent_id", "=", filter.agentId);
-  }
-  if (filter.workspaceId !== undefined) {
-    selection = selection.where("workspace_id", "=", filter.workspaceId);
-  }
-  if (filter.ownerProfileId !== undefined) {
-    selection = selection.where(
-      "owner_profile_id",
-      filter.ownerProfileId === null ? "is" : "=",
-      filter.ownerProfileId,
-    );
-  }
-  if (filter.idempotencyKey !== undefined) {
-    selection = selection.where("idempotency_key", "=", filter.idempotencyKey);
+  for (const [column, value] of [
+    ["session_id", filter.sessionId],
+    ["session_key", filter.sessionKey],
+    ["agent_id", filter.agentId],
+    ["workspace_id", filter.workspaceId],
+    ["owner_profile_id", filter.ownerProfileId],
+    ["idempotency_key", filter.idempotencyKey],
+  ] as const) {
+    if (value !== undefined) {
+      selection = selection.where(column, value === null ? "is" : "=", value);
+    }
   }
   if (filter.pending !== undefined) {
     selection = selection.where(

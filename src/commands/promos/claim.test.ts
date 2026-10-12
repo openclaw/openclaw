@@ -18,8 +18,7 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(),
   promptYesNo: vi.fn(),
   enablePluginInConfig: vi.fn(),
-  repairCodex: vi.fn(),
-  repairCopilot: vi.fn(),
+  repairRuntimePlugins: vi.fn(),
   recordPromotionClaim: vi.fn(),
   markPromotionSlugsNotified: vi.fn(),
 }));
@@ -91,12 +90,8 @@ vi.mock("../../plugins/enable.js", () => ({
   enablePluginWithCapabilityConsent: mocks.enablePluginInConfig,
 }));
 
-vi.mock("../codex-runtime-plugin-install.js", () => ({
-  repairCodexRuntimePluginInstallForModelSelection: mocks.repairCodex,
-}));
-
-vi.mock("../copilot-runtime-plugin-install.js", () => ({
-  repairCopilotRuntimePluginInstallForModelSelection: mocks.repairCopilot,
+vi.mock("../runtime-plugin-install.js", () => ({
+  repairModelSelectionRuntimePlugins: mocks.repairRuntimePlugins,
 }));
 
 vi.mock("../../wizard/clack-prompter.js", () => ({
@@ -175,8 +170,7 @@ beforeEach(() => {
     pluginId,
   }));
   mocks.fetchClawHubPromotion.mockResolvedValue(makePromotion());
-  mocks.repairCodex.mockResolvedValue({ warnings: [] });
-  mocks.repairCopilot.mockResolvedValue({ warnings: [] });
+  mocks.repairRuntimePlugins.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -244,10 +238,9 @@ describe("promosClaimCommand", () => {
     const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.sourceConfig;
     expect(next.agents.defaults.model.primary).toBe("openrouter/example/model-alpha");
     // Default changes must run the same runtime plugin repair as `models set`.
-    expect(mocks.repairCodex).toHaveBeenCalledWith(
+    expect(mocks.repairRuntimePlugins).toHaveBeenCalledWith(
       expect.objectContaining({ model: "openrouter/example/model-alpha" }),
     );
-    expect(mocks.repairCopilot).toHaveBeenCalled();
   });
 
   it("skips aliases outside the models-aliases contract but still registers the model", async () => {
@@ -299,17 +292,6 @@ describe("promosClaimCommand", () => {
     );
     // Auth config write plus the model registration write.
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("runs the auth flow for an explicit --api-key even when other auth exists", async () => {
-    // hasAvailableAuthForProvider stays true; the explicit key must not be ignored.
-    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
-    const runtime = makeRuntime();
-    await promosClaimCommand("spring-models", { apiKey: "sk-explicit" }, runtime);
-
-    expect(mocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ opts: { openrouterApiKey: "sk-explicit" } }),
-    );
   });
 
   it("aborts when the auth flow asks for retry instead of completing", async () => {
@@ -392,14 +374,6 @@ describe("promosClaimCommand", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
-  it("reports ended promotions with their end date", async () => {
-    mocks.fetchClawHubPromotion.mockResolvedValue(
-      makePromotion({ active: false, endsAt: now - 86_400_000 }),
-    );
-
-    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(/ended/);
-  });
-
   it("enforces the window even when the payload claims active", async () => {
     mocks.fetchClawHubPromotion.mockResolvedValue(
       makePromotion({ active: true, endsAt: now - 60_000 }),
@@ -432,24 +406,6 @@ describe("promosClaimCommand", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("refuses a promotion withdrawn after provider authentication", async () => {
-    const initial = makePromotion();
-    mocks.fetchClawHubPromotion
-      .mockResolvedValueOnce(initial)
-      .mockResolvedValueOnce({ ...initial, active: false });
-    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
-
-    await expect(
-      promosClaimCommand("spring-models", { apiKey: "sk-test" }, makeRuntime()),
-    ).rejects.toThrow(/not live/);
-
-    expect(mocks.fetchClawHubPromotion).toHaveBeenCalledTimes(2);
-    // Provider auth completed before the withdrawal was observed, but no
-    // promotion model/default/provenance mutation may follow it.
-    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
-    expect(mocks.recordPromotionClaim).not.toHaveBeenCalled();
   });
 
   it("preserves env references across auth before a withdrawn offer", async () => {

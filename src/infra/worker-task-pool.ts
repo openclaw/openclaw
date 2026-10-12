@@ -1,4 +1,5 @@
-import { WorkerTaskPoolCore } from "./worker-task-pool-core.js";
+import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
+import { createWorkerTaskHost } from "./worker-task-host.js";
 import type {
   WorkerTaskInput,
   WorkerTaskOptions,
@@ -7,7 +8,7 @@ import type {
   OwnedWorkerTaskOptions,
 } from "./worker-task-pool.types.js";
 
-export { WorkerTaskError } from "./worker-task-pool-core.js";
+export { WorkerTaskError } from "@openclaw/worker-runtime";
 export type { WorkerTaskResponse } from "./worker-task-pool.types.js";
 
 /** Existing SDK surface; task custody remains an internal capability. */
@@ -15,10 +16,14 @@ export class WorkerTaskPool<Input, Output> {
   private readonly core: WorkerTaskPoolCore<Input, Output>;
 
   constructor(options: WorkerTaskPoolOptions<Output>) {
-    this.core = new WorkerTaskPoolCore<Input, Output>(options, {
-      close: (error) => this.close(error),
-      getSnapshot: () => this.getSnapshot(),
-    });
+    this.core = new WorkerTaskPoolCore<Input, Output>(
+      options,
+      createWorkerTaskHost(undefined, options.workerClass),
+      {
+        close: (error) => this.close(error),
+        getSnapshot: () => this.getSnapshot(),
+      },
+    );
   }
 
   run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
@@ -51,7 +56,12 @@ export function createOwnedWorkerTaskPool<Input, Output>(
   options: WorkerTaskPoolOptions<Output>,
   ownerOptions?: WorkerTaskPoolOwnerOptions,
 ) {
-  const core = new WorkerTaskPoolCore<Input, Output>(options, undefined, ownerOptions);
+  const core = new WorkerTaskPoolCore<Input, Output>(
+    options,
+    createWorkerTaskHost(ownerOptions, options.workerClass),
+    undefined,
+    ownerOptions,
+  );
   return {
     run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
       core.run(input, taskOptions),

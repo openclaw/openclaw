@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { serializeCacheTtlToolResultProjections } from "./cache-ttl-checkpoint.js";
 import { makeCompactionSuccess, makeOverflowError } from "./run.overflow-compaction.fixture.js";
 import {
   mockedCompactDirect,
@@ -172,16 +173,19 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it("recovers a successor transcript from its own frozen tool projection", async () => {
     const { SessionManager } = await import("../sessions/session-manager.js");
-    const { getEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
+    const { retainEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
       await import("./session-prompt-state.js");
     const actualTruncation = await vi.importActual<typeof import("./tool-result-truncation.js")>(
       "./tool-result-truncation.js",
     );
     const { truncateOversizedToolResultsInSessionManager } =
       await import("./tool-result-truncation.js");
-    vi.mocked(truncateOversizedToolResultsInSessionManager).mockImplementation(
-      actualTruncation.truncateOversizedToolResultsInSessionManager,
-    );
+    const truncate = vi.mocked(truncateOversizedToolResultsInSessionManager);
+    const previousTruncate = truncate.getMockImplementation();
+    if (!previousTruncate) {
+      throw new Error("expected the shared harness truncation implementation");
+    }
+    truncate.mockImplementation(actualTruncation.truncateOversizedToolResultsInSessionManager);
     const successorId = `${session.runParams.sessionId}-tool-projection-successor`;
     const toolResult = makeTextToolResult(
       "call-exec",
@@ -216,7 +220,8 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       await manager.appendMessageAsync(settledExecAssistant);
       await manager.appendMessageAsync(toolResult);
       const messages = manager.buildSessionContext().messages;
-      const projection = getEmbeddedSessionPromptState(attempt.sessionId).toolResults;
+      using promptStateLease = retainEmbeddedSessionPromptState(attempt.sessionId);
+      const projection = promptStateLease.state.toolResults;
       const projected = actualTruncation
         .truncateOversizedToolResultsInMessages(messages, 200_000, maxChars, undefined, projection)
         .messages.find((message) => message.role === "toolResult");
@@ -235,6 +240,10 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
           .truncateOversizedToolResultsInMessages(messages, 200_000, 112_000, undefined, projection)
           .messages.find((message) => message.role === "toolResult"),
       ).toMatchObject({ content: projected.content });
+      await manager.appendCustomEntryAsync(
+        "openclaw.cache-ttl",
+        serializeCacheTtlToolResultProjections(projection),
+      );
       return { manager, messages, content: projected.content };
     };
     let successor: Awaited<ReturnType<typeof prepareAttemptProjection>> | undefined;
@@ -247,6 +256,11 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       .mockImplementationOnce(async (attempt) => {
         expect(attempt.sessionId).toBe(successorId);
         successor = await prepareAttemptProjection(attempt, 1_000);
+        // Recovery must restore this successor's durable projection, not depend
+        // on retained process memory or borrow the original session's 8k cap.
+        clearEmbeddedSessionPromptStates([successorId]);
+        using restarted = retainEmbeddedSessionPromptState(successorId);
+        expect(restarted.state.toolResults.replacements.size).toBe(0);
         return session.makeAttemptResult({
           ...makeReplayUnsafeMidTurnOverflow(),
           sessionIdUsed: successorId,
@@ -279,6 +293,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
           .messages.find((message) => message.role === "toolResult"),
       ).toMatchObject({ content: successor.content });
     } finally {
+      truncate.mockImplementation(previousTruncate);
       clearEmbeddedSessionPromptStates([session.runParams.sessionId, successorId]);
     }
   });

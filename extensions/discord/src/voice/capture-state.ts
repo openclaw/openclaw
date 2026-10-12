@@ -1,6 +1,6 @@
 import type { Readable } from "node:stream";
 
-type VoiceCaptureEntry = {
+export type VoiceCaptureEntry = {
   stream?: Readable;
   stopInput?: () => void;
   startRecording?: () => void;
@@ -51,16 +51,6 @@ export async function waitForVoiceCaptureAdmission(params: {
     delete params.capture.startRecording;
   }
   return params.isRecordingCurrent() || (await params.conversationAuthorized);
-}
-
-export function beginVoiceCapture(
-  state: VoiceCaptureState,
-  userId: string,
-  stream?: Readable,
-): VoiceCaptureEntry {
-  const capture = { stream };
-  state.set(userId, capture);
-  return capture;
 }
 
 export function finishVoiceCapture(

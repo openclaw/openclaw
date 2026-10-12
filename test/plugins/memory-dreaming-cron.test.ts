@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import memoryCore from "../../extensions/memory-core/index.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../../src/cron/agent-id.js";
@@ -13,15 +13,25 @@ import { createTestGatewayScheduler } from "../../src/test-utils/gateway-schedul
 const { makeStorePath } = createCronStoreHarness({ prefix: "memory-dreaming-cron-" });
 const services = new Set<PluginServicesHandle>();
 const schedulers = new Set<CronService>();
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
+beforeEach(() => {
+  scheduler = createTestGatewayScheduler();
+});
 
 afterEach(async () => {
-  await Promise.all([...services].map((service) => service.stop()));
-  services.clear();
-  for (const cron of schedulers) {
-    cron.stop();
+  scheduler.beginClose();
+  try {
+    await Promise.all([...services].map((service) => service.stop()));
+  } finally {
+    services.clear();
+    for (const cron of schedulers) {
+      cron.stop();
+    }
+    schedulers.clear();
+    await scheduler.stop();
+    vi.useRealTimers();
   }
-  schedulers.clear();
-  vi.useRealTimers();
 });
 
 async function startDreaming(config: OpenClawConfig, getCronService: () => CronService) {
@@ -43,7 +53,7 @@ async function startDreaming(config: OpenClawConfig, getCronService: () => CronS
       },
     }),
   );
-  const handle = await startPluginServices({ registry, config, getCronService });
+  const handle = await startPluginServices({ scheduler, registry, config, getCronService });
   services.add(handle);
   return { handle, logger };
 }
@@ -51,7 +61,7 @@ async function startDreaming(config: OpenClawConfig, getCronService: () => CronS
 async function createScheduler(cronEnabled: boolean, owner?: string) {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
-    scheduler: createTestGatewayScheduler(),
+    scheduler,
     nowMs: () => Date.now(),
     storePath,
     cronEnabled,
@@ -68,7 +78,7 @@ async function createScheduler(cronEnabled: boolean, owner?: string) {
 it("does not author ownerless dreaming work when the scheduler overrides enabled config", async () => {
   vi.useFakeTimers();
   const config: OpenClawConfig = {
-    agents: { ownership: "explicit", list: [{ id: "qa" }, { id: "qa-extra" }] },
+    agents: { ownership: "explicit", entries: { qa: {}, "qa-extra": {} } },
     cron: { enabled: true },
   };
   const cron = await createScheduler(false);
@@ -88,7 +98,7 @@ it("creates one owned declaration after scheduling resumes and across service re
     agents: {
       ownership: "explicit",
       defaults: { systemAgent: { agentId: "qa" } },
-      list: [{ id: "qa" }, { id: "qa-extra" }],
+      entries: { qa: {}, "qa-extra": {} },
     },
   };
   let cron = await createScheduler(false, "qa");
@@ -139,7 +149,7 @@ it.each([true, false])(
     const unrelated = await cron.add({ ...job, name: "Unrelated maintenance" });
     const before = await cron.list({ includeDisabled: true });
     const config: OpenClawConfig = {
-      agents: { ownership: "explicit", list: [{ id: "qa" }, { id: "qa-extra" }] },
+      agents: { ownership: "explicit", entries: { qa: {}, "qa-extra": {} } },
       plugins: {
         entries: { "memory-core": { config: { dreaming: { enabled: dreamingEnabled } } } },
       },

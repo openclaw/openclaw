@@ -27,13 +27,13 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
       const resolveGatewayContext = vi.fn(() => fixture.context);
       if (closedOwner === "gateway" || closedOwner === "role") {
         const loader = vi
-          .spyOn(pluginLoader, "loadOpenClawPlugins")
-          .mockImplementation((options = {}) => {
+          .spyOn(pluginLoader, "loadOpenClawPluginsAsync")
+          .mockImplementation(async (options = {}) => {
             runtime = createPluginRuntime(options.runtimeOptions);
             return createEmptyPluginRegistry();
           });
         try {
-          const loaded = loadGatewayPlugins({
+          const loaded = await loadGatewayPlugins({
             cfg: fixture.cfg,
             autoEnabledReasons: {},
             baseMethods: [],

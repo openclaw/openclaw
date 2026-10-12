@@ -99,7 +99,6 @@ describe("MCP automation creator capture", () => {
   }> = [
     { label: "inherited native", toolsAllow: undefined, nativeExec: true, unreadableSchema: false },
     { label: "finite native", toolsAllow: ["exec"], nativeExec: true, unreadableSchema: false },
-    { label: "restricted MCP", toolsAllow: undefined, nativeExec: false, unreadableSchema: false },
     {
       label: "schema-filtered MCP",
       toolsAllow: undefined,

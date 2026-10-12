@@ -3,6 +3,7 @@ import path from "node:path";
 import type { WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -54,7 +55,6 @@ vi.mock("./disk-budget.js", async (importOriginal) => {
 
 import { runSessionsCleanup } from "./cleanup-service.js";
 import {
-  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
@@ -63,6 +63,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
@@ -181,7 +182,7 @@ describe("sessions cleanup applied summary", () => {
       const old = Date.now() - 31 * 24 * 60 * 60_000;
       const protectedEntries: Record<string, Partial<SessionEntry>> = {
         main: {},
-        running: { status: "running" },
+        running: {},
         pinned: { pinnedAt: old },
         locked: { modelSelectionLocked: true },
         "custom:direct:peer": {},
@@ -211,6 +212,11 @@ describe("sessions cleanup applied summary", () => {
         scope: storePath,
         identities: [scope("admitted").sessionKey],
         assertAllowed: () => {},
+      });
+      registerAgentRunContext("cleanup-protected-live", {
+        agentId: "main",
+        sessionKey: scope("running").sessionKey,
+        projectSessionActive: true,
       });
       const maintenanceOverride = {
         mode: "enforce" as const,
@@ -267,6 +273,7 @@ describe("sessions cleanup applied summary", () => {
           expect.objectContaining({ id: "restored-message" }),
         ]);
       } finally {
+        clearAgentRunContext("cleanup-protected-live");
         admission.release();
       }
     });

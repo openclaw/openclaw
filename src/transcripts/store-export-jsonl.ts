@@ -1,63 +1,38 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
-import {
-  meetingTranscriptSessionQuery,
-  meetingTranscriptUtteranceQuery,
-  utteranceFromRow,
-} from "./store-sqlite.js";
-
-const TRANSCRIPT_EXPORT_ROW_BATCH_SIZE = 64;
+import { writeTranscriptArtifactFile } from "./store-artifacts.js";
+import type { TranscriptStoreOperation } from "./store-worker-client.js";
 
 export async function writeTranscriptJsonlArtifact(params: {
   sessionDir: string;
   session: TranscriptSessionDescriptor;
-  databaseOptions: OpenClawStateDatabaseOptions;
+  operation: TranscriptStoreOperation;
+  assertOwner: () => void;
+  signal: AbortSignal;
 }): Promise<string> {
-  ensureMeetingTranscriptsSchema(params.databaseOptions);
-  const database = openOpenClawStateDatabase(params.databaseOptions);
-  const sequenceHead = executeSqliteQueryTakeFirstSync(
-    database.db,
-    meetingTranscriptSessionQuery(database.db, params.session).select("next_utterance_seq"),
-  )?.next_utterance_seq;
-  if (sequenceHead === undefined) {
-    throw new Error(`transcripts session not found: ${params.session.sessionId}`);
-  }
   const digest = createHash("sha256");
-  await writeExternalFileWithinRoot({
+  const session = { sessionId: params.session.sessionId, startedAt: params.session.startedAt };
+  await writeTranscriptArtifactFile({
     rootDir: params.sessionDir,
-    path: "transcript.jsonl",
-    write: async (tempPath) => {
-      const handle = await fs.open(tempPath, "w", 0o600);
+    fileName: "transcript.jsonl",
+    assertBeforeMutation: params.assertOwner,
+    signal: params.signal,
+    write: async (filePath) => {
+      const handle = await fs.open(filePath, "wx", 0o600);
       try {
-        let nextSequence = 0;
-        while (nextSequence < sequenceHead) {
-          const rows = executeSqliteQuerySync(
-            database.db,
-            meetingTranscriptUtteranceQuery(database.db, params.session)
-              .selectAll()
-              .where("sequence", ">=", nextSequence)
-              .where("sequence", "<", sequenceHead)
-              .orderBy("sequence", "asc")
-              .limit(TRANSCRIPT_EXPORT_ROW_BATCH_SIZE),
-          ).rows;
-          if (rows.length === 0) {
-            break;
-          }
-          nextSequence = rows.at(-1)!.sequence + 1;
-          const lines = rows.map((row) => `${JSON.stringify(utteranceFromRow(row))}\n`);
-          for (const line of lines) {
-            await handle.writeFile(line);
-            digest.update(line);
-          }
-        }
+        await params.operation.streamExport(
+          { type: "meetingTranscripts.export", format: "artifact", session },
+          async (chunk, signal) => {
+            signal.throwIfAborted();
+            if (chunk.format !== "artifact") {
+              throw new Error("Unexpected transcript artifact chunk.");
+            }
+            await handle.writeFile(chunk.jsonl, { signal });
+            digest.update(chunk.jsonl);
+          },
+          params.signal,
+        );
       } finally {
         await handle.close();
       }

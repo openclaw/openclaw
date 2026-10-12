@@ -1,6 +1,6 @@
 import { resolveAuthProfileDisplayLabel } from "../agents/auth-profiles.js";
-import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
-import { createModelCatalogDecisions } from "../agents/model-catalog-decisions.js";
+import { resolveModelAuthLabelAsync } from "../agents/model-auth-label.js";
+import { prepareModelCatalogDecisions } from "../agents/model-catalog-decisions.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { getPreparedModelRuntimeAuthStore } from "../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
@@ -22,9 +22,9 @@ export function createStatusModelResolver(params: {
 }) {
   const { owner, sessionEntry } = params;
   const authStore = owner && getPreparedModelRuntimeAuthStore(owner);
-  const decisions =
+  const preparation =
     owner && authStore
-      ? createModelCatalogDecisions({
+      ? prepareModelCatalogDecisions({
           cfg: owner.config,
           agentId: params.agentId,
           agentDir: owner.agentDir,
@@ -51,6 +51,7 @@ export function createStatusModelResolver(params: {
     acceptedProviderIds: readonly string[];
     authLabelOverride?: string;
   }): Promise<StatusModelResolution> => {
+    const decisions = await preparation;
     const { provider, model, runtimeId } = selection;
     // Preserve SDK and built-in auth diagnostics; route display only borrows an
     // existing prepared owner and never starts discovery or resolves credentials.
@@ -64,7 +65,7 @@ export function createStatusModelResolver(params: {
     const authLabel = hasAuthOverride
       ? selection.authLabelOverride
       : usesHostAuth
-        ? resolveModelAuthLabel({
+        ? await resolveModelAuthLabelAsync({
             provider,
             acceptedProviderIds: selection.acceptedProviderIds,
             cfg: params.cfg,
@@ -72,6 +73,7 @@ export function createStatusModelResolver(params: {
             agentDir: params.agentDir,
             workspaceDir: params.workspaceDir,
             includeExternalProfiles: false,
+            authStore,
           })
         : "unknown";
     if (!decisions?.isCurrent() || !authStore) {
@@ -81,7 +83,7 @@ export function createStatusModelResolver(params: {
     const variants = decisions.snapshot.routeVariants.filter(
       (row) => row.provider === provider && row.id === model,
     );
-    const host = await decisions.evaluateEntry(
+    const host = decisions.evaluateEntry(
       entry ?? { provider, id: model },
       variants.length ? variants : entry ? [entry] : undefined,
       runtimeId,

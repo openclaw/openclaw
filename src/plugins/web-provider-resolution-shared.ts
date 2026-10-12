@@ -39,15 +39,12 @@ function loadInstalledWebProviderManifestRecords(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   pluginIds?: readonly string[];
-  manifestRecords?: readonly PluginManifestRecord[];
 }): readonly PluginManifestRecord[] {
-  const records =
-    params.manifestRecords ??
-    loadManifestMetadataSnapshot({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-    }).plugins;
+  const records = loadManifestMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  }).plugins;
   const pluginIdSet = createPluginIdScopeSet(params.pluginIds);
   return pluginIdSet ? records.filter((plugin) => pluginIdSet.has(plugin.id)) : records;
 }
@@ -79,9 +76,7 @@ export function resolveManifestDeclaredWebProviderCandidates(params: {
   const manifestRecords =
     params.manifestRecords ??
     loadInstalledWebProviderManifestRecords({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
+      ...params,
       pluginIds: scopedPluginIds,
     });
   const ids = manifestRecords
@@ -139,11 +134,7 @@ export function resolveBundledWebProviderResolutionConfig(params: {
       : {}),
     ...(currentSnapshot?.discovery ? { discovery: currentSnapshot.discovery } : {}),
     resolveBundledPluginIds: () => {
-      manifestRecords ??= loadInstalledWebProviderManifestRecords({
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      });
+      manifestRecords ??= loadInstalledWebProviderManifestRecords(params);
       return manifestRecords
         .filter(
           (plugin) =>

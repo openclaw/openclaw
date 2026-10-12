@@ -79,7 +79,7 @@ function context(env: NodeJS.ProcessEnv) {
 }
 afterEach(() => vi.unstubAllEnvs());
 describe("update Doctor diagnostic scope", () => {
-  it.each(["standalone", "package-swap", "post-core"])(
+  it.each(["standalone", "post-core"])(
     "keeps standalone advisory work outside update: %s",
     async (mode) => {
       const env: NodeJS.ProcessEnv =

@@ -3,6 +3,7 @@
  * this module to merge implicit provider discovery, explicit config, and
  * preserved secrets before touching models.json.
  */
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
@@ -137,24 +138,12 @@ async function resolveProvidersForModelsJson(params: {
     ...(context.workspaceDir ? { workspaceDir: context.workspaceDir } : {}),
     explicitProviders,
     sourceModelFields,
-    ...(context.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: context.pluginMetadataSnapshot }
-      : {}),
-    ...(context.preparedStaticProviderCatalog
-      ? { preparedStaticProviderCatalog: context.preparedStaticProviderCatalog }
-      : {}),
-    ...(context.providerDiscoveryProviderIds
-      ? { providerDiscoveryProviderIds: context.providerDiscoveryProviderIds }
-      : {}),
-    ...(context.providerDiscoveryTimeoutMs !== undefined
-      ? { providerDiscoveryTimeoutMs: context.providerDiscoveryTimeoutMs }
-      : {}),
-    ...(context.providerDiscoveryEntriesOnly === true
-      ? { providerDiscoveryEntriesOnly: true }
-      : {}),
-    ...(context.onProviderCatalogOutcome
-      ? { onProviderCatalogOutcome: context.onProviderCatalogOutcome }
-      : {}),
+    pluginMetadataSnapshot: context.pluginMetadataSnapshot,
+    preparedStaticProviderCatalog: context.preparedStaticProviderCatalog,
+    providerDiscoveryProviderIds: context.providerDiscoveryProviderIds,
+    providerDiscoveryTimeoutMs: context.providerDiscoveryTimeoutMs,
+    providerDiscoveryEntriesOnly: context.providerDiscoveryEntriesOnly === true,
+    onProviderCatalogOutcome: context.onProviderCatalogOutcome,
   });
   return mergeProviders({
     implicit: implicitProviders,
@@ -216,13 +205,8 @@ function collectGeneratedCatalogProviders(params: {
 }): Record<string, unknown> {
   const providers: Record<string, unknown> = {};
   for (const { pluginId, contents } of params.catalogs) {
-    let catalog: unknown;
-    try {
-      catalog = JSON.parse(contents) as unknown;
-    } catch {
-      continue;
-    }
-    if (!isRecord(catalog) || !isRecord(catalog.providers)) {
+    const catalog = safeParseJsonRecord(contents);
+    if (!catalog || !isRecord(catalog.providers)) {
       continue;
     }
     Object.assign(
@@ -272,7 +256,7 @@ export async function planOpenClawModelsJson(params: {
       ? context.pluginMetadataSnapshot?.manifestRegistry
       : undefined;
   const normalizedProviders =
-    normalizeProviders({
+    (await normalizeProviders({
       providers,
       agentDir,
       env,
@@ -282,7 +266,7 @@ export async function planOpenClawModelsJson(params: {
       ...(providerPolicyManifestRegistry
         ? { manifestRegistry: providerPolicyManifestRegistry }
         : {}),
-    }) ?? providers;
+    })) ?? providers;
   const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: {

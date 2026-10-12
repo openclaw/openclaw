@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -39,25 +39,6 @@ export class UiRuntimePartitionSequencer extends BaseSequencer {
   }
 
   override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
-    const receiptFile = process.env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;
-    const requestId = process.env.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID;
-    if (receiptFile && requestId) {
-      // The coordinator can omit an empty sibling runtime only from Vitest's
-      // original shard inventory, before this sequencer narrows membership.
-      await writeFile(
-        receiptFile,
-        JSON.stringify({
-          version: 1,
-          requestId,
-          config: this.ctx.vite.config.configFile,
-          root: this.ctx.config.root,
-          files: files.map((file) => path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")),
-        }),
-        { encoding: "utf8", flag: "wx" },
-      ).catch(() => {
-        // Missing or invalid receipts retain the ordinary Node invocation.
-      });
-    }
     const included = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE");
     const selected = included && new Set(included);
     // Native shard() must see the complete inventory before runtime membership

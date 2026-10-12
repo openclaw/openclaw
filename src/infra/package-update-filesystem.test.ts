@@ -129,9 +129,7 @@ it.runIf(process.platform === "darwin").each([
     );
 
     if (continues) {
-      await expect(copyPackagePathEntry(source, destination)).resolves.toEqual({
-        ownershipPreserved: operation !== "lchown",
-      });
+      await expect(copyPackagePathEntry(source, destination)).resolves.toBeUndefined();
       expect(await fs.readlink(destination)).toBe("missing");
     } else {
       await expect(copyPackagePathEntry(source, destination)).rejects.toThrow(
@@ -716,7 +714,7 @@ it.each(["publish", "revoke", "replace"] as const)(
       beforePublish,
     );
     if (action === "publish") {
-      await expect(result).resolves.toEqual({ ownershipPreserved: true });
+      await expect(result).resolves.toBeUndefined();
     } else if (action === "revoke") {
       await expect(result).rejects.toBe(refusal);
     } else {

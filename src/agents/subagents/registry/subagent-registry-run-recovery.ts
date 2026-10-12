@@ -19,7 +19,10 @@ import {
   normalizeSubagentRunState,
   resetRequesterSettleWakeRetry,
 } from "./subagent-delivery-state.js";
-import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -28,6 +31,7 @@ import {
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   getSubagentRunRuntimeKey,
@@ -40,6 +44,20 @@ import {
 } from "./subagent-session-metrics.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
+
+function continuesPausedSubagentRun(row: SubagentRunRecord): boolean {
+  return (
+    row.expectsCompletionMessage !== true &&
+    row.execution.status === "running" &&
+    !row.collect &&
+    !row.killIntent &&
+    !row.killReconciliation &&
+    row.suppressCompletionDelivery !== true &&
+    !row.requesterSettleWake &&
+    !row.requesterTurnRunId &&
+    row.pauseReason === undefined
+  );
+}
 
 export class SubagentRecoveryManager extends SubagentWaitManager {
   protected planSupersededKillReconciliations(
@@ -123,9 +141,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       // The original requester is idle behind its own yield, so its wake credential
       // is the only path back to it once this follow-up settles.
       preserveRequesterSettleWake: true,
-      // Gateway admission has not started provider work yet. If this owner swap
-      // is not durable, reject the dispatch instead of registering a sibling or
-      // leaving a live successor that restart recovery cannot identify.
       // Persist the follow-up text so restart recovery cannot reissue the task that
       // the child already yielded on.
       task: params.task,
@@ -135,10 +150,65 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     });
   };
 
+  /**
+   * A follow-up admitted while the yielding turn still runs registers a sibling.
+   * Whichever commit lands second hands the pause's requester, completion custody,
+   * and settle-wake to that follow-up. Requester-bound follow-ups keep their own delivery.
+   */
+  readonly adoptPausedSubagentRunIntoSuccessor = async (params: {
+    childSessionKey: string;
+    childAgentId?: string;
+    assertCurrent?: () => void;
+  }): Promise<boolean> => {
+    const { childSessionKey, childAgentId } = params;
+    const runs = [...this.options.getRunsForChildSession(childSessionKey, childAgentId)];
+    const paused = getLatestSubagentRunByChildSessionKeyFromRuns(
+      runs,
+      childSessionKey,
+      (entry) => entry.pauseReason === "sessions_yield",
+      childAgentId,
+    );
+    if (!paused) {
+      return false;
+    }
+    const successor = runs
+      .filter(
+        (row) =>
+          matchesSubagentChildSessionOwner(row, paused.childSessionKey, paused.childAgentId) &&
+          compareSubagentRunGeneration(row, paused) > 0 &&
+          continuesPausedSubagentRun(row),
+      )
+      .toSorted(compareSubagentRunGeneration)[0];
+    if (!successor) {
+      return false;
+    }
+    try {
+      return await this.replaceSubagentRunAfterSteer({
+        previousRunId: paused.runId,
+        nextRunId: successor.runId,
+        expected: paused,
+        successor,
+        allowEndedSource: true,
+        preserveRequesterSettleWake: true,
+        task: successor.task,
+        gatewayContextResolver: getGatewayContextResolver(successor),
+        assertCurrent: params.assertCurrent,
+      });
+    } catch (error) {
+      log.warn("failed to adopt paused subagent run into its admitted follow-up", {
+        error,
+        pausedRunId: paused.runId,
+        successorRunId: successor.runId,
+      });
+      return false;
+    }
+  };
+
   readonly replaceSubagentRunAfterSteer = async (replaceParams: {
     previousRunId: string;
     nextRunId: string;
     expected?: SubagentRunRecord;
+    successor?: SubagentRunRecord;
     runTimeoutSeconds?: number;
     allowEndedSource?: boolean;
     /** Ordinary next turns retain the completed execution's independent delivery. */
@@ -216,7 +286,18 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           ) {
             return { value: undefined };
           }
-          if (previousRunId !== nextRunId && rows.get(nextRunId)) {
+          const absorbed = replaceParams.successor ? rows.get(nextRunId) : undefined;
+          if (replaceParams.successor) {
+            if (
+              source.pauseReason !== "sessions_yield" ||
+              !absorbed ||
+              !isSameSubagentRunOwner(absorbed, replaceParams.successor) ||
+              compareSubagentRunGeneration(absorbed, source) <= 0 ||
+              !continuesPausedSubagentRun(absorbed)
+            ) {
+              return { value: undefined };
+            }
+          } else if (previousRunId !== nextRunId && rows.get(nextRunId)) {
             throw new SubagentRegistryMutationRejectedError(
               "Replacement subagent id already exists",
             );
@@ -255,9 +336,11 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           // The frozen batch is addressed by runId. Adoption retires the previous id,
           // so an unmapped membership list would drop this row from its own batch and
           // let the wave complete without ever waking the requester.
-          const sourceRequesterSettleWake = replaceParams.preserveRequesterSettleWake
-            ? source.requesterSettleWake
-            : undefined;
+          // A child-only pause notice ends with adoption; it never owns the result.
+          const sourceRequesterSettleWake =
+            replaceParams.preserveRequesterSettleWake && hasRequesterCompletionCohort(source)
+              ? source.requesterSettleWake
+              : undefined;
           const remapRequesterSettleWake = (
             wake: RequesterSettleWakeState,
           ): RequesterSettleWakeState => ({
@@ -285,6 +368,12 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             task: nextTask,
             generation,
             createdAt: now,
+            ...(absorbed
+              ? {
+                  childSessionIdentity:
+                    absorbed.childSessionIdentity ?? source.childSessionIdentity,
+                }
+              : {}),
             sessionStartedAt,
             accumulatedRuntimeMs,
             endedReason: undefined,
@@ -296,7 +385,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             requesterSettleWake: sourceRequesterSettleWake
               ? remapRequesterSettleWake(sourceRequesterSettleWake)
               : undefined,
-            execution: {
+            execution: absorbed?.execution ?? {
               status: "running",
               startedAt: now,
               lifecycleGeneration,
@@ -380,6 +469,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               subagentRuns.transferCompletionAuthority(value.source, next);
             }
             subagentRuns.commitOwnership(next);
+            if (replaceParams.successor) {
+              subagentRuns.releaseCompletionAuthority(replaceParams.successor);
+            }
             replaceParams.onPublished?.(next);
           },
         },
@@ -420,12 +512,12 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     } else if (!preserveCompletedRun && previousRunId !== nextRunId) {
       this.options.clearPendingLifecycleError(previousRunId);
       this.options.resumedRuns.delete(getSubagentRunRuntimeKey(source));
-      if (this.shouldDeleteAttachments(source)) {
+      if (shouldRemoveSubagentAttachments(source)) {
         void safeRemoveAttachmentsDir(source);
       }
       if (
         source.execution.transcriptTarget &&
-        source.execution.transcriptTarget !== replaceParams.transcriptTarget
+        source.execution.transcriptTarget !== next.execution.transcriptTarget
       ) {
         const retiredTarget = source.execution.transcriptTarget;
         // The committed replacement owns cleanup beyond its caller's lifetime,
@@ -445,14 +537,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     this.options.ensureListener();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     this.options.startSweeper();
-    void this.waitForSubagentCompletion(
-      nextRunId,
-      this.options.resolveSubagentWaitTimeoutMs(
-        this.options.getRuntimeConfig(),
-        next.runTimeoutSeconds,
-      ),
-      next,
-    );
+    void this.waitForSubagentCompletion(nextRunId, next);
     return true;
   };
 }

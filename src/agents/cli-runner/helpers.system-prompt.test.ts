@@ -129,14 +129,14 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("exec approval-pending");
   });
 
-  it("describes bundled exec as synchronous node execution", () => {
+  it("describes bundled exec without assuming a node-only target", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [{ name: "exec" } as never],
       modelDisplay: "test/model",
     });
 
-    expect(prompt).toContain("- exec: Run shell on connected node; sync; host=node");
+    expect(prompt).toContain("- exec: Run shell on configured exec target");
   });
 
   it("distinguishes the CLI working directory from the agent workspace", () => {

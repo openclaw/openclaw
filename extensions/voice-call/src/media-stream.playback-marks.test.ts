@@ -1,4 +1,4 @@
-// Voice Call tests cover Twilio playback-mark acknowledgement behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
@@ -145,10 +145,6 @@ describe("MediaStreamHandler playback marks", () => {
       await withTimeout(playback);
       expect(talkEvents.some((event) => event.type === "output.audio.done")).toBe(false);
 
-      const state = handler as unknown as {
-        ignoredPlaybackMarks: Map<string, Set<string>>;
-      };
-      expect(state.ignoredPlaybackMarks.get("MZ-clear-mark")).toContain("tts-cleared");
       ws.send(
         JSON.stringify({
           event: "mark",
@@ -156,18 +152,88 @@ describe("MediaStreamHandler playback marks", () => {
           mark: { name: "tts-cleared" },
         }),
       );
-      await vi.waitFor(() => {
-        expect(state.ignoredPlaybackMarks.get("MZ-clear-mark")?.has("tts-cleared") ?? false).toBe(
-          false,
-        );
-      });
-      expect(talkEvents.some((event) => event.type === "output.audio.done")).toBe(false);
-
       ws.close();
       await waitForClose(ws);
+      expect(talkEvents.some((event) => event.type === "output.audio.done")).toBe(false);
     } finally {
       ws?.terminate();
       await server.close();
     }
+  });
+});
+
+const createHandler = (): MediaStreamHandler =>
+  new MediaStreamHandler({
+    transcriptionProvider: createStubSttProvider(),
+    providerConfig: {},
+  });
+
+const waitForAbort = (signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+
+describe("MediaStreamHandler TTS queue", () => {
+  it("bounds pending playback per stream and recovers after draining", async () => {
+    const handler = createHandler();
+    const activeGate = createDeferred<void>();
+    const playbackOrder: number[] = [];
+
+    const active = handler.queueTts("stream-1", async () => {
+      playbackOrder.push(0);
+      await activeGate.promise;
+    });
+    const pending = Array.from({ length: 8 }, (_, index) =>
+      handler.queueTts("stream-1", async () => {
+        playbackOrder.push(index + 1);
+      }),
+    );
+    let overflowRan = false;
+
+    await expect(
+      handler.queueTts("stream-1", async () => {
+        overflowRan = true;
+      }),
+    ).rejects.toThrow("Telephony TTS queue is full for stream; maxPending=8");
+
+    await handler.queueTts("stream-2", async () => {});
+    expect(overflowRan).toBe(false);
+    expect(playbackOrder).toEqual([0]);
+
+    activeGate.resolve();
+    await active;
+    await Promise.all(pending);
+    expect(playbackOrder).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+
+    await handler.queueTts("stream-1", async () => {
+      playbackOrder.push(9);
+    });
+    expect(playbackOrder).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  it("cancels active playback and clears queued items", async () => {
+    const handler = createHandler();
+    let queuedRan = false;
+    const started: string[] = [];
+
+    const active = handler.queueTts("stream-1", async (signal) => {
+      started.push("active");
+      await waitForAbort(signal);
+    });
+    const queued = handler.queueTts("stream-1", async () => {
+      queuedRan = true;
+    });
+
+    expect(started).toEqual(["active"]);
+
+    handler.clearTtsQueue("stream-1");
+    await active;
+    await withTimeout(queued);
+
+    expect(queuedRan).toBe(false);
   });
 });

@@ -19,10 +19,10 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  readSessionTranscriptActivePathEntryRelation,
-  readSessionTranscriptWatermark,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntryPatchCommitted } from "../config/sessions/session-entry-patch.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -42,6 +42,7 @@ import {
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { readActivitySummarySource } from "./session-activity-summary-source.js";
 import {
   activitySummaryScope,
@@ -363,15 +364,6 @@ export function createSessionActivitySummaries(deps: {
           () => controller.abort(new Error("Activity recap timed out")),
           MODEL_TIMEOUT_MS,
         );
-        const aborted = new Promise<never>((_, reject) => {
-          controller.signal.addEventListener(
-            "abort",
-            () => reject(toErrorObject(controller.signal.reason, "Activity recap cancelled")),
-            {
-              once: true,
-            },
-          );
-        });
         try {
           const assertRequestCurrent = () => {
             if (controller.signal.aborted || state.controller !== controller) {
@@ -389,6 +381,7 @@ export function createSessionActivitySummaries(deps: {
             assertRequestCurrent();
             const result = await (deps.completeModel ?? defaultCompleteModel)({
               ...prepared,
+              purpose: "session-activity-summary",
               config: deps.getConfig(),
               systemPrompt: SYSTEM_PROMPT,
               prompt: JSON.stringify({
@@ -399,13 +392,18 @@ export function createSessionActivitySummaries(deps: {
               timeoutMs: MODEL_TIMEOUT_MS,
               abortSignal: controller.signal,
               assertCurrent: assertRequestCurrent,
-              streamParams: { maxTokens: 240, temperature: 0.2 },
+              answerTokenBudget: 240,
+              streamParams: { temperature: 0.2 },
             });
             return result.text;
           };
           ownedWork = execute();
           text = truncateUtf16Safe(
-            redactToolPayloadText(await Promise.race([ownedWork, aborted]))
+            redactToolPayloadText(
+              await racePromiseWithAbortSignal(ownedWork, controller.signal, (signal) =>
+                toErrorObject(signal.reason, "Activity recap cancelled"),
+              ),
+            )
               .replace(/\s+/gu, " ")
               .trim(),
             450,
@@ -435,7 +433,7 @@ export function createSessionActivitySummaries(deps: {
         totalMessages: snapshot.totalMessages,
         omittedContent: omitted,
       };
-      let accepted = false;
+      let committedTranscript: SessionEntryPatchCommitted["transcriptPredicate"];
       const committed = await patchSessionEntryCore(
         scope(state),
         (fresh) => {
@@ -444,38 +442,35 @@ export function createSessionActivitySummaries(deps: {
         },
         {
           preserveActivity: true,
-          shouldCommit: () => {
-            // The accessor revalidates the prepared row in this transaction.
-            // A separate read-only entry probe would rescan the store on a fresh connection.
-            assertCurrentOwner(state, ref);
-            const latest = readSessionTranscriptWatermark(transcriptScope);
-            if (
-              latest.generation !== summary.generation ||
-              (summary.leafEntryId &&
-                !["exact", "ancestor"].includes(
-                  readSessionTranscriptActivePathEntryRelation(
-                    transcriptScope,
-                    summary.leafEntryId,
-                  ),
-                ))
-            ) {
-              return false;
-            }
-            accepted = true;
-            return true;
+          onCommitted: (_entry, transcriptPredicate) => {
+            committedTranscript = transcriptPredicate;
+          },
+          workerGuard: {
+            assertCurrent: () => assertCurrentOwner(state, ref),
+            shouldCommitIf: {
+              kind: "transcript",
+              sessionId: state.sessionId,
+              generation: summary.generation,
+              leafEntryId: summary.leafEntryId,
+            },
           },
         },
       );
-      if (!committed || !accepted || !current(state)) {
+      if (!committed || !current(state)) {
         state.dirty = true;
         return;
       }
+      assertCurrentOwner(state, ref);
+      if (committedTranscript?.sessionId !== state.sessionId) {
+        throw new Error("Activity recap patch omitted its transcript predicate receipt");
+      }
+      // This source-free field patch cannot change the transcript after its transaction guard.
+      const latest = committedTranscript.watermark;
       state.failures = 0;
       if (modelBackoffs.get(ref) === priorBackoff) {
         modelBackoffs.delete(ref);
       }
       partial = summary.coveredMessages < summary.totalMessages;
-      const latest = readSessionTranscriptWatermark(transcriptScope);
       state.dirty ||= latest.generation !== summary.generation || latest.maxSeq !== summary.maxSeq;
       publish(state, partial || state.dirty ? "updating" : "current", true);
     } catch (error) {
@@ -539,6 +534,7 @@ export function createSessionActivitySummaries(deps: {
   };
   const pump = () => {
     pumpJob?.cancel();
+    pumpJob = undefined;
     if (disposed || deps.scheduler.signal.aborted) {
       return;
     }
@@ -555,16 +551,18 @@ export function createSessionActivitySummaries(deps: {
       });
       if (index < 0) {
         if (Number.isFinite(earliest)) {
-          pumpJob = deps.scheduler.schedule({
-            id: "session-activity-summary-pump",
-            atMs: earliest,
-            run: async () => {
-              pump();
-              while (running.size > 0) {
-                await Promise.all(running);
-              }
-            },
-          });
+          pumpJob = runInDetachedAsyncContext(() =>
+            deps.scheduler.schedule({
+              id: "session-activity-summary-pump",
+              atMs: earliest,
+              run: async () => {
+                pump();
+                while (running.size > 0) {
+                  await Promise.all(running);
+                }
+              },
+            }),
+          );
         }
         return;
       }
@@ -676,6 +674,7 @@ export function createSessionActivitySummaries(deps: {
     async dispose() {
       disposed = true;
       pumpJob?.cancel();
+      pumpJob = undefined;
       modelBackoffs.clear();
       unsubscribeIdentity();
       for (const state of states.values()) {

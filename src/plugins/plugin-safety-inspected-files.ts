@@ -32,6 +32,7 @@ export function collectPluginSafetyInspectedFiles(
   const entryKinds = new Map(entries.map((entry) => [entry.path, entry.kind]));
   const activityScopes: Array<readonly [string, string]> = [];
   const browserScopes: Array<readonly [string, string]> = [];
+  const skillScopes: Array<readonly [string, string]> = [];
   withPluginCache(createPluginCache({ kind: "operation" }), () => {
     for (const entry of entries) {
       if (path.basename(entry.path) !== "openclaw.plugin.json") {
@@ -101,6 +102,7 @@ export function collectPluginSafetyInspectedFiles(
       for (const theme of manifest?.themes ?? []) {
         [
           theme.source,
+          ...Object.values(theme.icons ?? {}),
           ...Object.values(theme.hats ?? {}),
           ...Object.values(theme.critters ?? {}).map((critter) => critter.source),
         ].forEach(add);
@@ -112,6 +114,13 @@ export function collectPluginSafetyInspectedFiles(
       if (browser && isPathInside(rootDir, browser)) {
         browserScopes.push([browser, browser]);
       }
+      for (const skill of manifest?.skills ?? []) {
+        const directory = path.resolve(rootDir, skill);
+        const real = isPathInside(rootDir, directory) ? pluginCacheRealpathSync(directory) : null;
+        if (real && isPathInside(rootDir, real) && entryKinds.get(real) === "directory") {
+          skillScopes.push([real, real]);
+        }
+      }
     }
   });
   // Nested contracts validate paths relative to their own root, not an ancestor.
@@ -119,6 +128,7 @@ export function collectPluginSafetyInspectedFiles(
     right.length - left.length;
   const activityScope = createRuntimePathLookup(activityScopes.toSorted(deepestFirst));
   const browserScope = createRuntimePathLookup(browserScopes.toSorted(deepestFirst));
+  const skillScope = createRuntimePathLookup(skillScopes.toSorted(deepestFirst));
   for (const entry of entries) {
     if (entry.kind !== "file") {
       continue;
@@ -128,6 +138,7 @@ export function collectPluginSafetyInspectedFiles(
     if (
       // Peer repair reads ordinary dependency manifests with the same strict inode guard.
       path.basename(entry.path) === "package.json" ||
+      (path.basename(entry.path) === "SKILL.md" && skillScope(entry.path) !== undefined) ||
       (activity &&
         path.dirname(entry.path) === activity &&
         entry.path.endsWith(".svg") &&

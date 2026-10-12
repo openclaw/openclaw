@@ -326,7 +326,7 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
       appendLog(
         "The installed update does not support automatic diagnostics. Run openclaw triage manually.",
       );
-      process.exitCode = 1;
+      finalExitCode = 1;
     }
     return { ...exit, continuation, updaterOutput: Buffer.concat(updaterChunks).toString(), outputOverflow };
   } finally {
@@ -348,6 +348,21 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params
 export const HANDOFF_NOTICE_MARKER = "before-park\n";
 export const HANDOFF_PARK_ADMITTED_MARKER = "park-admitted\n";
 
+export function createHandoffLineReader(onLine: (line: string) => void | false) {
+  let buffered = "";
+  return (chunk: Buffer | string) => {
+    buffered = `${buffered}${chunk.toString()}`.slice(-1024);
+    let newline;
+    while ((newline = buffered.indexOf("\n")) >= 0) {
+      const line = buffered.slice(0, newline + 1);
+      buffered = buffered.slice(newline + 1);
+      if (onLine(line) === false) {
+        return;
+      }
+    }
+  };
+}
+
 export type HandoffChild = ChildProcess & {
   stdin: NonNullable<ChildProcess["stdin"]>;
   stdout: NonNullable<ChildProcess["stdout"]>;
@@ -367,7 +382,6 @@ export function waitForHandoffResponse(
     const output = child.stdout;
     const exitEvent = command === "closed" ? "close" : "exit";
     let settled = false;
-    let buffered = "";
     // An already-expired deadline can settle before a timer exists.
     let cancelTimeout = () => {};
     const finish = (result: string | Error) => {
@@ -409,18 +423,13 @@ export function waitForHandoffResponse(
         finish(new Error("managed update handoff control input closed"));
       }
     };
-    const onData = (chunk: Buffer | string) => {
-      buffered = `${buffered}${chunk.toString()}`.slice(-1024);
-      let newline;
-      while ((newline = buffered.indexOf("\n")) >= 0) {
-        const line = buffered.slice(0, newline + 1);
-        buffered = buffered.slice(newline + 1);
-        if (line !== HANDOFF_NOTICE_MARKER && line !== HANDOFF_PARK_ADMITTED_MARKER) {
-          finish(line.slice(0, -1));
-          return;
-        }
+    const onData = createHandoffLineReader((line) => {
+      if (line !== HANDOFF_NOTICE_MARKER && line !== HANDOFF_PARK_ADMITTED_MARKER) {
+        finish(line.slice(0, -1));
+        return false;
       }
-    };
+      return undefined;
+    });
     // The canonical updater owns activation/finalization budgets. Once closed,
     // the parent joins its helper instead of inventing a shorter shutdown timer.
     if (command !== "closed") {

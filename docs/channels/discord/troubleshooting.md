@@ -10,6 +10,13 @@ sidebarTitle: "Troubleshooting"
 
 Symptom-first checks for a Discord account that is not behaving.
 
+Each account start logs `[account] starting account (reason: ...)` at info level.
+The reason distinguishes startup, manual starts, automatic retries, health recovery,
+config/plugin/secret reloads, and host-thaw recovery. A Discord socket reconnect or
+resume stays inside the existing account lifetime and does not produce this line.
+An event-loop stall label identifies work while its named operation is active; it
+does not by itself establish that an account restarted.
+
 ## Troubleshooting
 
 <AccordionGroup>
@@ -87,7 +94,7 @@ openclaw logs --follow
   <Accordion title="Permissions audit mismatches">
     `channels status --probe` permission checks only work for numeric channel IDs.
 
-    If you use slug keys, runtime matching can still work, but probe cannot fully verify permissions.
+    If you use slug keys, runtime matching can still work, but check cannot fully verify permissions.
 
   </Accordion>
 

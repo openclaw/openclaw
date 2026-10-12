@@ -26,6 +26,12 @@ vi.mock("../session-utils.js", async (importOriginal) => ({
   loadGatewaySessionEntryReadOnly: mocks.loadGatewaySessionEntryReadOnly,
 }));
 
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    mocks.loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }),
+}));
+
 import { systemHandlers } from "./system.js";
 
 describe("system-event routing", () => {
@@ -52,7 +58,7 @@ describe("system-event routing", () => {
       respond,
       context: {
         publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
 
@@ -69,41 +75,6 @@ describe("system-event routing", () => {
       sessionKey,
       heartbeat: { target: "last" },
     });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-  });
-
-  it("routes a bare targeted wake through the persisted fixed-store owner", async () => {
-    const respond = vi.fn();
-    mocks.loadGatewaySessionEntryReadOnly.mockReturnValue({
-      entry: { sessionId: "global-session" },
-    });
-    const request = {
-      params: { text: "Wake the retained session.", sessionKey: "global", wake: true },
-      respond,
-      context: {
-        publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({
-          session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-          agents: {
-            ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
-            defaults: { sessionStore: { agentId: "ops" } },
-          },
-        })),
-      },
-    } as unknown as GatewayRequestHandlerOptions;
-
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
-
-    expect(mocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith("global", {
-      agentId: "ops",
-    });
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "global" }),
-    );
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
@@ -154,7 +125,7 @@ describe("system-event routing", () => {
       respond,
       context: {
         publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
 
@@ -189,7 +160,7 @@ describe("system-event routing", () => {
         respond,
         context: {
           publishPresence: vi.fn(),
-          getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+          getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
         },
       } as unknown as GatewayRequestHandlerOptions;
 
@@ -221,7 +192,7 @@ describe("system-event routing", () => {
       respond,
       context: {
         publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
 
@@ -248,7 +219,7 @@ describe("system-event routing", () => {
     );
     const context = {
       publishPresence: vi.fn(),
-      getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
+      getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
     };
 
     await handler({

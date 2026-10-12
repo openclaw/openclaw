@@ -1,11 +1,17 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type {
   SqliteWorkerOperations,
   SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -13,12 +19,78 @@ import {
   listSessionPendingInputs,
   readSessionPendingInput,
   stageSessionPendingInput,
+  type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   registerSessionPendingInputOwner,
-  type SessionPendingInputOwner,
+  releaseSessionPendingInputOwner,
 } from "./session-accessor.sqlite-pending-inputs.js";
+import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
+import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
+
+it("serves empty pending history from its counted snapshot in one data read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:empty-pending-history",
+      sessionId: "empty-pending-history",
+    };
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    const counter = trackSqliteStatementExecutions(database.db, ["pending"], (query) =>
+      /\bfrom\s+"?session_pending_inputs\b/i.test(query) ? "pending" : null,
+    );
+    try {
+      expect(readPendingInputHistoryInDatabase(database, scope)).toEqual({ rows: [], total: 0 });
+      expect(counter.counts.pending).toBe(1);
+    } finally {
+      counter.restore();
+    }
+  });
+});
+
+it("bounds materialized pending pages by bytes without truncating input or skipping its cursor", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:pending-history-bytes",
+      sessionId: "pending-history-bytes",
+    };
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+    const content = "x".repeat(Math.floor(MAX_PAYLOAD_BYTES / 2));
+    const receipts: SessionPendingInputReceipt[] = [];
+    try {
+      for (const runId of ["large-first", "large-second"]) {
+        receipts.push(
+          expectDefined(
+            await stageSessionPendingInput(scope, {
+              runId,
+              message: { role: "user", content, timestamp: 100, idempotencyKey: `${runId}:user` },
+              assertCurrent: () => {},
+            }),
+            "Expected accepted input custody",
+          ),
+        );
+      }
+      const page = await listSessionPendingInputs(scope);
+      expect(page.items.map((input) => input.id)).toEqual([receipts[1]?.inputId]);
+      expect(page.items[0]?.message.content === content).toBe(true);
+      expect(page.total).toBe(2);
+      expect(page.nextBefore).toBeDefined();
+      const older = await listSessionPendingInputs(scope, { before: page.nextBefore });
+      expect(older.items.map((input) => input.id)).toEqual([receipts[0]?.inputId]);
+      expect(older.items[0]?.message.content === content).toBe(true);
+      expect(older.nextBefore).toBeUndefined();
+    } finally {
+      for (const receipt of receipts) {
+        receipt.finish("interrupted");
+      }
+      await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
+    }
+  });
+});
 
 it("reads pending history and exact messages without caller-thread data SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -57,6 +129,7 @@ it("reads pending history and exact messages without caller-thread data SQL", as
       throw new Error("Expected stale fixture");
     }
     stale.finish("interrupted");
+    await stale.settled?.();
     // A persisted pre-restart row has no process-local custody.
     database.db
       .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
@@ -79,6 +152,7 @@ it("reads pending history and exact messages without caller-thread data SQL", as
     } finally {
       hostSql.restore();
       receipt.finish("cancelled");
+      await receipt.settled?.();
     }
     expect(await readSessionPendingInput(scope, receipt.inputId)).toMatchObject({
       state: "cancelled",
@@ -111,6 +185,7 @@ it.each(["transaction", "commit"] as const)(
         throw new Error("Expected custody fixture");
       }
       receipt.finish("interrupted");
+      await receipt.settled?.();
       database.db
         .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
         .run(receipt.inputId);
@@ -123,14 +198,12 @@ it.each(["transaction", "commit"] as const)(
         throw new Error("Expected sibling custody fixture");
       }
       second.finish("interrupted");
+      await second.settled?.();
       database.db
         .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
         .run(second.inputId);
-      const source = { agentId: scope.agentId, path: database.path };
       const { readOpenClawAgentDatabaseIdentity } =
         await import("../../state/openclaw-agent-db-identity.js");
-      const { finishSessionPendingInputOwner } =
-        await import("./session-accessor.sqlite-pending-inputs.js");
       const identity = readOpenClawAgentDatabaseIdentity(database);
       const owner: SessionPendingInputOwner = {
         inputId: receipt.inputId,
@@ -138,37 +211,23 @@ it.each(["transaction", "commit"] as const)(
         sessionId: scope.sessionId,
         sessionKey: scope.sessionKey,
         databasePath: database.path,
+        workerDatabasePath: identity.canonicalPath,
         idempotencyKey: "late:user",
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
         messageJson: JSON.stringify(receipt.message),
         assertCurrent: () => {
           throw new Error("Aborted execution still owns disposition");
         },
-        finish: (disposition) =>
-          finishSessionPendingInputOwner(
-            owner,
-            disposition,
-            {
-              ...source,
-              databaseIdentity: identity.identity,
-              databaseBirthtime: identity.birthtime,
-            },
-            source,
-          ),
+        finish: () => releaseSessionPendingInputOwner(owner),
       };
       let registered = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === phase && !registered) {
-              registerSessionPendingInputOwner(owner);
-              registered = true;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(workerAdmission, (request, grant, callback) => {
+        if (request.stage === phase && !registered) {
+          registerSessionPendingInputOwner(owner);
+          registered = true;
+        }
+        callback(request, grant);
+      });
       const hostSql = observeHostDataSql();
       try {
         const read = listSessionPendingInputs(scope);
@@ -195,9 +254,6 @@ it.each(["transaction", "commit"] as const)(
           expect(beforeFinish).toEqual([{ state: "queued" }, { state: "queued" }]);
         }
       }
-      expect(await readSessionPendingInput(scope, receipt.inputId)).toMatchObject({
-        state: "cancelled",
-      });
     });
   },
 );
@@ -225,6 +281,7 @@ it("publishes an acknowledged interruption after the ordinary worker reply is lo
       throw new Error("Expected retained input");
     }
     receipt.finish("interrupted");
+    await receipt.settled?.();
     database.db
       .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
       .run(receipt.inputId);

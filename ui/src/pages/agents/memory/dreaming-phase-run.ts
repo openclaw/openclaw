@@ -1,5 +1,5 @@
 // What a dreaming phase chip on the Memory page shows about its schedule.
-import { t } from "../../../i18n/index.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 
 export type DreamingPhaseInfo = {
   enabled: boolean;

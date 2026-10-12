@@ -1,9 +1,14 @@
+import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
   NODE_WORKSPACE_QUIESCENCE_COMMAND,
   parseNodeWorkerWorkspaceExecInput,
@@ -12,11 +17,15 @@ import {
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 
 // Native Windows only: this exercises the real Job-backed command runner and
 // Windows filesystem/environment, not a stubbed platform or script-only entry.
 describe.runIf(process.platform === "win32")("Windows node-host quiescence", () => {
-  it("keeps the caller-bound SQLite lease through command cleanup, fences another nonce, and releases it", async () => {
+  it("retains one SQLite helper across foreground Job cleanup and fresh-nonce turns, then joins its retirement", async () => {
     const root = fs.realpathSync(tempDirs.make("node-quiescence-win-"));
     const identity = {
       gatewayNamespace: "gateway-windows",
@@ -72,6 +81,8 @@ describe.runIf(process.platform === "win32")("Windows node-host quiescence", () 
       }
     };
     const nonce = "a".repeat(32);
+    const spawned = vi.spyOn(childProcess, "spawn");
+    syncBuiltinESMExports();
     try {
       await expect(command({ action: "acquire", nonce, timeoutMs: 30_000 })).resolves.toMatchObject(
         {
@@ -81,16 +92,41 @@ describe.runIf(process.platform === "win32")("Windows node-host quiescence", () 
         },
       );
       expect(readLease()).toMatchObject({ nonce, sharedHost: true, processes: [], watchdog: null });
+      const helperCall = spawned.mock.calls.findIndex(
+        ([_command, argv]) => Array.isArray(argv) && argv.includes("owned") && argv.includes(nonce),
+      );
+      const helperResult = spawned.mock.results[helperCall];
+      if (!helperResult || helperResult.type !== "return") {
+        throw new Error("the retained SQLite helper was not spawned");
+      }
+      const helper = helperResult.value;
+      expect(helper.connected).toBe(true);
       const before = readLease();
       const foreground = await runtime.exec({
         ...identity,
+        nativeProcessOwner: true,
         argv: [
           path.basename(process.execPath),
           "-e",
-          "process.stdout.write(process.env.USERPROFILE)",
+          String.raw`const child = require("node:child_process").spawn(process.execPath,
+  ["-e", 'globalThis.channel = new (require("node:worker_threads").MessageChannel)(); globalThis.channel.port1.on("message", () => {}); globalThis.channel.port1.ref(); process.send("ready")'],
+  { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+child.once("message", () => {
+  child.disconnect();
+  process.stdout.write(JSON.stringify({ home: process.env.USERPROFILE, pid: child.pid }));
+  child.unref();
+});`,
         ],
       });
-      expect(foreground).toMatchObject({ code: 0, stdout: home });
+      expect(foreground).toMatchObject({ code: 0 });
+      const output: unknown = JSON.parse(foreground.stdout);
+      if (!isRecord(output) || typeof output.pid !== "number") {
+        throw new Error("foreground command did not identify its descendant");
+      }
+      expect(output.home).toBe(home);
+      expect(isPidDefinitelyDead(output.pid)).toBe(true);
+      expect(runtime.processes.hasActiveWork()).toBe(false);
+      expect(helper.exitCode).toBeNull();
       expect(readLease()).toEqual(before);
       await expect(
         command({ action: "acquire", nonce: "b".repeat(32), timeoutMs: 30_000 }),
@@ -103,6 +139,9 @@ describe.runIf(process.platform === "win32")("Windows node-host quiescence", () 
           validationMode: "final",
         }),
       ).rejects.toThrow();
+      await expect(command({ action: "release", nonce: "b".repeat(32) })).rejects.toThrow(
+        "no longer active",
+      );
       expect(readLease()).toEqual(before);
       // App retirement must not retire infrastructure lease control.
       await runtime.processes.stopEnvironment({ ...identity, ownerEpoch: 1 });
@@ -112,6 +151,46 @@ describe.runIf(process.platform === "win32")("Windows node-host quiescence", () 
       expect(readLease()).toMatchObject({ nonce, processes: [], watchdog: null });
       await expect(command({ action: "release", nonce })).resolves.toMatchObject({ code: 0 });
       expect(readLease()).toBeUndefined();
+      const controlSpawns = spawned.mock.calls.length;
+      const nextNonce = "c".repeat(32);
+      await command({ action: "acquire", nonce: nextNonce, timeoutMs: 30_000 });
+      expect(readLease()).toMatchObject({ nonce: nextNonce, processes: [], watchdog: null });
+      for (const action of ["renew", "release"] as const) {
+        await expect(
+          command(
+            action === "renew"
+              ? { action, nonce, timeoutMs: 30_000, validationMode: "final" }
+              : { action, nonce },
+          ),
+        ).rejects.toThrow("no longer active");
+      }
+      await command({
+        action: "renew",
+        nonce: nextNonce,
+        timeoutMs: 30_000,
+        validationMode: "final",
+      });
+      await command({ action: "release", nonce: nextNonce });
+      expect(spawned).toHaveBeenCalledTimes(controlSpawns);
+      expect(helper.exitCode).toBeNull();
+      await runtime.applyRetainSnapshot(
+        {
+          version: 1,
+          gatewayNamespace: identity.gatewayNamespace,
+          controllerId: "windows-watchdog-proof",
+          sequence: 1,
+          retain: [],
+        },
+        async () => [],
+      );
+      expect(fs.existsSync(workspaceDir)).toBe(false);
+      expect(helper.exitCode).toBeNull();
+      const retired = once(helper, "close");
+      await runtime.quiescence.close();
+      await retired;
+      expect(helper.exitCode).toBe(0);
+      expect(runtime.quiescence.hasActiveWork()).toBe(false);
+      expect(fs.existsSync(workspaceDir)).toBe(false);
     } finally {
       await runtime.quiescence.close();
       await runtime.processes.close();

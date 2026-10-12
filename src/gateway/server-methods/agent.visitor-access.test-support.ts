@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
 import { activatePluginRegistry } from "../../plugins/loader-shared.js";
 import { clearActivePluginRegistry } from "../../plugins/runtime.js";
-import { startPluginServices, type PluginServicesHandle } from "../../plugins/services.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../../plugins/services.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -32,8 +35,9 @@ export const visitorTestStateOptions = {
 
 export function createVisitorGatewayConfig(workspaceDir: string): OpenClawConfig {
   return {
-    agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] },
+    agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
     gateway: {
+      controlUi: { github: { token: "synthetic-visitor-github-token" } },
       roles: {
         default: "guest",
         definitions: {
@@ -101,6 +105,9 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
     const url = new URL(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
     if (url.href === "https://api.github.com/users/fresh-account" && method === "GET") {
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer synthetic-visitor-github-token",
+      );
       return Response.json({ id: 42, login: "fresh-account", email: null });
     }
     const collection = url.pathname === policiesPath;
@@ -167,7 +174,7 @@ export async function startVisitorGateway({
     ),
     "users.list": expectDefined(usersHandlers["users.list"], "users.list handler missing"),
   };
-  const loaded = loadGatewayPlugins({
+  const loaded = await loadGatewayPlugins({
     cfg: config,
     autoEnabledReasons: {},
     workspaceDir: state.workspaceDir,

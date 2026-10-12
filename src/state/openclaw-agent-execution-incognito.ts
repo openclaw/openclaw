@@ -1,10 +1,18 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
+import path from "node:path";
+import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-incognito.types.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
+import { captureRuntimeConfigWithSource } from "../config/runtime-config-capture-state.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import type { SessionActor } from "../config/sessions/session-actor-contract.js";
 import {
   createIncognitoSessionFacts,
-  type IncognitoSessionRunner,
+  type IncognitoSessionActor,
 } from "../config/sessions/session-incognito-actor.js";
+import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import { forkIncognitoSessionFromParent } from "../config/sessions/session-incognito-lifecycle.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
@@ -19,41 +27,39 @@ import {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
+import { IncognitoSessionEndedError } from "./incognito-session-error.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
-import { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
+import {
+  agentDatabaseLifecycle,
+  retainIncognitoSharedState,
+} from "./openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import {
   assertIncognitoAgentDatabasePathAvailable,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import {
-  IncognitoSessionEndedError,
-  type AgentDatabaseIncognitoAuthority,
-  type AgentDatabaseIncognitoIdentity,
-  type AgentDatabaseIncognitoOpen,
-  type AgentDatabaseIncognitoOperations,
+import type {
+  AgentDatabaseIncognitoAuthority,
+  AgentDatabaseIncognitoIdentity,
+  AgentDatabaseIncognitoOpen,
 } from "./openclaw-agent-execution-contract.js";
+import { createIncognitoAbsenceScopes } from "./openclaw-agent-execution-incognito-absence.js";
+import type { IncognitoAgentDatabaseOperations } from "./openclaw-agent-execution-incognito-contract.js";
+import {
+  createIncognitoSessionActorFactory,
+  invalidateIncognitoSessionActorTokens,
+} from "./openclaw-agent-execution-incognito-session-actors.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
-type Store = SqliteWorkerStore<AgentDatabaseIncognitoOperations>;
-export type IncognitoAgentDatabaseExecution = {
-  readonly identity: AgentDatabaseIncognitoIdentity;
-  readonly sessions: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>;
-  assertCurrent(): void;
-  /** Retains the actor across preparation/publication, independently of its writer turn. */
-  run<T>(
-    authority: AgentDatabaseIncognitoAuthority,
-    operation: (
-      scope: Pick<
-        SqliteWorkerStore<Pick<AgentDatabaseIncognitoOperations, "database.incognito.memory">>,
-        "execute"
-      >,
-    ) => Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T>;
+type Store = SqliteWorkerStore<IncognitoAgentDatabaseOperations>;
+export type IncognitoAgentDatabaseExecution = IncognitoSessionActor & {
+  readonly acp: IncognitoAcpSessionAccess;
+  /** Explicit inactive-path acquisition; legacy callers retain their existing facts contract. */
+  readonly sessionActors: ReturnType<typeof createIncognitoSessionActorFactory>;
   /** Release this borrow, without idle eviction of the memory database. */
   release(): Promise<void>;
   /** End the whole agent's incognito database, joining accepted work and native cleanup. */
@@ -64,6 +70,7 @@ export type IncognitoAgentExecutionOwner = {
   readonly kind: "ephemeral";
   readonly agentId: string;
   readonly identity: AgentDatabaseIncognitoIdentity;
+  readonly facts: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["captureRead"]>;
   assertCurrent(this: void): void;
   readonly state: "opening" | "live" | "closing" | "lost" | "closed";
   borrow(
@@ -105,9 +112,16 @@ function createIncognitoAgentExecutionOwner(
   let closing: Promise<void> | undefined;
   let nativeStopped: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
+  let releaseShared: (() => void) | undefined;
+  const actorWriteTokens = new Map<
+    string,
+    { writeToken: string; dependencySessionIds: string[] }
+  >();
+  const sessionActors = new Set<SessionActor>();
   const pending = new Set<Promise<unknown>>();
-  const assertCurrent = () => {
-    if (loss || state === "closed" || state === "closing") {
+  const continuations = new AsyncLocalStorage<{ borrow: object; active: boolean }>();
+  const assertRetainedCurrent = () => {
+    if (loss || state === "closed") {
       throw loss ?? new IncognitoSessionEndedError();
     }
     lifecycle.assertOwned();
@@ -123,42 +137,40 @@ function createIncognitoAgentExecutionOwner(
       throw new IncognitoSessionEndedError();
     }
   };
-  let granting = false;
-  const withGrant = <T>(operation: () => T): T => {
-    granting = true;
-    try {
-      return operation();
-    } finally {
-      granting = false;
+  const assertCurrent = () => {
+    if (state === "closing") {
+      throw new IncognitoSessionEndedError();
     }
+    assertRetainedCurrent();
   };
-  const sessionFacts = createIncognitoSessionFacts(identity, assertCurrent, withGrant);
+  const sessionFacts = createIncognitoSessionFacts(
+    identity,
+    assertRetainedCurrent,
+    (targets) => invalidateIncognitoSessionActorTokens(actorWriteTokens, targets),
+    assertCurrent,
+  );
   const admission =
     (source: AgentDatabaseIncognitoAuthority): SqliteWorkerAdmissionFactory =>
     () => ({
       nativeLocations: [],
-      admission: createSqliteWorkerOperationAdmission((request, grant) =>
-        withGrant(() => {
-          source.assertCurrent();
-          assertCurrent();
-          const expected = request.stage === "open" ? input : { identity };
-          if (
-            !isDeepStrictEqual(request.facts, expected) ||
-            (request.stage !== "open" && request.stage !== "prepare")
-          ) {
-            throw new Error("Incognito operation differs from its admitted actor");
-          }
-          // Session commands use their separate request-bound transaction/commit admission.
-          if (!grant()) {
-            throw new Error("Incognito actor admission was refused");
-          }
-        }),
-      ),
+      admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+        source.assertCurrent();
+        assertRetainedCurrent();
+        // Session commands use their separate request-bound transaction/commit admission.
+        if (!grant()) {
+          throw new Error("Incognito actor admission was refused");
+        }
+      }),
     });
   const track = <T>(work: Promise<T>, collection = pending): Promise<T> => {
     collection.add(work);
     void work.finally(() => collection.delete(work)).catch(() => undefined);
     return work;
+  };
+  const drain = async (collection: Set<Promise<unknown>>) => {
+    while (collection.size > 0) {
+      await Promise.allSettled(collection);
+    }
   };
   const open = (): Promise<Store> => {
     opening ??= Promise.resolve()
@@ -168,7 +180,7 @@ function createIncognitoAgentExecutionOwner(
         signal?.throwIfAborted();
         assertIncognitoAgentDatabasePathAvailable(options.path);
         const opened =
-          await openEphemeralAgentDatabaseSqliteWorkerStore<AgentDatabaseIncognitoOperations>(
+          await openEphemeralAgentDatabaseSqliteWorkerStore<IncognitoAgentDatabaseOperations>(
             {
               moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
               databasePath: options.path,
@@ -212,6 +224,7 @@ function createIncognitoAgentExecutionOwner(
     kind: "ephemeral",
     agentId: options.agentId,
     identity,
+    facts: sessionFacts.captureRead(assertCurrent),
     assertCurrent,
     get state() {
       return state;
@@ -266,68 +279,211 @@ function createIncognitoAgentExecutionOwner(
       let released = false;
       let releasing: Promise<void> | undefined;
       const borrowedWork = new Set<Promise<unknown>>();
-      const assertBorrowed = () => {
+      const acquiredActors = new Set<SessionActor>();
+      const borrow = {};
+      const assertReferenceCurrent = () => {
         assertCurrent();
+        source.assertCurrent();
         if (released) {
           throw new Error("Incognito execution reference is released");
         }
       };
-      const run: IncognitoSessionRunner = (
-        currentAuthority,
-        operation,
-        operationSignal,
-        createAdmission,
-      ) => {
-        if (granting) {
-          throw new Error("Incognito authority callbacks cannot call their actor");
+      const assertBorrowed = () => {
+        const current = continuations.getStore();
+        if (current?.borrow === borrow && current.active) {
+          assertRetainedCurrent();
+          source.assertCurrent();
+        } else {
+          assertReferenceCurrent();
         }
+      };
+      const retain = <T>(
+        operation: () => Promise<T>,
+        kind: "composition" | "command" | "cleanup" | "settlement" = "composition",
+      ): Promise<T> => {
+        const parent = continuations.getStore();
+        const continuation = { borrow, active: true };
+        const completion = createDeferredCore<T>();
+        const work = track(track(completion.promise), borrowedWork);
+        const execute = () =>
+          continuations.run(continuation, async () => {
+            try {
+              const result = await operation();
+              // Nested work may feed its still-live composition, never a released caller.
+              if (
+                kind === "cleanup" ||
+                kind === "settlement" ||
+                (parent?.borrow === borrow && parent.active)
+              ) {
+                assertRetainedCurrent();
+              } else if (kind === "command") {
+                assertCurrent();
+              } else {
+                assertReferenceCurrent();
+              }
+              return result;
+            } finally {
+              continuation.active = false;
+            }
+          });
+        // Commands reserve FIFO now; deferred compositions retain custody before their callback runs.
+        const running = kind === "composition" ? Promise.resolve().then(execute) : execute();
+        void running.then(completion.resolve, completion.reject);
+        return work;
+      };
+      const run = <T>(
+        currentAuthority: IncognitoSessionAuthority,
+        operation: (scope: Pick<Store, "execute">) => Promise<T>,
+        operationSignal?: AbortSignal,
+        createAdmission?: SqliteWorkerAdmissionFactory,
+        cleanup = false,
+      ): Promise<T> => {
         currentAuthority.assertCurrent();
-        assertBorrowed();
+        if (cleanup) {
+          assertRetainedCurrent();
+        } else {
+          assertBorrowed();
+        }
         const assertOperation = () => {
+          if (!cleanup) {
+            source.assertCurrent();
+          }
           currentAuthority.assertCurrent();
-          assertCurrent();
+          assertRetainedCurrent();
           operationSignal?.throwIfAborted();
         };
-        const work = runOpenClawAgentWorkerWrite(
-          { target: identity, assertCurrent: assertOperation },
-          async () => {
-            try {
-              const result = await runSqliteWorkerStoreOperation(
-                opened,
-                operation,
-                undefined,
-                assertOperation,
-                createAdmission ?? admission(currentAuthority),
-              );
-              assertOperation();
-              return result;
-            } catch (error) {
-              if (loss || !isSqliteWorkerStoreAvailable(opened)) {
-                // The broker settles dispatched custody only after native worker exit.
-                await nativeStopped;
-                throw loss ?? new IncognitoSessionEndedError({ cause: error });
-              }
-              throw error;
-            }
-          },
-          undefined,
-          operationSignal,
+        return retain(
+          () =>
+            runOpenClawAgentWorkerWrite(
+              { target: identity, assertCurrent: assertOperation },
+              async () => {
+                try {
+                  const result = await runSqliteWorkerStoreOperation(
+                    opened,
+                    operation,
+                    undefined,
+                    assertOperation,
+                    createAdmission ?? admission({ assertCurrent: assertOperation }),
+                  );
+                  assertOperation();
+                  return result;
+                } catch (error) {
+                  if (loss || !isSqliteWorkerStoreAvailable(opened)) {
+                    // The broker settles dispatched custody only after native worker exit.
+                    await nativeStopped;
+                    throw loss ?? new IncognitoSessionEndedError({ cause: error });
+                  }
+                  throw error;
+                }
+              },
+              undefined,
+              operationSignal,
+            ),
+          cleanup ? "cleanup" : "command",
         );
-        return track(track(work), borrowedWork);
       };
-      return {
+      const execution: IncognitoAgentDatabaseExecution = {
+        agentId: options.agentId,
+        path: options.path,
         identity,
-        sessions: sessionFacts.bind(run, assertBorrowed),
+        sessions: sessionFacts.bind(run, assertBorrowed, retain, () => source.assertCurrent()),
+        sessionActors: createIncognitoSessionActorFactory({
+          options,
+          identity,
+          assertBorrowed,
+          assertReferenceCurrent,
+          assertRetainedCurrent,
+          retain: (operation) => retain(operation, "settlement"),
+          run: (actorAuthority, operation, actorAdmission) =>
+            run(actorAuthority, operation, undefined, actorAdmission, false),
+          writeTokens: actorWriteTokens,
+          sessionFacts,
+          sessionActors,
+          acquiredActors,
+          getExecution: () => execution,
+        }),
+        acp: {
+          prepareEntryRead(params) {
+            const readAuthority = params.authority;
+            const env = cloneEnvWithPlatformSemantics(params.env);
+            env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+            const shared = captureOpenClawStateReadWorkerContext({
+              env,
+              path: params.databasePath ? path.resolve(params.databasePath) : undefined,
+            });
+            const readInput = {
+              signal: params.signal,
+              cfg: captureRuntimeConfigWithSource(params.cfg, params.cfg),
+              sessionKey: params.sessionKey,
+              env,
+              databasePath: shared.admission.databasePath,
+              storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+                agentId: execution.agentId,
+                env,
+              }),
+            };
+            const assertReadCurrent = () => {
+              execution.assertCurrent();
+              readAuthority.assertCurrent();
+              shared.maintenanceScope?.assertAdmission();
+              shared.admission.assertCurrent();
+            };
+            assertReadCurrent();
+            return execution.sessions.withSharedState(async () => {
+              const { prepareIncognitoAcpSessionEntryRead } =
+                await import("../acp/runtime/session-meta-worker-mutation.js");
+              readInput.signal?.throwIfAborted();
+              assertReadCurrent();
+              return prepareIncognitoAcpSessionEntryRead({
+                ...readInput,
+                actor: execution,
+                authority: {
+                  assertCurrent: assertReadCurrent,
+                  authorize: (stage, facts) => readAuthority.authorize?.(stage, facts),
+                },
+              });
+            });
+          },
+          readEntry(params) {
+            return execution.sessions
+              .withSharedState(async () => {
+                const { readIncognitoAcpSessionEntry } =
+                  await import("../acp/runtime/session-meta-worker-mutation.js");
+                return readIncognitoAcpSessionEntry({ ...params, actor: execution });
+              })
+              .then((entry) => {
+                params.authority.assertCurrent();
+                execution.assertReadable();
+                return entry;
+              });
+          },
+          upsertMeta(params) {
+            return execution.sessions
+              .withSharedState(async () => {
+                const { upsertIncognitoAcpSessionMeta } =
+                  await import("../acp/runtime/session-meta-worker-mutation.js");
+                return upsertIncognitoAcpSessionMeta({ ...params, actor: execution });
+              })
+              .then((entry) => {
+                params.authority.assertCurrent();
+                execution.assertReadable();
+                return entry;
+              });
+          },
+        },
         assertCurrent: assertBorrowed,
-        run: (currentAuthority, operation, operationSignal) =>
-          run(currentAuthority, operation, operationSignal),
+        assertReadable: assertReferenceCurrent,
         release() {
           released = true;
-          releasing ??= Promise.allSettled(borrowedWork).then(() => undefined);
+          releasing ??= (async () => {
+            await drain(borrowedWork);
+            await Promise.all([...acquiredActors].map((actor) => actor.release()));
+          })();
           return releasing;
         },
         close: () => owner.close(),
       };
+      return execution;
     },
     close() {
       if (state === "closed") {
@@ -336,15 +492,19 @@ function createIncognitoAgentExecutionOwner(
       if (!loss) {
         state = "closing";
       }
-      sessionFacts.clear();
       closing ??= (async () => {
-        await Promise.allSettled(pending);
+        await drain(pending);
         await opening?.catch(() => undefined);
+        await Promise.all([...sessionActors].map((actor) => actor.release()));
+        // Accepted compositions own their cleanup and commit facts until they settle.
+        sessionFacts.clear();
         await store?.close();
         await nativeStopped;
+        continuations.disable();
         state = "closed";
         unregister();
         unregisterShared?.();
+        releaseShared?.();
         lifecycle.retired();
       })().catch((error: unknown) => {
         closing = undefined;
@@ -360,11 +520,11 @@ function createIncognitoAgentExecutionOwner(
       if (!loss) {
         state = "closing";
       }
-      sessionFacts.clear();
     },
     close: () => owner.close(),
   });
   try {
+    releaseShared = retainIncognitoSharedState(context.environment);
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
       close: async (sharedIdentity) => {
         if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
@@ -373,6 +533,8 @@ function createIncognitoAgentExecutionOwner(
       },
     });
   } catch (error) {
+    continuations.disable();
+    releaseShared?.();
     unregister();
     throw error;
   }
@@ -392,6 +554,9 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
     constraints?: FileConstraints,
   ) => FileExecution,
 ) {
+  const absentSources = createIncognitoAbsenceScopes(
+    (pathname) => executions.get(pathname) !== undefined,
+  );
   /** Inactive actor entry point. Production incognito routing stays native until P7. */
   async function openIncognitoAgentDatabaseExecution(
     options: Omit<OpenClawAgentDatabaseOptions, "path">,
@@ -445,6 +610,7 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
         },
         signal,
       );
+      absentSources.revoke(pathname);
       executions.set(pathname, created);
       owner = created;
     }
@@ -490,6 +656,8 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
     return captureFile(target, constraints);
   }
   return Object.assign(capture, {
+    forkIncognitoSessionFromParent,
+    captureIncognitoAbsence: absentSources.capture,
     /** Inactive topology view; production discovery continues to use the native owner. */
     listIncognito(env: NodeJS.ProcessEnv = process.env) {
       const capturedEnv = { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) };
@@ -508,6 +676,7 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
             agentId: owner.agentId,
             storePath: pathname,
             identity: owner.identity,
+            facts: owner.facts,
             assertCurrent: owner.assertCurrent,
           },
         ];

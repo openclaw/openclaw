@@ -25,11 +25,6 @@ type HelperSupervisorParams = {
   logger: RuntimeLogger;
   runCommandWithTimeout: PluginRuntime["system"]["runCommandWithTimeout"];
   connectedBundles: () => string[];
-  initialGraceMs?: number;
-  retryDelaysMs?: readonly number[];
-  targetAvailable?: (target: FaceTimeHelperTarget) => boolean;
-  processAlive?: (processId: number) => boolean;
-  connectionGraceMs?: number;
 };
 
 const TARGET_BUNDLES: Record<FaceTimeHelperTarget, ReadonlySet<string>> = {
@@ -42,7 +37,7 @@ const TARGET_APP_PATHS: Record<FaceTimeHelperTarget, string> = {
 };
 const FACETIME_HELPER_TARGETS = ["FaceTime", "Phone"] as const;
 
-const DEFAULT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000] as const;
+const RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000] as const;
 
 function targetForBundle(bundleIdentifier: string): FaceTimeHelperTarget | undefined {
   return FACETIME_HELPER_TARGETS.find((target) => TARGET_BUNDLES[target].has(bundleIdentifier));
@@ -51,32 +46,27 @@ function targetForBundle(bundleIdentifier: string): FaceTimeHelperTarget | undef
 export class FaceTimeHelperSupervisor {
   readonly #states: Map<FaceTimeHelperTarget, HelperSupervisorTargetState>;
   readonly #timers = new Map<FaceTimeHelperTarget, ReturnType<typeof setTimeout>>();
-  readonly #retryDelaysMs: readonly number[];
   #injectionChain: Promise<void> = Promise.resolve();
   #started = false;
   #generation = 0;
   #abortController = new AbortController();
 
   constructor(private readonly params: HelperSupervisorParams) {
-    this.#retryDelaysMs =
-      params.retryDelaysMs && params.retryDelaysMs.length > 0
-        ? params.retryDelaysMs
-        : DEFAULT_RETRY_DELAYS_MS;
-    const targetAvailable =
-      params.targetAvailable ?? ((target) => existsSync(TARGET_APP_PATHS[target]));
     this.#states = new Map(
-      FACETIME_HELPER_TARGETS.filter((target) => targetAvailable(target)).map((target) => [
-        target,
-        {
+      FACETIME_HELPER_TARGETS.filter((target) => existsSync(TARGET_APP_PATHS[target])).map(
+        (target) => [
           target,
-          connected: false,
-          attempts: 0,
-          injecting: false,
-          queued: false,
-          retryScheduled: false,
-          stale: false,
-        },
-      ]),
+          {
+            target,
+            connected: false,
+            attempts: 0,
+            injecting: false,
+            queued: false,
+            retryScheduled: false,
+            stale: false,
+          },
+        ],
+      ),
     );
   }
 
@@ -90,7 +80,7 @@ export class FaceTimeHelperSupervisor {
     this.#refreshConnections();
     for (const target of this.#states.keys()) {
       if (!this.#states.get(target)?.connected) {
-        this.#schedule(target, this.params.initialGraceMs ?? 6_000);
+        this.#schedule(target, 6_000);
       }
     }
   }
@@ -130,7 +120,7 @@ export class FaceTimeHelperSupervisor {
     }
     this.#refreshConnections();
     if (this.#started && !this.#states.get(target)?.connected) {
-      this.#schedule(target, this.#retryDelaysMs[0] ?? 1_000);
+      this.#schedule(target, RETRY_DELAYS_MS[0]);
     }
   }
 
@@ -201,24 +191,22 @@ export class FaceTimeHelperSupervisor {
       if (!this.#started) {
         return;
       }
-      const processAlive =
-        this.params.processAlive ??
-        ((candidate: number) => {
-          try {
-            process.kill(candidate, 0);
-            return true;
-          } catch (error) {
-            if (error && typeof error === "object" && "code" in error) {
-              return error.code !== "ESRCH";
-            }
-            return true;
-          }
-        });
       const state = this.#states.get(target);
       if (!state?.stale || state.staleProcessId !== processId) {
         return;
       }
-      if (processAlive(processId)) {
+      let processAlive = true;
+      try {
+        process.kill(processId, 0);
+      } catch (error) {
+        processAlive = !(
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "ESRCH"
+        );
+      }
+      if (processAlive) {
         this.#scheduleStaleProcessCheck(target, processId);
         return;
       }
@@ -252,7 +240,7 @@ export class FaceTimeHelperSupervisor {
     target: FaceTimeHelperTarget,
     generation: number,
   ): Promise<void> {
-    const deadline = Date.now() + (this.params.connectionGraceMs ?? 10_000);
+    const deadline = Date.now() + 10_000;
     while (this.#started && generation === this.#generation && Date.now() < deadline) {
       this.#refreshConnections();
       const state = this.#states.get(target);
@@ -314,8 +302,8 @@ export class FaceTimeHelperSupervisor {
     }
     this.#refreshConnections();
     if (!state.connected && !state.stale) {
-      const retryIndex = Math.min(state.attempts - 1, this.#retryDelaysMs.length - 1);
-      this.#schedule(target, this.#retryDelaysMs[retryIndex] ?? 60_000);
+      const retryIndex = Math.min(state.attempts - 1, RETRY_DELAYS_MS.length - 1);
+      this.#schedule(target, RETRY_DELAYS_MS[retryIndex] ?? 60_000);
     }
   }
 }

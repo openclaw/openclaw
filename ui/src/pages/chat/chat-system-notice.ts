@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
@@ -24,6 +25,12 @@ export function projectChatSystemNotice(
         },
       ]
     : [];
+  const skillChanges = readSkillWorkshopChangeNotice(item.message);
+  const skillNoticeMessage = skillChanges && (normalized ?? safeNormalizeMessage(item.message));
+  if (skillChanges && skillNoticeMessage) {
+    const { timestamp } = skillNoticeMessage;
+    return [{ kind: "notice", key: item.key, text: "", timestamp, skillChanges }, ...pendingItems];
+  }
   const provenance = asRecord(asRecord(item.message)?.provenance);
   if (provenance?.kind !== "internal_system") {
     return [item, ...pendingItems];

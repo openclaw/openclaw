@@ -30,15 +30,6 @@ const SENDER_PREFIX_RE = new RegExp(`^(${SENDER_PREFIXES.join("|")}):`, "i");
 /** Channel-specific formatter for allowFrom identity values. */
 export type AllowFromFormatter = (values: string[]) => string[];
 
-/** Removes known channel/user prefixes before identity comparisons. */
-function stripSenderPrefix(value?: string): string {
-  if (!value) {
-    return "";
-  }
-  const trimmed = value.trim();
-  return trimmed.replace(SENDER_PREFIX_RE, "");
-}
-
 /** Parses explicit elevated allowlist entries such as `id:telegram:123`. */
 export function parseExplicitElevatedAllowEntry(
   entry: string,
@@ -80,7 +71,7 @@ export function buildFormattedTokens(params: {
 }): Set<string> {
   const tokens = new Set<string>();
   const values = params.includeStripped
-    ? [params.value, stripSenderPrefix(params.value)].filter(Boolean)
+    ? [params.value, params.value.trim().replace(SENDER_PREFIX_RE, "")].filter(Boolean)
     : [params.value];
   for (const entry of params.formatAllowFrom(values)) {
     addTokenVariants(tokens, entry);
@@ -103,19 +94,16 @@ export function matchesFormattedTokens(params: {
   return false;
 }
 
+function buildMutableTokenVariants(value: string): Set<string> {
+  const tokens = new Set<string>();
+  addTokenVariants(tokens, value);
+  addTokenVariants(tokens, normalizeAtHashSlug(value));
+  return tokens;
+}
+
 /** Builds normalized variants for mutable labels such as names and tags. */
 export function buildMutableTokens(value?: string): Set<string> {
-  const tokens = new Set<string>();
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return tokens;
-  }
-  addTokenVariants(tokens, trimmed);
-  const slugged = normalizeAtHashSlug(trimmed);
-  if (slugged) {
-    addTokenVariants(tokens, slugged);
-  }
-  return tokens;
+  return buildMutableTokenVariants(normalizeOptionalString(value) ?? "");
 }
 
 /** Checks mutable label text against normalized token variants. */
@@ -123,13 +111,7 @@ export function matchesMutableTokens(value: string, tokens: Set<string>): boolea
   if (!value || tokens.size === 0) {
     return false;
   }
-  const probes = new Set<string>();
-  addTokenVariants(probes, value);
-  const slugged = normalizeAtHashSlug(value);
-  if (slugged) {
-    addTokenVariants(probes, slugged);
-  }
-  for (const probe of probes) {
+  for (const probe of buildMutableTokenVariants(value)) {
     if (tokens.has(probe)) {
       return true;
     }

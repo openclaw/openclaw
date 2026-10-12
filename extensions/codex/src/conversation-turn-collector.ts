@@ -32,6 +32,16 @@ export function createCodexConversationTurnCollector(threadId: string) {
     const texts = [...assistantTextByItem.values()].map((text) => text.trim()).filter(Boolean);
     return texts.at(-1) ?? "";
   };
+  const completeItem = (item: JsonObject, itemId: string) => {
+    assistantTextByItem.delete(itemId);
+    const text =
+      item.phase === "commentary" || item.delivery === "async"
+        ? undefined
+        : readNonEmptyStringPreservingWhitespace(item.text);
+    if (text?.trim()) {
+      assistantTextByItem.set(itemId, text);
+    }
+  };
   const clearWaitState = () => {
     if (timeout) {
       clearTimeout(timeout);
@@ -72,11 +82,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
       if (item?.type === "agentMessage") {
         const itemId =
           normalizeOptionalString(item.id) ?? normalizeOptionalString(params.itemId) ?? "assistant";
-        assistantTextByItem.delete(itemId);
-        const text = readAssistantReplyText(item);
-        if (text?.trim()) {
-          assistantTextByItem.set(itemId, text);
-        }
+        completeItem(item, itemId);
       }
       return;
     }
@@ -102,11 +108,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
           }
           const itemId =
             normalizeOptionalString(item.id) ?? `assistant-${assistantTextByItem.size + 1}`;
-          assistantTextByItem.delete(itemId);
-          const text = readAssistantReplyText(item);
-          if (text?.trim()) {
-            assistantTextByItem.set(itemId, text);
-          }
+          completeItem(item, itemId);
         }
       }
       finish();
@@ -139,10 +141,4 @@ export function createCodexConversationTurnCollector(threadId: string) {
       });
     },
   };
-}
-
-function readAssistantReplyText(item: JsonObject): string | undefined {
-  return item.phase === "commentary" || item.delivery === "async"
-    ? undefined
-    : readNonEmptyStringPreservingWhitespace(item.text);
 }

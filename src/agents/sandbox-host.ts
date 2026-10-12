@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
   COMMAND_PALETTE_SHORTCUT,
   createKeyboardShortcutMatcher,
 } from "../shared/keyboard-shortcuts.js";
 import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
+import { buildSandboxWidgetScrollBridgeHtml } from "./sandbox-widget-scroll-bridge.js";
 
 export type SandboxHostCsp = {
   connectDomains?: string[];
@@ -142,53 +144,40 @@ function normalizeDomains(
   const allowedProtocols = options?.allowWebSocket
     ? new Set(["http:", "https:", "ws:", "wss:"])
     : new Set(["http:", "https:"]);
-  const entries = value
-    .filter((entry): entry is string => {
-      if (
-        typeof entry !== "string" ||
-        entry.length === 0 ||
-        entry.length > 2048 ||
-        entry !== entry.trim()
-      ) {
-        return false;
-      }
-      for (let index = 0; index < entry.length; index += 1) {
-        const code = entry.charCodeAt(index);
-        if (code <= 31 || code === 127) {
-          return false;
-        }
-      }
-      if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
-        return true;
-      }
-      let parsed: URL;
-      try {
-        parsed = new URL(entry);
-      } catch {
-        return false;
-      }
-      if (
-        !allowedProtocols.has(parsed.protocol) ||
-        parsed.username !== "" ||
-        parsed.password !== "" ||
-        parsed.pathname !== "/" ||
-        parsed.search !== "" ||
-        parsed.hash !== ""
-      ) {
-        return false;
-      }
-      // URL parsing validates bracketed IPv6. MCP Apps additionally support one
-      // leading wildcard label, while board declarations arrive as exact hosts.
-      return (
-        /^\[[0-9A-Fa-f:.]+\]$/u.test(parsed.hostname) ||
-        /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
-      );
-    })
-    .map((entry) =>
-      options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")
-        ? entry
-        : new URL(entry).origin,
-    );
+  const entries = value.flatMap((entry) => {
+    if (
+      typeof entry !== "string" ||
+      entry.length === 0 ||
+      entry.length > 2048 ||
+      entry !== entry.trim()
+    ) {
+      return [];
+    }
+    if (containsAsciiControlCharacter(entry)) {
+      return [];
+    }
+    if (options?.allowMediaSchemes && (entry === "https:" || entry === "blob:")) {
+      return [entry];
+    }
+    const parsed = URL.parse(entry);
+    if (
+      !parsed ||
+      !allowedProtocols.has(parsed.protocol) ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      return [];
+    }
+    // URL parsing validates bracketed IPv6. MCP Apps additionally support one
+    // leading wildcard label, while board declarations arrive as exact hosts.
+    return /^\[[0-9A-Fa-f:.]+\]$/u.test(parsed.hostname) ||
+      /^(?:\*\.)?[A-Za-z0-9.-]+$/u.test(parsed.hostname)
+      ? [parsed.origin]
+      : [];
+  });
   return entries.length > 0 ? entries : undefined;
 }
 
@@ -291,10 +280,12 @@ export function decodeSandboxHostCsp(value: string | null): SandboxHostCsp | und
 function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const blockDescendantFrames = csp?.blockDescendantFrames === true;
   // Runtime insertion reaches existing saved widgets without changing their
-  // approved bytes. Its first capture listener consumes private shortcut state
-  // before stored scripts; other sandbox documents never receive that nonce.
+  // approved bytes. Capture listeners consume private host state before stored
+  // scripts, including older wrappers whose scroll bridge must stay nonce-less.
   const serializedDocumentGuard = JSON.stringify(
-    buildSandboxDocumentGuardHtml(blockDescendantFrames) + buildSandboxShortcutBridgeHtml(),
+    buildSandboxDocumentGuardHtml(blockDescendantFrames) +
+      buildSandboxShortcutBridgeHtml() +
+      buildSandboxWidgetScrollBridgeHtml(),
   ).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <meta charset="utf-8" />
@@ -316,6 +307,7 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   }
   const createInner = (allowScripts = true) => {
     const frame = document.createElement("iframe");
+    frame.setAttribute("allow", "fullscreen *");
     // Block native popups here without reserving widget globals such as open.
     frame.setAttribute("sandbox", allowScripts ? "allow-scripts allow-forms" : "");
     return frame;

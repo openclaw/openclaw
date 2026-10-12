@@ -16,7 +16,7 @@ type ProgressPayload<TEvent extends ChannelProgressDraftLineInput["event"]> = Om
 >;
 
 type ToolProgressPayload = ProgressPayload<"tool"> & { detailMode?: "explain" | "raw" };
-type ItemProgressPayload = Omit<ProgressPayload<"item">, "itemKind"> & { kind?: string };
+export type ItemProgressPayload = Omit<ProgressPayload<"item">, "itemKind"> & { kind?: string };
 type ChannelProgressDraftEventLine = string | ChannelProgressDraftLine;
 export type ChannelProgressDraftEventLineBuilder = (
   input: ChannelProgressDraftLineInput,
@@ -26,6 +26,7 @@ export type ChannelProgressDraftEventLineBuilder = (
 export function createChannelProgressDraftEventHandlers(params: {
   entry: StreamingCompatEntry | null | undefined;
   preparedItems?: boolean;
+  toolIcons?: boolean;
   buildLine?: ChannelProgressDraftEventLineBuilder;
   onTool?: (payload: ToolProgressPayload) => void;
   onItem?: (payload: ItemProgressPayload) => void;
@@ -38,7 +39,7 @@ export function createChannelProgressDraftEventHandlers(params: {
     input: Exclude<ChannelProgressDraftLineInput, { event: "plan" }>,
     detailMode?: "explain" | "raw",
   ) => {
-    const options = detailMode ? { detailMode } : undefined;
+    const options = { detailMode, toolIcons: params.toolIcons };
     const line = params.buildLine
       ? params.buildLine(input, options)
       : buildChannelProgressDraftLineForEntry(params.entry, input, options);

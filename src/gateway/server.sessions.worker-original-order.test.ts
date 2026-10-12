@@ -389,14 +389,10 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
       clearEnvironment: () => {},
       rotateCredential: () => true,
     },
-    executeInference: async () => ({
-      type: "error",
-      reason: "cancelled",
-      message: "cancelled by boundary fixture",
-    }),
   });
   workerService = environmentService;
   const dispatch = createWorkerPlacementDispatchService({
+    initialPlacements: placements.list(),
     placements,
     environments: {
       ...environmentService,
@@ -427,7 +423,7 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: localWorkspace }, begin()),
+      await reclaim({ kind: "local", path: localWorkspace }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace: async () => ({ kind: "local", path: localWorkspace }),

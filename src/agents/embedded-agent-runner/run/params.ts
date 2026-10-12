@@ -1,3 +1,4 @@
+import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -6,13 +7,10 @@ import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
 import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
+import type { SkillLibraryAuthoringCapability } from "../../../skills/library/authoring.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
-import type {
-  SkillProposalOrigin,
-  SkillWorkshopProposalMutationBudget,
-  SkillWorkshopRunOptions,
-} from "../../../skills/workshop/types.js";
 import type { ModelFallbackAvailability } from "../../agent-scope.js";
+import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
@@ -56,14 +54,9 @@ export type ResolvedToolPromptFinalizer = (params: {
   messageToolAvailable: boolean;
 }) => string;
 
-type ReasoningStreamPayload = Pick<
-  ReplyPayload,
-  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
-> & {
-  requiresReasoningProgressOptIn?: boolean;
-};
-
 export type RunEmbeddedAgentParams = {
+  /** Host-minted parent audience inherited by a trusted internal child run. */
+  memoryAudience?: import("../../../plugins/memory-provider-types.js").MemoryAudience;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
   sessionPersistence?: "durable" | "detached";
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
@@ -86,6 +79,8 @@ export type RunEmbeddedAgentParams = {
   scheduledRuntimeAuthorityRecoveryRequired?: boolean;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
+  /** Provider-owned persistence surface for a tools-arm memory flush. */
+  memoryFlushTools?: MemoryFlushToolRunContext;
   /** Sticky source-turn taint inherited by an internal maintenance run. */
   initialTurnTainted?: boolean;
   /** Delivery target for topic/thread routing. */
@@ -120,20 +115,12 @@ export type RunEmbeddedAgentParams = {
   retryConnectionErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
-  /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */
-  skillWorkshopProposalOnly?: boolean;
-  /** Mark proposals created by this internal review as autonomous captures. */
-  skillWorkshopAutonomousCapture?: boolean;
-  skillWorkshopUpdateProposals?: boolean;
-  /** Preserve the foreground run as proposal provenance for an internal review run. */
-  skillWorkshopOrigin?: SkillProposalOrigin;
-  /** Run-scoped mutation budget shared across internal runner attempts. */
-  skillWorkshopProposalMutationBudget?: SkillWorkshopProposalMutationBudget;
-  /** Optional state environment for isolated Skill Workshop proposal persistence. */
-  skillWorkshopProposalEnv?: NodeJS.ProcessEnv;
-  /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
-  skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
-  skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];
+  /**
+   * Background Workshop review of this conversation: edits of existing skills require a prior
+   * view, and changes credit "review" with this originating session key as their provenance.
+   */
+  skillWorkshopReviewOf?: string;
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -142,14 +129,14 @@ export type RunEmbeddedAgentParams = {
   enableHeartbeatTool?: boolean;
   /** Keep the heartbeat response tool available even when a narrow profile would omit it. */
   forceHeartbeatTool?: boolean;
+  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
+  continuesConversation?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
   sessionFile?: string;
   /** Require file tools to stay within the task workspace without changing exec policy. */
   requireWorkspaceOnly?: true;
-  /** Refuse an enabled sandbox that would redirect a review away from its workspace. */
-  requireWritableSandbox?: true;
   permissionMode?: SessionEntry["permissionMode"];
   sessionRoot?: string;
   /** Context supplied by internal producers, separate from inbound prompt text. */
@@ -218,7 +205,7 @@ export type RunEmbeddedAgentParams = {
   execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
-  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => unknown;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string; backend?: string }) => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -314,39 +301,17 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "sandboxAgentId"
   | "promptCacheKey"
   | "reasoningLevel"
-  | "messageChannel"
-  | "messageProvider"
   | "clientCaps"
   | "gatewayUiCommandTarget"
   | "toolBindings"
-  | "chatType"
-  | "agentAccountId"
   | "trigger"
   | "messageTo"
   | "messageThreadId"
   | "conversationToolPolicy"
-  | "groupId"
-  | "groupChannel"
-  | "groupSpace"
   | "memberRoleIds"
-  | "messageActionTurnCapability"
-  | "spawnedBy"
   | "isCanonicalWorkspace"
-  | "senderId"
-  | "senderName"
-  | "senderUsername"
-  | "senderE164"
-  | "senderIsOwner"
-  | "approvalReviewerDeviceId"
-  | "currentChannelId"
   | "chatId"
-  | "channelContext"
   | "currentMessagingTarget"
-  | "currentThreadTs"
-  | "currentMessageId"
-  | "currentInboundAudio"
-  | "replyToMode"
-  | "requireExplicitMessageTarget"
   | "disableMessageTool"
   | "conversationRecall"
   | "toolOverrides"
@@ -361,11 +326,10 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "forceMessageTool"
   | "enableHeartbeatTool"
   | "forceHeartbeatTool"
+  | "continuesConversation"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
   | "gitCoauthorPrompt"
-  | "sourceReplyDeliveryMode"
-  | "taskSuggestionDeliveryMode"
   | "silentReplyPromptMode"
   | "ownerNumbers"
   | "toolsAllow"
@@ -374,12 +338,14 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "scheduledToolPolicy"
   | "modelThinkingCapability"
   | "modelFallbacksOverride"
-> & {
-  /** SDK observation of the completed attempt; new runs recheck publication availability. */
-  githubPublicationAvailable?: boolean;
-  agentId: string;
-  workspaceDir: string;
-  cwd?: string;
-  sandboxSessionKey: string;
-  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
-};
+> &
+  AgentRunMessageContext &
+  AgentRunChannelContext & {
+    /** SDK observation of the completed attempt; new runs recheck publication availability. */
+    githubPublicationAvailable?: boolean;
+    agentId: string;
+    workspaceDir: string;
+    cwd?: string;
+    sandboxSessionKey: string;
+    cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
+  };

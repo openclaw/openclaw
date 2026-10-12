@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as gitExec from "../../infra/git-exec.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as commandExec from "../../process/exec.js";
+import { resolveWorktreeBase } from "./base-ref.js";
 import { estimateWorktreeCheckoutTransitionBytes, estimateWorktreeGitBytes } from "./capacity.js";
 import { runGit } from "./git.js";
 
@@ -72,6 +73,20 @@ describe("worktree Git size estimates", () => {
     });
     return { root, source, origin, clone, commit, missing };
   }
+
+  it("hydrates a partial-clone default before advancing the local branch", async () => {
+    const { clone, commit } = await partialClone();
+    const selected = await resolveWorktreeBase(
+      clone,
+      undefined,
+      undefined,
+      undefined,
+      "fast-forward",
+    );
+    expect(selected.commit).toBe(commit);
+    expect(await git(clone, "rev-parse", "main")).toBe(commit);
+    expect(await fs.readFile(path.join(clone, "large.txt"), "utf8")).toBe("x".repeat(5000));
+  });
 
   it("preserves admitted caller ownership config through text and buffered sizing without changing defaults", async () => {
     const root = tempDirs.make("openclaw-capacity-caller-git-");
@@ -142,6 +157,7 @@ describe("worktree Git size estimates", () => {
       );
       const fetches = commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch");
       expect(fetches).toHaveLength(1);
+      expect(fetches[0]?.[1]).toContain("--no-auto-maintenance");
       const fetchOptions = fetches[0]?.[2];
       expect(fetchOptions?.timeoutMs).toBe(300_000);
       const input = fetchOptions?.input;
@@ -161,6 +177,38 @@ describe("worktree Git size estimates", () => {
       expect(commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch").length).toBe(0);
     },
   );
+
+  it("keeps the hydration fetch from starting Git auto-maintenance on the source repository", async () => {
+    const { root, clone, commit } = await partialClone();
+    const traceDir = path.join(root, "hydrate-trace2");
+    await fs.mkdir(traceDir);
+    // A directory target gives one event file per Git process, so nothing interleaves.
+    vi.stubEnv("GIT_TRACE2_EVENT", traceDir);
+    await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
+    const events = (
+      await Promise.all(
+        (await fs.readdir(traceDir)).map(async (name) =>
+          (await fs.readFile(path.join(traceDir, name), "utf8"))
+            .split("\n")
+            .filter((line) => line.length > 0)
+            .map(
+              (line) =>
+                JSON.parse(line) as { event: string; sid: string; name?: string; argv?: string[] },
+            ),
+        ),
+      )
+    ).flat();
+    const fetchSid = events.find(
+      (event) => event.event === "cmd_name" && event.name === "fetch",
+    )?.sid;
+    expect(fetchSid).toBeTruthy();
+    const spawned = events
+      .filter((event) => event.event === "child_start" && event.sid.startsWith(fetchSid ?? ""))
+      .map((event) => event.argv ?? []);
+    // The transfer itself still happens inside the fetch; only the maintenance child must go.
+    expect(spawned.some((argv) => argv.includes("index-pack"))).toBe(true);
+    expect(spawned.filter((argv) => argv[1] === "maintenance" || argv[1] === "gc")).toEqual([]);
+  });
 
   it.each(["cancel", "revoke"] as const)(
     "keeps hydration behind queued ref writes and honors %s before fetching",
@@ -335,7 +383,8 @@ describe("worktree Git size estimates", () => {
     "does not reuse byte totals across effective replacements in %s",
     async (namespace) => {
       const { source, commit } = await partialClone();
-      await expect(estimateWorktreeGitBytes(source, commit)).resolves.toBe(16_384);
+      const options = { preparationKey: "creation-cohort" };
+      await expect(estimateWorktreeGitBytes(source, commit, options)).resolves.toBe(16_384);
       vi.stubEnv("GIT_REPLACE_REF_BASE", namespace);
       const original = await git(source, "rev-parse", `${commit}:base.txt`);
       const replacementPath = path.join(source, "replacement.txt");
@@ -343,22 +392,31 @@ describe("worktree Git size estimates", () => {
       const replacement = await git(source, "hash-object", "-w", replacementPath);
       await git(source, "replace", original, replacement);
 
-      await expect(estimateWorktreeGitBytes(source, commit)).resolves.toBe(32_768);
+      await expect(estimateWorktreeGitBytes(source, commit, options)).resolves.toBe(32_768);
       await git(source, "replace", "-d", original);
-      await expect(estimateWorktreeGitBytes(source, commit)).resolves.toBe(16_384);
+      await expect(estimateWorktreeGitBytes(source, commit, options)).resolves.toBe(16_384);
     },
   );
 
-  it("rejects newly missing objects even when the commit's byte total was already measured", async () => {
-    const { source, commit } = await partialClone();
-    await expect(estimateWorktreeGitBytes(source, commit)).resolves.toBe(16_384);
-    const blob = await git(source, "rev-parse", `${commit}:large.txt`);
-    await fs.unlink(path.join(source, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+  it.each([undefined, "creation-cohort"])(
+    "rechecks missing objects after preparation %s",
+    async (preparationKey) => {
+      const { source, commit } = await partialClone();
+      await expect(estimateWorktreeGitBytes(source, commit, { preparationKey })).resolves.toBe(
+        16_384,
+      );
+      const blob = await git(source, "rev-parse", `${commit}:large.txt`);
+      await fs.unlink(path.join(source, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
 
-    await expect(estimateWorktreeGitBytes(source, commit)).rejects.toThrow(
-      `Repository is missing 1 objects for ${commit}; fetch or repair the clone.`,
-    );
-  });
+      await expect(
+        estimateWorktreeGitBytes(source, commit, {
+          preparationKey: preparationKey ? "next-cohort" : undefined,
+        }),
+      ).rejects.toThrow(
+        `Repository is missing 1 objects for ${commit}; fetch or repair the clone.`,
+      );
+    },
+  );
 
   it("explains missing objects when no promisor remote can repair the clone", async () => {
     const { clone, commit } = await partialClone();

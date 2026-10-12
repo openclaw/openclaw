@@ -1,20 +1,19 @@
-/** Named, retained allocations for the native inspector contract test. */
+/** MiB-sized backing stores keep retained samples attributed to this frame. */
 export function allocateHeapProfileWorkload() {
   const retained: number[][] = [];
-  for (let index = 0; index < 2_048; index++) {
+  for (let index = 0; index < 8; index++) {
     const row: number[] = [];
-    for (let column = 0; column < 128; column++) {
-      row.push(index);
-    }
+    row.length = 131_072;
+    row.fill(index);
     retained.push(row);
   }
   return retained;
 }
 
-/** Allocate and drop 200 MiB in bounded batches before the final collection. */
-export function allocateDroppedHeapProfileWorkload() {
+/** Allocate and drop MiB-sized rows in bounded batches before the final collection. */
+export function allocateDroppedHeapProfileWorkload(rowCount = 200) {
   const rows: number[][] = [];
-  for (let index = 0; index < 200; index++) {
+  for (let index = 0; index < rowCount; index++) {
     const row: number[] = [];
     // Resizing keeps the allocation in this JavaScript frame.
     row.length = 131_072;

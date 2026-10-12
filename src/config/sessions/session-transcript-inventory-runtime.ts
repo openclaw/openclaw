@@ -6,22 +6,44 @@ import type {
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { listSessionTranscriptArchivesReadOnly } from "./session-accessor.sqlite-history.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import {
   readSessionEntryInWorker,
   withSessionStoreReaderInWorker,
 } from "./session-entry-read-runtime.js";
-import { readMemorySessionTargets } from "./session-memory-targets.js";
+import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
+import {
+  readMemorySessionTargets,
+  resolveMemorySessionSince,
+  unresolvedMemorySessionTarget,
+} from "./session-memory-targets.js";
 import type { MemorySessionSelectors } from "./session-memory-targets.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { SessionArchiveInventoryScope } from "./session-transcript-inventory.types.js";
 
 export async function listSessionTranscriptArchivesInWorker(input: SessionArchiveInventoryScope) {
+  const memory = getSessionActorStorageBinding(input);
+  if (memory) {
+    memory.actor.snapshot(memory.authority);
+    return [];
+  }
+  const source = captureIncognitoSessionSource(input);
   const scope = {
     ...input,
     env: cloneEnvWithPlatformSemantics(input.env ?? process.env),
     sessionIds: [...new Set(input.sessionIds ?? [])],
     archiveNames: [...new Set(input.archiveNames ?? [])],
   };
+  if (source) {
+    // Actor transcripts never create durable archive artifacts.
+    source.admissionSignal?.throwIfAborted();
+    if ("kind" in source) {
+      source.assertCurrent();
+    } else {
+      source.actor.assertReadable();
+    }
+    return [];
+  }
   if (scope.sessionIds.length === 0 && scope.archiveNames.length === 0) {
     return [];
   }
@@ -49,19 +71,21 @@ export async function listSessionTranscriptArchivesInWorker(input: SessionArchiv
 export async function readSessionTranscriptCorpusInWorker(
   scope: SessionTranscriptCorpusScope,
   options: SessionTranscriptCorpusOptions,
-  artifacts: readonly SessionTranscriptCorpusArtifact[],
+  prepareArtifacts: () => Promise<readonly SessionTranscriptCorpusArtifact[]>,
 ) {
   const input = { agentId: scope.normalizedAgentId, storePath: scope.storePath, env: scope.env };
+  const memory = getSessionActorStorageBinding(input);
+  if (memory) {
+    return memory.actor.storage!.read(
+      { type: "session.corpus.list", input: { options } },
+      memory.authority,
+    );
+  }
   return withSessionStoreReaderInWorker(
     input,
-    async ({
-      reader,
-      database,
-      continuation,
-      assertCurrent,
-      onRegistryChange,
-      revalidateTarget,
-    }) => {
+    async ({ reader, database, continuation, assertCurrent, onRegistryChange }) => {
+      const artifacts = await prepareArtifacts();
+      assertCurrent();
       if (options.readOnly !== true && !continuation) {
         // Default corpus discovery retains its historical writable-open admission.
         await readSessionEntryInWorker(
@@ -74,18 +98,30 @@ export async function readSessionTranscriptCorpusInWorker(
           assertCurrent,
           onRegistryChange,
         );
-        await revalidateTarget?.();
-        assertCurrent();
       }
       const entries = await reader.readCorpusInventory({ scope, options, artifacts, continuation });
       assertCurrent();
       return entries;
     },
-    { backing: true, dataOnly: true },
+    {
+      backing: true,
+      dataOnly: true,
+      capturePhysicalSource: true,
+    },
   );
 }
 
 export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSelectors) {
+  const memory = getSessionActorStorageBinding(input);
+  if (memory) {
+    return memory.actor.storage!.read(
+      {
+        type: "session.memory.targets",
+        input: { selectors: { ...input, storePath: memory.path } },
+      },
+      memory.authority,
+    );
+  }
   const scope = {
     ...input,
     env: cloneEnvWithPlatformSemantics(process.env),
@@ -97,6 +133,34 @@ export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSe
     return [];
   }
   const storePath = resolveSessionStorePathForScope(scope);
+  const binding = captureIncognitoSessionSource({ ...input, storePath });
+  if (binding && "kind" in binding) {
+    resolveMemorySessionSince(scope.since);
+    binding.assertCurrent();
+    return scope.sessionIds.map((sessionId) =>
+      unresolvedMemorySessionTarget(scope.agentId, sessionId),
+    );
+  }
+  if (binding) {
+    const { actor } = binding;
+    const sessions = actor.sessions.deadlines().map(({ sessionKey, sessionId }) => ({
+      sessionKey,
+      sessionId,
+      lifecycleRevision: actor.sessions.readSharing(sessionKey)?.entry?.lifecycleRevision,
+    }));
+    const assertCurrent = () => {
+      binding.admissionSignal?.throwIfAborted();
+      actor.assertReadable();
+    };
+    // Memory discovery uses one captured inventory; concurrent changes appear on its next read.
+    return actor.sessions.withSharedState(() =>
+      actor.sessions.history(
+        { assertCurrent },
+        { type: "session.history.memory-targets", input: { selectors: scope, sessions } },
+        binding.admissionSignal,
+      ),
+    );
+  }
   if (isIncognitoOpenClawAgentSqlitePath(storePath, scope)) {
     return readMemorySessionTargets({ ...scope, storePath });
   }

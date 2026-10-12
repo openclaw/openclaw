@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { parseMentions } from "./mentions.js";
 
-function requireFirstEntity(result: ReturnType<typeof parseMentions>) {
+function requireOnlyEntity(result: ReturnType<typeof parseMentions>) {
+  expect(result.entities).toHaveLength(1);
   const entity = result.entities[0];
   if (!entity) {
     throw new Error("expected parseMentions to return at least one entity");
@@ -10,51 +11,8 @@ function requireFirstEntity(result: ReturnType<typeof parseMentions>) {
   return entity;
 }
 
-function requireOnlyEntity(result: ReturnType<typeof parseMentions>) {
-  expect(result.entities).toHaveLength(1);
-  return requireFirstEntity(result);
-}
-
-describe("mention-free text contract", () => {
-  it("parseMentions handles text without mentions", () => {
-    const result = parseMentions("Hello world!");
-
-    expect(result.text).toBe("Hello world!");
-    expect(result.entities).toHaveLength(0);
-  });
-});
-
 describe("parseMentions", () => {
-  it("parses multiple mentions", () => {
-    const result = parseMentions("Hey @[Alice](28:aaa) and @[Bob](28:bbb), can you review this?");
-
-    expect(result.text).toBe("Hey <at>Alice</at> and <at>Bob</at>, can you review this?");
-    expect(result.entities).toHaveLength(2);
-    expect(result.entities[0]).toEqual({
-      type: "mention",
-      text: "<at>Alice</at>",
-      mentioned: {
-        id: "28:aaa",
-        name: "Alice",
-      },
-    });
-    expect(result.entities[1]).toEqual({
-      type: "mention",
-      text: "<at>Bob</at>",
-      mentioned: {
-        id: "28:bbb",
-        name: "Bob",
-      },
-    });
-  });
-
   it.each([
-    { label: "spaces", source: "John Peter Smith", name: "John Peter Smith" },
-    {
-      label: "literal backslash",
-      source: String.raw`DOMAIN\Alice`,
-      name: String.raw`DOMAIN\Alice`,
-    },
     {
       label: "escaped brackets and backslash",
       source: String.raw`DOMAIN\\Alice \[Ops\]`,
@@ -65,40 +23,6 @@ describe("parseMentions", () => {
 
     expect(result.text).toBe(`<at>${name}</at>`);
     expect(requireOnlyEntity(result).mentioned.name).toBe(name);
-  });
-
-  it("trims whitespace from id and name", () => {
-    const result = parseMentions("@[ John Doe ]( 28:a1b2c3 )");
-
-    expect(result.text).toBe("<at>John Doe</at>");
-    expect(requireOnlyEntity(result)).toEqual({
-      type: "mention",
-      text: "<at>John Doe</at>",
-      mentioned: {
-        id: "28:a1b2c3",
-        name: "John Doe",
-      },
-    });
-  });
-
-  it("handles Japanese characters in mention at start of message", () => {
-    const input = "@[タナカ タロウ](a1b2c3d4-e5f6-7890-abcd-ef1234567890) スキル化完了しました！";
-    const result = parseMentions(input);
-
-    expect(result.text).toBe("<at>タナカ タロウ</at> スキル化完了しました！");
-    expect(requireOnlyEntity(result)).toEqual({
-      type: "mention",
-      text: "<at>タナカ タロウ</at>",
-      mentioned: {
-        id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        name: "タナカ タロウ",
-      },
-    });
-
-    // Verify entity text exactly matches what's in the formatted text
-    const entityText = requireFirstEntity(result).text;
-    expect(result.text).toContain(entityText);
-    expect(result.text.indexOf(entityText)).toBe(0);
   });
 
   it("skips mention-like patterns with non-Teams IDs (e.g. in code blocks)", () => {
@@ -131,12 +55,5 @@ describe("parseMentions", () => {
     expect(requireOnlyEntity(result).mentioned.id).toBe(
       "8:orgid:2d8c2d2c-1111-2222-3333-444444444444",
     );
-  });
-
-  it("rejects non-ID strings as mention targets", () => {
-    const result = parseMentions("See @[docs](https://example.com) for details");
-    expect(result.entities).toHaveLength(0);
-    // Original text preserved
-    expect(result.text).toBe("See @[docs](https://example.com) for details");
   });
 });

@@ -28,6 +28,10 @@ it.each([
     const patchEntered = createDeferred();
     const history = createDeferred<unknown>();
     const historyEntered = createDeferred();
+    const loadHistory = vi.fn(async () => {
+      historyEntered.resolve();
+      return history.promise;
+    });
     const commands = createTuiCommandHandlersHarness({
       currentAgentId: "research",
       currentSessionKey: previous,
@@ -48,12 +52,7 @@ it.each([
     );
     const actions = createTestSessionActions({
       state,
-      client: makeTuiBackend({
-        loadHistory: async () => {
-          historyEntered.resolve();
-          return history.promise;
-        },
-      }),
+      client: makeTuiBackend({ loadHistory }),
       resolveSessionSelection: (raw = "global") => ({ key: raw, agentId: "research" }),
     });
     const pending = commands.handleCommand("/verbose full");
@@ -75,30 +74,11 @@ it.each([
       });
       await Promise.all([pending, selecting]);
     }
+    expect(state.currentSessionKey).toBe(next);
+    expect(state.currentSessionId).toBe("selected-row");
+    expect(loadHistory).toHaveBeenCalledOnce();
   },
 );
-
-it("selects a qualified global row from an already loaded bare-global conversation", async () => {
-  const state = createBaseState({
-    currentAgentId: "research",
-    currentSessionKey: "global",
-    historyLoaded: true,
-  });
-  const loadHistory = vi.fn(async () => ({
-    messages: [],
-    sessionId: "literal-row",
-    sessionInfo: { key, sessionId: "literal-row" },
-  }));
-  const actions = createTestSessionActions({
-    state,
-    client: makeTuiBackend({ loadHistory }),
-    resolveSessionSelection: (raw = "global") => ({ key: raw, agentId: "research" }),
-  });
-  await actions.setSession(key);
-  expect(state.currentSessionKey).toBe(key);
-  expect(state.currentSessionId).toBe("literal-row");
-  expect(loadHistory).toHaveBeenCalledOnce();
-});
 
 it.each(["agent:research:main", "global"])(
   "resolves the missing qualified-global alias to Home %s",
@@ -151,17 +131,6 @@ it.each([
   const loadHistory = vi.fn(async () => history);
   const actions = createTestSessionActions({ state, client: makeTuiBackend({ loadHistory }) });
   await actions.loadHistory();
-  expect(state.currentSessionKey).toBe(key);
-  expect(loadHistory).toHaveBeenCalledOnce();
-});
-
-it("does not redirect after an exact history error", async () => {
-  const state = stateFor();
-  const loadHistory = vi.fn(async () => {
-    throw new Error("history access refused");
-  });
-  const actions = createTestSessionActions({ state, client: makeTuiBackend({ loadHistory }) });
-  await expect(actions.loadHistory()).resolves.toEqual({ loaded: false });
   expect(state.currentSessionKey).toBe(key);
   expect(loadHistory).toHaveBeenCalledOnce();
 });
@@ -332,6 +301,7 @@ it.each([
   { command: "/reset", backend: "resetSession" },
   { command: "/goal set finish the task", backend: "runGoalCommand" },
   { command: "/usage cost", backend: "runUsageCostCommand" },
+  { command: "Escape", backend: "abortChat" },
 ] as const)(
   "rejects $command while selected history is unresolved",
   async ({ command, backend }) => {
@@ -341,23 +311,23 @@ it.each([
       historyLoaded: false,
       opts: { local: true },
     });
-    await commands.handleCommand(command);
-    expect(commands.client[backend]).not.toHaveBeenCalled();
-    expect(commands.addSystem).toHaveBeenCalledWith(
-      "session history not ready — wait or retry /session",
-    );
+    if (backend === "abortChat") {
+      const abortChat = vi.fn(async () => ({ ok: true, aborted: false, runIds: [] }));
+      const actions = createTestSessionActions({
+        state: stateFor(),
+        client: makeTuiBackend({ abortChat }),
+      });
+      await actions.abortActive({ preferActive: true });
+      expect(abortChat).not.toHaveBeenCalled();
+    } else {
+      await commands.handleCommand(command);
+      expect(commands.client[backend]).not.toHaveBeenCalled();
+      expect(commands.addSystem).toHaveBeenCalledWith(
+        "session history not ready — wait or retry /session",
+      );
+    }
   },
 );
-
-it("rejects direct Escape abort while selected history is unresolved", async () => {
-  const abortChat = vi.fn(async () => ({ ok: true, aborted: false, runIds: [] }));
-  const actions = createTestSessionActions({
-    state: stateFor(),
-    client: makeTuiBackend({ abortChat }),
-  });
-  await actions.abortActive({ preferActive: true });
-  expect(abortChat).not.toHaveBeenCalled();
-});
 
 it("keeps a failed selection blocked and lets /session retry it", async () => {
   const commands = createTuiCommandHandlersHarness({
@@ -379,7 +349,9 @@ it("keeps a failed selection blocked and lets /session retry it", async () => {
     client: makeTuiBackend({ loadHistory }),
     resolveSessionSelection: (raw = key) => ({ key: raw, agentId: "research" }),
   });
-  await actions.loadHistory();
+  await expect(actions.loadHistory()).resolves.toEqual({ loaded: false });
+  expect(state.currentSessionKey).toBe(key);
+  expect(loadHistory).toHaveBeenCalledOnce();
   await commands.sendMessage("do not send after failed history");
   expect(commands.sendChat).not.toHaveBeenCalled();
   expect(state.historyLoaded).toBe(false);

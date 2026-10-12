@@ -4,20 +4,15 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
+import { isAgentDatabaseInspectionPendingError } from "../gateway-availability.ts";
 import type { SessionConnectionScope } from "./session-capability.ts";
-
-type SessionEventSubscriptionOwner = {
-  ensure: (scope: SessionConnectionScope) => Promise<void>;
-  reset: () => void;
-  dispose: () => void;
-};
 
 /** Keeps one acknowledged broad session observer alive for its connection generation. */
 export function createSessionEventSubscriptionOwner(params: {
   isCurrent: (scope: SessionConnectionScope) => boolean;
   onError: (scope: SessionConnectionScope, error: string | null) => void;
   retryDelayMs: (error: unknown) => number | null;
-}): SessionEventSubscriptionOwner {
+}) {
   let generation = 0;
   let confirmed: SessionConnectionScope | null = null;
   let pending: { generation: number; promise: Promise<void> } | null = null;
@@ -73,7 +68,10 @@ export function createSessionEventSubscriptionOwner(params: {
                 retryable: true,
               })
             : error;
-        params.onError(scope, formatUiError(failure));
+        params.onError(
+          scope,
+          isAgentDatabaseInspectionPendingError(failure) ? null : formatUiError(failure),
+        );
         const delayMs = params.retryDelayMs(failure);
         if (delayMs === null || !isCurrent(scope, expectedGeneration)) {
           return;

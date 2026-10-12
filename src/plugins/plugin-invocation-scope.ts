@@ -40,13 +40,6 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
   try {
     return await pluginInvocationContext.run(
       {
-        assertCurrent: (instance) => {
-          if (bindings.has(instance)) {
-            assertOpen();
-          } else {
-            parent?.assertCurrent?.(instance);
-          }
-        },
         lookup: (instance) => {
           const binding = bindings.get(instance);
           if (binding) {
@@ -108,7 +101,6 @@ export class PluginInvocationScope {
     }
   }
 
-  /** Open retained consumers are drained by a reload that reserved their instance. */
   get holdsPendingReplacement(): boolean {
     return (
       !this.closed && [...this.consumers.keys()].some((instance) => instance.replacementPending)

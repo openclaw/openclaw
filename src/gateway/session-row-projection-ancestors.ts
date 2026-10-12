@@ -1,5 +1,10 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -38,6 +43,13 @@ export function createSessionRowRelationReads(owner: {
       if (!owner.isReady()) {
         return undefined;
       }
+      const memory = getSessionActorStorageBinding({});
+      const binding = memory
+        ? undefined
+        : captureIncognitoSessionBinding({
+            ...query,
+            sessionKey: query.key,
+          });
       return owner.inOwnerContext(() => {
         const { key, value: entry } = selectStoredSessionLineage({
           cfg: owner.config(),
@@ -47,6 +59,19 @@ export function createSessionRowRelationReads(owner: {
             if (!isIncognitoSessionKey(storedKey)) {
               const row = owner.lookup({ ...query, agentId, key: storedKey });
               return row?.key === storedKey ? row.sharingEntry : undefined;
+            }
+            if (memory) {
+              const selected = captureSessionActorStorageOwner({
+                agentId,
+                sessionKey: storedKey,
+                sessionActor: memory,
+              })!;
+              return selected.owner?.readSession(storedKey, selected.authority)?.entry;
+            }
+            if (binding && binding.actor.agentId === agentId) {
+              binding.admissionSignal?.throwIfAborted();
+              binding.actor.assertReadable();
+              return binding.actor.sessions.readSharing(storedKey)?.entry;
             }
             const database = getOpenIncognitoAgentDatabase(
               agentId,
@@ -181,7 +206,6 @@ export function createSessionRowAncestorReads(owner: {
   prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
   prepareSelection: () => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
-  assertExactRowsPrepared: (queries: readonly records.Lookup[]) => void;
   retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
   describe: SessionRowReadView["describe"];
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
@@ -287,7 +311,6 @@ export function createSessionRowAncestorReads(owner: {
                 if (owner.membership.needsPreparation(() => targets)) {
                   return membershipPending;
                 }
-                owner.assertExactRowsPrepared(targets);
                 return consume(read);
               },
               options?.selection ? owner.prepareSelection : undefined,

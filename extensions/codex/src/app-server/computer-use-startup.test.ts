@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import * as service from "./computer-use-service.js";
 import * as desktopPaths from "./desktop-app-paths.js";
-import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js";
 import * as generation from "./desktop-generation.js";
 import { isJsonObject } from "./protocol.js";
 import {
@@ -35,162 +34,113 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])(
-    "settles copy notifications before startup (desktop changed: %s)",
-    async (desktopChanged) => {
-      const root = tempDirs.make("openclaw-computer-use-startup-");
-      const agentDir = path.join(root, "agent");
-      const codexHome = path.join(agentDir, "codex-home");
-      const appBundlePath = path.join(root, "ChatGPT.app");
-      const command = path.join(appBundlePath, "codex");
-      const sourceService = path.join(appBundlePath, "Codex Computer Use.app");
-      const targetService = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-      const marketplace = path.join(appBundlePath, "plugins", "openai-bundled");
-      const pluginRoot = path.join(marketplace, "plugins", "computer-use");
-      const cachePath = path.join(
-        codexHome,
-        "plugins",
-        "cache",
-        "openai-bundled",
-        "computer-use",
-        "1.0.857",
-      );
-      const priorService = artifact === "service" ? "old-service" : "new-service";
-      await writeServiceFixture(sourceService, "new-service");
-      await writeServiceFixture(targetService, priorService);
-      const sourceIdentity = await inspectServiceFixture(sourceService);
-      const priorIdentity = await inspectServiceFixture(targetService);
-      await fs.mkdir(path.join(marketplace, ".agents", "plugins"), { recursive: true });
-      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
-      await fs.writeFile(
-        path.join(marketplace, ".agents", "plugins", "marketplace.json"),
-        JSON.stringify({ name: "openai-bundled", plugins: [{ name: "computer-use" }] }),
-      );
-      await fs.writeFile(
-        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        JSON.stringify({ name: "computer-use", version: "1.0.857" }),
-      );
-      await fs.writeFile(path.join(pluginRoot, "generation.txt"), "new-cache");
-      await fs.cp(pluginRoot, cachePath, { recursive: true });
-      await fs.writeFile(path.join(cachePath, "generation.txt"), "old-cache");
+  it("refreshes the managed artifacts before startup", async () => {
+    const root = tempDirs.make("openclaw-computer-use-startup-");
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    const appBundlePath = path.join(root, "ChatGPT.app");
+    const command = path.join(appBundlePath, "codex");
+    const sourceService = path.join(appBundlePath, "Codex Computer Use.app");
+    const targetService = path.join(codexHome, "computer-use", "Codex Computer Use.app");
+    const marketplace = path.join(appBundlePath, "plugins", "openai-bundled");
+    const pluginRoot = path.join(marketplace, "plugins", "computer-use");
+    const cachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "1.0.857",
+    );
+    const priorService = artifact === "service" ? "old-service" : "new-service";
+    await writeServiceFixture(sourceService, "new-service");
+    await writeServiceFixture(targetService, priorService);
+    const sourceIdentity = await inspectServiceFixture(sourceService);
+    await fs.mkdir(path.join(marketplace, ".agents", "plugins"), { recursive: true });
+    await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(marketplace, ".agents", "plugins", "marketplace.json"),
+      JSON.stringify({ name: "openai-bundled", plugins: [{ name: "computer-use" }] }),
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "computer-use", version: "1.0.857" }),
+    );
+    await fs.writeFile(path.join(pluginRoot, "generation.txt"), "new-cache");
+    await fs.cp(pluginRoot, cachePath, { recursive: true });
+    await fs.writeFile(path.join(cachePath, "generation.txt"), "old-cache");
 
-      vi.spyOn(desktopPaths, "resolveMacOSDesktopCodexAppPathCandidates").mockReturnValue([
-        {
-          appName: "ChatGPT.app",
-          appBundlePath,
-          appServerCommandPath: command,
-          bundledMarketplacePath: marketplace,
-          computerUseServiceAppPaths: [sourceService],
-        },
-      ]);
-      vi.spyOn(service, "resolveCodexComputerUseServiceAppSourcePath").mockImplementation(
-        (params) =>
-          resolveServiceSource({
-            ...params,
-            platform: "darwin",
-            inspectServiceApp: inspectServiceFixture,
-          }),
-      );
-      vi.spyOn(service, "ensureCodexComputerUseServiceApp").mockImplementation((params) =>
-        ensureService({
-          ...params,
-          platform: "darwin",
-          inspectServiceApp: inspectServiceFixture,
-          copyServiceApp: (source, target) => fs.cp(source, target, { recursive: true }),
-        }),
-      );
+    vi.spyOn(desktopPaths, "resolveMacOSDesktopCodexAppPathCandidates").mockReturnValue([
+      {
+        appName: "ChatGPT.app",
+        appBundlePath,
+        appServerCommandPath: command,
+        bundledMarketplacePath: marketplace,
+        computerUseServiceAppPaths: [sourceService],
+      },
+    ]);
+    vi.spyOn(service, "resolveCodexComputerUseServiceAppSourcePath").mockImplementation((params) =>
+      resolveServiceSource({
+        ...params,
+        platform: "darwin",
+        inspectServiceApp: inspectServiceFixture,
+      }),
+    );
+    vi.spyOn(service, "ensureCodexComputerUseServiceApp").mockImplementation((params) =>
+      ensureService({
+        ...params,
+        platform: "darwin",
+        inspectServiceApp: inspectServiceFixture,
+        copyServiceApp: (source, target) => fs.cp(source, target, { recursive: true }),
+      }),
+    );
 
-      const selected = { epoch: 1, fingerprint: "desktop-original" };
-      let fingerprint = selected.fingerprint;
-      const owner = createCodexDesktopGenerationOwner({
-        initialGeneration: selected,
-        readFingerprint: async () => {
-          await expect(
-            fs.readFile(path.join(targetService, "Contents", "Info.plist"), "utf8"),
-          ).resolves.toBe(priorService);
-          await expect(fs.readFile(path.join(cachePath, "generation.txt"), "utf8")).resolves.toBe(
-            "old-cache",
-          );
-          return fingerprint;
-        },
-      });
-      vi.spyOn(generation, "waitForCodexDesktopGeneration").mockImplementation(() => owner.wait());
-      vi.spyOn(generation, "isCodexDesktopGenerationCurrent").mockImplementation(owner.isCurrent);
-      const copy = fs.cp.bind(fs);
-      vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
-        await copy(...args);
-        // The managed marketplace can alias the desktop plugin through a symlink.
-        const copiedArtifact =
-          artifact === "service"
-            ? args[0] === sourceService
-            : (await fs.realpath(args[0])) === pluginRoot;
-        if (copiedArtifact) {
-          if (desktopChanged) {
-            fingerprint = "desktop-replaced";
-          }
-          owner.markDirty();
-        }
-      });
+    const selected = { epoch: 1, fingerprint: "desktop-original" };
+    vi.spyOn(generation, "waitForCodexDesktopGeneration").mockResolvedValue(selected);
 
-      let initializations = 0;
-      const harness = createClientHarness({
-        onWrite(line, send) {
-          const request: unknown = JSON.parse(line);
-          if (
-            isJsonObject(request) &&
-            request.id !== undefined &&
-            request.method === "initialize"
-          ) {
-            initializations += 1;
-            send({
-              id: request.id,
-              result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
-            });
-          }
-        },
-      });
-      const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-      try {
-        const startup = createIsolatedCodexAppServerClient({
-          agentDir,
-          authProfileId: null,
-          startOptions: {
-            transport: "stdio",
-            homeScope: "agent",
-            commandSource: "resolved-managed",
-            command,
-            args: ["app-server"],
-            headers: {},
-          },
-          pluginConfig: {
-            computerUse: { enabled: true, autoInstall: true, pluginCacheMode: "shared" },
-          },
-        });
-        if (desktopChanged) {
-          await expect(startup).rejects.toMatchObject({
-            code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+    let initializations = 0;
+    const harness = createClientHarness({
+      onWrite(line, send) {
+        const request: unknown = JSON.parse(line);
+        if (isJsonObject(request) && request.id !== undefined && request.method === "initialize") {
+          initializations += 1;
+          send({
+            id: request.id,
+            result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
           });
-          expect(start).not.toHaveBeenCalled();
-        } else {
-          await expect(startup).resolves.toBe(harness.client);
-          expect(start).toHaveBeenCalledOnce();
         }
-        expect(initializations).toBe(desktopChanged ? 0 : 1);
-        expect(owner.isCurrent(selected)).toBe(!desktopChanged);
-        await expect(inspectServiceFixture(targetService)).resolves.toEqual(
-          desktopChanged ? priorIdentity : sourceIdentity,
-        );
-        await expect(fs.readFile(path.join(cachePath, "generation.txt"), "utf8")).resolves.toBe(
-          desktopChanged ? "old-cache" : "new-cache",
-        );
-        expect(await fs.readdir(path.dirname(targetService))).toEqual(["Codex Computer Use.app"]);
-        expect(await fs.readdir(path.dirname(cachePath))).toEqual(["1.0.857"]);
-      } finally {
-        owner.stop();
-        await harness.client.closeAndWait();
-      }
-    },
-  );
+      },
+    });
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    try {
+      const startup = createIsolatedCodexAppServerClient({
+        agentDir,
+        authProfileId: null,
+        startOptions: {
+          transport: "stdio",
+          homeScope: "agent",
+          commandSource: "resolved-managed",
+          command,
+          args: ["app-server"],
+          headers: {},
+        },
+        pluginConfig: {
+          computerUse: { enabled: true, autoInstall: true, pluginCacheMode: "shared" },
+        },
+      });
+      await expect(startup).resolves.toBe(harness.client);
+      expect(start).toHaveBeenCalledOnce();
+      expect(initializations).toBe(1);
+      await expect(inspectServiceFixture(targetService)).resolves.toEqual(sourceIdentity);
+      await expect(fs.readFile(path.join(cachePath, "generation.txt"), "utf8")).resolves.toBe(
+        "new-cache",
+      );
+      expect(await fs.readdir(path.dirname(targetService))).toEqual(["Codex Computer Use.app"]);
+      expect(await fs.readdir(path.dirname(cachePath))).toEqual(["1.0.857"]);
+    } finally {
+      await harness.client.closeAndWait();
+    }
+  });
 });
 
 async function writeServiceFixture(appPath: string, identity: string): Promise<void> {

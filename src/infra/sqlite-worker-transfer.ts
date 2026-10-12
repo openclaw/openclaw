@@ -1,4 +1,5 @@
 import { deserialize, serialize } from "node:v8";
+import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 export const SQLITE_WORKER_TRANSFER_FRAME_BYTES = 8 * 1024 * 1024;
 export type SqliteWorkerTransferHandle = { id: number; kinds: string[] };
 type SqliteWorkerTransferValue = { kind: string; value: unknown };
@@ -38,28 +39,20 @@ export function createSqliteWorkerTransferOwner() {
 
   const cleanup = (transfer: Transfer) => {
     const errors: unknown[] = [];
-    if (!transfer.iteratorClosed) {
-      try {
-        transfer.iterator.return?.();
-        transfer.iteratorClosed = true;
-      } catch (error) {
-        errors.push(error);
+    for (const [completed, close] of [
+      ["iteratorClosed", () => transfer.iterator.return?.()],
+      ["cleaned", () => transfer.cleanup?.()],
+    ] as const) {
+      if (!transfer[completed]) {
+        try {
+          close();
+          transfer[completed] = true;
+        } catch (error) {
+          errors.push(error);
+        }
       }
     }
-    if (!transfer.cleaned) {
-      try {
-        transfer.cleanup?.();
-        transfer.cleaned = true;
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "SQLite read transfer cleanup failed", { cause: errors[0] });
-    }
+    throwSqliteLifecycleErrors(errors, "SQLite read transfer cleanup failed");
   };
   const cancel = () => {
     if (current) {

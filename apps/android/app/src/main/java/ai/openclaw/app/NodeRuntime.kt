@@ -3,14 +3,12 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.chat.ChatAgentSessionSelectionOwner
 import ai.openclaw.app.chat.ChatCacheScope
-import ai.openclaw.app.chat.ChatCommandOutbox
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatReactionAccess
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.chat.ChatWidgetResource
-import ai.openclaw.app.chat.ChatWidgetSurface
 import ai.openclaw.app.chat.ChatWidgetSurfaceUrls
 import ai.openclaw.app.chat.ChatWidgetUrlResolver
 import ai.openclaw.app.chat.MainSessionBinding
@@ -63,6 +61,7 @@ import ai.openclaw.app.gateway.resolveGatewaySourcePreviewConfig
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.CalendarHandler
@@ -113,7 +112,6 @@ import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.VoiceWakeSuppressionReason
-import ai.openclaw.app.wear.WearProxyAgent
 import ai.openclaw.app.wear.WearProxyBridge
 import ai.openclaw.app.wear.WearProxyController
 import ai.openclaw.app.wear.WearProxyGatewayException
@@ -122,6 +120,7 @@ import ai.openclaw.app.wear.WearRealtimeTalkController
 import ai.openclaw.app.wear.projectWearAgentPulse
 import ai.openclaw.app.wear.projectWearFullReply
 import ai.openclaw.app.wear.wearConnectionFailure
+import ai.openclaw.wear.shared.WearConnectionFailure
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
@@ -130,11 +129,9 @@ import ai.openclaw.wear.shared.WearReplyTextPage
 import ai.openclaw.wear.shared.WearReplyTextStatus
 import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
-import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -191,7 +188,6 @@ private const val CRON_RUN_TRACKING_POLL_MS = 2_000L
 private const val CRON_JOBS_PAGE_SIZE = 200
 private const val CRON_JOBS_MAX_PAGES = 100
 private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGES
-private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
 private const val USAGE_INCOMPLETE_RETRY_DELAY_MS = 5_000L
 private const val USAGE_INCOMPLETE_RETRY_LIMIT = 3
 private const val OperatorAdminScope = "operator.admin"
@@ -381,18 +377,13 @@ internal fun canApproveGatewayDevicePairing(
   val grantedScopes = callerScopes.map(String::trim).filter(String::isNotEmpty).toSet()
   if (OperatorAdminScope in grantedScopes) return true
   if (roles.any { it != "operator" }) return false
-  return scopes.all { scope -> operatorScopeAllowed(scope, grantedScopes) }
-}
-
-private fun operatorScopeAllowed(
-  requestedScope: String,
-  grantedScopes: Set<String>,
-): Boolean =
-  when (requestedScope) {
-    OperatorReadScope -> OperatorReadScope in grantedScopes || OperatorWriteScope in grantedScopes
-    OperatorWriteScope -> OperatorWriteScope in grantedScopes
-    else -> requestedScope in grantedScopes
+  return scopes.all { scope ->
+    when (scope) {
+      OperatorReadScope -> OperatorReadScope in grantedScopes || OperatorWriteScope in grantedScopes
+      else -> scope in grantedScopes
+    }
   }
+}
 
 enum class GatewayDevicePairingAction(
   internal val method: String,
@@ -418,13 +409,9 @@ internal fun verifyGatewayDevicePairingMutation(
 ): Boolean =
   mutationAccepted &&
     when (mutation.action) {
-      GatewayDevicePairingAction.Approve -> {
+      GatewayDevicePairingAction.Approve, GatewayDevicePairingAction.Reject -> {
         pending.none { it.requestId == mutation.targetId } &&
-          paired.any { it.deviceId == expectedDeviceId }
-      }
-
-      GatewayDevicePairingAction.Reject -> {
-        pending.none { it.requestId == mutation.targetId }
+          (mutation.action != GatewayDevicePairingAction.Approve || paired.any { it.deviceId == expectedDeviceId })
       }
 
       GatewayDevicePairingAction.Remove -> {
@@ -433,35 +420,6 @@ internal fun verifyGatewayDevicePairingMutation(
     }
 
 internal fun buildGatewayDevicePairingMutationParams(mutation: GatewayDevicePairingMutation): JsonObject = buildJsonObject { put(mutation.action.idKey, JsonPrimitive(mutation.targetId)) }
-
-internal enum class SkillWorkshopGatewayAction(
-  val methodSuffix: String,
-  val expectedStatus: String,
-  val notice: NativeText,
-  val verb: NativeText,
-) {
-  Apply("apply", "applied", nativeText("Proposal applied."), nativeText("apply")),
-  Reject("reject", "rejected", nativeText("Proposal rejected."), nativeText("reject")),
-  Quarantine("quarantine", "quarantined", nativeText("Proposal quarantined."), nativeText("quarantine")),
-}
-
-internal fun skillWorkshopUnexpectedStatusText(
-  status: String?,
-  action: SkillWorkshopGatewayAction,
-): NativeText {
-  val statusText = status?.takeIf { it.isNotBlank() }?.let(::verbatimText) ?: nativeText("unknown")
-  return nativeText(
-    "Gateway returned status '\$statusLabel' after \${action.verb}.",
-    statusText,
-    action.verb,
-  )
-}
-
-internal fun skillWorkshopActionFailureText(action: SkillWorkshopGatewayAction): NativeText =
-  nativeText(
-    "Could not \${action.verb} Skill Workshop proposal.",
-    action.verb,
-  )
 
 internal data class PendingNotificationNodeEvent(
   val event: String,
@@ -545,12 +503,11 @@ internal class NotificationNodeEventOutbox(
               !isAuthorized(queued.event) ||
               !isConnected()
             ) {
-              false
-            } else {
-              pending.removeFirst()
-              inFlight = queued
-              true
+              return@synchronized false
             }
+            pending.removeFirst()
+            inFlight = queued
+            true
           }
         if (!admitted) continue
 
@@ -559,10 +516,6 @@ internal class NotificationNodeEventOutbox(
           if (inFlight === queued) inFlight = null
           if (queued.generation == generation.get() && isAuthorized(queued.event)) {
             when (outcome) {
-              NodeEventSendOutcome.COMPLETED -> {
-                lastDeliveryAtMs.set(nowEpochMs())
-              }
-
               NodeEventSendOutcome.DISCONNECTED -> {
                 // This outcome is rejected before send, so it is safe to retain for reconnect.
                 if (pending.size == capacity) pending.removeLast()
@@ -570,7 +523,7 @@ internal class NotificationNodeEventOutbox(
               }
 
               // Ambiguous failures may have reached the gateway: do not retry, but charge their rate slot.
-              NodeEventSendOutcome.FAILED -> {
+              NodeEventSendOutcome.COMPLETED, NodeEventSendOutcome.FAILED -> {
                 lastDeliveryAtMs.set(nowEpochMs())
               }
             }
@@ -640,67 +593,36 @@ private const val GATEWAY_STATUS_OPERATOR_OFFLINE = "Connected (operator offline
 
 private fun gatewayOperatorConnectionState(operator: String): String = "Connected (operator: $operator)"
 
+private val gatewayTlsUnavailableText = nativeText("Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.")
+private val gatewayTlsTimeoutText = nativeText("Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.")
+private val gatewayTlsUnreachableText = nativeText("Failed: couldn't reach the secure gateway endpoint for this host.")
+
+private val gatewayStatusDisplayTexts =
+  listOf(
+    nativeText("Offline"),
+    nativeText("Connected"),
+    nativeText("Connected (node offline)"),
+    nativeText("Connected (operator offline)"),
+    nativeText("Connecting…"),
+    nativeText("Reconnecting…"),
+    nativeText("Gateway connection timed out. Check your network and that the Gateway is running, then retry."),
+    nativeText("Could not reach the Gateway. Check your network and that the Gateway is running, then retry."),
+    nativeText("The previous network request is still stopping. Check your connection, then retry."),
+    gatewayTlsUnavailableText,
+    gatewayTlsTimeoutText,
+    gatewayTlsUnreachableText,
+  ).associateBy(NativeText.Resource::source)
+
 internal fun gatewayConnectionStatusForDisplay(statusText: String): String {
   val status = statusText.trim()
-  return when {
-    status.isEmpty() || status == GATEWAY_STATUS_OFFLINE -> {
-      nativeString("Offline")
-    }
-
-    status == GATEWAY_STATUS_CONNECTED -> {
-      nativeString("Connected")
-    }
-
-    status == GATEWAY_STATUS_NODE_OFFLINE -> {
-      nativeString("Connected (node offline)")
-    }
-
-    status == GATEWAY_STATUS_OPERATOR_OFFLINE -> {
-      nativeString("Connected (operator offline)")
-    }
-
-    status == "Connecting…" -> {
-      nativeString("Connecting…")
-    }
-
-    status == "Reconnecting…" -> {
-      nativeString("Reconnecting…")
-    }
-
-    status == "Gateway connection timed out. Check your network and that the Gateway is running, then retry." -> {
-      nativeString("Gateway connection timed out. Check your network and that the Gateway is running, then retry.")
-    }
-
-    status == "Could not reach the Gateway. Check your network and that the Gateway is running, then retry." -> {
-      nativeString("Could not reach the Gateway. Check your network and that the Gateway is running, then retry.")
-    }
-
-    status == "The previous network request is still stopping. Check your connection, then retry." -> {
-      nativeString("The previous network request is still stopping. Check your connection, then retry.")
-    }
-
-    status == "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected." -> {
-      nativeString("Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.")
-    }
-
-    status == "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry." -> {
-      nativeString("Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.")
-    }
-
-    status == "Failed: couldn't reach the secure gateway endpoint for this host." -> {
-      nativeString("Failed: couldn't reach the secure gateway endpoint for this host.")
-    }
-
-    status.startsWith("Connected (operator: ") && status.endsWith(")") -> {
-      nativeString(
-        "Connected (operator: \$operator)",
-        status.removePrefix("Connected (operator: ").dropLast(1),
-      )
-    }
-
-    else -> {
-      status
-    }
+  gatewayStatusDisplayTexts[status.ifEmpty { GATEWAY_STATUS_OFFLINE }]?.let { return it.resolveNativeText() }
+  return if (status.startsWith("Connected (operator: ") && status.endsWith(")")) {
+    nativeString(
+      "Connected (operator: \$operator)",
+      status.removePrefix("Connected (operator: ").dropLast(1),
+    )
+  } else {
+    status
   }
 }
 
@@ -756,13 +678,6 @@ internal fun gatewayConnectionDisplay(
   }
 }
 
-private data class AndroidChatStores(
-  val transcriptCache: ChatTranscriptCache,
-  val commandOutbox: ChatCommandOutbox,
-  val clientDatabases: AndroidClientDatabases,
-  val externalTranscriptCache: ChatTranscriptCache? = null,
-)
-
 internal enum class NodeRuntimeMode {
   Live,
   ScreenshotFixture,
@@ -797,45 +712,6 @@ internal class SessionObserverVisibility(
   }
 }
 
-private fun openAndroidChatStores(
-  context: Context,
-  prefs: SecurePrefs,
-  mode: NodeRuntimeMode = NodeRuntimeMode.Live,
-): AndroidChatStores {
-  val databases =
-    when (mode) {
-      NodeRuntimeMode.Live -> {
-        AndroidClientDatabases.start(
-          context.applicationContext,
-          registeredGatewayIds =
-            prefs.gatewayRegistry.entries.value
-              .map { it.stableId }
-              .toSet(),
-        )
-      }
-
-      // Fixture recovery must never read, migrate, or retire the operator's durable input.
-      NodeRuntimeMode.ScreenshotFixture -> {
-        AndroidClientDatabases.inMemory(context)
-      }
-    }
-  return AndroidChatStores(
-    transcriptCache = databases.transcriptCache(),
-    commandOutbox = databases.commandOutbox(),
-    clientDatabases = databases,
-  )
-}
-
-private fun openAndroidChatStores(
-  context: Context,
-  prefs: SecurePrefs,
-  transcriptCache: ChatTranscriptCache,
-): AndroidChatStores =
-  openAndroidChatStores(context, prefs).copy(
-    transcriptCache = transcriptCache,
-    externalTranscriptCache = transcriptCache,
-  )
-
 /** Presentation of the connection owner's handoff, not saved intent or network health. */
 internal data class GatewayConnectionHandoff(
   val focusedStableId: String? = null,
@@ -854,19 +730,34 @@ internal sealed interface GatewayTargetSelection {
   data object Retired : GatewayTargetSelection
 }
 
-class NodeRuntime private constructor(
+class NodeRuntime internal constructor(
   context: Context,
-  val prefs: SecurePrefs,
-  private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult,
-  chatStores: AndroidChatStores,
-  internal val mode: NodeRuntimeMode,
-  initialForeground: Boolean,
-  initialReconnectSuppressed: Boolean,
+  val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
+  internal val mode: NodeRuntimeMode = NodeRuntimeMode.Live,
+  tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
+  initialForeground: Boolean = true,
+  initialReconnectSuppressed: Boolean = false,
+  private val externalTranscriptCache: ChatTranscriptCache? = null,
 ) {
-  private val chatTranscriptCache = chatStores.transcriptCache
-  private val chatCommandOutbox = chatStores.commandOutbox
-  private val clientDatabases = chatStores.clientDatabases
-  private val externalTranscriptCache = chatStores.externalTranscriptCache
+  private val clientDatabases =
+    when (mode) {
+      NodeRuntimeMode.Live -> {
+        AndroidClientDatabases.start(
+          context.applicationContext,
+          registeredGatewayIds =
+            prefs.gatewayRegistry.entries.value
+              .map { it.stableId }
+              .toSet(),
+        )
+      }
+
+      // Fixture recovery must never read, migrate, or retire the operator's durable input.
+      NodeRuntimeMode.ScreenshotFixture -> {
+        AndroidClientDatabases.inMemory(context)
+      }
+    }
+  private val chatTranscriptCache = externalTranscriptCache ?: clientDatabases.transcriptCache()
+  private val chatCommandOutbox = clientDatabases.commandOutbox()
 
   // Reentry retains this runtime, so requester data and both capability paths must share its original mode.
   private val screenshotBranchesEnabled = mode == NodeRuntimeMode.ScreenshotFixture && AndroidScreenshotFixture.branchesEnabled
@@ -982,79 +873,19 @@ class NodeRuntime private constructor(
     val message: NativeText,
     val kind: GatewayCronNoticeKind,
     val refresh: Boolean,
-    val deleted: Boolean = false,
-  )
-
-  constructor(
-    context: Context,
-    prefs: SecurePrefs = SecurePrefs(context.applicationContext),
-    tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
-  ) : this(
-    context = context,
-    prefs = prefs,
-    tlsFingerprintProbe = tlsFingerprintProbe,
-    chatStores = openAndroidChatStores(context, prefs),
-    mode = NodeRuntimeMode.Live,
-    initialForeground = true,
-    initialReconnectSuppressed = false,
-  )
-
-  internal constructor(
-    context: Context,
-    prefs: SecurePrefs,
-    initialForeground: Boolean,
-  ) : this(
-    context = context,
-    prefs = prefs,
-    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
-    chatStores = openAndroidChatStores(context, prefs),
-    mode = NodeRuntimeMode.Live,
-    initialForeground = initialForeground,
-    initialReconnectSuppressed = false,
-  )
-
-  internal constructor(
-    context: Context,
-    prefs: SecurePrefs,
-    mode: NodeRuntimeMode,
-  ) : this(
-    context = context,
-    prefs = prefs,
-    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
-    chatStores = openAndroidChatStores(context, prefs, mode),
-    mode = mode,
-    initialForeground = true,
-    initialReconnectSuppressed = false,
   )
 
   internal constructor(
     context: Context,
     prefs: SecurePrefs,
     chatTranscriptCache: ChatTranscriptCache,
-  ) : this(
-    context = context,
-    prefs = prefs,
-    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
-    chatStores = openAndroidChatStores(context, prefs, chatTranscriptCache),
-    mode = NodeRuntimeMode.Live,
-    initialForeground = true,
-    initialReconnectSuppressed = false,
-  )
+  ) : this(context, prefs, externalTranscriptCache = chatTranscriptCache)
 
   companion object {
     internal fun forGatewayAuthReset(
       context: Context,
       prefs: SecurePrefs,
-    ): NodeRuntime =
-      NodeRuntime(
-        context = context,
-        prefs = prefs,
-        tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
-        chatStores = openAndroidChatStores(context, prefs),
-        mode = NodeRuntimeMode.Live,
-        initialForeground = true,
-        initialReconnectSuppressed = true,
-      )
+    ): NodeRuntime = NodeRuntime(context, prefs, initialReconnectSuppressed = true)
   }
 
   /**
@@ -1162,10 +993,7 @@ class NodeRuntime private constructor(
     )
   }
 
-  private val motionHandler: MotionHandler =
-    MotionHandler(
-      appContext = appContext,
-    )
+  private val motionHandler = MotionHandler(appContext = appContext)
 
   private val mobileUiHandler = MobileUiHandler()
   private var lastMobileUiConnected = mobileUiHandler.isConnected.value
@@ -1177,14 +1005,12 @@ class NodeRuntime private constructor(
           appContext = appContext,
           camera = camera,
           setCameraAudioCaptureActive = ::setCameraAudioCaptureActive,
-          invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
         ),
       debugHandler = DebugHandler(appContext = appContext, identityStore = identityStore),
       locationHandler =
         LocationHandler(
           appContext = appContext,
           location = location,
-          json = json,
           isForeground = { _isForeground.value },
           locationMode = { locationMode.value },
           backgroundLocationEnabled = { SensitiveFeatureConfig.backgroundLocationEnabled },
@@ -1211,9 +1037,9 @@ class NodeRuntime private constructor(
         object : TalkHandler {
           override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStart()
 
-          override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop()
+          override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop { talkMode.endPushToTalk() }
 
-          override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttCancel()
+          override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop { talkMode.cancelPushToTalk() }
 
           override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttOnce()
         },
@@ -1290,10 +1116,6 @@ class NodeRuntime private constructor(
 
   private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, GATEWAY_STATUS_OFFLINE, null))
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> = _gatewayConnectionDisplay.asStateFlow()
-  private val _statusText = MutableStateFlow(GATEWAY_STATUS_OFFLINE)
-  val statusText: StateFlow<String> = _statusText.asStateFlow()
-  private val _gatewayConnectionProblem = MutableStateFlow<GatewayConnectionProblem?>(null)
-  val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = _gatewayConnectionProblem.asStateFlow()
   private val _operatorScopes = MutableStateFlow<List<String>>(emptyList())
   val operatorScopes: StateFlow<List<String>> = _operatorScopes.asStateFlow()
   val operatorAdminScopeAvailable: StateFlow<Boolean> =
@@ -1426,29 +1248,9 @@ class NodeRuntime private constructor(
   private val clawHubSkillSearchSeq = AtomicLong(0)
   private val clawHubSkillReviewSeq = AtomicLong(0)
   private val clawHubSkillInstallMutex = Mutex()
-  private val _skillWorkshopSummary = MutableStateFlow(GatewaySkillWorkshopSummary(proposals = emptyList()))
-  val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> = _skillWorkshopSummary.asStateFlow()
-  private val _skillWorkshopRefreshing = MutableStateFlow(false)
-  val skillWorkshopRefreshing: StateFlow<Boolean> = _skillWorkshopRefreshing.asStateFlow()
-  private val _skillWorkshopErrorText = MutableStateFlow<NativeText?>(null)
-  val skillWorkshopErrorText: StateFlow<String?> = _skillWorkshopErrorText.resolveOptionalNativeText()
-  private val _skillWorkshopNoticeText = MutableStateFlow<NativeText?>(null)
-  val skillWorkshopNoticeText: StateFlow<String?> = _skillWorkshopNoticeText.resolveOptionalNativeText()
-  private val _skillWorkshopInspectingProposalId = MutableStateFlow<String?>(null)
-  val skillWorkshopInspectingProposalId: StateFlow<String?> = _skillWorkshopInspectingProposalId.asStateFlow()
-  private val _skillWorkshopMutatingProposalId = MutableStateFlow<String?>(null)
-  val skillWorkshopMutatingProposalId: StateFlow<String?> = _skillWorkshopMutatingProposalId.asStateFlow()
-  private val skillWorkshopListSeq = AtomicLong(0)
-  private val skillWorkshopInspectSeq = AtomicLong(0)
-  private val skillWorkshopMutationSeq = AtomicLong(0)
-  private val _nodesDevicesSummary =
-    MutableStateFlow(
-      GatewayNodesDevicesSummary(
-        nodes = emptyList(),
-        pendingDevices = emptyList(),
-        pairedDevices = emptyList(),
-      ),
-    )
+  private val emptyNodesDevicesSummary =
+    GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
+  private val _nodesDevicesSummary = MutableStateFlow(emptyNodesDevicesSummary)
   val nodesDevicesSummary: StateFlow<GatewayNodesDevicesSummary> = _nodesDevicesSummary.asStateFlow()
   private val _nodesDevicesRefreshing = MutableStateFlow(false)
   val nodesDevicesRefreshing: StateFlow<Boolean> = _nodesDevicesRefreshing.asStateFlow()
@@ -1511,6 +1313,15 @@ class NodeRuntime private constructor(
     val revision: Long,
   )
 
+  private enum class LocalMicOwner(
+    val suppressionReason: VoiceWakeSuppressionReason,
+    val busyMessage: String,
+  ) {
+    VoiceNote(VoiceWakeSuppressionReason.VoiceNote, "MIC_BUSY: voice note recording is active"),
+    Dictation(VoiceWakeSuppressionReason.Dictation, "MIC_BUSY: dictation is active"),
+    Camera(VoiceWakeSuppressionReason.Camera, "MIC_BUSY: camera audio recording is active"),
+  }
+
   private val voiceLifecycleEpoch = AtomicLong()
   private val voiceCaptureOwnershipEpoch = AtomicLong()
   private val talkPttCommandEpoch = AtomicLong()
@@ -1520,9 +1331,7 @@ class NodeRuntime private constructor(
   // Otherwise stale PTT cleanup can pass its epoch check before a UI mode change.
   private val voiceCaptureOwnershipLock = Any()
   private var voiceWakeSuppressionRevision = 0L
-  private var voiceNoteOwnsMic = false
-  private var dictationOwnsMic = false
-  private var cameraAudioOwnsMic = false
+  private var localMicOwner: LocalMicOwner? = null
   private val voiceReplySpeechDepth = AtomicInteger(0)
   private val voiceCapturePreparationMutex = Mutex()
 
@@ -1612,9 +1421,7 @@ class NodeRuntime private constructor(
         refreshNodesDevices()
         // Method and scope snapshots are synchronous above; refresh only after both so
         // this route cannot inherit readiness from the connection it replaced.
-        systemAgentChatController.refresh(startIfNeeded = false)
-        micCapture.onGatewayConnectionChanged(true)
-        wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
+        publishOperatorConnection(connected = true, status = "Connected")
         scope.launch {
           val gatewayScope = captureGatewayDataScope() ?: return@launch
           val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return@launch
@@ -1641,13 +1448,7 @@ class NodeRuntime private constructor(
           operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
           operatorStatusText = operatorConnectionProblem?.takeIf { it.isNetworkFailure }?.message ?: message
         }
-        systemAgentChatController.refresh(startIfNeeded = false)
-        micCapture.onGatewayConnectionChanged(false)
-        wearProxyBridge()?.publishConnection(
-          connected = false,
-          status = message,
-          failure = wearFailure,
-        )
+        publishOperatorConnection(connected = false, status = message, failure = { wearFailure })
       },
       onConnectFailure = { error, pauseReconnect ->
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
@@ -1657,19 +1458,21 @@ class NodeRuntime private constructor(
           operatorStatusText = problem.message
           operatorConnectionProblem = problem
         }
-        systemAgentChatController.refresh(startIfNeeded = false)
-        micCapture.onGatewayConnectionChanged(false)
-        wearProxyBridge()?.publishConnection(
-          connected = false,
-          status = problem.message,
-          failure = wearConnectionFailure(problem.code, problem.message),
-        )
+        publishOperatorConnection(connected = false, status = problem.message, failure = { wearConnectionFailure(problem.code, problem.message) })
       },
-      onEvent = { event, payloadJson ->
-        handleGatewayEvent(event, payloadJson)
-      },
+      onEvent = ::handleGatewayEvent,
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
+
+  private fun publishOperatorConnection(
+    connected: Boolean,
+    status: String,
+    failure: () -> WearConnectionFailure? = { null },
+  ) {
+    systemAgentChatController.refresh(startIfNeeded = false)
+    micCapture.onGatewayConnectionChanged(connected)
+    wearProxyBridge()?.publishConnection(connected = connected, status = status, failure = failure())
+  }
 
   private val sessionObserverVisibility =
     SessionObserverVisibility(
@@ -1728,15 +1531,7 @@ class NodeRuntime private constructor(
       activeAgentId = ::currentWearAgentId,
       activeSessionKey = { chat.sessionKey.value },
       selectedModelRef = { chat.selectedModelRef.value },
-      agents = {
-        gatewayAgents.value.selectableAgents().map { agent ->
-          WearProxyAgent(
-            id = agent.id,
-            name = agent.name,
-            emoji = agent.emoji,
-          )
-        }
-      },
+      agents = { gatewayAgents.value.selectableAgents() },
       selectGatewayAgent = { agentId ->
         if (gatewayAgents.value.selectableAgents().none { agent -> agent.id == agentId }) {
           false
@@ -1797,7 +1592,7 @@ class NodeRuntime private constructor(
       projectWearFullReply(
         json.parseToJsonElement(payload),
         entryId,
-        "\u0000".let { separator -> listOf(scope.stableId, scope.generation.toString(), methods.epoch.toString(), agentId, sessionKey, entryId).joinToString(separator) },
+        listOf(scope.stableId, scope.generation.toString(), methods.epoch.toString(), agentId, sessionKey, entryId).joinToString("\u0000"),
         offset,
         revision,
       )
@@ -1949,21 +1744,7 @@ class NodeRuntime private constructor(
     clawHubSkillSearchSeq.incrementAndGet()
     clawHubSkillReviewSeq.incrementAndGet()
     _clawHubSkillSearchState.value = GatewayClawHubSkillSearchState()
-    _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(proposals = emptyList())
-    _skillWorkshopRefreshing.value = false
-    _skillWorkshopErrorText.value = null
-    _skillWorkshopNoticeText.value = null
-    _skillWorkshopInspectingProposalId.value = null
-    _skillWorkshopMutatingProposalId.value = null
-    skillWorkshopListSeq.incrementAndGet()
-    skillWorkshopInspectSeq.incrementAndGet()
-    skillWorkshopMutationSeq.incrementAndGet()
-    _nodesDevicesSummary.value =
-      GatewayNodesDevicesSummary(
-        nodes = emptyList(),
-        pendingDevices = emptyList(),
-        pairedDevices = emptyList(),
-      )
+    _nodesDevicesSummary.value = emptyNodesDevicesSummary
     _nodesDevicesRefreshing.value = false
     _nodesDevicesErrorText.value = null
     _nodesDevicesNoticeText.value = null
@@ -2051,9 +1832,6 @@ class NodeRuntime private constructor(
       onEvent = ::handleNodeGatewayEvent,
       onInvoke = { req ->
         invokeDispatcher.handleInvoke(req.command, req.paramsJson)
-      },
-      onTlsFingerprint = { stableId, fingerprint ->
-        prefs.saveGatewayTlsFingerprint(stableId, fingerprint)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
@@ -2160,7 +1938,7 @@ class NodeRuntime private constructor(
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
-          onOfflineDefaultAgentRestored = ::syncMainSessionKey,
+          onOfflineDefaultAgentRestored = { prepareMainSessionKey(it, MainSessionUpdate.Sync) },
           onAssistantReplyFinalized = { owner, runId, text ->
             if (!_isForeground.value) {
               ConversationReplyNotifier(appContext).show(owner, runId, text)
@@ -2213,10 +1991,7 @@ class NodeRuntime private constructor(
    * Stable per-gateway scope for the offline chat cache; resolved per call so cached transcripts
    * never leak across gateways. Null (nothing paired/configured) disables cache reads and writes.
    */
-  private fun chatCacheGatewayId(): String? {
-    connectedEndpoint?.stableId?.let { return it }
-    return prefs.gatewayRegistry.activeStableId.value
-  }
+  private fun chatCacheGatewayId(): String? = connectedEndpoint?.stableId ?: prefs.gatewayRegistry.activeStableId.value
 
   private fun chatCacheScope(): ChatCacheScope? =
     chatCacheGatewayId()?.let { gatewayId ->
@@ -2494,33 +2269,28 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun syncMainSessionKey(agentId: String?) {
-    val resolvedKey = resolveNodeMainSessionKey(agentId)
-    talkMode.setMainSessionKey(resolvedKey)
-    if (!updateMainSessionKey(resolvedKey)) return
-    if (operatorConnected) {
-      chat.prepareMainSessionKey(resolvedKey)
-      chat.onGatewayConnected(mainSessionBinding(resolvedKey))
-    } else {
-      chat.applyMainSessionKey(resolvedKey)
-    }
-  }
+  private enum class MainSessionUpdate { Sync, Prepare, Select }
 
-  private fun prepareMainSessionKey(agentId: String?): String {
+  private fun prepareMainSessionKey(
+    agentId: String?,
+    update: MainSessionUpdate = MainSessionUpdate.Prepare,
+  ): String {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
     // Always push into TalkMode so a lazy instance cannot retain the "main" alias.
     talkMode.setMainSessionKey(resolvedKey)
-    updateMainSessionKey(resolvedKey)
-    chat.prepareMainSessionKey(resolvedKey)
+    val changed = updateMainSessionKey(resolvedKey)
+    if (update == MainSessionUpdate.Sync && !changed) return resolvedKey
+    if (update == MainSessionUpdate.Sync && !operatorConnected) {
+      chat.applyMainSessionKey(resolvedKey)
+      return resolvedKey
+    }
+    if (update == MainSessionUpdate.Select) {
+      chat.prepareAndSelectMainSessionKey(resolvedKey)
+    } else {
+      chat.prepareMainSessionKey(resolvedKey)
+    }
+    if (update != MainSessionUpdate.Prepare) chat.onGatewayConnected(mainSessionBinding(resolvedKey))
     return resolvedKey
-  }
-
-  private fun selectMainSessionKey(agentId: String) {
-    val resolvedKey = resolveNodeMainSessionKey(agentId)
-    talkMode.setMainSessionKey(resolvedKey)
-    updateMainSessionKey(resolvedKey)
-    chat.prepareAndSelectMainSessionKey(resolvedKey)
-    chat.onGatewayConnected(mainSessionBinding(resolvedKey))
   }
 
   private fun mainSessionBinding(sessionKey: String): MainSessionBinding =
@@ -2567,8 +2337,6 @@ class NodeRuntime private constructor(
         )
       _gatewayConnectionDisplay.value = display
       _isConnected.value = display.isConnected
-      _statusText.value = display.statusText
-      _gatewayConnectionProblem.value = display.problem
     }
   }
 
@@ -2688,13 +2456,12 @@ class NodeRuntime private constructor(
       when (val outcome = parseGatewayCronRunOutcome(json.parseToJsonElement(response).asObjectOrNull())) {
         is GatewayCronRunOutcome.Started -> {
           outcome.runId?.let { runId ->
-            var trackingStarted = false
-            publishGatewayData(gatewayScope) {
-              trackingStarted =
+            val trackingStarted =
+              withCurrentGatewayData(gatewayScope) {
                 pendingCronRunRegistry.begin(actionJobId, runId) {
                   _pendingCronRunJobIds.value = it
                 }
-            }
+              }
             if (trackingStarted) {
               trackQueuedCronRun(gatewayScope = gatewayScope, jobId = actionJobId, runId = runId)
             }
@@ -2797,7 +2564,6 @@ class NodeRuntime private constructor(
         message = nativeText("Automation deleted."),
         kind = GatewayCronNoticeKind.Success,
         refresh = true,
-        deleted = true,
       )
     }
   }
@@ -2889,69 +2655,6 @@ class NodeRuntime private constructor(
         errorText = null,
         messageText = null,
       )
-  }
-
-  fun refreshSkillWorkshopProposals(agentId: String? = null) {
-    scope.launch {
-      refreshSkillWorkshopProposalsFromGateway(agentId = agentId)
-    }
-  }
-
-  fun resetSkillWorkshopAgentScope(agentId: String? = null) {
-    val normalizedAgentId = normalizeSkillWorkshopAgentId(agentId)
-    skillWorkshopListSeq.incrementAndGet()
-    skillWorkshopInspectSeq.incrementAndGet()
-    skillWorkshopMutationSeq.incrementAndGet()
-    _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = normalizedAgentId, proposals = emptyList())
-    _skillWorkshopRefreshing.value = false
-    _skillWorkshopErrorText.value = null
-    _skillWorkshopNoticeText.value = null
-    _skillWorkshopInspectingProposalId.value = null
-    _skillWorkshopMutatingProposalId.value = null
-  }
-
-  fun inspectSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ) {
-    val normalized = proposalId.trim()
-    if (normalized.isEmpty()) return
-    scope.launch {
-      inspectSkillWorkshopProposalFromGateway(proposalId = normalized, agentId = agentId)
-    }
-  }
-
-  fun applySkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ) {
-    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = SkillWorkshopGatewayAction.Apply)
-  }
-
-  fun rejectSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ) {
-    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = SkillWorkshopGatewayAction.Reject)
-  }
-
-  fun quarantineSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String? = null,
-  ) {
-    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = SkillWorkshopGatewayAction.Quarantine)
-  }
-
-  private fun mutateSkillWorkshopProposal(
-    proposalId: String,
-    agentId: String?,
-    action: SkillWorkshopGatewayAction,
-  ) {
-    val normalized = proposalId.trim()
-    if (normalized.isEmpty()) return
-    scope.launch {
-      mutateSkillWorkshopProposalOnGateway(proposalId = normalized, agentId = agentId, action = action)
-    }
   }
 
   fun refreshNodesDevices() = launchGatewayRefresh { refreshNodesDevicesFromGateway() }
@@ -3049,22 +2752,27 @@ class NodeRuntime private constructor(
       }
     }
 
+  private suspend inline fun withGatewayAuthReset(block: () -> Boolean): Boolean {
+    val connectOperationsDrained =
+      synchronized(gatewayAuthLifecycleLock) {
+        if (gatewayAuthResetInProgress) return false
+        gatewayAuthResetInProgress = true
+        gatewayConnectOperationsDrained
+      }
+    return try {
+      connectOperationsDrained.await()
+      block()
+    } finally {
+      synchronized(gatewayAuthLifecycleLock) { gatewayAuthResetInProgress = false }
+      requestBackgroundGatewayReconciliation()
+    }
+  }
+
   private suspend fun resetGatewaySetupAuthLocked(
     stableId: String,
     isCurrent: () -> Boolean,
   ): Boolean {
-    val connectOperationsDrained =
-      synchronized(gatewayAuthLifecycleLock) {
-        if (gatewayAuthResetInProgress) {
-          null
-        } else {
-          gatewayAuthResetInProgress = true
-          gatewayConnectOperationsDrained
-        }
-      }
-        ?: return false
-    return try {
-      connectOperationsDrained.await()
+    return withGatewayAuthReset {
       disconnectSecondaryGatewayConnection(stableId)?.disconnectAndJoin()
       if (connectedEndpoint?.stableId == stableId) {
         disconnectAndJoin()
@@ -3095,9 +2803,6 @@ class NodeRuntime private constructor(
         deviceAuthStore.clearToken(stableId, deviceId, "operator")
         true
       }
-    } finally {
-      synchronized(gatewayAuthLifecycleLock) { gatewayAuthResetInProgress = false }
-      requestBackgroundGatewayReconciliation()
     }
   }
 
@@ -3385,7 +3090,7 @@ class NodeRuntime private constructor(
       return
     }
 
-    val client = connectionManager.buildClientInfo(clientId = "openclaw-android", clientMode = "node")
+    val client = connectionManager.buildClientInfo(clientMode = "node")
     val payloadJson =
       NodePresenceAliveBeacon.makePayloadJson(
         trigger = trigger,
@@ -3415,8 +3120,7 @@ class NodeRuntime private constructor(
   }
 
   private fun seedLastDiscoveredGateway(list: List<GatewayEndpoint>) {
-    if (list.isEmpty()) return
-    if (lastDiscoveredStableId.value.trim().isNotEmpty()) return
+    if (list.isEmpty() || lastDiscoveredStableId.value.trim().isNotEmpty()) return
     prefs.setLastDiscoveredStableId(list.first().stableId)
   }
 
@@ -3462,14 +3166,7 @@ class NodeRuntime private constructor(
           val auth = resolveGatewayConnectAuth(endpoint)
           val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
           val operatorAuth = resolveOperatorSessionConnectAuth(auth, storedOperatorEntry?.token)
-          val options =
-            connectionManager.buildOperatorConnectOptions(
-              scopes =
-                operatorConnectScopesForAuth(
-                  usesStoredDeviceToken = operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token),
-                  storedOperatorScopes = storedOperatorEntry?.scopes,
-                ),
-            )
+          val options = operatorConnectOptions(auth, storedOperatorEntry)
           val tls = connectionManager.resolveTlsParams(endpoint)
           synchronized(gatewayLifecycleIntentLock) {
             val currentEntry =
@@ -3502,17 +3199,14 @@ class NodeRuntime private constructor(
       }
     }
 
-  private fun resolveRegistryEndpoint(
-    entry: GatewayRegistryEntry,
-    discovered: List<GatewayEndpoint> = gateways.value,
-  ): GatewayEndpoint? {
+  private fun resolveRegistryEndpoint(entry: GatewayRegistryEntry): GatewayEndpoint? {
     return when (entry.kind) {
       GatewayRegistryEntryKind.MANUAL -> {
         manualGatewayEndpoint(entry)
       }
 
       GatewayRegistryEntryKind.DISCOVERED -> {
-        val endpoint = discovered.firstOrNull { it.stableId == entry.stableId } ?: return null
+        val endpoint = gateways.value.firstOrNull { it.stableId == entry.stableId } ?: return null
         val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
         endpoint.takeIf { storedFingerprint.isNotEmpty() }
       }
@@ -3791,61 +3485,23 @@ class NodeRuntime private constructor(
     // Don't re-enable on active=true; mic toggle drives that
   }
 
-  fun setMicEnabled(value: Boolean) {
-    setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
-  }
+  fun setMicEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
 
   internal fun hasActiveGatewaySwitchAudio(): Boolean =
     synchronized(voiceCaptureOwnershipLock) {
-      voiceNoteOwnsMic || dictationOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
+      localMicOwner != null || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
     }
 
-  internal fun tryAcquireVoiceNoteMic(): Boolean {
-    val suppressionUpdate =
-      synchronized(voiceCaptureOwnershipLock) {
-        if (gatewayConnectionHandoff.value.pending || voiceNoteOwnsMic || dictationOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
-        voiceNoteOwnsMic = true
-        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, true)
-      }
-    applyVoiceWakeSuppression(suppressionUpdate)
-    return true
-  }
+  internal fun tryAcquireVoiceNoteMic(): Boolean = setLocalMicActive(LocalMicOwner.VoiceNote, true)
 
   internal fun releaseVoiceNoteMic() {
-    val suppressionUpdate =
-      synchronized(voiceCaptureOwnershipLock) {
-        voiceNoteOwnsMic = false
-        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, false)
-      }
-    applyVoiceWakeSuppression(suppressionUpdate)
+    setLocalMicActive(LocalMicOwner.VoiceNote, false)
   }
 
-  internal fun tryAcquireDictationMic(): Boolean {
-    val suppressionUpdate =
-      synchronized(voiceCaptureOwnershipLock) {
-        if (
-          gatewayConnectionHandoff.value.pending ||
-          dictationOwnsMic ||
-          voiceNoteOwnsMic ||
-          cameraAudioOwnsMic ||
-          !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
-        ) {
-          return false
-        }
-        dictationOwnsMic = true
-        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Dictation, true)
-      }
-    applyVoiceWakeSuppression(suppressionUpdate)
-    return true
-  }
+  internal fun tryAcquireDictationMic(): Boolean = setLocalMicActive(LocalMicOwner.Dictation, true)
 
   internal fun releaseDictationMic() {
-    val suppressionUpdate =
-      synchronized(voiceCaptureOwnershipLock) {
-        dictationOwnsMic = false
-        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Dictation, false)
-      }
-    applyVoiceWakeSuppression(suppressionUpdate)
+    setLocalMicActive(LocalMicOwner.Dictation, false)
   }
 
   fun cancelMicCapture() {
@@ -3854,13 +3510,9 @@ class NodeRuntime private constructor(
     prefs.setVoiceMicEnabled(false)
   }
 
-  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice) {
-    talkMode.acknowledgeFailure(notice)
-  }
+  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice): Unit = talkMode.acknowledgeFailure(notice)
 
-  fun setTalkModeEnabled(value: Boolean) {
-    setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
-  }
+  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
@@ -3882,27 +3534,12 @@ class NodeRuntime private constructor(
             talkMode.beginPushToTalk(
               allowNewCapture = true,
               canStartCapture = {
-                _isForeground.value &&
-                  voiceLifecycleEpoch.get() == lifecycleEpoch &&
-                  talkPttCommandEpoch.get() == commandEpoch &&
-                  voiceCaptureOwnershipEpoch.get() == ownershipEpoch
+                isTalkPttCommandCurrent(lifecycleEpoch, commandEpoch, ownershipEpoch)
               },
             )
           recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
           started
         }
-      GatewaySession.InvokeResult.ok(payload.toJson())
-    }
-
-  private suspend fun handleTalkPttStop(): GatewaySession.InvokeResult =
-    runTalkPttCommand {
-      val payload = stopPreparedTalkPttCapture { talkMode.endPushToTalk() }
-      GatewaySession.InvokeResult.ok(payload.toJson())
-    }
-
-  private suspend fun handleTalkPttCancel(): GatewaySession.InvokeResult =
-    runTalkPttCommand {
-      val payload = stopPreparedTalkPttCapture { talkMode.cancelPushToTalk() }
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
@@ -3922,10 +3559,7 @@ class NodeRuntime private constructor(
           val started =
             talkMode.beginPushToTalkOnce(
               canStartCapture = {
-                _isForeground.value &&
-                  voiceLifecycleEpoch.get() == lifecycleEpoch &&
-                  talkPttCommandEpoch.get() == commandEpoch &&
-                  voiceCaptureOwnershipEpoch.get() == ownershipEpoch
+                isTalkPttCommandCurrent(lifecycleEpoch, commandEpoch, ownershipEpoch)
               },
             )
           when (started) {
@@ -3957,6 +3591,16 @@ class NodeRuntime private constructor(
     )
   }
 
+  private fun isTalkPttCommandCurrent(
+    lifecycleEpoch: Long,
+    commandEpoch: Long,
+    ownershipEpoch: Long? = null,
+  ): Boolean =
+    _isForeground.value &&
+      voiceLifecycleEpoch.get() == lifecycleEpoch &&
+      talkPttCommandEpoch.get() == commandEpoch &&
+      (ownershipEpoch == null || voiceCaptureOwnershipEpoch.get() == ownershipEpoch)
+
   private suspend fun <T> withPreparedTalkPttCommand(
     lifecycleEpoch: Long,
     commandEpoch: Long,
@@ -3966,23 +3610,14 @@ class NodeRuntime private constructor(
     voiceCapturePreparationMutex.withLock {
       // Preparation suspends while gateway config loads. Serialize ownership so
       // a stale command cannot clean up a newer command before capture starts.
-      if (
-        !_isForeground.value ||
-        voiceLifecycleEpoch.get() != lifecycleEpoch ||
-        talkPttCommandEpoch.get() != commandEpoch
-      ) {
-        throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+      check(isTalkPttCommandCurrent(lifecycleEpoch, commandEpoch)) {
+        "NODE_BACKGROUND_UNAVAILABLE: command requires foreground"
       }
       beforePrepare()?.let { return@withLock it }
       val ownershipEpoch = prepareTalkCapture(lifecycleEpoch, commandEpoch)
       try {
-        if (
-          !_isForeground.value ||
-          voiceLifecycleEpoch.get() != lifecycleEpoch ||
-          talkPttCommandEpoch.get() != commandEpoch ||
-          voiceCaptureOwnershipEpoch.get() != ownershipEpoch
-        ) {
-          throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+        check(isTalkPttCommandCurrent(lifecycleEpoch, commandEpoch, ownershipEpoch)) {
+          "NODE_BACKGROUND_UNAVAILABLE: command requires foreground"
         }
         block(ownershipEpoch)
       } catch (err: Throwable) {
@@ -4010,22 +3645,10 @@ class NodeRuntime private constructor(
     val (ownershipEpoch, suppressionUpdate) =
       withContext(Dispatchers.Main) {
         synchronized(voiceCaptureOwnershipLock) {
-          if (
-            !_isForeground.value ||
-            voiceLifecycleEpoch.get() != lifecycleEpoch ||
-            talkPttCommandEpoch.get() != commandEpoch
-          ) {
-            throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+          check(isTalkPttCommandCurrent(lifecycleEpoch, commandEpoch)) {
+            "NODE_BACKGROUND_UNAVAILABLE: command requires foreground"
           }
-          if (voiceNoteOwnsMic) {
-            throw IllegalStateException("MIC_BUSY: voice note recording is active")
-          }
-          if (dictationOwnsMic) {
-            throw IllegalStateException("MIC_BUSY: dictation is active")
-          }
-          if (cameraAudioOwnsMic) {
-            throw IllegalStateException("MIC_BUSY: camera audio recording is active")
-          }
+          localMicOwner?.let { throw IllegalStateException(it.busyMessage) }
           if (!hasRecordAudioPermission()) {
             throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
           }
@@ -4088,20 +3711,19 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun stopPreparedTalkPttCapture(
-    stopCapture: suspend () -> TalkPttStopPayload,
-  ): TalkPttStopPayload {
-    // Preparation can suspend on gateway config. Invalidate it before waiting,
-    // while later starts queue behind this stop with the new command epoch.
-    talkPttCommandEpoch.incrementAndGet()
-    return withContext(NonCancellable) {
-      voiceCapturePreparationMutex.withLock {
-        val payload = stopCapture()
-        finishTalkCaptureIfIdleLocked(payload.captureId)
-        payload
-      }
+  private suspend fun handleTalkPttStop(stopCapture: suspend () -> TalkPttStopPayload): GatewaySession.InvokeResult =
+    runTalkPttCommand {
+      // Preparation can suspend on gateway config. Invalidate it before waiting,
+      // while later starts queue behind this stop with the new command epoch.
+      talkPttCommandEpoch.incrementAndGet()
+      val payload =
+        withContext(NonCancellable) {
+          voiceCapturePreparationMutex.withLock {
+            stopCapture().also { finishTalkCaptureIfIdleLocked(it.captureId) }
+          }
+        }
+      GatewaySession.InvokeResult.ok(payload.toJson())
     }
-  }
 
   private fun finishTalkCaptureIfIdleLocked(captureId: String) {
     val suppressionUpdate =
@@ -4152,9 +3774,7 @@ class NodeRuntime private constructor(
     talkMode.setPlaybackEnabled(value)
   }
 
-  fun setPreferredAudioInputDevice(value: String?) {
-    prefs.setPreferredAudioInputDevice(value)
-  }
+  fun setPreferredAudioInputDevice(value: String?): Unit = prefs.setPreferredAudioInputDevice(value)
 
   fun setVoiceWakeEnabled(value: Boolean) {
     if (value && !voiceWakeManager.isAvailable) return
@@ -4173,11 +3793,7 @@ class NodeRuntime private constructor(
       return
     }
     val gatewayScope = captureGatewayDataScope()
-    if (gatewayScope == null) {
-      _voiceWakeWordsNoticeText.value = nativeText("Connect to a Gateway to save wake words")
-      return
-    }
-    if (!isVoiceWakeWordsReadyFor(gatewayScope.stableId)) {
+    if (gatewayScope == null || !isVoiceWakeWordsReadyFor(gatewayScope.stableId)) {
       _voiceWakeWordsNoticeText.value = nativeText("Connect to a Gateway to save wake words")
       return
     }
@@ -4250,22 +3866,14 @@ class NodeRuntime private constructor(
     realtimeAssistantText: String,
     timeoutMs: Long,
   ): VoiceE2eResult {
-    if (!BuildConfig.DEBUG) {
-      throw IllegalStateException("voice e2e is debug-only")
-    }
-    if (!gatewayConnectionDisplay.value.isConnected) {
-      throw IllegalStateException("gateway not connected")
-    }
-    if (!hasRecordAudioPermission()) {
-      throw IllegalStateException("microphone permission missing")
-    }
+    check(BuildConfig.DEBUG) { "voice e2e is debug-only" }
+    check(gatewayConnectionDisplay.value.isConnected) { "gateway not connected" }
+    check(hasRecordAudioPermission()) { "microphone permission missing" }
 
     val normalizedMode = mode.trim().lowercase().ifEmpty { "both" }
     val runNormal = normalizedMode == "both" || normalizedMode == "normal" || normalizedMode == "dictation"
     val runRealtime = normalizedMode == "both" || normalizedMode == "realtime" || normalizedMode == "talk"
-    if (!runNormal && !runRealtime) {
-      throw IllegalArgumentException("unknown voice e2e mode: $mode")
-    }
+    require(runNormal || runRealtime) { "unknown voice e2e mode: $mode" }
 
     val previousSpeakerEnabled = speakerEnabled.value
     setSpeakerEnabled(false)
@@ -4361,8 +3969,7 @@ class NodeRuntime private constructor(
     var ownershipEpoch = 0L
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (mode != VoiceCaptureMode.Off && (gatewayConnectionHandoff.value.pending || voiceNoteOwnsMic || dictationOwnsMic)) return
-        if (mode != VoiceCaptureMode.Off && cameraAudioOwnsMic) return
+        if (mode != VoiceCaptureMode.Off && (gatewayConnectionHandoff.value.pending || localMicOwner != null)) return
         // Every mode command cancels queued PTT intent; only a real transition replaces the capture owner.
         talkPttCommandEpoch.incrementAndGet()
         val permissionDenied = mode.requiresMicrophonePermission && !hasRecordAudioPermission()
@@ -4477,23 +4084,27 @@ class NodeRuntime private constructor(
     return createVoiceCaptureSuppressionUpdateLocked()
   }
 
-  internal fun setCameraAudioCaptureActive(active: Boolean): Boolean {
+  internal fun setCameraAudioCaptureActive(active: Boolean): Boolean = setLocalMicActive(LocalMicOwner.Camera, active)
+
+  private fun setLocalMicActive(
+    owner: LocalMicOwner,
+    active: Boolean,
+  ): Boolean {
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
         if (active) {
           if (
-            cameraAudioOwnsMic ||
-            voiceNoteOwnsMic ||
-            dictationOwnsMic ||
+            (owner != LocalMicOwner.Camera && gatewayConnectionHandoff.value.pending) ||
+            localMicOwner != null ||
             !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
           ) {
             return false
           }
-          cameraAudioOwnsMic = true
-        } else {
-          cameraAudioOwnsMic = false
+          localMicOwner = owner
+        } else if (localMicOwner == owner) {
+          localMicOwner = null
         }
-        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Camera, active)
+        createVoiceWakeSuppressionUpdateLocked(owner.suppressionReason, active)
       }
     applyVoiceWakeSuppression(suppressionUpdate)
     return true
@@ -4567,7 +4178,7 @@ class NodeRuntime private constructor(
   private fun isVoiceCaptureModeActive(mode: VoiceCaptureMode): Boolean =
     when (mode) {
       VoiceCaptureMode.Off -> {
-        !cameraAudioOwnsMic &&
+        localMicOwner != LocalMicOwner.Camera &&
           !externalAudioCaptureActive.value &&
           !micCapture.micEnabled.value &&
           !micCapture.micCooldown.value &&
@@ -4577,17 +4188,10 @@ class NodeRuntime private constructor(
           talkMode.activePushToTalkCaptureId == null
       }
 
-      VoiceCaptureMode.ManualMic -> {
+      VoiceCaptureMode.ManualMic, VoiceCaptureMode.TalkMode -> {
         externalAudioCaptureActive.value &&
-          micCapture.micEnabled.value &&
-          !talkMode.isEnabled.value &&
-          talkMode.activePushToTalkCaptureId == null
-      }
-
-      VoiceCaptureMode.TalkMode -> {
-        externalAudioCaptureActive.value &&
-          !micCapture.micEnabled.value &&
-          talkMode.isEnabled.value &&
+          micCapture.micEnabled.value == (mode == VoiceCaptureMode.ManualMic) &&
+          talkMode.isEnabled.value == (mode == VoiceCaptureMode.TalkMode) &&
           talkMode.activePushToTalkCaptureId == null
       }
     }
@@ -4820,8 +4424,6 @@ class NodeRuntime private constructor(
       val tls = connectionManager.resolveTlsParams(endpoint)
       val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
       refreshGatewayControlPage(endpoint)
-      val usesStoredOperatorDeviceToken =
-        operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
       val operatorAuth =
         resolveOperatorSessionConnectAuth(
           auth = auth,
@@ -4841,19 +4443,25 @@ class NodeRuntime private constructor(
           operatorAuth.token,
           operatorAuth.bootstrapToken,
           operatorAuth.password,
-          connectionManager.buildOperatorConnectOptions(
-            scopes =
-              operatorConnectScopesForAuth(
-                usesStoredDeviceToken = usesStoredOperatorDeviceToken,
-                storedOperatorScopes = storedOperatorEntry?.scopes,
-              ),
-          ),
+          operatorConnectOptions(auth, storedOperatorEntry),
           tls,
           onReady = { publishOperatorReadiness(connection) },
         )
       }
       connectNodeSession(endpoint, auth, tls, connectionManager.buildNodeConnectOptions())
     }
+
+  private fun operatorConnectOptions(
+    auth: GatewayConnectAuth,
+    storedOperatorEntry: DeviceAuthEntry?,
+  ): GatewayConnectOptions =
+    connectionManager.buildOperatorConnectOptions(
+      scopes =
+        operatorConnectScopesForAuth(
+          usesStoredDeviceToken = operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token),
+          storedOperatorScopes = storedOperatorEntry?.scopes,
+        ),
+    )
 
   private fun connectNodeSession(
     endpoint: GatewayEndpoint,
@@ -4876,19 +4484,13 @@ class NodeRuntime private constructor(
   // Auth reset waits for claimed connection starts before disconnecting. Session calls stay outside
   // this monitor because GatewaySession invokes callbacks while holding its own lifecycle monitor.
   private inline fun runGatewayConnectOperation(block: () -> Unit): Boolean {
-    val claimed =
-      synchronized(gatewayAuthLifecycleLock) {
-        if (gatewayAuthResetInProgress) {
-          false
-        } else {
-          if (gatewayConnectOperationsInFlight == 0) {
-            gatewayConnectOperationsDrained = CompletableDeferred()
-          }
-          gatewayConnectOperationsInFlight += 1
-          true
-        }
+    synchronized(gatewayAuthLifecycleLock) {
+      if (gatewayAuthResetInProgress) return false
+      if (gatewayConnectOperationsInFlight == 0) {
+        gatewayConnectOperationsDrained = CompletableDeferred()
       }
-    if (!claimed) return false
+      gatewayConnectOperationsInFlight += 1
+    }
     try {
       block()
       return true
@@ -4932,7 +4534,7 @@ class NodeRuntime private constructor(
     restoration.start()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
-    if (tls?.required == true) {
+    if (tls != null) {
       val storedFingerprint = tls.expectedFingerprint
       intent.handedOff = true
       tlsProbeJob =
@@ -5064,12 +4666,9 @@ class NodeRuntime private constructor(
     prompt: GatewayTrustPrompt,
   ): Boolean =
     synchronized(gatewayAuthLifecycleLock) {
-      if (gatewayAuthResetInProgress || !isCurrentConnectAttempt(connectAttemptId)) {
-        false
-      } else {
-        _pendingGatewayTrust.value = prompt
-        true
-      }
+      if (gatewayAuthResetInProgress || !isCurrentConnectAttempt(connectAttemptId)) return@synchronized false
+      _pendingGatewayTrust.value = prompt
+      true
     }
 
   private fun refreshGatewayControlPage(
@@ -5120,7 +4719,7 @@ class NodeRuntime private constructor(
     page =
       GatewayControlPage(
         baseUrl = gatewayControlPageBaseUrl(endpoint),
-        tlsFingerprintSha256 = gatewayControlPageTlsFingerprint(prefs, endpoint),
+        tlsFingerprintSha256 = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.let(::normalizeGatewayTlsFingerprintInput),
         connectAuth = { nonce, signedAt ->
           withCurrentCredential { credential ->
             buildNativeControlUiConnectAuth(identityStore, client, grantedScopes, credential, nonce, signedAt)
@@ -5253,28 +4852,12 @@ class NodeRuntime private constructor(
 
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure): String =
     when (failure) {
-      GatewayTlsProbeFailure.TLS_UNAVAILABLE -> {
-        nativeText(
-          "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
-        ).source
-      }
-
-      GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT -> {
-        nativeText(
-          "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
-        ).source
-      }
-
-      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE -> {
-        nativeText("Failed: couldn't reach the secure gateway endpoint for this host.").source
-      }
+      GatewayTlsProbeFailure.TLS_UNAVAILABLE -> gatewayTlsUnavailableText.source
+      GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT -> gatewayTlsTimeoutText.source
+      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE -> gatewayTlsUnreachableText.source
     }
 
-  private fun hasRecordAudioPermission(): Boolean =
-    (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
-        PackageManager.PERMISSION_GRANTED
-    )
+  private fun hasRecordAudioPermission(): Boolean = appContext.hasPermission(Manifest.permission.RECORD_AUDIO)
 
   private fun loadStoredRoleDeviceAuthEntry(
     endpoint: GatewayEndpoint,
@@ -5294,8 +4877,6 @@ class NodeRuntime private constructor(
       if (activeGatewayConnection !== connection) return@launch
       val auth = connection.auth
       val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
-      val usesStoredOperatorDeviceToken =
-        operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
       val operatorAuth =
         resolveOperatorSessionConnectAuth(auth, storedOperatorEntry?.token) ?: return@launch
       launchGatewayLifecycle({ activeGatewayConnection === connection && connectedEndpoint?.stableId == endpoint.stableId }) {
@@ -5311,13 +4892,7 @@ class NodeRuntime private constructor(
             operatorAuth.token,
             operatorAuth.bootstrapToken,
             operatorAuth.password,
-            connectionManager.buildOperatorConnectOptions(
-              scopes =
-                operatorConnectScopesForAuth(
-                  usesStoredDeviceToken = usesStoredOperatorDeviceToken,
-                  storedOperatorScopes = storedOperatorEntry?.scopes,
-                ),
-            ),
+            operatorConnectOptions(auth, storedOperatorEntry),
             connectionManager.resolveTlsParams(endpoint),
             onReady = { publishOperatorReadiness(connection) },
           )
@@ -5381,18 +4956,7 @@ class NodeRuntime private constructor(
     val normalized = stableId.trim()
     if (normalized.isEmpty()) return false
     val wasActive = prefs.gatewayRegistry.activeStableId.value == normalized
-    val connectOperationsDrained =
-      synchronized(gatewayAuthLifecycleLock) {
-        if (gatewayAuthResetInProgress) {
-          null
-        } else {
-          gatewayAuthResetInProgress = true
-          gatewayConnectOperationsDrained
-        }
-      }
-        ?: return false
-    return try {
-      connectOperationsDrained.await()
+    return withGatewayAuthReset {
       disconnectSecondaryGatewayConnection(normalized)?.disconnectAndJoin()
       if (connectedEndpoint?.stableId == normalized) {
         disconnectAndJoin()
@@ -5451,9 +5015,6 @@ class NodeRuntime private constructor(
       if (!registryRemoved) return false
       secondaryOperatorSessions.remove(normalized)
       true
-    } finally {
-      synchronized(gatewayAuthLifecycleLock) { gatewayAuthResetInProgress = false }
-      requestBackgroundGatewayReconciliation()
     }
   }
 
@@ -5555,18 +5116,10 @@ class NodeRuntime private constructor(
     path: String,
     failedResource: ChatWidgetResource?,
   ): ChatWidgetResource? {
-    fun GatewaySession.currentWidgetSurface(): ChatWidgetSurface? =
-      currentCanvasHostRoute()?.let { route ->
-        ChatWidgetSurface(
-          url = route.url,
-          tlsFingerprintSha256 = route.tlsFingerprintSha256,
-        )
-      }
-
     fun currentSurfaceUrls(): ChatWidgetSurfaceUrls =
       ChatWidgetSurfaceUrls(
-        node = nodeSession.currentWidgetSurface(),
-        operator = operatorSession.currentWidgetSurface(),
+        node = nodeSession.currentCanvasHostRoute(),
+        operator = operatorSession.currentCanvasHostRoute(),
       )
 
     // Initial loads may use the operator fallback; failures rotate the preferred live route.
@@ -5577,22 +5130,8 @@ class NodeRuntime private constructor(
         target = path,
         failedResource = failedResource,
         currentSurfaceUrls = ::currentSurfaceUrls,
-        refreshNodeSurface = { observedUrl ->
-          nodeSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
-            ChatWidgetSurface(
-              url = route.url,
-              tlsFingerprintSha256 = route.tlsFingerprintSha256,
-            )
-          }
-        },
-        refreshOperatorSurface = { observedUrl ->
-          operatorSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
-            ChatWidgetSurface(
-              url = route.url,
-              tlsFingerprintSha256 = route.tlsFingerprintSha256,
-            )
-          }
-        },
+        refreshNodeSurface = nodeSession::refreshCanvasHostRouteIfCurrent,
+        refreshOperatorSurface = operatorSession::refreshCanvasHostRouteIfCurrent,
       )
     }
   }
@@ -5617,9 +5156,7 @@ class NodeRuntime private constructor(
     return image.takeIf { isGatewayDataScopeCurrent(gatewayScope) && _gatewaySourcePreviewConfig.value === config }
   }
 
-  fun loadCurrentChat() {
-    chat.loadCurrent(resolveMainSessionKey())
-  }
+  fun loadCurrentChat(): Unit = chat.loadCurrent(resolveMainSessionKey())
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chat.sessionKey.value, entryId)
 
@@ -5656,7 +5193,7 @@ class NodeRuntime private constructor(
       // Agent selection owns every main-session consumer; switching chat alone would
       // leave Talk mode bound to the previous agent.
       selectedChatAgentId = normalizedAgentId
-      selectMainSessionKey(normalizedAgentId)
+      prepareMainSessionKey(normalizedAgentId, MainSessionUpdate.Select)
       selectedMainSessionKey = mainSessionKey.value
     }
     scope.launch {
@@ -5690,9 +5227,7 @@ class NodeRuntime private constructor(
   fun toggleMessageSpeech(
     messageId: String,
     text: String,
-  ) {
-    messageSpeechController.toggle(messageId = messageId, text = text)
-  }
+  ): Unit = messageSpeechController.toggle(messageId = messageId, text = text)
 
   fun stopMessageSpeech() {
     if (messageSpeechControllerLazy.isInitialized()) messageSpeechController.stop()
@@ -5719,7 +5254,7 @@ class NodeRuntime private constructor(
     idempotencyKey: String,
     canAdmit: () -> Boolean = { true },
   ): Boolean =
-    chat.sendMessageForOwnerAwaitAcceptance(
+    chat.sendMessageAwaitAcceptance(
       message = message,
       thinkingLevel = thinking,
       attachments = attachments,
@@ -5862,12 +5397,10 @@ class NodeRuntime private constructor(
   ) {
     val gatewayScope = captureGatewayDataScope()?.takeIf { it.stableId == endpointStableId } ?: return
     val words = parseVoiceWakeWords(payloadJson) ?: return
-    var applied = false
-    publishGatewayData(gatewayScope) {
-      if (isCurrentConnection()) {
-        applied = applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
+    val applied =
+      withCurrentGatewayData(gatewayScope) {
+        isCurrentConnection() && applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
       }
-    }
     if (applied) resumeVoiceWakeAfterGatewayWords(gatewayScope)
   }
 
@@ -5876,15 +5409,14 @@ class NodeRuntime private constructor(
     val requestRevision = currentVoiceWakeWordsRevision()
     try {
       val words = parseVoiceWakeWords(requestGatewayData(gatewayScope, GatewayMethod.VoicewakeGet.rawValue, "{}")) ?: return
-      var applied = false
-      publishGatewayData(gatewayScope) {
-        applied =
+      val applied =
+        withCurrentGatewayData(gatewayScope) {
           applyAuthoritativeVoiceWakeWords(
             words = words,
             gatewayStableId = gatewayScope.stableId,
             expectedRevision = requestRevision,
           )
-      }
+        }
       if (applied) resumeVoiceWakeAfterGatewayWords(gatewayScope)
     } catch (_: CancellationException) {
       // A replacement Gateway owns the next refresh.
@@ -5896,10 +5428,10 @@ class NodeRuntime private constructor(
   private fun applyVoiceWakeWords(payloadJson: String?) {
     val gatewayScope = captureGatewayDataScope() ?: return
     val words = parseVoiceWakeWords(payloadJson) ?: return
-    var applied = false
-    publishGatewayData(gatewayScope) {
-      applied = applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
-    }
+    val applied =
+      withCurrentGatewayData(gatewayScope) {
+        applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
+      }
     if (applied) resumeVoiceWakeAfterGatewayWords(gatewayScope)
   }
 
@@ -6048,9 +5580,7 @@ class NodeRuntime private constructor(
     val sessionId =
       root?.get("transcriptionSessionId").asStringOrNull()
         ?: root?.get("sessionId").asStringOrNull()
-    if (sessionId.isNullOrBlank()) {
-      throw IllegalStateException("talk.session.create returned no session id")
-    }
+    check(!sessionId.isNullOrBlank()) { "talk.session.create returned no session id" }
     return sessionId
   }
 
@@ -6073,6 +5603,13 @@ class NodeRuntime private constructor(
     if (!isGatewayDataScopeCurrent(gatewayScope)) throw CancellationException("gateway scope changed")
     return response
   }
+
+  private suspend fun requestGatewayObject(
+    gatewayScope: GatewayDataScope,
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+  ): JsonObject? = json.parseToJsonElement(requestGatewayData(gatewayScope, method, paramsJson, timeoutMs)).asObjectOrNull()
 
   private suspend fun requestGatewayApprovalData(
     gatewayScope: GatewayDataScope,
@@ -6109,22 +5646,26 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun isGatewayDataScopeCurrent(gatewayScope: GatewayDataScope): Boolean =
-    synchronized(gatewayDataScopeLock) {
-      gatewayScope.generation == gatewayDataGeneration && connectedEndpoint?.stableId == gatewayScope.stableId
-    }
+  private fun isGatewayDataScopeCurrent(gatewayScope: GatewayDataScope): Boolean = withCurrentGatewayData(gatewayScope) { true }
 
   private inline fun publishGatewayData(
     gatewayScope: GatewayDataScope,
     publish: () -> Unit,
   ): Boolean =
+    withCurrentGatewayData(gatewayScope) {
+      publish()
+      true
+    }
+
+  private inline fun withCurrentGatewayData(
+    gatewayScope: GatewayDataScope,
+    action: () -> Boolean,
+  ): Boolean =
     synchronized(gatewayDataScopeLock) {
       if (gatewayScope.generation != gatewayDataGeneration || connectedEndpoint?.stableId != gatewayScope.stableId) {
-        false
-      } else {
-        publish()
-        true
+        return@synchronized false
       }
+      action()
     }
 
   private suspend fun <T> refreshGatewaySummary(
@@ -6267,91 +5808,84 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun loadMoreSessionCatalogFromGateway(catalogId: String) =
+  private suspend fun loadMoreSessionCatalogFromGateway(catalogId: String) {
     sessionCatalogListMutex.withLock {
-      loadMoreSessionCatalogLocked(catalogId)
-    }
-
-  private suspend fun loadMoreSessionCatalogLocked(catalogId: String) {
-    val normalizedCatalogId = catalogId.trim()
-    if (normalizedCatalogId.isEmpty()) return
-    val current: SessionCatalogState
-    val cursors: Map<String, String>
-    val requestSeq: Long
-    val gatewayScope: GatewayDataScope
-    // Cursors and their loading marker belong to the same refresh, including across agent changes.
-    synchronized(gatewayDataScopeLock) {
-      current = _sessionCatalogState.value
-      if (current.loading || normalizedCatalogId in current.loadingMoreCatalogIds) return
-      val catalog = current.catalogs.firstOrNull { it.id == normalizedCatalogId } ?: return
-      cursors =
-        catalog.hosts
-          .mapNotNull { host ->
-            host.nextCursor?.takeIf(String::isNotEmpty)?.let { host.hostId to it }
-          }.toMap()
-      if (cursors.isEmpty()) return
-      requestSeq = sessionCatalogRefreshSeq.get()
-      gatewayScope = captureGatewayDataScope() ?: return
-      _sessionCatalogState.value =
-        current.copy(
-          loadingMoreCatalogIds = current.loadingMoreCatalogIds + normalizedCatalogId,
-          errorText = null,
-        )
-    }
-    try {
-      val response =
-        requestGatewayData(
-          gatewayScope,
-          "sessions.catalog.list",
-          sessionCatalogPageParams(current.agentId, normalizedCatalogId, cursors),
-        )
-      val page = parseSessionCatalogs(response, current.agentId, json).firstOrNull { it.id == normalizedCatalogId }
-      publishGatewayData(gatewayScope) {
-        if (sessionCatalogRefreshSeq.get() == requestSeq) {
-          val latest = _sessionCatalogState.value
-          val pageMerge =
-            if (page == null) {
-              null
-            } else {
-              latest.catalogs
-                .firstOrNull { it.id == normalizedCatalogId }
-                ?.let { mergeSessionCatalogPage(it, page, cursors) }
-            }
-          _sessionCatalogState.value =
-            latest.copy(
-              catalogs =
-                if (pageMerge == null) {
-                  latest.catalogs
-                } else {
-                  latest.catalogs.map { existing ->
-                    if (existing.id == normalizedCatalogId) pageMerge.catalog else existing
-                  }
-                },
-              loadedPageDepthsByHost =
-                if (pageMerge == null) {
-                  latest.loadedPageDepthsByHost
-                } else {
-                  incrementSessionCatalogPageDepths(
-                    latest.loadedPageDepthsByHost,
-                    normalizedCatalogId,
-                    pageMerge.advancedHostIds,
-                  )
-                },
-              loadingMoreCatalogIds = latest.loadingMoreCatalogIds - normalizedCatalogId,
-            )
-        }
+      val normalizedCatalogId = catalogId.trim()
+      if (normalizedCatalogId.isEmpty()) return
+      val current: SessionCatalogState
+      val cursors: Map<String, String>
+      val requestSeq: Long
+      val gatewayScope: GatewayDataScope
+      // Cursors and their loading marker belong to the same refresh, including across agent changes.
+      synchronized(gatewayDataScopeLock) {
+        current = _sessionCatalogState.value
+        if (current.loading || normalizedCatalogId in current.loadingMoreCatalogIds) return
+        val catalog = current.catalogs.firstOrNull { it.id == normalizedCatalogId } ?: return
+        cursors =
+          catalog.hosts
+            .mapNotNull { host ->
+              host.nextCursor?.takeIf(String::isNotEmpty)?.let { host.hostId to it }
+            }.toMap()
+        if (cursors.isEmpty()) return
+        requestSeq = sessionCatalogRefreshSeq.get()
+        gatewayScope = captureGatewayDataScope() ?: return
+        _sessionCatalogState.value =
+          current.copy(
+            loadingMoreCatalogIds = current.loadingMoreCatalogIds + normalizedCatalogId,
+            errorText = null,
+          )
       }
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        if (sessionCatalogRefreshSeq.get() == requestSeq) {
-          val latest = _sessionCatalogState.value
-          _sessionCatalogState.value =
-            latest.copy(
-              loadingMoreCatalogIds = latest.loadingMoreCatalogIds - normalizedCatalogId,
-              errorText = nativeString("Could not load more sessions."),
-            )
+      try {
+        val response =
+          requestGatewayData(
+            gatewayScope,
+            "sessions.catalog.list",
+            sessionCatalogPageParams(current.agentId, normalizedCatalogId, cursors),
+          )
+        val page = parseSessionCatalogs(response, current.agentId, json).firstOrNull { it.id == normalizedCatalogId }
+        publishGatewayData(gatewayScope) {
+          if (sessionCatalogRefreshSeq.get() == requestSeq) {
+            val latest = _sessionCatalogState.value
+            val pageMerge =
+              page?.let { nextPage ->
+                latest.catalogs
+                  .firstOrNull { it.id == normalizedCatalogId }
+                  ?.let { mergeSessionCatalogPage(it, nextPage, cursors) }
+              }
+            _sessionCatalogState.value =
+              latest.copy(
+                catalogs =
+                  if (pageMerge == null) {
+                    latest.catalogs
+                  } else {
+                    latest.catalogs.map { existing ->
+                      if (existing.id == normalizedCatalogId) pageMerge.catalog else existing
+                    }
+                  },
+                loadedPageDepthsByHost =
+                  pageMerge?.let {
+                    incrementSessionCatalogPageDepths(
+                      latest.loadedPageDepthsByHost,
+                      normalizedCatalogId,
+                      it.advancedHostIds,
+                    )
+                  } ?: latest.loadedPageDepthsByHost,
+                loadingMoreCatalogIds = latest.loadingMoreCatalogIds - normalizedCatalogId,
+              )
+          }
+        }
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        publishGatewayData(gatewayScope) {
+          if (sessionCatalogRefreshSeq.get() == requestSeq) {
+            val latest = _sessionCatalogState.value
+            _sessionCatalogState.value =
+              latest.copy(
+                loadingMoreCatalogIds = latest.loadingMoreCatalogIds - normalizedCatalogId,
+                errorText = nativeString("Could not load more sessions."),
+              )
+          }
         }
       }
     }
@@ -6385,19 +5919,14 @@ class NodeRuntime private constructor(
           sessionCatalogContinueParams(entry),
         )
       val sessionKey = parseSessionCatalogContinueResult(response, json)
-      var opened = false
-      val published =
-        publishGatewayData(gatewayScope) {
-          if (sessionCatalogContinueSeq.get() == requestSeq) {
-            _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
-            if (chatSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) {
-              stopMessageSpeech()
-              chat.switchSession(sessionKey, entry.agentId)
-              opened = true
-            }
-          }
-        }
-      return published && opened
+      return withCurrentGatewayData(gatewayScope) {
+        if (sessionCatalogContinueSeq.get() != requestSeq) return@withCurrentGatewayData false
+        _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
+        if (!chatSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) return@withCurrentGatewayData false
+        stopMessageSpeech()
+        chat.switchSession(sessionKey, entry.agentId)
+        true
+      }
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
@@ -6431,38 +5960,23 @@ class NodeRuntime private constructor(
     gatewayScope: GatewayDataScope,
     methodsSnapshot: GatewayMethodsSnapshot,
     publish: () -> Unit,
-  ): Boolean {
-    var approvalPublished = false
-    val scopePublished =
-      publishGatewayData(gatewayScope) {
-        // Lock order stays gateway data -> method catalog -> approval state. The
-        // explicit disconnect path already takes the first two in this order.
-        synchronized(gatewayMethodsLock) {
-          if (methodsSnapshot.epoch == gatewayMethodsEpoch.value) {
-            publish()
-            approvalPublished = true
-          }
-        }
-      }
-    return scopePublished && approvalPublished
-  }
-
-  private inline fun publishCronRefresh(
-    gatewayScope: GatewayDataScope,
-    refreshGeneration: Long,
-    crossinline publish: () -> Unit,
   ): Boolean =
     publishGatewayData(gatewayScope) {
-      cronRefreshGuard.publishIfCurrent(refreshGeneration) { publish() }
+      // Lock order stays gateway data -> method catalog -> approval state. The
+      // explicit disconnect path already takes the first two in this order.
+      synchronized(gatewayMethodsLock) {
+        if (methodsSnapshot.epoch != gatewayMethodsEpoch.value) return false
+        publish()
+      }
     }
 
-  private inline fun publishProviderModelRefresh(
+  private inline fun LatestGatewayRefreshGuard.publishGatewayRefresh(
     gatewayScope: GatewayDataScope,
     refreshGeneration: Long,
     crossinline publish: () -> Unit,
   ): Boolean =
-    publishGatewayData(gatewayScope) {
-      providerModelCatalogRefreshGuard.publishIfCurrent(refreshGeneration) { publish() }
+    withCurrentGatewayData(gatewayScope) {
+      publishIfCurrent(refreshGeneration) { publish() }
     }
 
   private fun publishAppearancePreferences(
@@ -6874,8 +6388,7 @@ class NodeRuntime private constructor(
     if (!operatorConnected) return
     val selectionSequence = chatSelectionSeq.get()
     try {
-      val res = requestGatewayData(gatewayScope, "agents.list", "{}")
-      val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
+      val root = requestGatewayObject(gatewayScope, "agents.list", "{}") ?: return
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
       val agents = parseGatewayAgentSummaries(root)
@@ -6887,7 +6400,7 @@ class NodeRuntime private constructor(
         _gatewayAgents.value = agents
         val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
         selectedChatAgentId = selectedAgentId
-        syncMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
+        prepareMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value, MainSessionUpdate.Sync)
       }
     } catch (_: Throwable) {
       // ignore
@@ -6905,12 +6418,9 @@ class NodeRuntime private constructor(
     }
     try {
       val params = buildJsonObject { if (agentId != null) put("agentId", JsonPrimitive(agentId)) }
-      val modelsRes = requestGatewayData(gatewayScope, "models.list", params.toString())
-      val catalog = parseGatewayModelCatalog(json.parseToJsonElement(modelsRes).asObjectOrNull())
-      publishGatewayData(gatewayScope) {
-        modelCatalogRefreshGuard.publishIfCurrent(refreshGeneration) {
-          _modelCatalog.value = catalog.models
-        }
+      val catalog = parseGatewayModelCatalog(requestGatewayObject(gatewayScope, "models.list", params.toString()))
+      modelCatalogRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+        _modelCatalog.value = catalog.models
       }
     } catch (err: CancellationException) {
       throw err
@@ -6923,12 +6433,12 @@ class NodeRuntime private constructor(
     val refreshGeneration = providerModelCatalogRefreshGuard.begin()
     val gatewayScope = captureGatewayDataScope() ?: return
     val agentId = selectedChatAgentId
-    publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+    providerModelCatalogRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
       _providerModelCatalogRefreshing.value = true
       _providerModelCatalogErrorText.value = null
     }
     if (!operatorConnected) {
-      publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+      providerModelCatalogRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
         _providerModelCatalog.value = emptyList()
         _modelAuthProviders.value = emptyList()
         _providerModelCatalogRefreshing.value = false
@@ -6939,7 +6449,7 @@ class NodeRuntime private constructor(
       try {
         val response = requestProviderModelConfig(agentId, refresh) { requestGatewayData(gatewayScope, "models.list", it) }
         val catalog = parseGatewayModelCatalog(json.parseToJsonElement(response).asObjectOrNull())
-        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        providerModelCatalogRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
           // The Gateway owns compatible inventory; an empty result can revoke old choices.
           _providerModelCatalog.value = catalog.models
           if (catalog.refreshFailed) {
@@ -6947,7 +6457,7 @@ class NodeRuntime private constructor(
           }
         }
       } catch (err: Throwable) {
-        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        providerModelCatalogRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
           _providerModelCatalogErrorText.value =
             if (err is ProviderModelConfigUnsupported) {
               nativeText("Update your Gateway to view provider model config.")
@@ -6961,13 +6471,13 @@ class NodeRuntime private constructor(
       // older Gateways still populate provider status while prompting an upgrade.
       try {
         val params = buildJsonObject { if (agentId != null) put("agentId", JsonPrimitive(agentId)) }
-        val response = requestGatewayData(gatewayScope, "models.authStatus", params.toString())
-        val providers = parseGatewayModelProviders(json.parseToJsonElement(response).asObjectOrNull()?.get("providers") as? JsonArray)
-        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        val root = requestGatewayObject(gatewayScope, "models.authStatus", params.toString())
+        val providers = parseGatewayModelProviders(root?.get("providers") as? JsonArray)
+        providerModelCatalogRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
           _modelAuthProviders.value = providers
         }
       } catch (_: Throwable) {
-        publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+        providerModelCatalogRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
           if (_providerModelCatalogErrorText.value == null) {
             _providerModelCatalogErrorText.value =
               nativeText("Provider models loaded, but readiness is unavailable.")
@@ -6975,7 +6485,7 @@ class NodeRuntime private constructor(
         }
       }
     } finally {
-      publishProviderModelRefresh(gatewayScope, refreshGeneration) {
+      providerModelCatalogRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
         _providerModelCatalogRefreshing.value = false
       }
     }
@@ -6989,8 +6499,7 @@ class NodeRuntime private constructor(
     }
     val readiness =
       try {
-        val response = requestGatewayData(gatewayScope, "talk.catalog", "{}")
-        parseGatewayTalkSetupReadiness(json.parseToJsonElement(response).asObjectOrNull())
+        parseGatewayTalkSetupReadiness(requestGatewayObject(gatewayScope, "talk.catalog", "{}"))
       } catch (_: Throwable) {
         GatewayTalkSetupReadiness.unverified(GatewayTalkSetupIssue.CatalogLoadFailed)
       }
@@ -7000,12 +6509,12 @@ class NodeRuntime private constructor(
   private suspend fun refreshCronFromGateway() {
     val refreshGeneration = cronRefreshGuard.begin()
     val gatewayScope = captureGatewayDataScope() ?: return
-    publishCronRefresh(gatewayScope, refreshGeneration) {
+    cronRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
       _cronRefreshing.value = true
       _cronErrorText.value = null
     }
     if (!operatorConnected) {
-      publishCronRefresh(gatewayScope, refreshGeneration) {
+      cronRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
         _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
         _cronJobs.value = emptyList()
         _cronRefreshing.value = false
@@ -7013,8 +6522,7 @@ class NodeRuntime private constructor(
       return
     }
     try {
-      val statusRes = requestGatewayData(gatewayScope, "cron.status", "{}")
-      val statusRoot = json.parseToJsonElement(statusRes).asObjectOrNull()
+      val statusRoot = requestGatewayObject(gatewayScope, "cron.status", "{}")
       val status =
         GatewayCronStatus(
           enabled = statusRoot.boolean("enabled"),
@@ -7022,30 +6530,23 @@ class NodeRuntime private constructor(
           nextWakeAtMs = statusRoot.long("nextWakeAtMs"),
         )
 
-      var snapshot: List<GatewayCronJobSummary>? = null
-      repeat(CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS) {
-        if (snapshot == null) snapshot = requestCronJobsSnapshot(gatewayScope)
-      }
-      val jobs =
-        requireNotNull(snapshot) {
-          "Gateway cron jobs changed repeatedly while loading."
-        }
+      val jobs = requestCronJobsSnapshot(gatewayScope)
       val sortedJobs =
         jobs.sortedWith(
           compareBy<GatewayCronJobSummary> { it.nextRunAtMs == null }
             .thenBy { it.nextRunAtMs ?: Long.MAX_VALUE }
             .thenBy { it.id },
         )
-      publishCronRefresh(gatewayScope, refreshGeneration) {
+      cronRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
         _cronStatus.value = status
         _cronJobs.value = sortedJobs
       }
     } catch (_: Throwable) {
-      publishCronRefresh(gatewayScope, refreshGeneration) {
+      cronRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
         _cronErrorText.value = nativeText("Could not load automations.")
       }
     } finally {
-      publishCronRefresh(gatewayScope, refreshGeneration) {
+      cronRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
         _cronRefreshing.value = false
       }
     }
@@ -7053,17 +6554,10 @@ class NodeRuntime private constructor(
 
   private suspend fun requestCronJobsSnapshot(
     gatewayScope: GatewayDataScope,
-  ): List<GatewayCronJobSummary>? {
+  ): List<GatewayCronJobSummary> {
     val jobs = mutableListOf<GatewayCronJobSummary>()
-    val jobIds = mutableSetOf<String>()
     var offset = 0
-    var complete = false
-    var pageCount = 0
-    var expectedTotal: Long? = null
-    var expectedSnapshotRevision: String? = null
-    var snapshotRevisionSupported: Boolean? = null
-    while (pageCount < CRON_JOBS_MAX_PAGES && !complete) {
-      pageCount += 1
+    repeat(CRON_JOBS_MAX_PAGES) {
       val listParams =
         buildJsonObject {
           put("includeDisabled", JsonPrimitive(true))
@@ -7074,8 +6568,7 @@ class NodeRuntime private constructor(
           put("sortBy", JsonPrimitive("name"))
           put("sortDir", JsonPrimitive("asc"))
         }.toString()
-      val listRes = requestGatewayData(gatewayScope, "cron.list", listParams)
-      val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
+      val listRoot = requestGatewayObject(gatewayScope, "cron.list", listParams)
       val rawJobs = listRoot?.get("jobs") as? JsonArray
       val pageJobs = parseCronJobs(rawJobs)
       val total =
@@ -7085,43 +6578,16 @@ class NodeRuntime private constructor(
       require(total in 0L..CRON_JOBS_MAX_COUNT.toLong()) {
         "Gateway returned an invalid cron jobs total."
       }
-      if (expectedTotal != null && total != expectedTotal) return null
-      expectedTotal = total
-      val snapshotRevision =
-        (listRoot?.get("snapshotRevision") as? JsonPrimitive)
-          ?.contentOrNull
-          ?.trim()
-          ?.takeIf { it.isNotEmpty() }
-      val pageSupportsSnapshotRevision = snapshotRevision != null
-      if (
-        snapshotRevisionSupported != null &&
-        snapshotRevisionSupported != pageSupportsSnapshotRevision
-      ) {
-        return null
-      }
-      snapshotRevisionSupported = pageSupportsSnapshotRevision
-      if (expectedSnapshotRevision != null && snapshotRevision != expectedSnapshotRevision) return null
-      expectedSnapshotRevision = snapshotRevision
-      for (job in pageJobs) {
-        // Offset pages are separately locked by the Gateway. A mutation between
-        // calls can shift a boundary; discard the partial snapshot and retry.
-        if (!jobIds.add(job.id)) return null
-      }
       jobs += pageJobs
       require(jobs.size <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
-      require(total >= jobs.size.toLong()) {
-        "Gateway returned an invalid cron jobs total."
-      }
-      val nextOffset = nextCronJobsPageOffset(listRoot, offset, rawJobs?.size ?: 0)
-      if (nextOffset == null) {
-        complete = true
-        break
-      }
+      val nextOffset =
+        nextCronJobsPageOffset(listRoot, offset, rawJobs?.size ?: 0)
+          // Paging is best effort when jobs change mid-refresh; the next refresh picks up omissions.
+          ?: return jobs.distinctBy { it.id }
       require(nextOffset <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
       offset = nextOffset
     }
-    require(complete) { "Gateway returned too many cron job pages." }
-    return jobs.takeIf { it.size.toLong() == expectedTotal }
+    throw IllegalArgumentException("Gateway returned too many cron job pages.")
   }
 
   private suspend fun loadCronJobDetailFromGateway(request: CronJobDetailRequest) {
@@ -7133,8 +6599,7 @@ class NodeRuntime private constructor(
       return
     }
     try {
-      val res = requestGatewayData(gatewayScope, "cron.get", cronJobGetParams(request.id))
-      val root = json.parseToJsonElement(res).asObjectOrNull()
+      val root = requestGatewayObject(gatewayScope, "cron.get", cronJobGetParams(request.id))
       cronJobDetailRequestGuard.publishIfCurrent(request) {
         _cronJobDetailState.value =
           parseGatewayCronJobDetail(root)?.let(GatewayCronJobDetailState::Loaded)
@@ -7248,19 +6713,20 @@ class NodeRuntime private constructor(
       var completionState: GatewayCronActionState.Notice? = null
       try {
         val result = perform(actionScope, jobId)
-        if (result.deleted) {
+        val deleted = action == GatewayCronAction.Delete
+        if (deleted) {
           clearDeletedCronSelection(jobId)
         }
         if (result.refresh) {
           refreshCronFromGateway()
-          if (!result.deleted) reloadCronJobIfSelected(jobId)
+          if (!deleted) reloadCronJobIfSelected(jobId)
         }
         completionState =
           GatewayCronActionState.Notice(
             id = jobId,
             message = result.message,
             kind = result.kind,
-            deleted = result.deleted,
+            deleted = deleted,
           )
       } catch (err: CancellationException) {
         throw err
@@ -7327,8 +6793,8 @@ class NodeRuntime private constructor(
       while (isGatewayDataScopeCurrent(gatewayScope) && completedRun == null) {
         completedRun =
           try {
-            val response =
-              requestGatewayData(
+            val root =
+              requestGatewayObject(
                 gatewayScope,
                 "cron.runs",
                 buildJsonObject {
@@ -7338,7 +6804,6 @@ class NodeRuntime private constructor(
                   put("sortDir", JsonPrimitive("desc"))
                 }.toString(),
               )
-            val root = json.parseToJsonElement(response).asObjectOrNull()
             parseGatewayCronRunHistory(root?.get("entries") as? JsonArray)
               .firstOrNull { it.runId == runId }
           } catch (err: CancellationException) {
@@ -7352,15 +6817,13 @@ class NodeRuntime private constructor(
       if (!isGatewayDataScopeCurrent(gatewayScope)) return@launch
       val terminalRun = completedRun ?: return@launch
 
-      var pendingCleared = false
-      val scopeCurrent =
-        publishGatewayData(gatewayScope) {
-          pendingCleared =
-            pendingCronRunRegistry.finish(jobId, runId) {
-              _pendingCronRunJobIds.value = it
-            }
+      val pendingCleared =
+        withCurrentGatewayData(gatewayScope) {
+          pendingCronRunRegistry.finish(jobId, runId) {
+            _pendingCronRunJobIds.value = it
+          }
         }
-      if (!scopeCurrent || !pendingCleared) return@launch
+      if (!pendingCleared) return@launch
 
       refreshCronFromGateway()
       reloadCronJobIfSelected(jobId)
@@ -7393,7 +6856,7 @@ class NodeRuntime private constructor(
       return usageSummary.publish(gatewayScope) { usageSummary.initialState }
     }
     return try {
-      val root = json.parseToJsonElement(requestGatewayData(gatewayScope, "usage.status", "{}")).asObjectOrNull()
+      val root = requestGatewayObject(gatewayScope, "usage.status", "{}")
       val nextSummary =
         GatewayUsageSummary(
           updatedAtMs = root.long("updatedAt"),
@@ -7438,7 +6901,7 @@ class NodeRuntime private constructor(
       summary = skillsSummary,
       failureText = nativeText("Could not load skills."),
     ) { gatewayScope ->
-      val root = json.parseToJsonElement(requestGatewayData(gatewayScope, "skills.status", "{}")).asObjectOrNull()
+      val root = requestGatewayObject(gatewayScope, "skills.status", "{}")
       GatewaySkillsSummary(
         skills = parseSkillSummaries(root?.get("skills") as? JsonArray),
       )
@@ -7479,6 +6942,24 @@ class NodeRuntime private constructor(
     }
   }
 
+  private fun checkClawHubSkillMethods(gatewayScope: GatewayDataScope): Boolean {
+    if (clawHubSkillMethodsAvailable.value) return true
+    updateClawHubSkillSearch(gatewayScope) {
+      it.copy(errorText = CLAWHUB_SKILL_GATEWAY_UNAVAILABLE)
+    }
+    return false
+  }
+
+  private inline fun updateClawHubSkillSearch(
+    gatewayScope: GatewayDataScope,
+    isCurrent: () -> Boolean = { true },
+    update: (GatewayClawHubSkillSearchState) -> GatewayClawHubSkillSearchState,
+  ) {
+    publishGatewayData(gatewayScope) {
+      if (isCurrent()) _clawHubSkillSearchState.value = update(_clawHubSkillSearchState.value)
+    }
+  }
+
   private suspend fun searchClawHubSkillsFromGateway(query: String) {
     val normalized = query.trim()
     val searchSeq = clawHubSkillSearchSeq.incrementAndGet()
@@ -7492,49 +6973,36 @@ class NodeRuntime private constructor(
         )
       return
     }
-    if (!clawHubSkillMethodsAvailable.value) {
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(errorText = CLAWHUB_SKILL_GATEWAY_UNAVAILABLE)
-      }
-      return
-    }
-    publishGatewayData(gatewayScope) {
-      _clawHubSkillSearchState.value =
-        _clawHubSkillSearchState.value.copy(
-          query = normalized,
-          searching = true,
-          results = emptyList(),
-          reviewingSlug = null,
-          installReview = null,
-          errorText = null,
-          messageText = null,
-        )
+    if (!checkClawHubSkillMethods(gatewayScope)) return
+    updateClawHubSkillSearch(gatewayScope) {
+      it.copy(
+        query = normalized,
+        searching = true,
+        results = emptyList(),
+        reviewingSlug = null,
+        installReview = null,
+        errorText = null,
+        messageText = null,
+      )
     }
     try {
       val response = requestGatewayData(gatewayScope, "skills.search", clawHubSearchParams(normalized))
       val results = parseClawHubSearchResults(response, json)
-      publishGatewayData(gatewayScope) {
-        if (clawHubSkillSearchSeq.get() == searchSeq) {
-          _clawHubSkillSearchState.value =
-            _clawHubSkillSearchState.value.copy(
-              searching = false,
-              results = results,
-              messageText = if (results.isEmpty()) "No ClawHub skills matched." else null,
-            )
-        }
+      updateClawHubSkillSearch(gatewayScope, { clawHubSkillSearchSeq.get() == searchSeq }) {
+        it.copy(
+          searching = false,
+          results = results,
+          messageText = if (results.isEmpty()) "No ClawHub skills matched." else null,
+        )
       }
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        if (clawHubSkillSearchSeq.get() == searchSeq) {
-          _clawHubSkillSearchState.value =
-            _clawHubSkillSearchState.value.copy(
-              searching = false,
-              errorText = nativeString("Could not search ClawHub skills."),
-            )
-        }
+      updateClawHubSkillSearch(gatewayScope, { clawHubSkillSearchSeq.get() == searchSeq }) {
+        it.copy(
+          searching = false,
+          errorText = nativeString("Could not search ClawHub skills."),
+        )
       }
     }
   }
@@ -7549,52 +7017,39 @@ class NodeRuntime private constructor(
         )
       return
     }
-    if (!clawHubSkillMethodsAvailable.value) {
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(errorText = CLAWHUB_SKILL_GATEWAY_UNAVAILABLE)
-      }
-      return
-    }
-    publishGatewayData(gatewayScope) {
-      _clawHubSkillSearchState.value =
-        _clawHubSkillSearchState.value.copy(
-          reviewingSlug = skill.reference,
-          installReview = null,
-          errorText = null,
-          messageText = null,
-        )
+    if (!checkClawHubSkillMethods(gatewayScope)) return
+    updateClawHubSkillSearch(gatewayScope) {
+      it.copy(
+        reviewingSlug = skill.reference,
+        installReview = null,
+        errorText = null,
+        messageText = null,
+      )
     }
     try {
       val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.reference))
       val review = parseClawHubInstallReview(response, skill, json)
-      publishGatewayData(gatewayScope) {
-        if (clawHubSkillReviewSeq.get() == reviewSeq) {
-          _clawHubSkillSearchState.value =
-            _clawHubSkillSearchState.value.copy(
-              reviewingSlug = null,
-              installReview = review,
-              errorText =
-                if (review == null) {
-                  "ClawHub did not return an installable version for ${skill.reference}."
-                } else {
-                  null
-                },
-            )
-        }
+      updateClawHubSkillSearch(gatewayScope, { clawHubSkillReviewSeq.get() == reviewSeq }) {
+        it.copy(
+          reviewingSlug = null,
+          installReview = review,
+          errorText =
+            if (review == null) {
+              "ClawHub did not return an installable version for ${skill.reference}."
+            } else {
+              null
+            },
+        )
       }
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        if (clawHubSkillReviewSeq.get() == reviewSeq) {
-          _clawHubSkillSearchState.value =
-            _clawHubSkillSearchState.value.copy(
-              reviewingSlug = null,
-              errorText =
-                nativeString("Could not load ClawHub details for \${skill.reference}.", skill.reference),
-            )
-        }
+      updateClawHubSkillSearch(gatewayScope, { clawHubSkillReviewSeq.get() == reviewSeq }) {
+        it.copy(
+          reviewingSlug = null,
+          errorText =
+            nativeString("Could not load ClawHub details for \${skill.reference}.", skill.reference),
+        )
       }
     }
   }
@@ -7611,108 +7066,98 @@ class NodeRuntime private constructor(
         )
       return
     }
-    if (!clawHubSkillMethodsAvailable.value) {
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(errorText = CLAWHUB_SKILL_GATEWAY_UNAVAILABLE)
-      }
-      return
-    }
+    if (!checkClawHubSkillMethods(gatewayScope)) return
     if (!operatorAdminScopeAvailable.value) {
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            errorText =
-              nativeString(
-                "This gateway connection needs operator.admin to install ClawHub skills.",
-              ),
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          errorText =
+            nativeString(
+              "This gateway connection needs operator.admin to install ClawHub skills.",
+            ),
+        )
       }
       return
     }
     clawHubSkillInstallBeforeClaimObserverForTests?.invoke()
     val claimed =
       clawHubSkillInstallMutex.withLock {
-        var published = false
         // Gateway switches reset this shared UI state while installs can wait
         // on the mutex. Claim under the scope lock so stale work cannot leak in.
-        publishGatewayData(gatewayScope) {
+        withCurrentGatewayData(gatewayScope) {
           val current = _clawHubSkillSearchState.value
-          if (slug !in current.installingSlugs) {
-            _clawHubSkillSearchState.value =
-              current.copy(installingSlugs = current.installingSlugs + slug)
-            published = true
-          }
+          if (slug in current.installingSlugs) return@withCurrentGatewayData false
+          _clawHubSkillSearchState.value =
+            current.copy(installingSlugs = current.installingSlugs + slug)
+          true
         }
-        published
       }
     if (!claimed) return
     val attemptedVersion = version?.trim()?.takeIf(String::isNotEmpty)
-    publishGatewayData(gatewayScope) {
-      _clawHubSkillSearchState.value =
-        _clawHubSkillSearchState.value.copy(
-          installReview = null,
-          errorText = null,
-          messageText = null,
-        )
+    updateClawHubSkillSearch(gatewayScope) {
+      it.copy(
+        installReview = null,
+        errorText = null,
+        messageText = null,
+      )
     }
     try {
-      val response =
-        requestGatewayData(
+      val root =
+        requestGatewayObject(
           gatewayScope,
           "skills.install",
           clawHubInstallParams(slug, attemptedVersion),
           timeoutMs = CLAWHUB_INSTALL_REQUEST_TIMEOUT_MS,
         )
-      val root = json.parseToJsonElement(response).asObjectOrNull()
       val message =
         root.nonBlankString("message")
       val warning =
         root.nonBlankString("warning")
       val refreshed = refreshSkillsFromGateway()
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            messageText =
-              formatClawHubInstallMessage(
-                message ?: "Installed $slug.",
-                listOfNotNull(
-                  warning,
-                  if (refreshed != null) null else "Installed, but the skills list could not be refreshed.",
-                ).joinToString("\n").ifBlank { null },
-              ),
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          messageText =
+            formatClawHubInstallMessage(
+              message ?: "Installed $slug.",
+              listOfNotNull(
+                warning,
+                if (refreshed != null) null else "Installed, but the skills list could not be refreshed.",
+              ).joinToString("\n").ifBlank { null },
+            ),
+        )
       }
     } catch (err: CancellationException) {
       throw err
     } catch (_: GatewayRequestOutcomeUnknown) {
       val confirmed = refreshAndConfirmClawHubInstall(gatewayScope, slug, attemptedVersion)
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            errorText = if (confirmed) null else clawHubInstallOutcomeUnknownMessage(slug),
-            messageText = if (confirmed) "Installed $slug." else null,
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          errorText = if (confirmed) null else clawHubInstallOutcomeUnknownMessage(slug),
+          messageText = if (confirmed) "Installed $slug." else null,
+        )
       }
     } catch (err: GatewayRequestRejected) {
       val confirmed = refreshAndConfirmClawHubInstall(gatewayScope, slug, attemptedVersion)
       val rejection = if (confirmed) null else clawHubInstallRejection(err.gatewayError)
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            errorText = rejection?.let { formatClawHubInstallMessage(it.message, it.warning) },
-            messageText = if (confirmed) "Installed $slug." else null,
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          errorText = rejection?.let { formatClawHubInstallMessage(it.message, it.warning) },
+          messageText = if (confirmed) "Installed $slug." else null,
+        )
       }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            errorText = nativeString("Could not install \${slug} from ClawHub.", slug),
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          errorText = nativeString("Could not install \${slug} from ClawHub.", slug),
+        )
       }
     } finally {
-      releaseClawHubInstallClaim(slug, gatewayScope)
+      clawHubSkillInstallMutex.withLock {
+        updateClawHubSkillSearch(gatewayScope) {
+          it.copy(
+            installingSlugs = _clawHubSkillSearchState.value.installingSlugs - slug,
+          )
+        }
+      }
     }
   }
 
@@ -7729,258 +7174,6 @@ class NodeRuntime private constructor(
       ?: isClawHubSkillInstalledByReference(skills, slug)
   }
 
-  private suspend fun releaseClawHubInstallClaim(
-    slug: String,
-    gatewayScope: GatewayDataScope,
-  ) {
-    clawHubSkillInstallMutex.withLock {
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            installingSlugs = _clawHubSkillSearchState.value.installingSlugs - slug,
-          )
-      }
-    }
-  }
-
-  private suspend fun refreshSkillWorkshopProposalsFromGateway(agentId: String?) {
-    val listSeq = skillWorkshopListSeq.incrementAndGet()
-    val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
-    val gatewayScope = captureGatewayDataScope()
-    if (gatewayScope == null || !operatorConnected) {
-      _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = requestAgentId, proposals = emptyList())
-      _skillWorkshopRefreshing.value = false
-      _skillWorkshopErrorText.value = nativeText("Connect the gateway to load Skill Workshop proposals.")
-      return
-    }
-    publishGatewayData(gatewayScope) {
-      _skillWorkshopRefreshing.value = true
-      _skillWorkshopErrorText.value = null
-      if (_skillWorkshopSummary.value.agentId != requestAgentId) {
-        _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = requestAgentId, proposals = emptyList())
-        _skillWorkshopNoticeText.value = null
-        _skillWorkshopInspectingProposalId.value = null
-        _skillWorkshopMutatingProposalId.value = null
-        skillWorkshopInspectSeq.incrementAndGet()
-        skillWorkshopMutationSeq.incrementAndGet()
-      }
-    }
-    try {
-      val res =
-        requestGatewayData(
-          gatewayScope,
-          "skills.proposals.list",
-          skillWorkshopParams(agentId = agentId).toString(),
-        )
-      val root = json.parseToJsonElement(res).asObjectOrNull()
-      val previousById =
-        _skillWorkshopSummary.value
-          .takeIf { it.agentId == requestAgentId }
-          ?.proposals
-          ?.associateBy { it.id }
-          .orEmpty()
-      val proposals = parseSkillWorkshopProposals(root?.get("proposals") as? JsonArray, previousById)
-      publishGatewayData(gatewayScope) {
-        if (skillWorkshopListSeq.get() == listSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(agentId = requestAgentId, proposals = proposals)
-        }
-      }
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        if (skillWorkshopListSeq.get() == listSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = nativeText("Could not load Skill Workshop proposals.")
-        }
-      }
-    } finally {
-      publishGatewayData(gatewayScope) {
-        if (skillWorkshopListSeq.get() == listSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopRefreshing.value = false
-        }
-      }
-    }
-  }
-
-  private suspend fun inspectSkillWorkshopProposalFromGateway(
-    proposalId: String,
-    agentId: String?,
-  ) {
-    var inspectSeq = 0L
-    val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
-    val gatewayScope = captureGatewayDataScope()
-    if (gatewayScope == null || !operatorConnected) {
-      _skillWorkshopErrorText.value = nativeText("Connect the gateway to inspect Skill Workshop proposals.")
-      return
-    }
-    var inspectStarted = false
-    val scopeCurrent =
-      publishGatewayData(gatewayScope) {
-        val currentSummary = _skillWorkshopSummary.value
-        if (
-          currentSummary.agentId == requestAgentId &&
-          currentSummary.proposals.any { it.id == proposalId } &&
-          _skillWorkshopMutatingProposalId.value == null
-        ) {
-          inspectStarted = true
-          inspectSeq = skillWorkshopInspectSeq.incrementAndGet()
-          _skillWorkshopInspectingProposalId.value = proposalId
-          _skillWorkshopErrorText.value = null
-        }
-      }
-    if (!scopeCurrent || !inspectStarted) {
-      return
-    }
-    try {
-      val res =
-        requestGatewayData(
-          gatewayScope,
-          "skills.proposals.inspect",
-          skillWorkshopParams(agentId = agentId, proposalId = proposalId).toString(),
-        )
-      val root = json.parseToJsonElement(res).asObjectOrNull()
-      val previous =
-        _skillWorkshopSummary.value
-          .takeIf { it.agentId == requestAgentId }
-          ?.proposals
-          ?.firstOrNull { it.id == proposalId }
-      val inspected =
-        parseSkillWorkshopProposalInspect(root, previous)
-          ?: throw IllegalStateException("skills.proposals.inspect returned no proposal")
-      publishGatewayData(gatewayScope) {
-        val currentSummary = _skillWorkshopSummary.value
-        if (
-          skillWorkshopInspectSeq.get() == inspectSeq &&
-          currentSummary.agentId == requestAgentId &&
-          currentSummary.proposals.any { it.id == proposalId }
-        ) {
-          _skillWorkshopSummary.value = _skillWorkshopSummary.value.withProposal(inspected)
-        }
-      }
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        if (skillWorkshopInspectSeq.get() == inspectSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = nativeText("Could not inspect Skill Workshop proposal.")
-        }
-      }
-    } finally {
-      publishGatewayData(gatewayScope) {
-        if (skillWorkshopInspectSeq.get() == inspectSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopInspectingProposalId.value = null
-        }
-      }
-    }
-  }
-
-  private suspend fun mutateSkillWorkshopProposalOnGateway(
-    proposalId: String,
-    agentId: String?,
-    action: SkillWorkshopGatewayAction,
-  ) {
-    var mutationSeq = 0L
-    val requestAgentId = normalizeSkillWorkshopAgentId(agentId)
-    if (!operatorAdminScopeAvailable.value) {
-      _skillWorkshopErrorText.value = nativeText("Skill Workshop proposal actions require operator.admin scope.")
-      return
-    }
-    val gatewayScope = captureGatewayDataScope()
-    if (gatewayScope == null || !operatorConnected) {
-      _skillWorkshopErrorText.value = nativeText("Connect the gateway to update Skill Workshop proposals.")
-      return
-    }
-    var mutationStarted = false
-    val scopeCurrent =
-      publishGatewayData(gatewayScope) {
-        val currentSummary = _skillWorkshopSummary.value
-        if (
-          currentSummary.agentId == requestAgentId &&
-          currentSummary.proposals.any { it.id == proposalId } &&
-          _skillWorkshopMutatingProposalId.value == null
-        ) {
-          mutationStarted = true
-          mutationSeq = skillWorkshopMutationSeq.incrementAndGet()
-          // A lifecycle action supersedes any older detail read. Without this
-          // guard, a late inspect response can restore the pre-action status.
-          skillWorkshopInspectSeq.incrementAndGet()
-          _skillWorkshopInspectingProposalId.value = null
-          _skillWorkshopMutatingProposalId.value = proposalId
-          _skillWorkshopErrorText.value = null
-          _skillWorkshopNoticeText.value = null
-        }
-      }
-    if (!scopeCurrent || !mutationStarted) {
-      return
-    }
-    try {
-      val res =
-        requestGatewayData(
-          gatewayScope,
-          "skills.proposals.${action.methodSuffix}",
-          skillWorkshopParams(agentId = agentId, proposalId = proposalId).toString(),
-        )
-      val updatedProposal =
-        parseSkillWorkshopProposalActionResult(
-          root = json.parseToJsonElement(res).asObjectOrNull(),
-          previous =
-            _skillWorkshopSummary.value
-              .takeIf { it.agentId == requestAgentId }
-              ?.proposals
-              ?.firstOrNull { it.id == proposalId },
-        )
-      var mutationConfirmed = false
-      publishGatewayData(gatewayScope) {
-        if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          if (updatedProposal?.status == action.expectedStatus) {
-            _skillWorkshopSummary.value = _skillWorkshopSummary.value.withProposal(updatedProposal)
-            _skillWorkshopNoticeText.value = action.notice
-            mutationConfirmed = true
-          } else {
-            _skillWorkshopErrorText.value = skillWorkshopUnexpectedStatusText(updatedProposal?.status, action)
-          }
-        }
-      }
-      if (!mutationConfirmed) return
-      var refreshStillCurrent = false
-      publishGatewayData(gatewayScope) {
-        refreshStillCurrent =
-          skillWorkshopMutationSeq.get() == mutationSeq &&
-          _skillWorkshopSummary.value.agentId == requestAgentId
-      }
-      if (refreshStillCurrent) {
-        refreshSkillWorkshopProposalsFromGateway(agentId = agentId)
-      }
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopErrorText.value = skillWorkshopActionFailureText(action)
-        }
-      }
-    } finally {
-      publishGatewayData(gatewayScope) {
-        if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopMutatingProposalId.value = null
-        }
-      }
-    }
-  }
-
-  private fun normalizeSkillWorkshopAgentId(agentId: String?): String = agentId?.trim().orEmpty()
-
-  private fun skillWorkshopParams(
-    agentId: String?,
-    proposalId: String? = null,
-  ): JsonObject =
-    buildJsonObject {
-      val normalizedAgentId = agentId?.trim()?.takeIf { it.isNotEmpty() }
-      if (normalizedAgentId != null) put("agentId", JsonPrimitive(normalizedAgentId))
-      val normalizedProposalId = proposalId?.trim()?.takeIf { it.isNotEmpty() }
-      if (normalizedProposalId != null) put("proposalId", JsonPrimitive(normalizedProposalId))
-    }
-
   private suspend fun mutateDevicePairingOnGateway(
     gatewayScope: GatewayDataScope,
     mutation: GatewayDevicePairingMutation,
@@ -7996,33 +7189,23 @@ class NodeRuntime private constructor(
       var definitiveFailure: NativeText? = null
       val mutationAccepted =
         try {
-          val response =
-            requestGatewayData(
+          val result =
+            requestGatewayObject(
               gatewayScope = gatewayScope,
               method = mutation.action.method,
               paramsJson = buildGatewayDevicePairingMutationParams(mutation).toString(),
             )
-          val result = json.parseToJsonElement(response).asObjectOrNull()
-          when (mutation.action) {
-            GatewayDevicePairingAction.Approve -> {
-              result?.get("requestId").asStringOrNull()?.trim() == mutation.targetId &&
+          val targetMatches = result?.get(mutation.action.idKey).asStringOrNull()?.trim() == mutation.targetId
+          targetMatches &&
+            (
+              mutation.action != GatewayDevicePairingAction.Approve ||
                 result
                   ?.get("device")
                   .asObjectOrNull()
                   ?.get("deviceId")
                   .asStringOrNull()
-                  ?.trim() ==
-                expectedDeviceId
-            }
-
-            GatewayDevicePairingAction.Reject -> {
-              result?.get("requestId").asStringOrNull()?.trim() == mutation.targetId
-            }
-
-            GatewayDevicePairingAction.Remove -> {
-              result?.get("deviceId").asStringOrNull()?.trim() == mutation.targetId
-            }
-          }
+                  ?.trim() == expectedDeviceId
+            )
         } catch (err: CancellationException) {
           throw err
         } catch (err: GatewayRequestRejected) {
@@ -8037,8 +7220,7 @@ class NodeRuntime private constructor(
 
       val devicesRoot =
         try {
-          val response = requestGatewayData(gatewayScope, "device.pair.list", "{}")
-          json.parseToJsonElement(response).asObjectOrNull()
+          requestGatewayObject(gatewayScope, "device.pair.list", "{}")
         } catch (err: CancellationException) {
           throw err
         } catch (_: Throwable) {
@@ -8097,45 +7279,33 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope() ?: return
     val approvalContext = captureNodeApprovalContext(gatewayScope)
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
-    var refreshStarted = false
-    val currentScope =
-      publishGatewayData(gatewayScope) {
-        refreshStarted =
-          nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
-            _nodesDevicesRefreshing.value = true
-            _nodesDevicesErrorText.value = null
-            _nodesDevicesNoticeText.value = null
-            _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
-            val pendingFallback = _nodeCapabilityApproval.value.withoutExactRequestId()
-            if (pendingFallback != null) {
-              _nodeCapabilityApproval.value = pendingFallback
-            } else if (
-              _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingApproval &&
-              _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingReapproval
-            ) {
-              _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading
-            }
-          }
-      }
-    if (!currentScope || !refreshStarted) return
-    if (!operatorConnected) {
-      publishGatewayData(gatewayScope) {
-        nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+    val refreshStarted =
+      nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+        _nodesDevicesRefreshing.value = true
+        _nodesDevicesErrorText.value = null
+        _nodesDevicesNoticeText.value = null
+        _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
+        val pendingFallback = _nodeCapabilityApproval.value.withoutExactRequestId()
+        if (pendingFallback != null) {
+          _nodeCapabilityApproval.value = pendingFallback
+        } else if (
+          _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingApproval &&
+          _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingReapproval
+        ) {
           _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading
-          _nodesDevicesSummary.value =
-            GatewayNodesDevicesSummary(
-              nodes = emptyList(),
-              pendingDevices = emptyList(),
-              pairedDevices = emptyList(),
-            )
-          _nodesDevicesRefreshing.value = false
         }
+      }
+    if (!refreshStarted) return
+    if (!operatorConnected) {
+      nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+        _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading
+        _nodesDevicesSummary.value = emptyNodesDevicesSummary
+        _nodesDevicesRefreshing.value = false
       }
       return
     }
     try {
-      val nodesRes = requestGatewayData(gatewayScope, "node.list", "{}")
-      val nodesRoot = json.parseToJsonElement(nodesRes).asObjectOrNull()
+      val nodesRoot = requestGatewayObject(gatewayScope, "node.list", "{}")
       val nodes = parseGatewayNodeList(nodesRoot)
       val selfNodeId = identityStore.loadOrCreate().deviceId
       val approval =
@@ -8144,17 +7314,11 @@ class NodeRuntime private constructor(
           selfNodeId = selfNodeId,
         )
       val selfNodeConnected = nodes.firstOrNull { it.id == selfNodeId }?.connected == true
-      var approvalPublished = false
-      val scopePublished =
-        publishGatewayData(gatewayScope) {
-          approvalPublished =
-            nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
-              _nodeCapabilityApproval.value = approval
-            }
+      val approvalPublished =
+        nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+          _nodeCapabilityApproval.value = approval
         }
-      if (!scopePublished || !approvalPublished) {
-        return
-      }
+      if (!approvalPublished) return
       if (approvalContext != null && nodesRoot != null) nodeApproval.refresh(approvalContext, nodesRoot)
       publishGatewayData(gatewayScope) {
         if (selfNodeConnected && !_nodeConnected.value) {
@@ -8169,36 +7333,29 @@ class NodeRuntime private constructor(
       val devicesRoot =
         if (_devicePairingCapabilities.value.canList) {
           try {
-            val devicesRes = requestGatewayData(gatewayScope, "device.pair.list", "{}")
-            json.parseToJsonElement(devicesRes).asObjectOrNull()
+            requestGatewayObject(gatewayScope, "device.pair.list", "{}")
           } catch (_: Throwable) {
             null
           }
         } else {
           null
         }
-      publishGatewayData(gatewayScope) {
-        nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
-          _nodesDevicesSummary.value =
-            GatewayNodesDevicesSummary(
-              nodes = nodes,
-              pendingDevices = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray),
-              pairedDevices = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray),
-              devicePairingAvailable = devicesRoot != null,
-            )
-        }
+      nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+        _nodesDevicesSummary.value =
+          GatewayNodesDevicesSummary(
+            nodes = nodes,
+            pendingDevices = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray),
+            pairedDevices = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray),
+            devicePairingAvailable = devicesRoot != null,
+          )
       }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
-          _nodesDevicesErrorText.value = nativeText("Could not load nodes and devices.")
-        }
+      nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+        _nodesDevicesErrorText.value = nativeText("Could not load nodes and devices.")
       }
     } finally {
-      publishGatewayData(gatewayScope) {
-        nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
-          _nodesDevicesRefreshing.value = false
-        }
+      nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+        _nodesDevicesRefreshing.value = false
       }
     }
   }
@@ -8213,16 +7370,12 @@ class NodeRuntime private constructor(
       delay(NODE_APPROVAL_COMMAND_FRESH_MS)
       // Pairing request IDs expire on the Gateway. Age out cached commands before rechecking so
       // recovery never leaves an old exact ID visible when a refresh fails or races disconnect.
-      var approvalPublished = false
-      val scopePublished =
-        publishGatewayData(gatewayScope) {
-          approvalPublished =
-            nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
-              _nodeCapabilityApproval.value = fallback
-              _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
-            }
+      val approvalPublished =
+        nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+          _nodeCapabilityApproval.value = fallback
+          _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
         }
-      if (scopePublished && approvalPublished && operatorConnected) {
+      if (approvalPublished && operatorConnected) {
         refreshNodesDevicesFromGateway()
       }
     }
@@ -8403,42 +7556,33 @@ class NodeRuntime private constructor(
     }
   }
 
+  private fun GatewayApprovalRpcFamily.method(action: String): String =
+    when (this) {
+      GatewayApprovalRpcFamily.Canonical -> "approval.$action"
+      GatewayApprovalRpcFamily.Legacy -> "exec.approval.$action"
+      GatewayApprovalRpcFamily.Unavailable -> throw GatewayApprovalRpcUnavailable()
+    }
+
   private suspend fun fetchExecApprovalDetailFromGateway(
     gatewayScope: GatewayDataScope,
     methodsSnapshot: GatewayMethodsSnapshot,
     id: String,
     createdAtMs: Long?,
-  ): GatewayExecApprovalSnapshot =
-    when (methodsSnapshot.approvalRpcFamily) {
-      GatewayApprovalRpcFamily.Canonical -> {
-        fetchUnifiedExecApprovalDetail(
-          gatewayScope = gatewayScope,
-          methodsSnapshot = methodsSnapshot,
-          id = id,
-        )
-      }
-
-      GatewayApprovalRpcFamily.Legacy -> {
-        val params = buildGatewayExecApprovalGetParams(id).toString()
-        val response =
-          requestGatewayApprovalData(
-            gatewayScope = gatewayScope,
-            methodsSnapshot = methodsSnapshot,
-            method = "exec.approval.get",
-            paramsJson = params,
-          )
-        parseLegacyGatewayExecApprovalGetPayload(
-          payloadJson = response,
-          json = json,
-          expectedId = id,
-          createdAtMs = createdAtMs,
-        ) ?: error("Malformed exec.approval.get response")
-      }
-
-      GatewayApprovalRpcFamily.Unavailable -> {
-        throw GatewayApprovalRpcUnavailable()
-      }
-    }
+  ): GatewayExecApprovalSnapshot {
+    val method = methodsSnapshot.approvalRpcFamily.method("get")
+    val response =
+      requestGatewayApprovalData(
+        gatewayScope = gatewayScope,
+        methodsSnapshot = methodsSnapshot,
+        method = method,
+        paramsJson = buildGatewayExecApprovalGetParams(id).toString(),
+      )
+    return if (methodsSnapshot.approvalRpcFamily == GatewayApprovalRpcFamily.Canonical) {
+      parseGatewayExecApprovalGetPayload(response, json, expectedId = id)
+    } else {
+      parseLegacyGatewayExecApprovalGetPayload(response, json, expectedId = id, createdAtMs = createdAtMs)
+    } ?: error("Malformed $method response")
+  }
 
   private suspend fun resolveExecApprovalOnGateway(
     id: String,
@@ -8505,14 +7649,9 @@ class NodeRuntime private constructor(
       markExecApprovalWriteRequestFinished(pendingWrite)
       reconcileExecApprovalWriteOutcome(gatewayScope, pendingWrite)
       throw err
-    } catch (_: GatewayRequestNotEnqueued) {
-      handleExecApprovalResolveFailure(
-        gatewayScope = gatewayScope,
-        pendingWrite = pendingWrite,
-        outcomeUnknown = false,
-      )
-    } catch (err: GatewayRequestRejected) {
+    } catch (err: Throwable) {
       if (
+        err is GatewayRequestRejected &&
         methodsSnapshot.approvalRpcFamily == GatewayApprovalRpcFamily.Legacy &&
         isGatewayExecApprovalAlreadyResolved(err.gatewayError)
       ) {
@@ -8528,25 +7667,14 @@ class NodeRuntime private constructor(
           reconcileExecApprovalWriteOutcome(gatewayScope, pendingWrite)
         }
       } else {
+        val outcomeUnknown = err !is GatewayRequestDefinitiveFailure && err !is GatewayApprovalRpcUnavailable
         handleExecApprovalResolveFailure(
           gatewayScope = gatewayScope,
           pendingWrite = pendingWrite,
-          outcomeUnknown = false,
+          outcomeUnknown = outcomeUnknown,
         )
+        if (outcomeUnknown) reconcileExecApprovalWriteOutcome(gatewayScope, pendingWrite)
       }
-    } catch (_: GatewayApprovalRpcUnavailable) {
-      handleExecApprovalResolveFailure(
-        gatewayScope = gatewayScope,
-        pendingWrite = pendingWrite,
-        outcomeUnknown = false,
-      )
-    } catch (_: Throwable) {
-      handleExecApprovalResolveFailure(
-        gatewayScope = gatewayScope,
-        pendingWrite = pendingWrite,
-        outcomeUnknown = true,
-      )
-      reconcileExecApprovalWriteOutcome(gatewayScope, pendingWrite)
     }
   }
 
@@ -8556,57 +7684,38 @@ class NodeRuntime private constructor(
     id: String,
     decision: String,
     kind: GatewayApprovalKind,
-  ): GatewayExecApprovalResolution =
-    when (methodsSnapshot.approvalRpcFamily) {
-      GatewayApprovalRpcFamily.Canonical -> {
-        val params = buildGatewayExecApprovalResolveParams(id, decision, kind).toString()
-        val response =
-          requestGatewayApprovalData(
-            gatewayScope = gatewayScope,
-            methodsSnapshot = methodsSnapshot,
-            method = "approval.resolve",
-            paramsJson = params,
-            preserveWriteFailureAcrossEpoch = true,
-          )
-        parseGatewayExecApprovalResolvePayload(
-          payloadJson = response,
-          json = json,
-          expectedId = id,
-          expectedDecision = decision,
-        ) ?: throw ExecApprovalWriteOutcomeUnknown()
-      }
-
-      GatewayApprovalRpcFamily.Legacy -> {
-        val legacyParams =
-          buildJsonObject {
-            put("id", JsonPrimitive(id))
-            put("decision", JsonPrimitive(decision))
-          }.toString()
-        val legacyResponse =
-          requestGatewayApprovalData(
-            gatewayScope = gatewayScope,
-            methodsSnapshot = methodsSnapshot,
-            method = "exec.approval.resolve",
-            paramsJson = legacyParams,
-            preserveWriteFailureAcrossEpoch = true,
-          )
-        if (!parseLegacyGatewayExecApprovalResolvePayload(legacyResponse, json)) {
-          throw ExecApprovalWriteOutcomeUnknown()
+  ): GatewayExecApprovalResolution {
+    val method = methodsSnapshot.approvalRpcFamily.method("resolve")
+    val canonical = methodsSnapshot.approvalRpcFamily == GatewayApprovalRpcFamily.Canonical
+    val params =
+      if (canonical) {
+        buildGatewayExecApprovalResolveParams(id, decision, kind)
+      } else {
+        buildJsonObject {
+          put("id", JsonPrimitive(id))
+          put("decision", JsonPrimitive(decision))
         }
-        val terminal =
-          legacyGatewayExecApprovalTerminal(id, decision)
-            ?: throw ExecApprovalWriteOutcomeUnknown()
-        GatewayExecApprovalResolution(
-          applied = false,
-          approval = terminal,
-          attribution = GatewayExecApprovalResolutionAttribution.Unknown,
-        )
       }
-
-      GatewayApprovalRpcFamily.Unavailable -> {
-        throw GatewayApprovalRpcUnavailable()
-      }
+    val response =
+      requestGatewayApprovalData(
+        gatewayScope = gatewayScope,
+        methodsSnapshot = methodsSnapshot,
+        method = method,
+        paramsJson = params.toString(),
+        preserveWriteFailureAcrossEpoch = true,
+      )
+    if (canonical) {
+      return parseGatewayExecApprovalResolvePayload(response, json, expectedId = id, expectedDecision = decision)
+        ?: throw ExecApprovalWriteOutcomeUnknown()
     }
+    if (!parseLegacyGatewayExecApprovalResolvePayload(response, json)) throw ExecApprovalWriteOutcomeUnknown()
+    val terminal = legacyGatewayExecApprovalTerminal(id, decision) ?: throw ExecApprovalWriteOutcomeUnknown()
+    return GatewayExecApprovalResolution(
+      applied = false,
+      approval = terminal,
+      attribution = GatewayExecApprovalResolutionAttribution.Unknown,
+    )
+  }
 
   private fun isGatewayExecApprovalAlreadyResolved(error: GatewaySession.ErrorShape): Boolean = error.code == "INVALID_REQUEST" && error.details?.reason == "APPROVAL_ALREADY_RESOLVED"
 
@@ -8745,23 +7854,6 @@ class NodeRuntime private constructor(
         pendingWrite.requestInFlight = false
       }
     }
-  }
-
-  private suspend fun fetchUnifiedExecApprovalDetail(
-    gatewayScope: GatewayDataScope,
-    methodsSnapshot: GatewayMethodsSnapshot,
-    id: String,
-  ): GatewayExecApprovalSnapshot {
-    val params = buildGatewayExecApprovalGetParams(id).toString()
-    val response =
-      requestGatewayApprovalData(
-        gatewayScope = gatewayScope,
-        methodsSnapshot = methodsSnapshot,
-        method = "approval.get",
-        paramsJson = params,
-      )
-    return parseGatewayExecApprovalGetPayload(response, json, expectedId = id)
-      ?: error("Malformed approval.get response")
   }
 
   private fun replaceGatewayMethods(
@@ -8959,14 +8051,11 @@ class NodeRuntime private constructor(
       scopes = grantedScopes,
       desired = desired,
       commitIfCurrent = { block ->
-        var current = false
-        publishGatewayData(gatewayScope) {
-          if (_operatorScopes.value == grantedScopes && currentNodeApprovalSurface() == desired) {
-            current = true
-            block()
-          }
+        withCurrentGatewayData(gatewayScope) {
+          if (_operatorScopes.value != grantedScopes || currentNodeApprovalSurface() != desired) return@withCurrentGatewayData false
+          block()
+          true
         }
-        current
       },
     )
   }
@@ -8976,8 +8065,7 @@ class NodeRuntime private constructor(
       summary = channelsSummary,
       failureText = nativeText("Could not load channels."),
     ) { gatewayScope ->
-      val response = requestGatewayData(gatewayScope, "channels.status", """{"probe":false,"timeoutMs":8000}""")
-      val root = json.parseToJsonElement(response).asObjectOrNull()
+      val root = requestGatewayObject(gatewayScope, "channels.status", """{"probe":false,"timeoutMs":8000}""")
       GatewayChannelsSummary(
         updatedAtMs = root.long("ts"),
         partial = root.boolean("partial"),
@@ -8993,10 +8081,8 @@ class NodeRuntime private constructor(
     ) { gatewayScope ->
       val agentId = resolveActiveAgentId().takeIf { it.isNotEmpty() } ?: error("No active agent")
       val paramsJson = buildJsonObject { put("agentId", JsonPrimitive(agentId)) }.toString()
-      val statusResponse = requestGatewayData(gatewayScope, "doctor.memory.status", paramsJson)
-      val statusRoot = json.parseToJsonElement(statusResponse).asObjectOrNull()
-      val diaryResponse = requestGatewayData(gatewayScope, "doctor.memory.dreamDiary", paramsJson)
-      val diaryRoot = json.parseToJsonElement(diaryResponse).asObjectOrNull()
+      val statusRoot = requestGatewayObject(gatewayScope, "doctor.memory.status", paramsJson)
+      val diaryRoot = requestGatewayObject(gatewayScope, "doctor.memory.dreamDiary", paramsJson)
       parseDreamingSummary(dreaming = statusRoot?.get("dreaming").asObjectOrNull(), diary = diaryRoot)
     }
 
@@ -9005,8 +8091,7 @@ class NodeRuntime private constructor(
       summary = healthLogsSummary,
       failureText = nativeText("Could not load gateway logs."),
     ) { gatewayScope ->
-      val response = requestGatewayData(gatewayScope, "logs.tail", """{"limit":40,"maxBytes":65536}""")
-      val root = json.parseToJsonElement(response).asObjectOrNull()
+      val root = requestGatewayObject(gatewayScope, "logs.tail", """{"limit":40,"maxBytes":65536}""")
       val lines = (root?.get("lines") as? JsonArray)?.mapNotNull { it.asStringOrNull() }.orEmpty()
       GatewayHealthLogsSummary(
         fileName =
@@ -9078,23 +8163,21 @@ class NodeRuntime private constructor(
 
   private fun parseGatewayModelProviders(providers: JsonArray?): List<GatewayModelProviderSummary> =
     providers
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = obj.nonBlankString("provider") ?: return@mapNotNull null
+      .mapObjects { obj ->
+        val id = obj.nonBlankString("provider") ?: return@mapObjects null
         GatewayModelProviderSummary(
           id = id,
           displayName = obj.nonBlankString("displayName") ?: providerDisplayName(id),
           status = obj.nonBlankString("status") ?: "unknown",
           profileCount = ((obj["profiles"] as? JsonArray)?.size ?: 0),
         )
-      }.orEmpty()
+      }
 
   private fun parseCronJobs(jobs: JsonArray?): List<GatewayCronJobSummary> =
     jobs
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = obj.nonBlankString("id") ?: return@mapNotNull null
-        val name = obj.nonBlankString("name") ?: return@mapNotNull null
+      .mapObjects { obj ->
+        val id = obj.nonBlankString("id") ?: return@mapObjects null
+        val name = obj.nonBlankString("name") ?: return@mapObjects null
         val schedule = obj["schedule"].asObjectOrNull()
         val state = obj["state"].asObjectOrNull()
         val payload = obj["payload"].asObjectOrNull()
@@ -9107,38 +8190,35 @@ class NodeRuntime private constructor(
           nextRunAtMs = state.long("nextRunAtMs"),
           lastRunStatus = cronJobLastRunStatus(state),
         )
-      }.orEmpty()
+      }
 
   private fun parseUsageProviders(providers: JsonArray?): List<GatewayUsageProviderSummary> =
     providers
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val displayName = obj.nonBlankString("displayName") ?: return@mapNotNull null
+      .mapObjects { obj ->
+        val displayName = obj.nonBlankString("displayName") ?: return@mapObjects null
         GatewayUsageProviderSummary(
           displayName = displayName,
           plan = obj.nonBlankString("plan"),
           error = obj.nonBlankString("error"),
           windows = parseUsageWindows(obj["windows"] as? JsonArray),
         )
-      }.orEmpty()
+      }
 
   private fun parseUsageWindows(windows: JsonArray?): List<GatewayUsageWindowSummary> =
     windows
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val label = obj.nonBlankString("label") ?: return@mapNotNull null
+      .mapObjects { obj ->
+        val label = obj.nonBlankString("label") ?: return@mapObjects null
         GatewayUsageWindowSummary(
           label = label,
           usedPercent = obj.double("usedPercent") ?: 0.0,
           resetAtMs = obj.long("resetAt"),
         )
-      }.orEmpty()
+      }
 
   private fun parseSkillSummaries(skills: JsonArray?): List<GatewaySkillSummary> =
     skills
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val name = obj.nonBlankString("name") ?: return@mapNotNull null
+      .mapObjects { obj ->
+        val name = obj.nonBlankString("name") ?: return@mapObjects null
         val missing = obj["missing"].asObjectOrNull()
         val clawHub = obj["clawhub"].asObjectOrNull()
         GatewaySkillSummary(
@@ -9164,109 +8244,15 @@ class NodeRuntime private constructor(
           clawHubInstalledVersion =
             clawHub.nonBlankString("installedVersion"),
         )
-      }.orEmpty()
-
-  private fun parseSkillWorkshopProposals(
-    proposals: JsonArray?,
-    previousById: Map<String, GatewaySkillWorkshopProposal>,
-  ): List<GatewaySkillWorkshopProposal> {
-    val parsed =
-      proposals?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = obj.nonBlankString("id") ?: return@mapNotNull null
-        val previous = previousById[id]
-        val updatedAt = obj.nonBlankString("updatedAt").orEmpty()
-        GatewaySkillWorkshopProposal(
-          id = id,
-          kind = obj.nonBlankString("kind") ?: "proposal",
-          status = obj.nonBlankString("status") ?: "pending",
-          title = obj.nonBlankString("title") ?: obj.nonBlankString("skillName") ?: id,
-          description = obj.nonBlankString("description"),
-          skillName = obj.nonBlankString("skillName") ?: id,
-          skillKey = obj.nonBlankString("skillKey") ?: id,
-          createdAt = obj.nonBlankString("createdAt").orEmpty(),
-          updatedAt = updatedAt,
-          scanState = obj.nonBlankString("scanState"),
-          content = previous?.content?.takeIf { previous.updatedAt == updatedAt },
-          supportFiles = previous?.supportFiles?.takeIf { previous.updatedAt == updatedAt }.orEmpty(),
-        )
       }
-    return parsed.orEmpty().sortedByDescending { it.updatedAt }
-  }
-
-  private fun parseSkillWorkshopProposalInspect(
-    root: JsonObject?,
-    previous: GatewaySkillWorkshopProposal?,
-  ): GatewaySkillWorkshopProposal? {
-    val source = root ?: return null
-    val record = source["record"].asObjectOrNull() ?: return null
-    return parseSkillWorkshopProposalRecord(record, previous)?.copy(
-      content = stripSkillWorkshopFrontmatter(source["content"].asStringOrNull().orEmpty()),
-      supportFiles = parseSkillWorkshopSupportFiles(source["supportFiles"] as? JsonArray),
-    )
-  }
-
-  private fun parseSkillWorkshopProposalActionResult(
-    root: JsonObject?,
-    previous: GatewaySkillWorkshopProposal?,
-  ): GatewaySkillWorkshopProposal? {
-    val record =
-      root?.get("record").asObjectOrNull()
-        ?: root?.takeIf { it.nonBlankString("status") != null }
-        ?: return null
-    val proposal = parseSkillWorkshopProposalRecord(record, previous) ?: return null
-    return proposal.copy(scanState = record["scan"].asObjectOrNull().nonBlankString("state") ?: proposal.scanState)
-  }
-
-  private fun parseSkillWorkshopProposalRecord(
-    record: JsonObject,
-    previous: GatewaySkillWorkshopProposal?,
-  ): GatewaySkillWorkshopProposal? {
-    val id = record.nonBlankString("id") ?: previous?.id ?: return null
-    val target = record["target"].asObjectOrNull()
-    val updatedAt = record.nonBlankString("updatedAt").orEmpty()
-    return GatewaySkillWorkshopProposal(
-      id = id,
-      kind = record.nonBlankString("kind") ?: previous?.kind ?: "proposal",
-      status = record.nonBlankString("status") ?: previous?.status ?: "pending",
-      title = record.nonBlankString("title") ?: target?.nonBlankString("skillName") ?: previous?.title ?: id,
-      description = record.nonBlankString("description") ?: previous?.description,
-      skillName = target?.nonBlankString("skillName") ?: previous?.skillName ?: id,
-      skillKey = target?.nonBlankString("skillKey") ?: previous?.skillKey ?: id,
-      createdAt = record.nonBlankString("createdAt") ?: previous?.createdAt.orEmpty(),
-      updatedAt = updatedAt.ifEmpty { previous?.updatedAt.orEmpty() },
-      scanState = record.nonBlankString("scanState") ?: previous?.scanState,
-      content = previous?.content,
-      supportFiles = previous?.supportFiles.orEmpty(),
-    )
-  }
-
-  private fun parseSkillWorkshopSupportFiles(files: JsonArray?): List<GatewaySkillWorkshopSupportFile> {
-    val parsed =
-      files?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val path = obj.nonBlankString("path") ?: return@mapNotNull null
-        GatewaySkillWorkshopSupportFile(
-          path = path,
-          content = obj["content"].asStringOrNull()?.takeIf { it.isNotEmpty() },
-        )
-      }
-    return parsed.orEmpty()
-  }
-
-  private fun stripSkillWorkshopFrontmatter(content: String): String {
-    val withoutFrontmatter = content.replace(Regex("(?s)^---\\r?\\n.*?\\r?\\n---\\r?\\n?"), "")
-    return withoutFrontmatter.trim()
-  }
 
   private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
 
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
     devices
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val requestId = obj.nonBlankString("requestId") ?: return@mapNotNull null
-        val deviceId = obj.nonBlankString("deviceId") ?: return@mapNotNull null
+      .mapObjects { obj ->
+        val requestId = obj.nonBlankString("requestId") ?: return@mapObjects null
+        val deviceId = obj.nonBlankString("deviceId") ?: return@mapObjects null
         GatewayPendingDeviceSummary(
           requestId = requestId,
           deviceId = deviceId,
@@ -9283,13 +8269,12 @@ class NodeRuntime private constructor(
           requestedAtMs = obj.long("ts"),
           repair = obj.boolean("isRepair"),
         )
-      }.orEmpty()
+      }
 
   private fun parsePairedDevices(devices: JsonArray?): List<GatewayPairedDeviceSummary> =
     devices
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val deviceId = obj.nonBlankString("deviceId") ?: return@mapNotNull null
+      .mapObjects { obj ->
+        val deviceId = obj.nonBlankString("deviceId") ?: return@mapObjects null
         GatewayPairedDeviceSummary(
           deviceId = deviceId,
           displayName = obj.nonBlankString("displayName"),
@@ -9299,7 +8284,7 @@ class NodeRuntime private constructor(
           tokens = parseDeviceTokens(obj["tokens"] as? JsonArray),
           approvedAtMs = obj.long("approvedAtMs"),
         )
-      }.orEmpty()
+      }
 
   private fun parseDeviceRoles(device: JsonObject): List<String> {
     val roles = parseGatewayStringArray(device["roles"] as? JsonArray)
@@ -9309,16 +8294,15 @@ class NodeRuntime private constructor(
 
   private fun parseDeviceTokens(tokens: JsonArray?): List<GatewayDeviceTokenSummary> =
     tokens
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val role = obj.nonBlankString("role") ?: return@mapNotNull null
+      .mapObjects { obj ->
+        val role = obj.nonBlankString("role") ?: return@mapObjects null
         GatewayDeviceTokenSummary(
           role = role,
           scopes = parseGatewayStringArray(obj["scopes"] as? JsonArray),
           revoked = obj.long("revokedAtMs") != null,
           updatedAtMs = obj.long("rotatedAtMs") ?: obj.long("createdAtMs") ?: obj.long("lastUsedAtMs"),
         )
-      }.orEmpty()
+      }
 
   private fun parseChannelSummaries(root: JsonObject?): List<GatewayChannelSummary> {
     val order = parseGatewayStringArray(root?.get("channelOrder") as? JsonArray)
@@ -9366,29 +8350,16 @@ class NodeRuntime private constructor(
   ): GatewayDreamingSummary {
     val diaryContent = diary?.get("content").asStringOrNull()
     val entries = if (diary.boolean("found")) parseDreamDiaryEntries(diaryContent) else emptyList()
-    val timezone = dreaming.nonBlankString("timezone")
-    val storeHealthy =
-      dreaming
-        ?.get("storeError")
-        .asStringOrNull()
-        ?.trim()
-        .isNullOrEmpty()
-    val phaseSignalHealthy =
-      dreaming
-        ?.get("phaseSignalError")
-        .asStringOrNull()
-        ?.trim()
-        .isNullOrEmpty()
     return GatewayDreamingSummary(
       enabled = dreaming.boolean("enabled"),
-      timezone = timezone,
+      timezone = dreaming.nonBlankString("timezone"),
       shortTermCount = dreaming.long("shortTermCount")?.toInt() ?: 0,
       totalSignalCount = dreaming.long("totalSignalCount")?.toInt() ?: 0,
       promotedToday = dreaming.long("promotedToday")?.toInt() ?: 0,
       promotedTotal = dreaming.long("promotedTotal")?.toInt() ?: 0,
       nextRunAtMs = dreamingNextRunAtMs(dreaming),
-      storeHealthy = storeHealthy,
-      phaseSignalHealthy = phaseSignalHealthy,
+      storeHealthy = dreaming.nonBlankString("storeError") == null,
+      phaseSignalHealthy = dreaming.nonBlankString("phaseSignalError") == null,
       diaryFound = diary.boolean("found"),
       diaryEntries = entries,
     )
@@ -9435,54 +8406,21 @@ internal fun resolveOperatorSessionConnectAuth(
   storedOperatorToken: String?,
 ): NodeRuntime.GatewayConnectAuth? {
   val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
-  if (explicitToken != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = explicitToken,
-      bootstrapToken = null,
-      password = null,
-    )
-  }
-
-  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
-  if (explicitPassword != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = null,
-      bootstrapToken = null,
-      password = explicitPassword,
-    )
-  }
-
-  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
-  if (storedToken != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = null,
-      bootstrapToken = null,
-      password = null,
-    )
-  }
-
-  val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
-  if (explicitBootstrapToken != null) {
+  val explicitPassword = auth.password?.trim()?.takeIf { explicitToken == null && it.isNotEmpty() }
+  if (explicitToken == null && explicitPassword == null && storedOperatorToken.isNullOrBlank() && !auth.bootstrapToken.isNullOrBlank()) {
     return null
   }
-
   return NodeRuntime.GatewayConnectAuth(
-    token = null,
+    token = explicitToken,
     bootstrapToken = null,
-    password = null,
+    password = explicitPassword,
   )
 }
 
 internal fun operatorSessionUsesStoredDeviceToken(
   auth: NodeRuntime.GatewayConnectAuth,
   storedOperatorToken: String?,
-): Boolean {
-  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
-  if (storedToken == null) return false
-  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
-  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
-  return explicitToken == null && explicitPassword == null
-}
+): Boolean = !storedOperatorToken.isNullOrBlank() && auth.token.isNullOrBlank() && auth.password.isNullOrBlank()
 
 internal fun operatorConnectScopesForAuth(
   usesStoredDeviceToken: Boolean,
@@ -9651,38 +8589,6 @@ data class GatewaySkillsSummary(
   val skills: List<GatewaySkillSummary>,
 )
 
-data class GatewaySkillWorkshopSummary(
-  val agentId: String = "",
-  val proposals: List<GatewaySkillWorkshopProposal>,
-) {
-  fun withProposal(proposal: GatewaySkillWorkshopProposal): GatewaySkillWorkshopSummary =
-    copy(
-      proposals =
-        (proposals.filterNot { it.id == proposal.id } + proposal)
-          .sortedByDescending { it.updatedAt },
-    )
-}
-
-data class GatewaySkillWorkshopProposal(
-  val id: String,
-  val kind: String,
-  val status: String,
-  val title: String,
-  val description: String?,
-  val skillName: String,
-  val skillKey: String,
-  val createdAt: String,
-  val updatedAt: String,
-  val scanState: String?,
-  val content: String? = null,
-  val supportFiles: List<GatewaySkillWorkshopSupportFile> = emptyList(),
-)
-
-data class GatewaySkillWorkshopSupportFile(
-  val path: String,
-  val content: String?,
-)
-
 data class GatewaySkillSummary(
   val skillKey: String,
   val name: String,
@@ -9732,17 +8638,9 @@ sealed interface GatewayNodeCapabilityApproval {
 
 internal fun GatewayNodeCapabilityApproval.withoutExactRequestId(): GatewayNodeCapabilityApproval? =
   when (this) {
-    is GatewayNodeCapabilityApproval.PendingApproval -> {
-      requestId?.let { GatewayNodeCapabilityApproval.PendingApproval(requestId = null) }
-    }
-
-    is GatewayNodeCapabilityApproval.PendingReapproval -> {
-      requestId?.let { GatewayNodeCapabilityApproval.PendingReapproval(requestId = null) }
-    }
-
-    else -> {
-      null
-    }
+    is GatewayNodeCapabilityApproval.PendingApproval -> requestId?.let { GatewayNodeCapabilityApproval.PendingApproval(requestId = null) }
+    is GatewayNodeCapabilityApproval.PendingReapproval -> requestId?.let { GatewayNodeCapabilityApproval.PendingReapproval(requestId = null) }
+    else -> null
   }
 
 internal fun GatewayNodesDevicesSummary.withoutExactApprovalRequestIds(): GatewayNodesDevicesSummary = copy(nodes = nodes.map { node -> node.copy(approvalState = node.approvalState.withoutExactRequestId() ?: node.approvalState) })
@@ -10024,11 +8922,3 @@ private fun gatewayIdentifierDisplayName(value: String): String =
     .split(' ')
     .filter { it.isNotBlank() }
     .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
-
-private fun gatewayControlPageTlsFingerprint(
-  prefs: SecurePrefs,
-  endpoint: GatewayEndpoint,
-): String? =
-  prefs
-    .loadGatewayTlsFingerprint(endpoint.stableId)
-    ?.let(::normalizeGatewayTlsFingerprintInput)

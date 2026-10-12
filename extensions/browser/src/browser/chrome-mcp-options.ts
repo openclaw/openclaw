@@ -1,4 +1,3 @@
-// Normalizes Chrome MCP profile options and subprocess arguments.
 import { createRequire } from "node:module";
 import {
   hasNonEmptyString,
@@ -25,7 +24,7 @@ export function normalizeChromeMcpOptions(
   if (typeof input === "object" && input && "command" in input && "args" in input) {
     return input;
   }
-  const options = typeof input === "string" ? { userDataDir: input } : (input ?? {});
+  const options = input ?? {};
   const configuredCommand = normalizeOptionalString(options.mcpCommand);
   // Explicit npx has always selected OpenClaw's pinned server, including its package prefix.
   const customCommand = configuredCommand === "npx" ? undefined : configuredCommand;

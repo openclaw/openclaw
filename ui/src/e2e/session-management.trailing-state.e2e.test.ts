@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/session-capability.ts";
+import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -40,21 +41,22 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    await page.addInitScript(() => {
+    await page.addInitScript((storageKey) => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-    });
+      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({ ...settings, railShortcuts: ["session:agent:main:two-line"] }),
+      );
+    }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     await installMockGateway(page, {
       mainSessionKey: "agent:main:main",
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
-          Object.assign(
-            sessionRow("agent:main:two-line", "Two-line session", baseTime - 1, {
-              pinned: true,
-              pinnedAt: baseTime,
-            }),
-            { lastMessagePreview: "Finishing repository setup review" },
-          ),
+          Object.assign(sessionRow("agent:main:two-line", "Two-line session", baseTime - 1), {
+            lastMessagePreview: "Finishing repository setup review",
+          }),
         ]),
       },
       sessionKey: "agent:main:two-line",

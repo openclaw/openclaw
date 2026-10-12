@@ -36,12 +36,31 @@ function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
   return {
     agents: {
       defaults: { workspace },
-      list: [{ id: "main", workspace, identity: { avatar } }],
+      entries: { main: { workspace, identity: { avatar } } },
     },
   };
 }
 
 describe("Control UI response authority", () => {
+  it("briefly caches an authenticated missing agent avatar", async () => {
+    const config = createAvatarConfig(testTempDirs.make("openclaw-avatar-missing-"), "missing.png");
+    const req = new IncomingMessage(new Socket());
+    Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
+    req.method = "GET";
+    req.url = "/avatar/main";
+    req.headers = { authorization: "Bearer admitted-token" };
+    const res = new ServerResponse(req);
+    const handled = await handleControlUiAvatarRequest(req, res, {
+      config,
+      cfg: config,
+      auth: { mode: "token", token: "admitted-token", allowTailscale: false },
+    });
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(404);
+    expect(res.getHeader("Cache-Control")).toBe("private, max-age=60");
+    expect(res.getHeader("Vary")).toBe("Authorization, Cookie");
+  });
+
   it("withholds prepared bootstrap bytes when visitor authority expires before its abort signal", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const trustedProxy = { userHeader: "x-visitor-email", allowLoopback: true };

@@ -74,19 +74,15 @@ export function createFinalizableDraftStreamControls<T = string>(
     await loop.flush();
   };
 
-  const stopForClear = async (): Promise<void> => {
-    // Clearing deletes the preview, so stop the loop without flushing another edit first.
-    params.markStopped();
+  const stopPending = async (mark: () => void): Promise<void> => {
+    mark();
     loop.stop();
     await loop.waitForInFlight();
   };
-
-  const seal = async (): Promise<void> => {
-    // Sealing keeps the preview id for callers that already own final delivery/deletion.
-    params.markFinal();
-    loop.stop();
-    await loop.waitForInFlight();
-  };
+  // Clearing deletes the preview, so stop the loop without flushing another edit first.
+  const stopForClear = () => stopPending(() => params.markStopped());
+  // Sealing keeps the preview id for callers that already own final delivery/deletion.
+  const seal = () => stopPending(() => params.markFinal());
 
   return {
     loop,

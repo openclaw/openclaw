@@ -2,8 +2,8 @@ import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
-  type ModelProviderRequestTransportOverrides,
 } from "./provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
 
 export function unwrapSecretSentinelsForProviderEgress(value: string, boundary: string): string {
   const swapped = swapSecretSentinelsInText(value);

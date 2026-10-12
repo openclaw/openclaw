@@ -175,8 +175,18 @@ export function defineSessionPlacementModuleBoundaryTests(
           })),
         ).toEqual({ hasSubtleCrypto: true, isSecureContext: true });
         await gateway.waitForRequest("environments.list");
-        await page.locator("#new-session-where-trigger").click();
         const place = page.locator("wa-popover.new-session-page__where-popover");
+        await place.evaluate((element) => {
+          const onAfterShow = (event: Event) => {
+            if (event.target === element) {
+              element.removeEventListener("wa-after-show", onAfterShow);
+              element.setAttribute("data-test-picker-ready", "true");
+            }
+          };
+          element.addEventListener("wa-after-show", onAfterShow);
+        });
+        await page.locator("#new-session-where-trigger").click();
+        await expect.poll(() => place.getAttribute("data-test-picker-ready")).toBe("true");
         await place.getByRole("button", { name: "aws", exact: true }).click();
         const trigger = page.locator("#new-session-where-trigger");
         await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
@@ -453,7 +463,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
         await expect
           .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
-          .toBe(true);
+          .toBe(false);
         const publishPlacement = async (
           state: "requested" | "provisioning" | "syncing" | "starting",
           generation: number,

@@ -79,10 +79,12 @@ describe("inline tool execution ownership", () => {
         if (revocation === "before start") {
           expect(onAgentRunStart).not.toHaveBeenCalled();
         } else {
-          expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith("inline-tool-run", undefined, {
-            completionSource: "reply-dispatch",
-            getResult: expect.any(Function),
-          });
+          expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(
+            "inline-tool-run",
+            undefined,
+            { completionSource: "reply-dispatch", getResult: expect.any(Function) },
+            null,
+          );
           expect(onAgentRunStart.mock.calls[0]?.[2]?.getResult()).toEqual({});
         }
         if (revocation === "during execution" || revocation === "successful completion") {

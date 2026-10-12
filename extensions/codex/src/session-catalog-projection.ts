@@ -1,6 +1,6 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
 import { codexCatalogRowRecency } from "./session-catalog-index-order.js";
@@ -9,7 +9,6 @@ import type {
   CodexCatalogRolloutFingerprint,
 } from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
-import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {
   readControlCursor,
   selectCodexCatalogPreviewInput,
@@ -22,7 +21,6 @@ import {
   copyCodexCatalogSource,
   getCodexCatalogSource,
   setCodexCatalogSource,
-  type CodexCatalogSource,
 } from "./session-catalog-source.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
@@ -30,25 +28,7 @@ type CodexCatalogProjectionParams = {
   localSessionsRoot?: string;
   diagnostics?: CodexCatalogPageDiagnostics | null;
   sanitize: typeof sanitizeTerminalText;
-  source?: CodexCatalogSource;
 };
-
-/** Single-thread responses remain owned by their native consumers. */
-export function projectCodexCatalogThread(thread: CodexThread, localSessionsRoot?: string) {
-  try {
-    const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
-    return projectCodexCatalogPage(
-      { data: [prepared] },
-      {
-        localSessionsRoot,
-        sanitize: sanitizeTerminalText,
-        source: getCodexCatalogSource(prepared),
-      },
-    );
-  } catch (error) {
-    return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
-  }
-}
 
 export class CodexCatalogProjectionCapacityError extends Error {
   constructor() {
@@ -59,6 +39,10 @@ export class CodexCatalogProjectionCapacityError extends Error {
 /** Direct mutations and events share one bound across asynchronous projection work. */
 export class CodexCatalogProjections {
   private active = 0;
+
+  hasActiveWork(): boolean {
+    return this.active > 0;
+  }
 
   run<T>(work: () => Promise<T>): Promise<T> {
     if (this.active >= CODEX_CATALOG_MAX_ROWS) {
@@ -111,9 +95,10 @@ export async function projectCodexCatalogPage(
         const rolloutPath = typeof thread.path === "string" ? thread.path.trim() : "";
         page.managedThreads = [{ threadId: thread.id, ...(rolloutPath ? { rolloutPath } : {}) }];
       } else {
-        const session = toCatalogSession(thread, false, sanitize, {
-          value: typeof thread.preview === "string" ? thread.preview : undefined,
-        });
+        const session = toCatalogSession(
+          thread,
+          typeof thread.preview === "string" ? thread.preview : undefined,
+        );
         if (session) {
           page.sessions.push(session);
         }
@@ -130,7 +115,7 @@ export async function projectCodexCatalogPage(
             recencyAt: asFiniteNumber(thread.recencyAt) ?? null,
             page,
           },
-          params.source ?? getCodexCatalogSource(thread),
+          getCodexCatalogSource(thread),
         ),
       );
     }
@@ -180,7 +165,7 @@ export async function projectCodexCatalogDeltaPage(
     if (typeof thread.preview === "string" && Boolean(thread.preview) !== Boolean(row.preview)) {
       return undefined;
     }
-    const session = toCatalogSession(thread, false, params.sanitize, { value: row.preview });
+    const session = toCatalogSession(thread, row.preview);
     return copyCodexCatalogSource(thread, {
       ...row,
       nativeMetadata: true,

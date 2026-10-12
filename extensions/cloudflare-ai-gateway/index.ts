@@ -2,7 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   listProfilesForProvider,
   normalizeOptionalSecretInput,
   type ProviderAuthContext,
@@ -102,7 +102,7 @@ export default definePluginEntry({
             };
           },
           runNonInteractive: async (ctx) => {
-            const authStore = ensureAuthProfileStore(ctx.agentDir, {
+            const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
               allowKeychainPrompt: false,
             });
             const credential = authStore.profiles[PROFILE_ID];
@@ -120,11 +120,9 @@ export default definePluginEntry({
               normalizeOptionalSecretInput(ctx.opts.cloudflareAiGatewayGatewayId) ??
               storedMetadata.gatewayId;
             if (!accountId || !gatewayId) {
-              ctx.runtime.error(
+              throw new Error(
                 "Cloudflare AI Gateway setup requires --cloudflare-ai-gateway-account-id and --cloudflare-ai-gateway-gateway-id.",
               );
-              ctx.runtime.exit(1);
-              return null;
             }
             const resolved = await ctx.resolveApiKey({
               provider: PROVIDER_ID,
@@ -156,7 +154,7 @@ export default definePluginEntry({
       catalog: {
         order: "late",
         run: async (ctx) => {
-          const authStore = ensureAuthProfileStore(ctx.agentDir, {
+          const authStore = await ensureAuthProfileStoreAsync(ctx.agentDir, {
             allowKeychainPrompt: false,
           });
           const envManagedApiKey = normalizeOptionalString(ctx.env[PROVIDER_ENV_VAR])

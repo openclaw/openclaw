@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   inspectAcpSessionClaimsForDoctor,
@@ -17,9 +19,10 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
-} from "../config/sessions/targets-read-availability.js";
+} from "../config/sessions/targets-read-availability.worker.js";
 import { dedupeSessionStoreTargetsBySqliteTarget } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runWriteTransaction } from "../plugin-state/plugin-state-store.database.js";
 import {
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
   createPluginStateKeyedStore,
@@ -29,16 +32,31 @@ import {
   pluginStateDoctorEntriesInKeyRange,
   type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
+import { getPluginStateKysely } from "../plugin-state/plugin-state-store.kernel.js";
+import {
+  observedPluginStateRow,
+  type PluginDoctorRawStateEntry,
+} from "../plugin-state/plugin-state-store.sqlite.js";
+import {
+  prepareRegisterParams,
+  validateNamespace,
+} from "../plugin-state/plugin-state-store.validation.js";
 import type {
   PluginDoctorChannelIngressQueueAccess,
   PluginDoctorChannelIngressQueueInspection,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   readDeferredPluginSessionImport,
   resolveVerifiedSessionSource,
 } from "./deferred-plugin-session-sources.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "./sqlite-worker-identity.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import type { PluginDoctorRepairAuthority } from "./state-migrations.types.js";
 
@@ -284,6 +302,90 @@ export type PluginDoctorChannelIngressAccessOptions = {
   mutation?: { assertCurrent(): void };
 };
 
+/** Backed-up same-schema repair; source observations and replacement values freeze before yielding. */
+async function repairPluginStateEntriesForDoctor(params: {
+  pluginId: string;
+  namespace: string;
+  replacements: readonly { entry: PluginDoctorRawStateEntry; value: unknown }[];
+  authority: PluginDoctorRepairAuthority;
+  env: NodeJS.ProcessEnv;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const { pluginId, authority } = params;
+  const env = { ...params.env };
+  const namespace = validateNamespace(params.namespace);
+  const rows = structuredClone(params.replacements).map(({ entry, value }) => {
+    const { key, valueJson } = prepareRegisterParams(entry.key, value);
+    return { entry, key, valueJson };
+  });
+  if (
+    rows.length > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES ||
+    new Set(rows.map((row) => row.key)).size !== rows.length ||
+    rows.some(({ key, entry }) => key !== entry.key)
+  ) {
+    throw new Error("Plugin Doctor repair requires a bounded batch of distinct rows.");
+  }
+  if (!rows.length) {
+    return { changes: [], warnings: [] };
+  }
+  authority.assertCurrent();
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  const identity = readDatabasePathIdentitySync(databasePath);
+  const assertCurrent = () => {
+    authority.assertCurrent();
+    assertExistingDatabaseIdentity(databasePath, identity.key, identity.birthtime);
+  };
+  const validate = (db: DatabaseSync) => {
+    for (const { entry } of rows) {
+      const query = getPluginStateKysely(db)
+        .selectFrom("plugin_state_entries")
+        .select("entry_key")
+        .where((eb) => observedPluginStateRow(eb, { pluginId, namespace }, entry));
+      if (!executeSqliteQuerySync(db, query).rows.length) {
+        throw new Error(
+          "Plugin state changed during Doctor repair; inspect again before retrying.",
+        );
+      }
+    }
+  };
+  const { backupDoctorSqliteDatabases } = await import("../commands/doctor-migration-backup.js");
+  assertCurrent();
+  const backup = await backupDoctorSqliteDatabases({
+    env,
+    pendingDatabasePaths: [databasePath],
+    databasePaths: [databasePath],
+    authority: { assertCurrent },
+    repair: {
+      key: createHash("sha256")
+        .update(JSON.stringify([pluginId, namespace, rows]))
+        .digest("hex"),
+      validate,
+    },
+  });
+  assertCurrent();
+  runWriteTransaction(
+    "register",
+    ({ db }) => {
+      assertCurrent();
+      authority.assertOwnedInTransaction(db);
+      validate(db);
+      for (const { key, valueJson } of rows) {
+        executeSqliteQuerySync(
+          db,
+          getPluginStateKysely(db)
+            .updateTable("plugin_state_entries")
+            .set({ value_json: valueJson })
+            .where("plugin_id", "=", pluginId)
+            .where("namespace", "=", namespace)
+            .where("entry_key", "=", key),
+        );
+      }
+      authority.assertOwnedInTransaction(db);
+    },
+    { env },
+  );
+  return backup;
+}
+
 export function createPluginDoctorStateMigrationContext(params: {
   pluginId: string;
   env: NodeJS.ProcessEnv;
@@ -355,6 +457,8 @@ export function createPluginDoctorStateMigrationContext(params: {
   }
   if (params.repairAuthority) {
     const authority = params.repairAuthority;
+    context.repairPluginStateEntries = (namespace, replacements) =>
+      repairPluginStateEntriesForDoctor({ pluginId, env, namespace, replacements, authority });
     context.updateAcpSessionIdentity = (input) =>
       updateAcpSessionIdentityForDoctor(params, authority, input);
     context.deletePluginStateEntriesIfUnchanged = (namespace, entries) => {

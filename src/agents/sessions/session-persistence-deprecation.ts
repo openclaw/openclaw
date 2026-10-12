@@ -1,18 +1,16 @@
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 
-// Source and bundled SDK graphs share one warning budget for this process.
-const warned = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionPersistenceDeprecations"),
-  () => new Set<string>(),
-);
-
-export function warnSessionPersistenceDeprecation(method: string, replacement: string): void {
-  if (warned.has(method)) {
-    return;
-  }
-  warned.add(method);
-  process.emitWarning(
-    `${method} is deprecated; await ${replacement} instead. Removal: next Plugin SDK major.`,
-    { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
-  );
+export function warnSessionPersistenceDeprecation(
+  method: string,
+  replacement: string,
+  options?: { pluginId?: string; family?: string },
+): void {
+  warnPluginSdkDeprecation({
+    family: options?.family ?? "session-persistence",
+    method,
+    replacement,
+    pluginId: options?.pluginId,
+    compatibility: "Synchronous calls retain their return values and commit before returning.",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
 }

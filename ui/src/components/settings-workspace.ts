@@ -10,8 +10,6 @@ export function renderSettingsWorkspace(
   options: {
     fillHeight?: boolean;
     id?: string;
-    role?: string;
-    ariaLabel?: string;
   } = {},
 ) {
   const className = options.fillHeight
@@ -22,8 +20,6 @@ export function renderSettingsWorkspace(
       class=${className}
       ${shellLayoutTraits({ settingsWorkspace: true })}
       id=${ifDefined(options.id)}
-      role=${ifDefined(options.role)}
-      aria-label=${ifDefined(options.ariaLabel)}
     >
       <div class="settings-workspace__body">${body}</div>
     </section>

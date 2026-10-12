@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { escapeRegExp } from "../shared/regexp.js";
@@ -21,6 +22,25 @@ const state = resolveGlobalSingleton<SecretRedactionRegistryState>(
     registeredValueRedactor: undefined,
   }),
 );
+
+export type SecretRedactionRegistrySnapshot = { revision: number; values: readonly string[] };
+const registrySnapshots = resolveGlobalSingleton(
+  Symbol.for("openclaw.secretRedactionRegistrySnapshots"),
+  () =>
+    new AsyncLocalStorage<{
+      snapshot: SecretRedactionRegistrySnapshot;
+      values: ReadonlySet<string>;
+      redactor?: SecretValueRedactor;
+    }>(),
+);
+
+/** A trusted worker task borrows captured policy without mutating its process registry. */
+export function withSecretRedactionRegistrySnapshot<T>(
+  snapshot: SecretRedactionRegistrySnapshot,
+  run: () => T,
+): T {
+  return registrySnapshots.run({ snapshot, values: new Set(snapshot.values) }, run);
+}
 
 function invalidateMatcher(): void {
   state.registryRevision += 1;
@@ -60,24 +80,24 @@ export function registerSecretValueForRedaction(value: string): void {
 
 /** Returns whether a value has SecretRef provenance in the process registry. */
 export function isSecretValueRegisteredForRedaction(value: string): boolean {
-  return state.registeredValues.has(value);
+  return (registrySnapshots.getStore()?.values ?? state.registeredValues).has(value);
 }
 
 export function hasRegisteredSecretValuesForRedaction(): boolean {
-  return state.registeredValues.size > 0;
+  return (registrySnapshots.getStore()?.values ?? state.registeredValues).size > 0;
 }
 
 /** Changes with registry membership, including bounded eviction and test resets. */
 export function getSecretRedactionRegistryRevision(): number {
-  return state.registryRevision;
+  return registrySnapshots.getStore()?.snapshot.revision ?? state.registryRevision;
 }
 
 /** Exact surface forms are already expanded; snapshots must not register them again. */
-export function captureSecretRedactionRegistrySnapshot(): {
-  revision: number;
-  values: readonly string[];
-} {
-  return { revision: state.registryRevision, values: [...state.registeredValues.keys()] };
+export function captureSecretRedactionRegistrySnapshot(): SecretRedactionRegistrySnapshot {
+  const scoped = registrySnapshots.getStore();
+  return scoped
+    ? { revision: scoped.snapshot.revision, values: [...scoped.values] }
+    : { revision: state.registryRevision, values: [...state.registeredValues.keys()] };
 }
 
 /** Replaces registered exact values while preserving the caller's mask convention. */
@@ -85,6 +105,11 @@ export function redactRegisteredSecretValues(
   text: string,
   mask: (value: string, index: number) => string,
 ): string {
+  const scoped = registrySnapshots.getStore();
+  if (scoped) {
+    scoped.redactor ??= createSecretValueRedactor(scoped.snapshot.values);
+    return scoped.redactor(text, mask);
+  }
   if (!text || state.registeredValues.size === 0) {
     return text;
   }

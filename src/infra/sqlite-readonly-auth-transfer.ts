@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createJsonFieldReceiver, JSON_FIELD_TRANSFER_BYTES } from "./json-field-transfer.js";
 import type { SqliteReadOnlyOperationResult } from "./sqlite-readonly-operation-types.js";
 import type { SqliteAuthProfileRows } from "./sqlite-readonly-worker-protocol.js";
 import {
@@ -82,14 +83,14 @@ function decodeFrame(value: unknown, label: string): SqliteWorkerTransferFrame {
 function createSqliteReadOnlyTransferReceiver<T>(options: {
   kinds: string[];
   label: string;
-  readHandle?: (handle: Record<string, unknown>) => void;
-  readResult: (records: Map<string, unknown>) => T;
+  maxRecordBytes?: number;
+  acceptRecord: (kind: string, value: unknown) => void;
+  readResult: () => T;
 }) {
   let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
   let transferId: number | undefined;
   let ending = false;
   let completed = false;
-  const records = new Map<string, unknown>();
   return {
     accept(value: unknown): { request: SqliteAuthTransferRequest } | { value: T } {
       if (!isRecord(value) || completed) {
@@ -109,15 +110,9 @@ function createSqliteReadOnlyTransferReceiver<T>(options: {
           throw new Error(`Invalid ${options.label} transfer handle`);
         }
         transferId = handle.id;
-        options.readHandle?.(handle);
         receiver = createSqliteWorkerTransferReceiver(
           { id: transferId, kinds: options.kinds },
-          ({ kind, value: record }) => {
-            if (records.has(kind)) {
-              throw new Error(`Duplicate ${options.label} transfer record`);
-            }
-            records.set(kind, record);
-          },
+          ({ kind, value: record }) => options.acceptRecord(kind, record),
         );
         return { request: { type: "next", transferId } };
       }
@@ -127,12 +122,13 @@ function createSqliteReadOnlyTransferReceiver<T>(options: {
         );
       }
       if (value.type === "frame" && !ending) {
-        const counts = receiver.accept(decodeFrame(value.frame, options.label));
+        const frame = decodeFrame(value.frame, options.label);
+        if (!frame.done && options.maxRecordBytes && frame.recordBytes > options.maxRecordBytes) {
+          throw new Error(`${options.label} transfer record exceeds its bound`);
+        }
+        const counts = receiver.accept(frame);
         if (counts) {
-          if (
-            records.size !== options.kinds.length ||
-            options.kinds.some((kind) => !records.has(kind))
-          ) {
+          if (counts.length !== options.kinds.length || counts.some(([, count]) => count < 1)) {
             throw new Error(`Incomplete ${options.label} transfer result`);
           }
           ending = true;
@@ -141,9 +137,7 @@ function createSqliteReadOnlyTransferReceiver<T>(options: {
       }
       if (value.type === "complete" && ending) {
         completed = true;
-        const result = options.readResult(records);
-        records.clear();
-        return { value: result };
+        return { value: options.readResult() };
       }
       throw new Error(
         `${options.label.charAt(0).toUpperCase()}${options.label.slice(1)} transfer response is out of order`,
@@ -153,34 +147,50 @@ function createSqliteReadOnlyTransferReceiver<T>(options: {
 }
 
 export function createSqliteAuthTransferReceiver() {
-  let cacheable = false;
+  const receiver = createJsonFieldReceiver();
   return createSqliteReadOnlyTransferReceiver<SqliteAuthProfileRows>({
-    kinds: ["store", "state"],
+    kinds: ["fields"],
     label: "auth profile",
-    readHandle(handle) {
-      if (typeof handle.cacheable !== "boolean") {
-        throw new Error("Invalid auth profile transfer handle");
+    maxRecordBytes: JSON_FIELD_TRANSFER_BYTES,
+    acceptRecord(_kind, batch) {
+      if (!Array.isArray(batch)) {
+        throw new Error("Invalid auth profile field batch");
       }
-      cacheable = handle.cacheable;
+      for (const field of batch) {
+        receiver.accept(field);
+      }
     },
-    readResult: (records) => ({
-      store: records.get("store"),
-      state: records.get("state"),
-      cacheable,
-    }),
+    readResult() {
+      const rows = receiver.finish();
+      if (
+        !isRecord(rows) ||
+        !("store" in rows) ||
+        !("state" in rows) ||
+        typeof rows.cacheable !== "boolean"
+      ) {
+        throw new Error("Invalid auth profile transfer rows");
+      }
+      return { store: rows.store, state: rows.state, cacheable: rows.cacheable };
+    },
   });
 }
 
 export function createSqliteOperationTransferReceiver(operation: string) {
+  let result: SqliteReadOnlyOperationResult | undefined;
   return createSqliteReadOnlyTransferReceiver<SqliteReadOnlyOperationResult>({
     kinds: ["result"],
     label: "SQLite operation",
-    readResult(records) {
-      const result = records.get("result");
-      if (!isRecord(result) || result.operation !== operation || !("value" in result)) {
-        throw new Error("SQLite read-only worker returned a different operation");
+    acceptRecord(_kind, record) {
+      if (result || !isRecord(record) || record.operation !== operation || !("value" in record)) {
+        throw new Error("SQLite read-only worker returned a different or duplicate operation");
       }
-      return { operation, value: result.value };
+      result = { operation, value: record.value };
+    },
+    readResult() {
+      if (!result) {
+        throw new Error("SQLite read-only worker returned no operation");
+      }
+      return result;
     },
   });
 }

@@ -52,22 +52,10 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
   return { ...original, MeetingPlatformAdapter: { ...adapter, defineBrowserMeetingPlugin } };
 });
 
-const { zoomMeetingsPlugin, teamsMeetingsPlugin, slackHuddlesPlugin } =
-  await loadBrowserMeetingPlugins();
+const { zoomMeetingsPlugin, teamsMeetingsPlugin } = await loadBrowserMeetingPlugins();
 
 describe("createMeetingSession", () => {
-  it.each([
-    {
-      mode: "agent" as const,
-      provider: undefined,
-      transcriptionProvider: "deepgram",
-    },
-    {
-      mode: "bidi" as const,
-      provider: "openai-realtime",
-      transcriptionProvider: undefined,
-    },
-  ])("preserves $mode realtime session fields", ({ mode, provider, transcriptionProvider }) => {
+  it("preserves bidi realtime session fields", () => {
     const session = createMeetingSession({
       platform: {
         id: "test-meeting",
@@ -98,7 +86,7 @@ describe("createMeetingSession", () => {
       resolved: {
         url: "https://meeting.example/room",
         transport: "chrome",
-        mode,
+        mode: "bidi",
         agentId: "operator",
       },
       createdAt: "2026-07-22T00:00:00.000Z",
@@ -110,10 +98,10 @@ describe("createMeetingSession", () => {
       participantIdentity: "Test participant via chrome",
       realtime: {
         enabled: true,
-        strategy: mode,
-        provider,
-        model: mode === "bidi" ? "realtime-model" : undefined,
-        transcriptionProvider,
+        strategy: "bidi",
+        provider: "openai-realtime",
+        model: "realtime-model",
+        transcriptionProvider: undefined,
         toolPolicy: "safe-read-only",
       },
       notes: [],
@@ -416,8 +404,8 @@ describe("MeetingSessionRuntime durable transcripts", () => {
 
 describe("MeetingSessionRuntime failed joins", () => {
   it.each([false, true])(
-    "retries failed joins while preserving acquired browser custody: %s",
-    async (acquiredTab) => {
+    "permits same-URL retry with retained tab custody (failed join: %s)",
+    async (failedJoin) => {
       const launchError = new Error("browser launch failed");
       let launches = 0;
       let releaseAllowed = false;
@@ -432,31 +420,38 @@ describe("MeetingSessionRuntime failed joins", () => {
         },
         joinTransport: async ({ session }) => {
           launches += 1;
-          if (launches > 1 || acquiredTab) {
-            session.browser = {
-              launched: true,
-              tab: { targetId: `${session.id}-retry-tab`, openedByPlugin: true },
-            };
-          }
-          if (launches === 1) {
+          session.browser = {
+            launched: true,
+            tab: { targetId: `${session.id}-retry-tab`, openedByPlugin: true },
+          };
+          if (failedJoin && launches === 1) {
             throw launchError;
           }
           return {};
         },
       });
       try {
-        await expect(runtime.join(request)).rejects.toBe(launchError);
-        const pending = runtime.list()[0];
-        expect(runtime.list()).toHaveLength(acquiredTab ? 1 : 0);
+        let pending: TestSession | undefined;
+        if (failedJoin) {
+          await expect(runtime.join(request)).rejects.toBe(launchError);
+          pending = runtime.list()[0];
+          expect(runtime.list()).toHaveLength(1);
+        } else {
+          pending = (await runtime.join(request)).session;
+          await expect(runtime.leave(pending.id)).resolves.toMatchObject({ browserLeft: false });
+        }
         const retried = await runtime.join(request);
         expect(retried.session.state).toBe("active");
         expect(launches).toBe(2);
         if (pending) {
+          expect(retried.session.id).not.toBe(pending.id);
           expect(pending.browser?.tab).toBeDefined();
           releaseAllowed = true;
           await expect(runtime.leave(pending.id)).resolves.toMatchObject({ browserLeft: true });
         }
-        expect(runtime.list()).toEqual([retried.session]);
+        if (failedJoin) {
+          expect(runtime.list()).toEqual([retried.session]);
+        }
       } finally {
         releaseAllowed = true;
         for (const session of runtime.list()) {
@@ -500,277 +495,157 @@ describe("MeetingSessionRuntime failed joins", () => {
     expect(joinTransport).toHaveBeenCalledTimes(2);
   });
 
-  it("stops attached transport handles and releases the partial browser tab", async () => {
-    const joinError = new Error("transport setup failed");
-    const stop = vi.fn(async () => {});
-    let releaseAttempts = 0;
-    const releaseBrowserTab = vi.fn(async (session: TestSession) => {
-      if (releaseAttempts++ === 0) {
-        return false;
-      }
-      if (session.browser) {
-        session.browser.tab = undefined;
-      }
-      return true;
-    });
-    const { createdSessions, runtime } = createTestRuntime({
-      releaseBrowserTab,
-      joinTransport: async ({ session, context }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "partial-tab", openedByPlugin: true },
-        };
-        context.attachRuntimeHandles(session, { stop });
-        throw joinError;
-      },
-    });
-
-    await expect(
-      runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
-    ).rejects.toBe(joinError);
-
-    expect(stop).toHaveBeenCalledOnce();
-    expect(releaseBrowserTab).toHaveBeenCalledTimes(2);
-    expect(createdSessions[0]).toMatchObject({ state: "ended", browser: { tab: undefined } });
-    expect(runtime.list()).toEqual([]);
-  });
-
-  it("retries transport cleanup for an unpublished failed join", async () => {
-    const joinError = new Error("transport setup failed");
-    const stopError = new Error("transport stop failed");
-    const stop = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(stopError)
-      .mockResolvedValueOnce();
-    const releaseBrowserTab = vi.fn(async (session: TestSession) => {
-      if (session.browser) {
-        session.browser.tab = undefined;
-      }
-      return true;
-    });
-    const { runtime } = createTestRuntime({
-      releaseBrowserTab,
-      joinTransport: async ({ session, context }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "partial-tab", openedByPlugin: true },
-        };
-        context.attachRuntimeHandles(session, { stop });
-        throw joinError;
-      },
-    });
-
-    await expect(
-      runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
-    ).rejects.toBe(joinError);
-
-    expect(stop).toHaveBeenCalledTimes(2);
-    expect(releaseBrowserTab).toHaveBeenCalledOnce();
-    expect(runtime.list()).toEqual([]);
-  });
-
-  it.each([true, false])(
-    "retains a failed join with live cleanup for a later leave retry (tab: %s)",
-    async (acquiredTab) => {
+  it.each(["browser", "transport"])(
+    "retries partial %s cleanup after an unpublished failed join",
+    async (failure) => {
       const joinError = new Error("transport setup failed");
-      const cleanupError = new Error("transport cleanup still pending");
-      let resourceLive = true;
-      let releaseStop = false;
-      const stop = vi.fn(async () => {
-        if (!releaseStop) {
-          throw cleanupError;
+      const stop = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      if (failure === "transport") {
+        stop.mockRejectedValueOnce(new Error("transport stop failed"));
+      }
+      let releaseAttempts = 0;
+      const releaseBrowserTab = vi.fn(async (session: TestSession) => {
+        if (failure === "browser" && releaseAttempts++ === 0) {
+          return false;
         }
-        resourceLive = false;
+        if (session.browser) {
+          session.browser.tab = undefined;
+        }
+        return true;
       });
       const { createdSessions, runtime } = createTestRuntime({
-        releaseBrowserTab: async (session) => {
-          if (!session.browser?.tab) {
-            return false;
-          }
-          session.browser.tab = undefined;
-          return true;
-        },
+        releaseBrowserTab,
         joinTransport: async ({ session, context }) => {
-          if (acquiredTab) {
-            session.browser = {
-              launched: true,
-              tab: { targetId: "partial-tab", openedByPlugin: true },
-            };
-          }
+          session.browser = {
+            launched: true,
+            tab: { targetId: "partial-tab", openedByPlugin: true },
+          };
           context.attachRuntimeHandles(session, { stop });
           throw joinError;
         },
       });
-      try {
-        await expect(
-          runtime.join({ url: "https://meeting.example/failed", agentId: "main" }),
-        ).rejects.toBe(joinError);
-        expect(resourceLive).toBe(true);
-        expect(stop).toHaveBeenCalledTimes(2);
-        const original = createdSessions[0];
-        expect(original).toBeDefined();
-        if (!original) {
-          throw new Error("Expected the original meeting session");
-        }
-        await expect(runtime.status(original.id)).resolves.toMatchObject({ found: true });
-        await expect(runtime.join({ url: original.url, agentId: "main" })).rejects.toBe(
-          cleanupError,
-        );
-        expect(createdSessions).toHaveLength(1);
-        expect(resourceLive).toBe(true);
-        expect(stop).toHaveBeenCalledTimes(3);
-        releaseStop = true;
-        await runtime.leave(original.id);
-        expect(resourceLive).toBe(false);
-        expect(stop).toHaveBeenCalledTimes(4);
-        await expect(runtime.status(original.id)).resolves.toMatchObject({ found: false });
-      } finally {
-        releaseStop = true;
-        if (resourceLive) {
-          await stop();
-        }
-      }
+      await expect(
+        runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
+      ).rejects.toBe(joinError);
+      expect(stop).toHaveBeenCalledTimes(failure === "transport" ? 2 : 1);
+      expect(releaseBrowserTab).toHaveBeenCalledTimes(failure === "browser" ? 2 : 1);
+      expect(createdSessions[0]).toMatchObject({ state: "ended", browser: { tab: undefined } });
+      expect(runtime.list()).toEqual([]);
     },
   );
 
-  it("retries unprocessed retained tabs after settlement rejects", async () => {
-    const settlementError = new Error("retained release rejected");
-    const oldStop = vi.fn(async () => {});
-    const replacementStop = vi.fn(async () => {});
-    const releaseOrder: string[] = [];
-    let oldReleaseAttempts = 0;
-    const releaseBrowserTab = vi.fn(async (session: TestSession) => {
-      releaseOrder.push(session.id);
-      if (session.id === "session-1" && oldReleaseAttempts++ === 0) {
-        throw settlementError;
+  it("retains a failed join with live cleanup for a later leave retry", async () => {
+    const joinError = new Error("transport setup failed");
+    const cleanupError = new Error("transport cleanup still pending");
+    let resourceLive = true;
+    let releaseStop = false;
+    const stop = vi.fn(async () => {
+      if (!releaseStop) {
+        throw cleanupError;
       }
-      if (session.browser) {
-        session.browser.tab = undefined;
-      }
-      return true;
+      resourceLive = false;
     });
     const { createdSessions, runtime } = createTestRuntime({
-      releaseBrowserTab,
+      releaseBrowserTab: async (session) => {
+        if (!session.browser?.tab) {
+          return false;
+        }
+        session.browser.tab = undefined;
+        return true;
+      },
       joinTransport: async ({ session, context }) => {
-        const first = session.id === "session-1";
         session.browser = {
           launched: true,
-          tab: {
-            targetId: first ? "retained-tab" : "replacement-tab",
-            openedByPlugin: true,
-          },
+          tab: { targetId: "partial-tab", openedByPlugin: true },
         };
-        context.attachRuntimeHandles(session, { stop: first ? oldStop : replacementStop });
-        return {};
+        context.attachRuntimeHandles(session, { stop });
+        throw joinError;
       },
     });
-    await runtime.join({ url: "https://meeting.example/room", agentId: "support" });
-
-    await expect(
-      runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
-    ).rejects.toBe(settlementError);
-
-    expect(oldStop).toHaveBeenCalledOnce();
-    expect(replacementStop).toHaveBeenCalledOnce();
-    expect(releaseOrder).toEqual(["session-1", "session-2", "session-1"]);
-    expect(createdSessions[0]?.browser?.tab).toBeUndefined();
-    expect(createdSessions[1]).toMatchObject({ state: "ended", browser: { tab: undefined } });
+    try {
+      await expect(
+        runtime.join({ url: "https://meeting.example/failed", agentId: "main" }),
+      ).rejects.toBe(joinError);
+      expect(resourceLive).toBe(true);
+      expect(stop).toHaveBeenCalledTimes(2);
+      const original = createdSessions[0];
+      expect(original).toBeDefined();
+      if (!original) {
+        throw new Error("Expected the original meeting session");
+      }
+      await expect(runtime.status(original.id)).resolves.toMatchObject({ found: true });
+      await expect(runtime.join({ url: original.url, agentId: "main" })).rejects.toBe(cleanupError);
+      expect(createdSessions).toHaveLength(1);
+      expect(resourceLive).toBe(true);
+      expect(stop).toHaveBeenCalledTimes(3);
+      releaseStop = true;
+      await runtime.leave(original.id);
+      expect(resourceLive).toBe(false);
+      expect(stop).toHaveBeenCalledTimes(4);
+      await expect(runtime.status(original.id)).resolves.toMatchObject({ found: false });
+    } finally {
+      releaseStop = true;
+      if (resourceLive) {
+        await stop();
+      }
+    }
   });
 
-  it("retries retained cleanup when stopping the previous session rejects", async () => {
-    const stopError = new Error("previous transport stop failed");
-    const settlementError = new Error("retained release rejected");
-    const oldStop = vi.fn(async () => {
-      throw stopError;
-    });
-    let releaseAttempts = 0;
-    const releaseBrowserTab = vi.fn(async (session: TestSession) => {
-      if (releaseAttempts++ === 0) {
-        throw settlementError;
+  it.each([false, true])(
+    "retries retained settlement after replacement fails (prior stop rejects: %s)",
+    async (stopFails) => {
+      const stopError = new Error("previous transport stop failed");
+      const settlementError = new Error("retained release rejected");
+      const oldStop = vi.fn(async () => {
+        if (stopFails) {
+          throw stopError;
+        }
+      });
+      const replacementStop = vi.fn(async () => {});
+      const releaseOrder: string[] = [];
+      let oldReleaseAttempts = 0;
+      const releaseBrowserTab = vi.fn(async (session: TestSession) => {
+        releaseOrder.push(session.id);
+        if (session.id === "session-1" && oldReleaseAttempts++ === 0) {
+          throw settlementError;
+        }
+        if (session.browser) {
+          session.browser.tab = undefined;
+        }
+        return true;
+      });
+      const joinTransport = vi.fn(
+        async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
+          const first = session.id === "session-1";
+          session.browser = {
+            launched: true,
+            tab: { targetId: first ? "retained-tab" : "replacement-tab", openedByPlugin: true },
+          };
+          context.attachRuntimeHandles(session, { stop: first ? oldStop : replacementStop });
+          return {};
+        },
+      );
+      const { createdSessions, runtime } = createTestRuntime({ releaseBrowserTab, joinTransport });
+      await runtime.join({ url: "https://meeting.example/room", agentId: "support" });
+      await expect(
+        runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
+      ).rejects.toBe(stopFails ? stopError : settlementError);
+      expect(oldStop).toHaveBeenCalledOnce();
+      expect(joinTransport).toHaveBeenCalledTimes(stopFails ? 1 : 2);
+      expect(releaseOrder).toEqual(
+        stopFails ? ["session-1", "session-1"] : ["session-1", "session-2", "session-1"],
+      );
+      expect(releaseBrowserTab).toHaveBeenCalledTimes(stopFails ? 2 : 3);
+      expect(createdSessions[0]).toMatchObject({ state: "ended", browser: { tab: undefined } });
+      if (!stopFails) {
+        expect(replacementStop).toHaveBeenCalledOnce();
+        expect(createdSessions[1]).toMatchObject({ state: "ended", browser: { tab: undefined } });
       }
-      if (session.browser) {
-        session.browser.tab = undefined;
-      }
-      return true;
-    });
-    const joinTransport = vi.fn(
-      async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "retained-tab", openedByPlugin: true },
-        };
-        context.attachRuntimeHandles(session, { stop: oldStop });
-        return {};
-      },
-    );
-    const { createdSessions, runtime } = createTestRuntime({
-      releaseBrowserTab,
-      joinTransport,
-    });
-    await runtime.join({ url: "https://meeting.example/room", agentId: "support" });
-
-    await expect(
-      runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
-    ).rejects.toBe(stopError);
-
-    expect(joinTransport).toHaveBeenCalledOnce();
-    expect(oldStop).toHaveBeenCalledOnce();
-    expect(releaseBrowserTab).toHaveBeenCalledTimes(2);
-    expect(createdSessions[0]).toMatchObject({ state: "ended", browser: { tab: undefined } });
-  });
+    },
+  );
 });
 
 describe("MeetingSessionRuntime leave cleanup", () => {
-  it.each([false, true])(
-    "allows same-URL retry after ordinary leave according to owned browser custody: %s",
-    async (acquiredTab) => {
-      let releaseAllowed = false;
-      let launches = 0;
-      const request = { url: "https://meeting.example/ordinary", agentId: "main" };
-      const { runtime } = createTestRuntime({
-        releaseBrowserTab: async (session) => {
-          if (!session.browser?.tab || !releaseAllowed) {
-            return false;
-          }
-          session.browser.tab = undefined;
-          return true;
-        },
-        joinTransport: async ({ session }) => {
-          launches += 1;
-          session.browser = {
-            launched: acquiredTab,
-            ...(acquiredTab
-              ? { tab: { targetId: `${session.id}-ordinary-tab`, openedByPlugin: true } }
-              : {}),
-          };
-          return {};
-        },
-      });
-      try {
-        const first = await runtime.join(request);
-        await expect(runtime.leave(first.session.id)).resolves.toMatchObject({
-          browserLeft: false,
-        });
-        const second = await runtime.join(request);
-        expect(second.session.id).not.toBe(first.session.id);
-        expect(second.session.state).toBe("active");
-        expect(launches).toBe(2);
-        if (acquiredTab) {
-          expect(first.session.browser?.tab).toBeDefined();
-          releaseAllowed = true;
-          await expect(runtime.leave(first.session.id)).resolves.toMatchObject({
-            browserLeft: true,
-          });
-        }
-      } finally {
-        releaseAllowed = true;
-        for (const session of runtime.list()) {
-          await runtime.leave(session.id);
-        }
-      }
-    },
-  );
-
   it("clears stale in-call health after confirmed browser departure", async () => {
     const { runtime } = createTestRuntime({
       releaseBrowserTab: async () => true,
@@ -813,75 +688,52 @@ describe("MeetingSessionRuntime leave cleanup", () => {
     expect(session.browser?.health?.speechBlockedMessage).toBeUndefined();
   });
 
-  it("retries a failed transport stop without repeating settled browser cleanup", async () => {
-    const stopError = new Error("transport stop failed");
-    const stop = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(stopError)
-      .mockResolvedValueOnce();
-    const releaseBrowserTab = vi.fn(async (session: TestSession) => {
-      if (session.browser) {
-        session.browser.tab = undefined;
+  it.each(["transport", "browser"])(
+    "retries failed %s cleanup without repeating settled work",
+    async (failure) => {
+      const stopError = new Error("transport stop failed");
+      const stop = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      if (failure === "transport") {
+        stop.mockRejectedValueOnce(stopError);
       }
-      return true;
-    });
-    const { runtime } = createTestRuntime({
-      releaseBrowserTab,
-      joinTransport: async ({ session, context }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "leave-tab", openedByPlugin: true },
-        };
-        context.attachRuntimeHandles(session, { stop });
-        return {};
-      },
-    });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "main",
-    });
-
-    await expect(runtime.leave(session.id)).rejects.toBe(stopError);
-    await expect(runtime.leave(session.id)).resolves.toMatchObject({
-      found: true,
-      browserLeft: true,
-    });
-
-    expect(stop).toHaveBeenCalledTimes(2);
-    expect(releaseBrowserTab).toHaveBeenCalledOnce();
-  });
-
-  it("retries browser cleanup that reported an unsuccessful leave", async () => {
-    const stop = vi.fn(async () => {});
-    const releaseBrowserTab = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    const { runtime } = createTestRuntime({
-      releaseBrowserTab,
-      joinTransport: async ({ session, context }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "retry-tab", openedByPlugin: true },
-        };
-        context.attachRuntimeHandles(session, { stop });
-        return {};
-      },
-    });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "main",
-    });
-
-    await expect(runtime.leave(session.id)).resolves.toMatchObject({
-      found: true,
-      browserLeft: false,
-    });
-    await expect(runtime.leave(session.id)).resolves.toMatchObject({
-      found: true,
-      browserLeft: true,
-    });
-
-    expect(stop).toHaveBeenCalledOnce();
-    expect(releaseBrowserTab).toHaveBeenCalledTimes(2);
-  });
+      const releaseBrowserTab = vi.fn(async (session: TestSession) => {
+        if (failure === "transport" && session.browser) {
+          session.browser.tab = undefined;
+        }
+        return true;
+      });
+      if (failure === "browser") {
+        releaseBrowserTab.mockResolvedValueOnce(false);
+      }
+      const { runtime } = createTestRuntime({
+        releaseBrowserTab,
+        joinTransport: async ({ session, context }) => {
+          session.browser = {
+            launched: true,
+            tab: { targetId: "leave-tab", openedByPlugin: true },
+          };
+          context.attachRuntimeHandles(session, { stop });
+          return {};
+        },
+      });
+      const { session } = await runtime.join({
+        url: "https://meeting.example/room",
+        agentId: "main",
+      });
+      const leaving = runtime.leave(session.id);
+      if (failure === "transport") {
+        await expect(leaving).rejects.toBe(stopError);
+      } else {
+        await expect(leaving).resolves.toMatchObject({ found: true, browserLeft: false });
+      }
+      await expect(runtime.leave(session.id)).resolves.toMatchObject({
+        found: true,
+        browserLeft: true,
+      });
+      expect(stop).toHaveBeenCalledTimes(failure === "transport" ? 2 : 1);
+      expect(releaseBrowserTab).toHaveBeenCalledTimes(failure === "browser" ? 2 : 1);
+    },
+  );
 });
 
 describe("MeetingSessionRuntime speech readiness", () => {
@@ -937,26 +789,19 @@ describe.each([
     admissionReason: "teams-admission-required",
     preserveTrackedBrowser: false,
   },
-  {
-    title: "Slack",
-    plugin: slackHuddlesPlugin,
-    url: "https://app.slack.com/huddle/T0123ABCD/C0123ABCD",
-    tabId: "slack-tab",
-    nodeCommand: "slackhuddles.chrome",
-    admissionReason: "slack-admission-required",
-    preserveTrackedBrowser: true,
-  },
 ])("$title browser meeting audio", (entry) => {
   const { plugin } = entry;
-  describe("startup cleanup", () => {
-    defineMeetingChromeCleanupTests({
-      ...entry,
-      resolveConfig: plugin.config.resolveConfig,
-      launchInChrome: plugin.chrome.launchInChrome,
-      launchOnNode: plugin.chrome.launchOnNode,
-      engineMocks,
+  if (plugin === zoomMeetingsPlugin) {
+    describe("startup cleanup", () => {
+      defineMeetingChromeCleanupTests({
+        ...entry,
+        resolveConfig: plugin.config.resolveConfig,
+        launchInChrome: plugin.chrome.launchInChrome,
+        launchOnNode: plugin.chrome.launchOnNode,
+        engineMocks,
+      });
     });
-  });
+  }
 
   describe("node realtime recovery", () => {
     const testState = useMeetingTestState(createOpenClawTestState);

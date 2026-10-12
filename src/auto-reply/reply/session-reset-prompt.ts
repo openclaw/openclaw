@@ -50,22 +50,19 @@ export async function resolveBareResetBootstrapFileAccess(params: {
   if (!cfg) {
     return false;
   }
-  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+  const runtimeModelParams = {
     cfg,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
-  });
+  };
+  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext(runtimeModelParams);
   try {
-    return acquired.run((runtimeModelContext) => {
-      const inventory = resolveEffectiveToolInventory({
-        cfg,
-        agentId: params.agentId,
+    return await acquired.run(async (runtimeModelContext) => {
+      const inventory = await resolveEffectiveToolInventory({
+        ...runtimeModelParams,
         sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        modelProvider: params.modelProvider,
-        modelId: params.modelId,
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
       });

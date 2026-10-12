@@ -16,34 +16,22 @@ export async function load(
     return restored;
   }
   const requestedLocation = newSessionModelLocationFromSearch(search);
-  const requestedAgentId = requestedLocation.agentId.trim();
   let groupCwd = "";
   let groupWorktree = false;
   let groupStatus: NewSessionRouteData["groupStatus"];
-  let groupCatalogGeneration: number | undefined;
-  let groupDefaultsStatus: NewSessionRouteData["groupDefaultsStatus"];
   if (requestedLocation.group) {
-    const startedGeneration = context.sessions.groupsGeneration();
     const settings = await context.sessions.groupsLoad();
-    groupCatalogGeneration = context.sessions.groupsGeneration();
-    groupDefaultsStatus = context.sessions.groupsStatus();
-    const currentSettings =
-      startedGeneration === groupCatalogGeneration && groupDefaultsStatus === "ready"
-        ? settings
-        : null;
-    const group = currentSettings?.find((candidate) => candidate.name === requestedLocation.group);
-    groupStatus = currentSettings === null ? "unavailable" : group ? "resolved" : "missing";
+    const group = settings?.find((candidate) => candidate.name === requestedLocation.group);
+    groupStatus = settings === null ? "unavailable" : group ? "resolved" : "missing";
     groupCwd = group?.cwd ?? "";
     groupWorktree = group?.worktree === true;
   }
   const route: NewSessionRouteData = {
     ...requestedLocation,
-    requestedAgentId,
+    requestedAgentId: requestedLocation.agentId,
     groupStatus,
     groupCwd,
     groupWorktree,
-    groupCatalogGeneration,
-    groupDefaultsStatus,
     catalogLabel: "",
     startTerminal: false,
   };
@@ -76,10 +64,9 @@ export async function load(
   ) {
     return unresolved();
   }
-  const agentsList = loadedAgentsList;
-  const availableAgents = listSelectableAgents(agentsList?.agents ?? []);
-  const fallbackAgentId = availableAgents.some((agent) => agent.id === agentsList.defaultId)
-    ? agentsList.defaultId
+  const availableAgents = listSelectableAgents(loadedAgentsList.agents);
+  const fallbackAgentId = availableAgents.some((agent) => agent.id === loadedAgentsList.defaultId)
+    ? loadedAgentsList.defaultId
     : availableAgents[0]?.id;
   const agentId = fallbackAgentId
     ? resolveAgentId(requestedLocation, availableAgents, fallbackAgentId)

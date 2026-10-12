@@ -13,6 +13,7 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
+  WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
 import {
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
@@ -23,22 +24,27 @@ import {
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import { hasCloudWorkerSetupDeviceBinding } from "./device-pairing-cloud-worker.js";
 import { devicePairingMutation } from "./device-pairing-dispatch.worker.js";
-import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
+import {
+  requestDevicePairingMutationAdmission,
+  withDevicePairingMutationAdmission,
+} from "./device-pairing-mutation.worker.js";
 import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
 import {
   confirmDevicePairSetupCompletionDeliveryInTransaction,
   consumeDeviceBootstrapTokenWithSetupCompletionInTransaction,
+  hasExpiredDevicePairSetupCompletionsInDatabase,
   loadDeviceBootstrapTokenRecords,
   withDevicePairingStoreDatabase,
   loadDevicePairSetupCompletionRecord,
   persistDeviceBootstrapTokenRecords as persistState,
-  pruneExpiredDevicePairSetupCompletionRecords,
+  pruneExpiredDevicePairSetupCompletionsInDatabase,
 } from "./device-pairing-store.js";
 import type {
   DeviceBootstrapTokenRecord,
   DevicePairSetupCompletionRecord,
 } from "./device-pairing.types.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
+import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 
 // Outlive generic setup credentials; cloud-worker completion also binds durably
 // on its environment row, independently of this retained delivery outcome.
@@ -83,27 +89,17 @@ function bootstrapProfileSatisfiesProfile(params: {
   actualProfile: DeviceBootstrapProfile;
   requiredProfile: DeviceBootstrapProfile;
 }): boolean {
-  for (const requiredRole of params.requiredProfile.roles) {
-    if (!params.actualProfile.roles.includes(requiredRole)) {
-      return false;
-    }
-    const requiredScopes = resolveBootstrapProfileScopesForRole(
-      requiredRole,
-      params.requiredProfile.scopes,
-      params.requiredProfile.purpose,
-    );
-    if (
-      requiredScopes.length > 0 &&
-      !bootstrapProfileAllowsRequest({
-        allowedProfile: params.actualProfile,
-        requestedRole: requiredRole,
-        requestedScopes: requiredScopes,
-      })
-    ) {
-      return false;
-    }
-  }
-  return true;
+  return params.requiredProfile.roles.every((role) =>
+    bootstrapProfileAllowsRequest({
+      allowedProfile: params.actualProfile,
+      requestedRole: role,
+      requestedScopes: resolveBootstrapProfileScopesForRole(
+        role,
+        params.requiredProfile.scopes,
+        params.requiredProfile.purpose,
+      ),
+    }),
+  );
 }
 
 function normalizeBootstrapPublicKey(publicKey: string): string {
@@ -120,12 +116,19 @@ function normalizeBootstrapPublicKey(publicKey: string): string {
 
 function loadState(nowMs: number): DeviceBootstrapStateFile {
   const state = loadDeviceBootstrapTokenRecords();
+  const now = asDateTimestampMs(nowMs) ?? 0;
   for (const [token, record] of Object.entries(state)) {
-    if ((asDateTimestampMs(nowMs) ?? 0) > resolveDeviceBootstrapTokenExpiresAtMs(record)) {
+    if (now > resolveDeviceBootstrapTokenExpiresAtMs(record)) {
       delete state[token];
     }
   }
   return state;
+}
+
+function findBootstrapToken(state: DeviceBootstrapStateFile, providedToken: string) {
+  return Object.entries(state).find(([, candidate]) =>
+    verifyPairingToken(providedToken, candidate.token),
+  );
 }
 
 function issueDeviceBootstrapTokenRecord(
@@ -220,7 +223,6 @@ function consumeDeviceBootstrapTokenWithSetupCompletion(
   });
 }
 
-/** Remove every outstanding bootstrap token from the pairing state file. */
 function clearDeviceBootstrapTokens(params: { nowMs: number }): { removed: number } {
   const state = loadState(params.nowMs);
   const removed = Object.keys(state).length;
@@ -238,9 +240,7 @@ function revokeDeviceBootstrapToken(
     return { removed: false };
   }
   const state = loadState(params.nowMs);
-  const found = Object.entries(state).find(([, candidate]) =>
-    verifyPairingToken(providedToken, candidate.token),
-  );
+  const found = findBootstrapToken(state, providedToken);
   if (!found) {
     return { removed: false };
   }
@@ -318,9 +318,7 @@ function redeemDeviceBootstrapTokenProfile(params: {
     return { recorded: false, fullyRedeemed: false };
   }
   const state = loadState(params.nowMs);
-  const found = Object.entries(state).find(([, candidate]) =>
-    verifyPairingToken(providedToken, candidate.token),
-  );
+  const found = findBootstrapToken(state, providedToken);
   if (!found) {
     return { recorded: false, fullyRedeemed: false };
   }
@@ -379,9 +377,7 @@ function verifyDeviceBootstrapToken(
   if (!providedToken) {
     return { ok: false, reason: "bootstrap_token_invalid" };
   }
-  const found = Object.entries(state).find(([, candidate]) =>
-    verifyPairingToken(providedToken, candidate.token),
-  );
+  const found = findBootstrapToken(state, providedToken);
   if (!found) {
     return { ok: false, reason: "bootstrap_token_invalid" };
   }
@@ -459,9 +455,7 @@ export function getBoundDeviceBootstrapContextFromRecords(
   if (!providedToken) {
     return null;
   }
-  const found = Object.entries(state).find(([, candidate]) =>
-    verifyPairingToken(providedToken, candidate.token),
-  );
+  const found = findBootstrapToken(state, providedToken);
   if (!found) {
     return null;
   }
@@ -506,9 +500,20 @@ export const deviceBootstrapOperations = {
   "bootstrap.readCompletion": devicePairingMutation((input: { setupId: string; nowMs: number }) =>
     loadDevicePairSetupCompletionRecord(input.setupId, input.nowMs),
   ),
-  "bootstrap.prune": devicePairingMutation((input: { nowMs: number }) =>
-    pruneExpiredDevicePairSetupCompletionRecords(input.nowMs),
-  ),
+  "bootstrap.prune": (input: { nowMs: number }, { open, write }) => {
+    const database = open();
+    const due = runSqliteReadOperationSync(database.db, () =>
+      hasExpiredDevicePairSetupCompletionsInDatabase(database.db, input.nowMs),
+    );
+    if (!due) {
+      return 0;
+    }
+    return write(({ db }) =>
+      withDevicePairingMutationAdmission(() =>
+        pruneExpiredDevicePairSetupCompletionsInDatabase(db, input.nowMs),
+      ),
+    );
+  },
   "bootstrap.clear": devicePairingMutation(clearDeviceBootstrapTokens),
   "bootstrap.revoke": devicePairingMutation(
     (input: Parameters<typeof revokeDeviceBootstrapToken>[0], { database }) =>
@@ -517,6 +522,6 @@ export const deviceBootstrapOperations = {
   "bootstrap.restore": devicePairingMutation(restoreGenericDeviceBootstrapToken),
   "bootstrap.redeem": devicePairingMutation(redeemDeviceBootstrapTokenProfile),
   "bootstrap.verify": devicePairingMutation(verifyDeviceBootstrapToken),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
 export type DeviceBootstrapOperations = WorkerOperations<typeof deviceBootstrapOperations>;
