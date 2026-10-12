@@ -12,6 +12,7 @@ import * as preparationTiming from "./preparation-timing.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
+// mock-isolation: exercise Btrfs selection on every host without native filesystem probes.
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
 
 const execFileAsync = promisify(execFile);
