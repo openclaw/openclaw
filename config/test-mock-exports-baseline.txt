@@ -7135,7 +7135,6 @@
 ["src/gateway/server-maintenance.telemetry.test.ts","../infra/outbound/delivery-queue-media-spool.js","dee3a2620b0bb928366938beb1b4925dd7b74421b8dc5b351245b52057201087",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","../infra/telemetry.js","c2a0e43bc1fceb877dfcb882832d8eceb8d0d381ada53adc903f5ea8e242391d",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","../media/store.js","b2b25bad1973aa63dba575502338cbec9710c7100860904b7241febe7578ae4e",1]
-["src/gateway/server-maintenance.telemetry.test.ts","../plugin-state/plugin-state-worker-client.js","22c2abd5624a05e74784356ec104f4470083f888e1d853c9cb94fe44b0f09020",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","./chat-abort.js","b025828acde25bc18c21cdf68bb814f994be7751e3565692acbf12d6a0e77975",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","./server-methods/session-active-runs.js","4762dc0a9243193c540ed67870afe774e67df48a8534135b0136aede19aab590",1]
 ["src/gateway/server-maintenance.telemetry.test.ts","./server/health-state.js","9006fb3bf77d6e6473d8c2b0bdd92bdd1500930c32de8d151f40d27711583357",1]
