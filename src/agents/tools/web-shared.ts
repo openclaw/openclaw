@@ -138,7 +138,17 @@ function sniffCharset(contentType: string | null, bytes: Uint8Array): string | u
   if (declaredCharset || !shouldSniffDocumentCharset(contentType)) {
     return declaredCharset;
   }
+  const documentCharset = sniffDocumentCharset(bytes);
+  try {
+    return documentCharset && new TextDecoder(documentCharset).encoding.startsWith("utf-16")
+      ? "utf-8"
+      : documentCharset;
+  } catch {
+    return documentCharset;
+  }
+}
 
+function sniffDocumentCharset(bytes: Uint8Array): string | undefined {
   const head = latin1Decoder.decode(
     bytes.subarray(0, Math.min(bytes.byteLength, RESPONSE_CHARSET_SCAN_BYTES)),
   );
