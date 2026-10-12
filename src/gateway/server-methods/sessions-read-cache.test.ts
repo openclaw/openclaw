@@ -378,9 +378,15 @@ describe("resident sessions.list", () => {
       const request = { archived: "all" as const, limit: 100, includeLastMessage: true };
       const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
 
+      const initialBackfill = observeSessionRowBackfill(["agent:main:active"]);
       const first = await listSessions({ client, context, request });
+      await initialBackfill;
       clock.mockReturnValue(60_401);
 
+      const refreshedBackfill = observeSessionRowBackfill(
+        ["agent:main:active"],
+        getSessionRowProjection(context),
+      );
       await persistSessionTranscriptTurn(
         { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
         {
@@ -391,14 +397,13 @@ describe("resident sessions.list", () => {
       emitSessionTranscriptUpdate({
         target: { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
       });
-      await vi.waitFor(() =>
-        expect(
-          getSessionRowProjection(context)?.snapshot(
-            { agentId: "main", key: "agent:main:active" },
-            { includeLastMessage: true },
-          ).row?.lastMessagePreview,
-        ).toBe("Fresh committed preview"),
-      );
+      await refreshedBackfill;
+      expect(
+        getSessionRowProjection(context)?.snapshot(
+          { agentId: "main", key: "agent:main:active" },
+          { includeLastMessage: true },
+        ).row?.lastMessagePreview,
+      ).toBe("Fresh committed preview");
       const refreshed = await listSessions({ client, context, request });
       expect(
         first.sessions.find((row) => row.key === "agent:main:active")?.lastMessagePreview,
