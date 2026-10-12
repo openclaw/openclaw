@@ -236,6 +236,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
         buildProvider,
       });
       expect(buildProvider).toHaveBeenCalledExactlyOnceWith(provider.baseUrl, {
+        onListedModels: expect.any(Function),
         discoveryMode: "strict",
       });
       expect(result).toMatchObject({ provider: { apiKey: "ollama-local" } });
@@ -256,6 +257,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
         outcomes: [{ provider: "ollama", status: "ready" }],
       });
       expect(buildProvider).toHaveBeenCalledExactlyOnceWith(baseUrl, {
+        onListedModels: expect.any(Function),
         discoveryMode: "strict",
         apiKey: "test-key",
       });
@@ -277,6 +279,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
       outcomes: [{ provider: "ollama", status: "ready" }],
     });
     expect(buildProvider).toHaveBeenCalledExactlyOnceWith("http://localhost:11434", {
+      onListedModels: expect.any(Function),
       discoveryMode: "strict",
     });
   });
@@ -314,6 +317,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
         },
       );
       expect(buildProvider).toHaveBeenCalledWith(baseUrl, {
+        onListedModels: expect.any(Function),
         discoveryMode: "strict",
         apiKey: "resolved-ollama-discovery-token",
       });
@@ -346,6 +350,7 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
         },
       );
       expect(buildProvider).toHaveBeenCalledWith(baseUrl, {
+        onListedModels: expect.any(Function),
         discoveryMode: "strict",
         apiKey: secretValue,
       });

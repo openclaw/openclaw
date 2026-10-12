@@ -29,6 +29,10 @@ export function readLiveModelCatalogId(row: unknown): string | undefined {
   return readLiveModelCatalogStringField(record, "id");
 }
 
+export function readOpenAICompatibleLiveModelId(row: unknown): string | undefined {
+  return readLiveModelCatalogStringField(row, ["id", "model", "model_name", "modelName"]);
+}
+
 export function readLiveModelCatalogStringField(
   row: unknown,
   keys: string | readonly string[],
@@ -241,7 +245,7 @@ function buildOpenAICompatibleLiveModel(
   acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig | undefined {
   const record = asOptionalRecord(row);
-  const id = readLiveModelCatalogStringField(record, ["id", "model", "model_name", "modelName"]);
+  const id = readOpenAICompatibleLiveModelId(record);
   if (!record || !id || !isSafeLiveModelId(id)) {
     return undefined;
   }

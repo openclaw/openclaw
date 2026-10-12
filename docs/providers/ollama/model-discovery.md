@@ -8,6 +8,12 @@ title: "Ollama model discovery"
 sidebarTitle: "Model discovery"
 ---
 
+A successful `/api/tags` listing also checks configured model names. If
+`qwen3:8bb` is configured but absent from the server, `openclaw models list` warns
+to pull it or fix the name. Doctor and `models status` show the prepared Gateway
+warning too. Omitted `:latest` tags remain accepted; an offline server produces no
+missing-model warning. These warnings never reject a model declaration.
+
 ## Model discovery (implicit provider)
 
 When `OLLAMA_API_KEY` (or an auth profile) is set and neither
