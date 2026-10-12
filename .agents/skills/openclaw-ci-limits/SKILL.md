@@ -360,8 +360,13 @@ These are intentionally guarded by the `ci-workflow-guards`,
   four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
   SDK preparation and 126 compiles before final validation/canary/cleanup.
   One completed both compile and canary but still exceeded the job deadline.
-  Other additional-check groups retain 20 minutes; compiler concurrency,
-  complete inventory, receipt guards, canary, and routing remain unchanged.
+  Compiler concurrency, complete inventory, receipt guards, canary, and routing
+  remain unchanged.
+- The Plugin SDK API diff row also has a 30-minute whole-job budget. Two hosted
+  runs spent 722 and 725 seconds rendering the base, then hit the former
+  20-minute deadline during the candidate render. Keep both complete revision
+  renders and the existing eight-CPU/24-GiB floor for two render workers;
+  smaller hosts remain serial. Other additional-check groups retain 20 minutes.
 - Current fast plugin/channel contract families each share one checkout/setup.
   Their two weighted process envelopes run sequentially with unchanged include
   lists and package commands; channel invocations retain four project slots and
