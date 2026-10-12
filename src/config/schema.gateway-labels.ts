@@ -14,6 +14,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.experimental": "Experimental Control UI Features",
   "gateway.controlUi.experimental.customPlugins": "Custom Plugin UI",
+  "gateway.controlUi.experimental.chatBubbles": "Speech Bubbles",
   "gateway.controlUi.environment": "Control UI Environment",
   "gateway.controlUi.environment.label": "Control UI Environment Label",
   "gateway.controlUi.environment.color": "Control UI Environment Color",

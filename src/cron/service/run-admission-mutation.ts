@@ -224,6 +224,7 @@ export async function releaseReservedCronRuns(
   const terminal = policy.kind === "general" ? policy.terminal : undefined;
   const requireCurrentReceipt = policy.kind === "general" && policy.requireCurrentReceipt;
   const retained = terminal ? retainCronRunReceiptSettlement(terminal.handle) : undefined;
+  let notifications: Parameters<typeof runPostPersistCronNotifications>[1];
   try {
     await runCronRuntimeMutation({
       context,
@@ -306,7 +307,7 @@ export async function releaseReservedCronRuns(
           noteCronJobsStoreCommit(storeKey);
         }
         try {
-          runPostPersistCronNotifications(state, committed.notifications);
+          notifications = committed.notifications;
           applyCronRuntimeRowsToState(state, committed.jobs);
           for (const entry of committed.logs) {
             state.deps.log[entry.level](entry.fields, entry.message);
@@ -323,6 +324,7 @@ export async function releaseReservedCronRuns(
         params.onSettled(outcome);
       },
     });
+    await runPostPersistCronNotifications(state, notifications);
   } finally {
     retained?.release();
   }

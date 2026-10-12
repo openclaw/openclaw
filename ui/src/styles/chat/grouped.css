@@ -1929,12 +1929,29 @@ button.chat-reply-attribution__target:disabled {
   --chat-message-column-max: 88%;
 }
 
-.chat--bubbles .chat-group.user .chat-bubble {
-  border-radius: 18px 18px 4px 18px;
+.chat--bubbles .chat-group-messages {
+  --chat-message-gap: 8px;
 }
 
-.chat--bubbles .chat-group.user.chat-group--peer .chat-bubble {
-  border-radius: 18px 18px 18px 4px;
+/* The renderer marks the first visible message across native and interop ranges.
+   Activity and reasoning-only rows never own the avatar-facing corner. */
+.chat--bubbles .chat-bubble {
+  --chat-bubble-top-left: 18px;
+  --chat-bubble-top-right: 18px;
+}
+
+.chat--bubbles .chat-bubble--first {
+  --chat-bubble-top-left: 4px;
+}
+
+.chat--bubbles .chat-group.user:not(.chat-group--peer) .chat-bubble--first {
+  --chat-bubble-top-left: 18px;
+  --chat-bubble-top-right: 4px;
+}
+
+.chat--bubbles .chat-group:is(.user, .chat-group--forwarded) .chat-bubble,
+.chat--bubbles .chat-group.user .chat-bubble--with-images .chat-text {
+  border-radius: var(--chat-bubble-top-left, 18px) var(--chat-bubble-top-right, 18px) 18px 18px;
 }
 
 .chat.chat--bubbles
@@ -1942,7 +1959,7 @@ button.chat-reply-attribution__target:disabled {
   .chat-bubble:not(.chat-bubble--tool-shell) {
   padding: 14px 18px;
   border: 1px solid var(--border);
-  border-radius: 18px 18px 18px 4px;
+  border-radius: var(--chat-bubble-top-left, 18px) var(--chat-bubble-top-right, 18px) 18px 18px;
   background: var(--bg-elevated);
   box-shadow: none;
 }
@@ -1970,17 +1987,36 @@ button.chat-reply-attribution__target:disabled {
 .chat-activity-group--bubble > .chat-activity-group__summary {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 6px;
   width: auto;
-  min-width: 60px;
-  min-height: 44px;
-  padding: 12px 16px;
-  border: 1px solid var(--border);
-  border-radius: 18px 18px 18px 4px;
-  background: var(--bg-elevated);
+  max-width: 100%;
+  min-height: 28px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
+  font-size: 12px;
   list-style: none;
   cursor: var(--cursor-action);
+}
+
+.chat-bubble-activity--working > .chat-bubble-activity__summary {
+  min-width: 60px;
+  min-height: 40px;
+  justify-content: center;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-elevated);
+}
+
+.chat.chat--bubbles .chat-group.assistant .chat-bubble--activity-only {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .chat-bubble-activity__summary::-webkit-details-marker {

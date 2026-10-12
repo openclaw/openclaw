@@ -695,14 +695,19 @@ describe("SQLite exact transcript suffix replacement", () => {
   });
 
   it("reparents a retained compressed opaque suffix while preserving payload and rollback", async () => {
-    const tail = {
+    const plannedTail = {
       type: "custom",
       id: "opaque",
       parentId: "user",
+      customType: "openclaw.cache-ttl",
+      display: true,
+      message: { role: "toolResult" },
+    };
+    const tail = {
+      ...plannedTail,
       data: { payload: "opaque retained 🦞 ".repeat(4096) },
     };
     const events = [rewriteEvents[0], rewriteEvents[1], tail];
-    const plannedTail = { type: "custom", id: "opaque", parentId: "user" };
     const expected = [rewriteEvents[0], rewriteEvents[1], plannedTail];
     const next = [rewriteEvents[0], { ...plannedTail, parentId: "root" }];
     const retainedIds = [tail.id];
@@ -731,6 +736,15 @@ describe("SQLite exact transcript suffix replacement", () => {
         before.raw[0],
         { ...before.raw[2], seq: 1, event_json: retainedJson },
       ]);
+      expect(result.storage[1]).toMatchObject({
+        navigation_type: "custom",
+        navigation_custom_type: "openclaw.cache-ttl",
+        navigation_display: 1,
+        message_role: "toolResult",
+        navigation_last_type: "custom",
+        navigation_last_custom_type: "openclaw.cache-ttl",
+        navigation_valid: 1,
+      });
       expect(result).toMatchObject({
         identities: [
           expect.objectContaining({ seq: 0 }),

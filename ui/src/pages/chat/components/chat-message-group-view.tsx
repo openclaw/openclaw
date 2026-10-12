@@ -102,6 +102,10 @@ function PreparedMessage(props: {
     }
     return {
       ...props.options,
+      firstBubbleKey:
+        props.options.firstBubbleKey !== undefined
+          ? props.options.firstBubbleKey
+          : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
       entryId: persistedMessageEntryId(props.item.message) ?? undefined,
       entryRef: props.options.entryRefFor?.(props.item.key),

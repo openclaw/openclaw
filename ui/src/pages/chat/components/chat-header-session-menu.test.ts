@@ -66,6 +66,7 @@ async function mountMenu({
     | "onboarding"
     | "preferencesBrowserOnly"
     | "compact"
+    | "bubbleModeEnabled"
     | "copyMarkdownAllowed"
     | "splitAllowed"
     | "panelActions"
@@ -343,6 +344,7 @@ describe("chat header session menu", () => {
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const menu = await mountMenu({
       onboarding,
+      bubbleModeEnabled: true,
       preferencesBrowserOnly: !onboarding,
       session: { target: { key: "agent:main:test" } },
       onSettingsChange,
@@ -380,7 +382,12 @@ describe("chat header session menu", () => {
             [{ chatShowThinking: false }],
             [{ chatShowToolCalls: false }],
             [{ chatPersistCommentary: false }],
-            [{ chatBubbleSessionKeys: ["agent:main:test"] }],
+            [
+              {
+                chatBubbleSessionKeys: ["agent:main:test"],
+                chatBubbleDisabledSessionKeys: undefined,
+              },
+            ],
           ],
     );
   });
@@ -389,6 +396,7 @@ describe("chat header session menu", () => {
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const menu = await mountMenu({
       compact,
+      bubbleModeEnabled: true,
       session: { target: { key: "agent:main:other" } },
       onSettingsChange,
     });
@@ -402,6 +410,7 @@ describe("chat header session menu", () => {
     select(menu, "view:speech-bubbles");
     expect(onSettingsChange).toHaveBeenLastCalledWith({
       chatBubbleSessionKeys: ["agent:main:main", "agent:main:other"],
+      chatBubbleDisabledSessionKeys: undefined,
     });
     menu.settings = { ...menu.settings, ...onSettingsChange.mock.calls[0]![0] };
     await menu.updateComplete;
@@ -416,6 +425,7 @@ describe("chat header session menu", () => {
     select(menu, "view:speech-bubbles");
     expect(onSettingsChange).toHaveBeenLastCalledWith({
       chatBubbleSessionKeys: ["agent:main:main"],
+      chatBubbleDisabledSessionKeys: ["agent:main:other"],
     });
   });
 
@@ -514,13 +524,7 @@ describe("chat header session menu", () => {
         ]);
         await navigate("back");
         await navigate("open-view");
-        expect(rootLabels(menu)).toEqual([
-          "Back",
-          "Reasoning",
-          "Tool calls",
-          "Keep commentary",
-          "Speech bubbles",
-        ]);
+        expect(rootLabels(menu)).toEqual(["Back", "Reasoning", "Tool calls", "Keep commentary"]);
         expect(menu.querySelector("[slot='submenu']")).toBeNull();
         select(menu, "view:reasoning");
         expect(onSettingsChange).toHaveBeenCalledWith({ chatShowThinking: false });

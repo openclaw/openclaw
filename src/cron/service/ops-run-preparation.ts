@@ -181,7 +181,7 @@ async function skipInvalidPersistedManualRun(params: {
       );
       for (const notification of outcome.notifications) {
         historySource.assertCurrent();
-        runPostPersistCronNotifications(params.state, [notification]);
+        await runPostPersistCronNotifications(params.state, [notification]);
       }
       historySource.assertCurrent();
       armTimer(params.state);

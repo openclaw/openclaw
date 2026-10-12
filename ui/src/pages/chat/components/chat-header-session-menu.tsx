@@ -78,6 +78,8 @@ export type ChatHeaderSessionMenuProps = {
   onboarding: boolean;
   preferencesBrowserOnly: boolean;
   compact: boolean;
+  bubbleModeEnabled: boolean;
+  mainKey: string;
   copyMarkdownAllowed: boolean;
   splitAllowed: boolean;
   settings: UiSettings;
@@ -198,13 +200,17 @@ export function ChatHeaderSessionMenuContent(
         props.onSettingsChange({
           chatPersistCommentary: props.settings.chatPersistCommentary === false,
         });
-      } else if (setting === "speech-bubbles" && props.session.target?.key) {
+      } else if (
+        setting === "speech-bubbles" &&
+        props.bubbleModeEnabled &&
+        props.session.target?.key
+      ) {
         const sessionKey = props.session.target.key;
         props.onSettingsChange(
           setChatBubbleMode(
             props.settings,
             sessionKey,
-            !isChatBubbleMode(props.settings, sessionKey),
+            !isChatBubbleMode(props.settings, sessionKey, props.bubbleModeEnabled, props.mainKey),
           ),
         );
       }
@@ -382,12 +388,19 @@ export function ChatHeaderSessionMenuContent(
           label={t("chat.view.commentary")}
           checked={props.settings.chatPersistCommentary !== false}
         />
-        <ViewItem
-          inline={view.inline}
-          value="speech-bubbles"
-          label={t("chat.view.speechBubbles")}
-          checked={isChatBubbleMode(props.settings, props.session.target?.key ?? "")}
-        />
+        <Show when={props.bubbleModeEnabled}>
+          <ViewItem
+            inline={view.inline}
+            value="speech-bubbles"
+            label={t("chat.view.speechBubbles")}
+            checked={isChatBubbleMode(
+              props.settings,
+              props.session.target?.key ?? "",
+              true,
+              props.mainKey,
+            )}
+          />
+        </Show>
         <Show when={props.preferencesBrowserOnly}>
           <div slot={view.inline ? undefined : "submenu"} class="session-menu__info" role="note">
             {t("quickSettings.personal.browserOnly")}
@@ -571,6 +584,8 @@ export const ChatHeaderSessionMenu = defineSolidBridge<ChatHeaderSessionMenuProp
       onboarding: { default: false, attribute: false },
       preferencesBrowserOnly: { default: false, attribute: false },
       compact: { default: false, attribute: false },
+      bubbleModeEnabled: { default: false, attribute: false },
+      mainKey: { default: "main", attribute: false },
       copyMarkdownAllowed: { default: false, attribute: false },
       splitAllowed: { default: false, attribute: false },
       settings: { default: EMPTY_SETTINGS, attribute: false },

@@ -1,6 +1,7 @@
 // Mattermost tests cover model picker plugin behavior.
 import path from "node:path";
 import {
+  getSessionEntryAsync,
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -192,6 +193,7 @@ describe("Mattermost model picker", () => {
           sessionKey: "agent:support:main",
         },
         data: providerData,
+        sessionEntry: undefined,
       }),
     ).toBe("openai/gpt-5");
   });
@@ -257,7 +259,11 @@ describe("Mattermost model picker", () => {
           sessionKey: directSessionKey,
         },
         data,
-        readConsistency: "latest",
+        sessionEntry: await getSessionEntryAsync({
+          agentId: "support",
+          storePath: supportStorePath,
+          sessionKey: directSessionKey,
+        }),
       }),
     ).toBe("openai/gpt-5");
     expect(
@@ -268,7 +274,11 @@ describe("Mattermost model picker", () => {
           sessionKey: childSessionKey,
         },
         data,
-        readConsistency: "latest",
+        sessionEntry: await getSessionEntryAsync({
+          agentId: "support",
+          storePath: supportStorePath,
+          sessionKey: childSessionKey,
+        }),
       }),
     ).toBe("anthropic/claude-sonnet-4-5");
     expect(
@@ -279,7 +289,7 @@ describe("Mattermost model picker", () => {
           sessionKey: `${parentSessionKey}:thread:new-thread`,
         },
         data,
-        readConsistency: "latest",
+        sessionEntry: undefined,
       }),
     ).toBe("anthropic/claude-sonnet-4-5");
   });

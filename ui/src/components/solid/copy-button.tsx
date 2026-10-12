@@ -41,7 +41,3 @@ export function CopyButton(props: CopyButtonProps): SolidJSX.Element {
     </For>
   );
 }
-
-export function CopyAsMarkdownButton(props: { markdown: string }) {
-  return <CopyButton text={props.markdown} bare />;
-}

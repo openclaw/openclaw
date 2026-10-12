@@ -551,6 +551,13 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       config: SessionDiscussionPanelConfig;
     }
   >();
+  protected presentationUserId: string | null = null;
+  protected readonly retrySessionPlacementStartup = () => {
+    const sessionKey = this.state?.sessionKey;
+    if (sessionKey) {
+      this.context.placementStartup.retry(sessionKey);
+    }
+  };
   protected headerRenameInitialValue = "";
   @litState({ hasChanged: (next, previous) => Boolean(next) !== Boolean(previous) })
   protected headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null =
@@ -641,6 +648,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
             notify();
           }),
       )
+      .watchStore(() => this.context?.config)
       .watchStore(() => this.context?.theme)
       .watchStore(() => this.context?.plugins)
       .watch(

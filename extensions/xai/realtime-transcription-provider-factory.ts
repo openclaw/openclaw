@@ -1,4 +1,4 @@
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -9,8 +9,9 @@ import { normalizeXaiRealtimeBaseUrl } from "./realtime-voice-config.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
 type XaiTranscriptionRuntime = Pick<
-  PluginCapabilityCatalogContext,
+  PluginCapabilityCatalogHostContext,
   | "isProviderAuthProfileConfigured"
+  | "isProviderAuthProfileConfiguredAsync"
   | "resolveApiKeyForProvider"
   | "createRealtimeTranscriptionWebSocketSession"
 >;
