@@ -33,6 +33,7 @@ import type { CronJob, CronStoreFile } from "../types.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
 import { dispatchCronNotification } from "./notification-dispatch.js";
 import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
+import { wakeCronRunQueues } from "./run-queue-wake.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { publishDurableNextRunChanges } from "./runtime-publication.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
@@ -322,13 +323,13 @@ async function persistQuarantinedJobs(
  * masquerade as a store-write failure — at startup that keeps the whole
  * scheduler down.
  */
-export function runPostPersistCronNotifications(
+export async function runPostPersistCronNotifications(
   state: CronServiceState,
   notifications: DeferredCronNotifications | undefined,
 ) {
   for (const notification of notifications ?? []) {
     try {
-      dispatchCronNotification(state, notification);
+      await dispatchCronNotification(state, notification);
     } catch (err) {
       state.deps.log.warn(
         { error: err instanceof Error ? err.message : String(err) },
@@ -482,6 +483,9 @@ export async function persistCronJobMutation(params: {
       }
       const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
       noteCronJobsStoreCommit(source.storeKey);
+      // Mutations can cancel queued requests even when every execution slot is occupied.
+      // Wake their transient owners only after this store operation releases its lock.
+      void state.op.then(() => wakeCronRunQueues(state));
       if (unchanged) {
         publishCronJobNames(source.storeKey, source.context, names);
       }
@@ -505,7 +509,6 @@ export async function persistCronJobMutation(params: {
             storeJobs: store.jobs,
             suppressScheduledJobId: params.suppressScheduledJobId,
           });
-          runPostPersistCronNotifications(state, params.postPersistNotifications);
         } finally {
           params.afterPublish?.();
         }
@@ -525,4 +528,5 @@ export async function persistCronJobMutation(params: {
         : new CronJobsStoreChangedError(source.storeKey);
     },
   });
+  await runPostPersistCronNotifications(state, params.postPersistNotifications);
 }

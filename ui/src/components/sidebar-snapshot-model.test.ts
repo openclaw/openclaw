@@ -14,8 +14,6 @@ const model: SidebarSnapshotModel = {
   roster: null,
   mode: "roster",
   navigationView: "sessions",
-  navigationScope: "all",
-  scopesEquivalent: false,
   pages: [],
   pageScopeId: null,
   pinnedSessions: [],
@@ -80,6 +78,26 @@ describe("sidebar display snapshot admission", () => {
         roster: { ...roster, result: sessionsResult([{ ...stable, incognito: true }], 1) },
       }),
     ).toBeNull();
+  });
+
+  it("admits the sidebar after the live roster grows beyond the boot window", () => {
+    const sessions = Array.from({ length: 240 }, (_, index) => ({
+      key: `agent:main:session-${index}`,
+      kind: "direct" as const,
+      label: `Session ${index}`,
+    }));
+    const roster = captureBootRoster({
+      result: sessionsResult(sessions, 1),
+      agentId: "main",
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+      loading: false,
+      error: null,
+    });
+    const saved = parseSidebarSnapshot({ ...model, roster });
+    expect(saved).not.toBeNull();
+    expect(saved?.roster?.result.sessions).toEqual(sessions.slice(0, 200));
   });
 
   it("keeps display data without persisting authority, executable plugins, or watched sessions", () => {

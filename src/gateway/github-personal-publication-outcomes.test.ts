@@ -22,6 +22,7 @@ import {
   createPersonalPublicationFixture,
   readPersonalPublicationFixtureStatus,
   personalPublicationAccount as account,
+  preparePersonalPublicationFixtureAction,
 } from "./github-personal-publication.test-support.js";
 import {
   claimGitHubPublicationExecution,
@@ -30,7 +31,6 @@ import {
 } from "./github-publication-store.js";
 import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
-import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 
 const mocks = githubPublicationTestMocks();
 const table = "github_personal_publication_requests";
@@ -297,13 +297,13 @@ describe("personal publication definitive outcomes", () => {
     });
     db.exec(`CREATE TEMP TRIGGER stop_personal_admission AFTER INSERT ON ${table}
       BEGIN SELECT stop_personal_admission(); END`);
-    const stopped = preparePersonalGitHubSessionAction(
-      { client, context, signal: controller.signal },
-      { sessionKey: SESSION_KEY },
+    const stopped = await preparePersonalPublicationFixtureAction(
+      { client, context },
+      controller.signal,
     );
-    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
-      "current",
-    );
+    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toMatchObject({
+      name: "AbortError",
+    });
     db.exec("DROP TRIGGER stop_personal_admission");
     const row = openOpenClawStateDatabase()
       .db.prepare(`SELECT request_id, status, execution_id FROM ${table}`)

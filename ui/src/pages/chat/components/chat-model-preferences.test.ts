@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
-import { expect, it, vi } from "vitest";
+import { nothing, render } from "lit";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
 import { renderChatModelControls } from "./chat-model-controls.ts";
 
@@ -22,35 +22,42 @@ function controls(overrides: Partial<Props>) {
   const onThinkingSelect = vi.fn(async () => true);
   const onFastModeSelect = vi.fn(async () => true);
   const container = document.createElement("div");
-  render(
-    renderChatModelControls({
-      activeRunId: null,
-      activeRunSessionKey: "main",
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      modelSwitching: false,
-      modelCatalogState: { hasSnapshot: true, status: "ready" },
-      sending: false,
-      stream: null,
-      sessionKey: "main",
-      modelCatalog: ["primary", "other"].map((id) => ({
-        id,
-        name: id,
-        provider: "example",
-        supportsFastMode: true,
-      })),
-      selectedSession,
-      thinkingSession: selectedSession,
-      sessionsResult: sessions,
-      onModelSelect,
-      onThinkingSelect,
-      onFastModeSelect,
-      ...overrides,
-    }),
-    container,
-  );
+  onTestFinished(() => {
+    render(nothing, container);
+  });
+  const props: Props = {
+    activeRunId: null,
+    activeRunSessionKey: "main",
+    connected: true,
+    gatewayAvailable: true,
+    loading: false,
+    modelSwitching: false,
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    sending: false,
+    stream: null,
+    sessionKey: "main",
+    modelCatalog: ["primary", "other"].map((id) => ({
+      id,
+      name: id,
+      provider: "example",
+      supportsFastMode: true,
+    })),
+    selectedSession,
+    thinkingSession: selectedSession,
+    sessionsResult: sessions,
+    onModelSelect,
+    onThinkingSelect,
+    onFastModeSelect,
+    ...overrides,
+  };
+  const update = (next: Partial<Props>) => {
+    Object.assign(props, next);
+    render(renderChatModelControls(props), container);
+  };
+  update({});
   return {
+    container,
+    update,
     onModelSelect,
     onThinkingSelect,
     onFastModeSelect,
@@ -124,4 +131,25 @@ it.each([
   slider.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onModelSelect).not.toHaveBeenCalled();
   expect(onThinkingSelect).not.toHaveBeenCalled();
+});
+
+it("retires and restores an unavailable context-window control with its access guard", () => {
+  const contextWindowTarget = {
+    contextWindow: "standard",
+    contextWindowDefault: "standard",
+    contextWindows: [
+      { id: "standard", label: "Standard", contextWindow: 100_000 },
+      { id: "extended", label: "Extended", contextWindow: 200_000 },
+    ],
+  };
+  const view = controls({ contextWindowTarget, contextWindowMutationDisabledReason: "Admin only" });
+  expect(
+    view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
+  ).toBe(true);
+  view.update({ contextWindowTarget: { contextWindows: [] } });
+  expect(view.container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+  view.update({ contextWindowTarget });
+  expect(
+    view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
+  ).toBe(true);
 });

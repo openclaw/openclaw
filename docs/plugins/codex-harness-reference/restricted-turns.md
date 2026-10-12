@@ -35,8 +35,8 @@ web_fetch, x_search
 ```
 
 A policy containing only those denies stays on the normal Codex native surface;
-the harness applies the named OpenClaw denial directly. Any other deny fails
-closed into the restricted surface. For example, `tools.deny: ["nodes"]`
+the harness applies the named OpenClaw denial directly. Any other deny uses
+the restricted surface. For example, `tools.deny: ["nodes"]`
 restricts the native surface because `nodes` is not in the audited set.
 
 OpenClaw admin and status denies alone do not remove native Codex tools.

@@ -96,7 +96,6 @@ export type LobsterSvgProps = {
 export function LobsterSvg(props: LobsterSvgProps) {
   const isFlatpack = () => props.look.palette.id === "flatpack";
   const paletteGeometry = () => PALETTE_GEOMETRY[props.look.palette.id];
-  // eslint-disable-next-line solid/reactivity -- Solid 2 dynamic() tracks its component selector.
   const PaletteGeometry = dynamic(() => PALETTE_GEOMETRY[props.look.palette.id]);
   const hasRetroGeometry = () => RETRO_GEOMETRY_PALETTES.has(props.look.palette.id);
   const clawProp = () =>

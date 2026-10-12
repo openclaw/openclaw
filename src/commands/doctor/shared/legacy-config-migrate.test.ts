@@ -1139,7 +1139,7 @@ describe("legacy bundled provider discovery migrate", () => {
 
     expect(res.config).toEqual({ plugins: { allow: ["telegram"] } });
     expect(res.changes).toStrictEqual([
-      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+      "Applied tier-eval tranche retirements; current settings and built-in defaults now apply.",
     ]);
   });
 });
@@ -1347,7 +1347,7 @@ describe("legacy model compat migrate", () => {
     expect(res.changes).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          'Merged config.models.providers.google.models.0 into model id "gemini-3.1-pro-preview"; kept canonical values for conflicting fields: name.',
+          'Merged config.models.providers.google.models.0 into model id "gemini-3.1-pro-preview"; kept existing values for conflicting fields: name.',
         ),
       ]),
     );

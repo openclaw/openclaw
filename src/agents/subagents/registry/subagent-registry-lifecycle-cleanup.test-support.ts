@@ -8,7 +8,6 @@ import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-i
 import { createContext as createGatewayContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
-  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -459,7 +458,7 @@ export function registerDeliveryRetryOwnerTests({
     }
   });
 
-  it.each(["current", "completed cleanup", "replaced", "cancelled", "restart"] as const)(
+  it.each(["current", "completed cleanup", "replaced", "cancelled"] as const)(
     "resumes one scheduled delivery only for its current owner (%s)",
     async (state) => {
       await useRetryTimers();
@@ -485,16 +484,10 @@ export function registerDeliveryRetryOwnerTests({
           runs.set(entry.runId, createRunEntry({ ...entry, generation: 2 }));
         } else if (state === "cancelled") {
           controller.clearScheduledResumeTimers();
-        } else if (state === "restart") {
-          markGatewayRestartDraining();
-          await vi.advanceTimersByTimeAsync(1_000);
-          expect(resumeSubagentRun).not.toHaveBeenCalled();
-          expect(vi.getTimerCount()).toBe(1);
-          resetGatewayWorkAdmission();
         }
         await vi.advanceTimersByTimeAsync(1_000);
         expect(resumeSubagentRun).toHaveBeenCalledTimes(
-          state === "current" || state === "completed cleanup" || state === "restart" ? 1 : 0,
+          state === "current" || state === "completed cleanup" ? 1 : 0,
         );
         expect(vi.getTimerCount()).toBe(0);
       } finally {

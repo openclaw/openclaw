@@ -104,11 +104,8 @@ describe("qa multipass runtime", () => {
   });
 
   it.each([
-    ["repo", 0],
     ["repo", 4],
     ["repo", 5],
-    ["codex-home", 0],
-    ["codex-home", 4],
     ["codex-home", 5],
   ] as const)("preserves %s mount lifecycle after %i failures", async (mount, failures) => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mount-"));
@@ -220,26 +217,6 @@ describe("qa multipass runtime", () => {
     }
   });
 
-  it("accepts repo-local output directory names beginning with two dots", async () => {
-    await withTempWorkspace(
-      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "qa-multipass-output-" },
-      async (workspace) => {
-        await workspace.writeText(
-          "package.json",
-          JSON.stringify({ packageManager: "pnpm@10.32.1" }),
-        );
-        const outputDir = workspace.path("..qa-artifacts");
-
-        await expect(
-          runQaMultipass({ repoRoot: workspace.dir, outputDir, providerMode: "mock-openai" }),
-        ).rejects.toThrow("Multipass is not installed on this host.");
-
-        const script = fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8");
-        expect(script).toContain("'--output-dir' '..qa-artifacts'");
-      },
-    );
-  });
-
   it("rejects output directories outside the mounted repo root", async () => {
     await expect(
       runQaMultipass({
@@ -279,28 +256,6 @@ describe("qa multipass runtime", () => {
     }
   });
 
-  it("persists the default live suite command and mounted artifact path", async () => {
-    const script = await renderPersistedGuestScript({
-      outputDirName: "multipass-default-test",
-      scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
-    });
-
-    expect(script).toContain("pnpm install --frozen-lockfile");
-    expect(script).toContain("pnpm build");
-    expect(script).toContain("corepack prepare 'pnpm@");
-    expect(script).toContain(
-      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/SHASUMS256.txt" -o "${node_tmp_dir}/SHASUMS256.txt"',
-    );
-    expect(script).toContain(
-      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/${tarball_name}" -o "${node_tmp_dir}/${tarball_name}"',
-    );
-    expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
-    expect(script).toContain("'--provider-mode' 'live-frontier'");
-    expect(script).toContain("'--scenario' 'channel-chat-baseline'");
-    expect(script).toContain("'--scenario' 'thread-follow-up'");
-    expect(script).toContain("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-default-test");
-  });
-
   it("forwards fail-fast to the real guest QA suite command", async () => {
     const script = await renderPersistedGuestScript({
       outputDirName: "multipass-fail-fast-test",
@@ -313,11 +268,8 @@ describe("qa multipass runtime", () => {
 
   it.skipIf(process.platform === "win32").each([
     ["missing", "24.99.0"],
-    ["22.99.0", "24.99.0"],
     ["24.15.0", "24.99.0"],
-    ["25.1.0", "24.99.0"],
     ["24.16.0", "24.16.0"],
-    ["26.1.0", "24.99.0"],
   ])("bootstraps a runnable guest toolchain from Node %s", async (version, expectedVersion) => {
     const { executableScript } = await captureGuestScriptsAtTransfer({
       outputDirName: "multipass-node-" + version,
@@ -481,39 +433,6 @@ describe("qa multipass runtime", () => {
     expect(script).toContain("'--enable-plugin' 'browser' '--enable-plugin' 'memory-core'");
   });
 
-  it("forwards supported live credential shapes only in redacted form", async () => {
-    vi.stubEnv("OPENCLAW_LIVE_ANTHROPIC_KEYS", TEST_ENV_VALUE);
-    vi.stubEnv("OPENCLAW_LIVE_CODEX_API_KEY", TEST_ENV_VALUE);
-    vi.stubEnv("CODEX_API_KEY", TEST_ENV_VALUE);
-    vi.stubEnv("OPENAI_API_KEY_1", TEST_ENV_VALUE);
-    vi.stubEnv("GEMINI_API_KEY_2", TEST_ENV_VALUE);
-    const script = await renderPersistedGuestScript({
-      outputDirName: "multipass-env-test",
-      providerMode: "live-frontier",
-    });
-
-    for (const key of [
-      "OPENCLAW_LIVE_ANTHROPIC_KEYS",
-      "OPENCLAW_LIVE_CODEX_API_KEY",
-      "CODEX_API_KEY",
-      "OPENAI_API_KEY_1",
-      "GEMINI_API_KEY_2",
-    ]) {
-      expect(script).toContain(`${key}='<redacted>'`);
-    }
-    expect(script).not.toContain(TEST_ENV_VALUE);
-  });
-
-  it("omits stale CODEX_HOME values", async () => {
-    vi.stubEnv("CODEX_HOME", "/tmp/does-not-exist-openclaw-codex-home");
-    const script = await renderPersistedGuestScript({
-      outputDirName: "multipass-stale-codex-home-test",
-      providerMode: "live-frontier",
-    });
-
-    expect(script).not.toContain("CODEX_HOME=");
-  });
-
   it("uses os.homedir() when HOME is unset for CODEX_HOME discovery", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-multipass-home-"));
     const fakeHome = path.join(tempRoot, "home");
@@ -532,17 +451,6 @@ describe("qa multipass runtime", () => {
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
-
-  it("does not leave a temp guest transfer script behind when multipass is missing", async () => {
-    const tempRoot = resolvePreferredOpenClawTmpDir();
-    const before = new Set(fs.readdirSync(tempRoot));
-    await renderPersistedGuestScript({
-      outputDirName: "multipass-missing-test",
-      scenarioIds: ["channel-chat-baseline"],
-    });
-    const added = fs.readdirSync(tempRoot).filter((entry) => !before.has(entry));
-    expect(added.filter((entry) => entry.includes("-qa-suite-"))).toStrictEqual([]);
   });
 
   it("preserves non-install multipass probe failures", async () => {

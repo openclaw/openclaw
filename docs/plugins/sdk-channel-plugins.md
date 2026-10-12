@@ -386,6 +386,10 @@ a canonical URL alone is not proof of anonymous access.
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.
+      `hasReplyPayloadFinalDeliveryCapture(payload)` from the same subpath identifies
+      replies whose confirmed delivery the shared dispatcher will record. Channel
+      adapters must skip their own transcript mirror for those replies, including
+      fallback sends, while still reporting the delivery outcome normally.
       When recovering a payload from earlier source text, apply
       `preserveReplyPayloadMediaSelection(current, recovered)` from
       `openclaw/plugin-sdk/channel-outbound`.
@@ -403,6 +407,16 @@ a canonical URL alone is not proof of anonymous access.
       Entries can also carry `sourceUrls` for references staged by the host. When recording
       delivered media, request entries for only the URLs confirmed accepted by the transport;
       source aliases for removed or unsent media are not delivery evidence.
+
+      A block with `ReplyPayload.textMode: "delta"` carries a disjoint text chunk.
+      Preview adapters append it within the current answer lane; omitted `textMode`
+      means a replacement snapshot. Never infer this from matching prefixes.
+      Finals always replace, and durable sends/transcripts use the payload's own
+      `text`, not an accumulated preview. A text-rewriting delivery modifier clears
+      delta mode so its replacement remains authoritative. When appending a chunk
+      to an existing preview, use `stripReplyPayloadResponsePrefix(payload, text)`
+      to remove only the response prefix recorded by normalization; retain the
+      decorated text for the first chunk and for independent durable sends.
 
       Streaming delivery can carry one `OutboundPayloadPlan` through the optional
       `onPreparedBlockReply(plan, context)`, dispatcher `sendPreparedReply(kind, plan)`,

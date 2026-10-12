@@ -6,7 +6,6 @@ import { readChannelContextGatewayContextResolver } from "../../channels/message
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
@@ -46,6 +45,7 @@ import {
 import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
+import { commitQueuedReplySessionActivity } from "./agent-runner-session-activity.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -60,7 +60,7 @@ import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
-import { resolveFollowupAbortSignal } from "./queue/types.js";
+import { bindReplyOperationQueueDisposition, resolveFollowupAbortSignal } from "./queue/types.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import * as replyRunState from "./reply-operation-run-state.js";
@@ -77,7 +77,7 @@ import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 import {
   isDuplicateRestartRecoverySource,
   retireTerminalRestartRecoverySourceClaim,
-} from "./restart-recovery-claim.js";
+} from "./restart-recovery-source.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
@@ -195,7 +195,7 @@ export async function runReplyAgent(
   let restartRecoveryTarget: SessionEntryTargetPatchScope | undefined;
   try {
     restartRecoveryEntry =
-      sessionKey && storePath
+      sessionKey && storePath && (restartRecoverySourceTurnId || (shouldSteer && isActive))
         ? ((await readSessionEntryInWorker(
             { agentId: followupRun.run.agentId, storePath, sessionKey },
             assertReadCurrent,
@@ -306,14 +306,24 @@ export async function runReplyAgent(
     }
     // Keep the in-memory snapshot aligned with the pending-reset write boundary.
     const updatedAt = activeSessionEntry.updatedAt === 0 ? 0 : Date.now();
-    activeSessionEntry.updatedAt = updatedAt;
-    activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
-      await updateSessionEntry(
-        { agentId: followupRun.run.agentId, storePath, sessionKey },
-        () => ({ updatedAt }),
-        { skipMaintenance: true, takeCacheOwnership: true },
-      );
+      await commitQueuedReplySessionActivity({
+        target: { agentId: followupRun.run.agentId, storePath, sessionKey },
+        expected: activeSessionEntry,
+        updatedAt,
+        assertCurrent: () => {
+          followupRun.operatorAuthority?.assertCurrent();
+        },
+        onCommittedEntry: (entry) => {
+          activeSessionEntry = entry;
+          if (activeSessionEntry) {
+            activeSessionStore[sessionKey] = activeSessionEntry;
+          }
+        },
+      });
+    } else {
+      activeSessionEntry.updatedAt = updatedAt;
+      activeSessionStore[sessionKey] = activeSessionEntry;
     }
   };
 
@@ -338,19 +348,6 @@ export async function runReplyAgent(
     return undefined;
   }
 
-  const bindQueueDisposition = () => {
-    const observe = followupRun.onQueueDisposition;
-    followupRun.onQueueDisposition = (disposition) => {
-      observe?.(disposition);
-      if (
-        replyOperationRunState &&
-        (disposition !== "queue-cap-old" || replyOperationRunState.admission?.status !== "accepted")
-      ) {
-        replyOperationRunState.admission = { status: "skipped", reason: "queue-cap" };
-      }
-    };
-  };
-
   if (
     effectiveShouldSteer &&
     isActive &&
@@ -358,7 +355,7 @@ export async function runReplyAgent(
     !shouldQueueTerminalReceiptSteer &&
     messageInjectionDisposition === "none"
   ) {
-    bindQueueDisposition();
+    bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
     const result = await runActiveReplySteer({
       followupRun,
       opts,
@@ -396,7 +393,7 @@ export async function runReplyAgent(
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    bindQueueDisposition();
+    bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
     const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,

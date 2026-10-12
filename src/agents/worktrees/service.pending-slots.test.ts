@@ -229,6 +229,38 @@ describe("managed worktree pending slots", () => {
     }
   });
 
+  it("publishes a reserved checkout while another creator holds allocation", async ({ signal }) => {
+    config.worktreeMaxCount = 1;
+    const held = holdMaterialization();
+    const creating = service.create({ repoRoot, name: "publish-reserved", baseRef: "HEAD" });
+    let releaseAllocation: (() => Promise<void>) | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          held.entered[0]!.promise,
+          creating,
+          "Checkout did not materialize",
+        ),
+        signal,
+      );
+      expect(await readPendingWorktrees(env)).toHaveLength(1);
+      releaseAllocation = await holdLease(WORKTREE_CREATE_LEASE_SCOPE, "capacity");
+      // An occupied allocation lane must not delay the count-neutral pending → live transaction.
+      vi.spyOn(backoff, "sleepWithAbort").mockRejectedValue(
+        new Error("Publication waited for the unrelated allocation holder"),
+      );
+      held.release.resolve();
+      const created = await withinTest(creating, signal);
+      expect(await readPendingWorktrees(env)).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([created]);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    } finally {
+      held.release.resolve();
+      await releaseAllocation?.();
+      await Promise.allSettled([creating]);
+    }
+  });
+
   it("counts pending slots at admission and keeps them out of eviction", async ({ signal }) => {
     config.worktreeMaxCount = 1;
     const held = holdMaterialization();

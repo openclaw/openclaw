@@ -13,9 +13,7 @@ export function keyText(keybinding: Keybinding): string {
   return getKeybindings()
     .getKeys(keybinding)
     .join("/")
-    .split("/")
-    .map((k) => k.split("+").map(formatKeyPart).join("+"))
-    .join("/");
+    .replace(/[^+/]+/g, formatKeyPart);
 }
 
 export function keyHint(keybinding: Keybinding, description: string): string {

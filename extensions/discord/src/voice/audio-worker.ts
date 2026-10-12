@@ -250,7 +250,7 @@ export class DiscordAudioWorker {
         break;
       }
       case "output-audio":
-        this.outputs.get(command.id)?.appendAdmitted(Buffer.from(command.audio), command.audible);
+        this.outputs.get(command.id)?.append(Buffer.from(command.audio), command.audible);
         break;
       case "output-mark":
         this.outputs

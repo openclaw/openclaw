@@ -176,6 +176,12 @@ child-process env. WebSocket app-server connections do not receive Gateway
 env API-key fallback; use an explicit auth profile or the remote
 app-server's own account.
 
+Model discovery uses the same local stdio environment-key fallback when no
+OpenAI profile is selected in the isolated agent home. Refreshing discovery
+after changing the environment key acquires a client for the new key. Native
+user homes and remote app-servers keep their own authentication. Discovery does
+not import API keys from the operator’s native Codex auth file.
+
 If a subscription profile hits a Codex usage limit, OpenClaw records the
 reset time when Codex reports one and tries the next ordered auth profile
 for the same Codex run. When the reset time passes, the subscription
@@ -226,7 +232,7 @@ authenticates the plugin.
 OpenClaw does not install unknown apps or let the model authorize new plugin
 installs. Owner-approved plugin installation refreshes the target runtime
 inventory. Missing inventory methods, authentication errors, transport
-failures, and connector refresh failures fail closed.
+failures, and connector refresh failures block the request.
 
 ## Scheduled app authority
 
@@ -270,8 +276,8 @@ Codex may discover shared `$HOME/.agents/skills` and
 `$HOME/.agents/plugins/marketplace.json` entries. With
 `appServer.homeScope: "user"`, OpenClaw instead uses the native user Codex
 home and its existing account without injecting an OpenClaw auth profile.
-Canonical `openai/*` chats on a user-home stdio or Unix connection also retain
-the native configured model provider; select the model with the canonical
+Standard `openai/*` chats on a user-home stdio or Unix connection also retain
+the native configured model provider; select the model with the standard
 OpenClaw model ref. Explicit non-OpenAI providers remain explicit. Prepared
 route compatibility and subscription/API-key account checks still apply.
 
@@ -309,7 +315,7 @@ network-family autoselection, environment-proxy, and CA-source options because
 those settings cannot preload code or change module resolution. For example,
 `--dns-result-order=ipv4first --no-network-family-autoselection` is allowed.
 Malformed or unknown options and code-loading options such as `--require` or
-`--import` fail closed. If an inherited option is not needed by Codex, remove
+`--import` are rejected. If an inherited option is not needed by Codex, remove
 `NODE_OPTIONS` with `appServer.clearEnv`.
 
 ## Local testing env overrides

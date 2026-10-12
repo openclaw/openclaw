@@ -11,6 +11,7 @@ type DurableHistoryReadOperationRequest = Extract<
   SessionTranscriptWorkerInput,
   {
     kind:
+      | "trajectory-events"
       | "trajectory-retention"
       | "board-snapshot"
       | "board-widget-document"
@@ -48,6 +49,7 @@ export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
 ): request is DurableHistoryReadOperationRequest {
   switch (request.kind) {
+    case "trajectory-events":
     case "trajectory-retention":
     case "board-snapshot":
     case "board-widget-document":
@@ -107,6 +109,18 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "trajectory-events": {
+      const { loadSqliteTrajectoryRuntimeEventRowsSync } =
+        await import("../../trajectory/runtime-store.sqlite.js");
+      return () => ({
+        kind: request.kind,
+        events: loadSqliteTrajectoryRuntimeEventRowsSync({
+          ...request.scope,
+          agentId: request.database.agentId,
+          storePath: request.database.path,
+        }).map((row) => row.event),
+      });
+    }
     case "trajectory-retention": {
       const [
         { withOpenClawAgentDatabaseReadOnly },
@@ -253,6 +267,8 @@ async function prepareHistoryRead(
               request.resolved,
               request.selection,
               readMessage,
+              undefined,
+              request.preparedEntry,
             ),
           { ...request.database, env: request.resolved.env },
         );

@@ -8,15 +8,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
-import {
-  promoteAuthProfileInOrder,
-  upsertAuthProfileWithLockOrThrow,
-} from "../../agents/auth-profiles/profiles.js";
+import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -79,6 +75,7 @@ import {
   withoutProviderModelPolicy,
   type PreparedProviderModelAccess,
 } from "./auth-model-policy.js";
+import { promotePersistedAuthProfile } from "./auth-profile-promotion.js";
 import {
   refreshProviderAuthAfterLogin,
   refreshRunningGatewayAuthState,
@@ -369,6 +366,7 @@ async function persistProviderAuthResult(params: {
         agentDir: params.agentDir,
         provider: profile.credential.provider,
         profileId: profile.profileId,
+        assertCurrent: params.assertCurrent,
       });
     }
 
@@ -379,6 +377,7 @@ async function persistProviderAuthResult(params: {
         configSnapshot: params.configSnapshot,
         configPatch,
         credentialsSaved: persistedProfiles.length > 0,
+        beforeCommit: params.assertCurrent,
         writeOptions: { assertCurrent: params.assertCurrent },
         finalizeConfig: (replayed, cfg) => {
           const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
@@ -435,42 +434,6 @@ async function persistProviderAuthResult(params: {
       );
     }
     throw error;
-  }
-}
-
-async function promotePersistedAuthProfile(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-  provider: string;
-  profileId: string;
-}): Promise<void> {
-  const cfg = params.config;
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: cfg });
-  const configuredOrder = Object.entries(cfg.auth?.order ?? {}).find(
-    ([orderProvider, profileIds]) =>
-      profileIds.length > 0 &&
-      resolveProviderIdForAuth(orderProvider, { config: cfg }) === providerAuthKey,
-  )?.[1];
-  const order =
-    configuredOrder ??
-    Object.entries(cfg.auth?.profiles ?? {})
-      .filter(
-        ([, profile]) =>
-          resolveProviderIdForAuth(profile.provider, { config: cfg, storedCredential: true }) ===
-          providerAuthKey,
-      )
-      .map(([profileId]) => profileId);
-  const promotion = await promoteAuthProfileInOrder({
-    agentDir: params.agentDir,
-    provider: params.provider,
-    profileId: params.profileId,
-    createIfMissing: order.length > 0,
-    ...(order.length > 0 ? { createFromOrder: order } : {}),
-  });
-  if (!promotion.ok) {
-    throw new ProviderCredentialsSavedError(
-      "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then retry the login.",
-    );
   }
 }
 
@@ -856,7 +819,7 @@ export async function runModelsAuthLoginFlowCore(
 export async function runModelsAuthLoginFlowForGateway(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
-  return runModelsAuthLoginFlow(opts, false);
+  return runModelsAuthLoginFlow(opts, opts.isRemote === false);
 }
 
 async function runModelsAuthLoginFlow(
@@ -982,6 +945,7 @@ async function runModelsAuthLoginFlow(
       agentDir: context.agentDir,
       provider: imported.provider,
       profileId: imported.profileId,
+      assertCurrent: opts.assertCurrent,
     });
     const authRefresh = await refreshProviderAuthAfterLogin({ ...opts, agentId: context.agentId });
     if (imported.configUpdated) {

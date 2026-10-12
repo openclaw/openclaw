@@ -250,7 +250,7 @@ export async function finalizeNodeAdoptedSession(params: {
       },
     });
   } catch (error) {
-    const currentEntry = params.api.runtime.agent.session.getSessionEntry({
+    const currentEntry = await params.api.runtime.agent.session.getSessionEntryAsync({
       sessionKey: params.adopted.key,
       readConsistency: "latest",
     });

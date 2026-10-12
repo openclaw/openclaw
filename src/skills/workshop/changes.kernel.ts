@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -34,6 +35,17 @@ type ChangesDatabase = Pick<DB, "skill_workshop_changes">;
 
 const MAX_CHANGES_PER_AGENT = 500;
 
+const ensureWorkshopChangesSchema = createSqliteSchemaEnsurer(
+  () =>
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "skill_workshop_changes", {
+      endMarker: "ON skill_workshop_changes(agent_id, created_at_ms);",
+    }),
+  {
+    tables: ["skill_workshop_changes"],
+    indexes: ["idx_skill_workshop_changes_agent_time"],
+  },
+);
+
 export type WorkshopChangesQuery = {
   agentId: string;
   limit: number;
@@ -47,13 +59,7 @@ export function recordWorkshopChangeInDatabase(
   change: WorkshopChange,
 ): void {
   const { db } = database;
-  // sqlite-allow-raw -- Canonical feature-owned additive DDL; rows use Kysely.
-  // Canonical table + index are adjacent in the schema; the index line ends the slice.
-  db.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "skill_workshop_changes", {
-      endMarker: "ON skill_workshop_changes(agent_id, created_at_ms);",
-    }),
-  );
+  ensureWorkshopChangesSchema(db);
   const kysely = getNodeSqliteKysely<ChangesDatabase>(db);
   executeSqliteQuerySync(
     db,

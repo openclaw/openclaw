@@ -120,11 +120,11 @@ it("repeats only after completion, defers busy work once, and joins stop", async
     await clock.advanceBy(10);
     expect(run).toHaveBeenCalledTimes(1);
     expect(scheduler.nextWakeAtMs).not.toBeNull();
-    // Admission sees idle; newly admitted foreground work wins before execution.
-    isBusy.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    isBusy.mockReturnValue(true);
     await clock.advanceBy(20);
     expect(run).toHaveBeenCalledTimes(1);
     expect(scheduler.nextWakeAtMs).not.toBeNull();
+    isBusy.mockReturnValue(false);
     const pendingWake = clock.advanceBy(5);
     await started.promise;
     expect(run).toHaveBeenCalledTimes(2);

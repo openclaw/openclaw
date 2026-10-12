@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
@@ -504,11 +504,24 @@ function recurringJob(id: string, nowMs: number, nextRunAtMs: number): CronJob {
 }
 
 describe("cron wakes during active execution", () => {
-  it("runs later due work while an earlier scheduled run is still executing", async () => {
+  it("runs later due work while an earlier scheduled run is still executing", async ({
+    signal,
+  }) => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const clock = createGatewaySchedulerClock(now);
-    const scheduler = createTestGatewayScheduler(clock.clock);
+    const laterWakeArmed = createDeferred();
+    const scheduler = createTestGatewayScheduler({
+      ...clock.clock,
+      arm(run, delayMs) {
+        const cancel = clock.clock.arm(run, delayMs);
+        const deadline = clock.clock.now() + delayMs;
+        if (deadline > now && deadline <= now + 10_000) {
+          laterWakeArmed.resolve();
+        }
+        return cancel;
+      },
+    });
     const started = createDeferred();
     const deferredRun = createDeferred<{ status: "ok"; summary: string }>();
     const laterFinished = createDeferred();
@@ -542,12 +555,14 @@ describe("cron wakes during active execution", () => {
     const timerPromise = onTimer(state);
     let laterWake: ReturnType<typeof clock.advanceTo> = undefined;
     try {
-      await started.promise;
+      // Payload dispatch can precede the timer producer's re-arm after its worker reply.
+      await withinTest(Promise.all([started.promise, laterWakeArmed.promise]), signal);
       expect(state.running).toBe(true);
-      expect(scheduler.nextWakeAtMs).not.toBeNull();
+      expect(scheduler.nextWakeAtMs).toBeGreaterThan(now);
+      expect(scheduler.nextWakeAtMs).toBeLessThanOrEqual(now + 10_000);
 
       laterWake = clock.advanceTo(now + 10_000);
-      await laterFinished.promise;
+      await withinTest(laterFinished.promise, signal);
 
       expect(enqueueSystemEvent).toHaveBeenCalledWith("later work", expect.any(Object));
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);

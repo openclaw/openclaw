@@ -5,10 +5,6 @@ import { createContext, Script, type Context } from "node:vm";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
-import type {
-  CodeModeExecutorStartInput,
-  CodeModeExecutorResumeInput,
-} from "./code-mode-executor-types.js";
 import {
   boundCodeModeError,
   captureCodeModeOutput,
@@ -25,6 +21,7 @@ import {
 import { prepareSource } from "./code-mode-source.js";
 import type {
   CodeModeConfig,
+  CodeModeNodeInput,
   CodeModeWorkerContinuation,
   CodeModeWorkerThreadResult,
   PendingBridgeRequest,
@@ -32,10 +29,7 @@ import type {
 } from "./code-mode-worker-types.js";
 import { ToolInputError } from "./tool-input-error.js";
 
-type NodeInput = (CodeModeExecutorStartInput | CodeModeExecutorResumeInput) & {
-  progress: SharedArrayBuffer;
-  inlineHost: boolean;
-};
+type NodeInput = CodeModeNodeInput;
 type NodeResult = CodeModeWorkerThreadResult<undefined>;
 
 type GuestOutcome = { ok: boolean; json: string };
@@ -83,8 +77,12 @@ function isBridgeMethod(method: string): method is PendingBridgeRequest["method"
   return bridgeMethods.has(method);
 }
 
+function compileController(source: string): Script {
+  return new Script(source, { filename: "openclaw-code-mode:controller.js" });
+}
+
 // Compile trusted control scripts once per worker; each cell still owns a fresh context.
-const initializeScript = new Script(
+const initializeScript = compileController(
   String.raw`
     (() => {
       // Keep native encoding prototypes private when this worker is reused.
@@ -116,6 +114,8 @@ const initializeScript = new Script(
 
     Object.assign(globalThis, JSON.parse(__openclawNodeInit));
     delete globalThis.__openclawNodeInit;
+    globalThis.__openclawMaxPendingToolCalls = __openclawNodeMaxPending;
+    delete globalThis.__openclawNodeMaxPending;
     ${CODE_MODE_CONTROLLER_SOURCE}
 
     (() => {
@@ -147,32 +147,23 @@ const initializeScript = new Script(
       });
     })();
   `,
-  { filename: "openclaw-code-mode:controller.js" },
 );
-const settleScript = new Script("__openclawSettleBridge()", {
-  filename: "openclaw-code-mode:controller.js",
-});
-const drainScript = new Script(
+const settleScript = compileController("__openclawSettleBridge()");
+const drainScript = compileController(
   `(() => {
     const error = __openclawAdmissionError();
     if (!error) __openclawDrainQueuedRequests();
     return error;
   })()`,
-  { filename: "openclaw-code-mode:controller.js" },
 );
-const outputScript = new Script("__openclawTakeOutputJson()", {
-  filename: "openclaw-code-mode:controller.js",
-});
-const observeResultScript = new Script("__openclawNodeObserveResult(__openclawResult)", {
-  filename: "openclaw-code-mode:controller.js",
-});
-const rejectionScript = new Script(
+const outputScript = compileController("__openclawTakeOutputJson()");
+const observeResultScript = compileController("__openclawNodeObserveResult(__openclawResult)");
+const rejectionScript = compileController(
   `(() => {
     const error = __openclawNodeRejection;
     delete globalThis.__openclawNodeRejection;
     return __openclawNodeEncodeError(error);
   })()`,
-  { filename: "openclaw-code-mode:controller.js" },
 );
 
 function evaluate(current: NodeCell, script: Script): unknown {
@@ -296,13 +287,8 @@ function createCell(
     current.progress.observeNetworkContent();
   };
   context["__openclawHostOutput"] = (json: string) => current.progress.append(json);
-  context["__openclawNodeInit"] = JSON.stringify({
-    __openclawCatalog: input.catalog,
-    __openclawNamespaces: input.namespaces,
-    __openclawApiFiles: input.apiFiles ?? [],
-    __openclawSwarmEnabled: input.swarmEnabled === true,
-    __openclawMaxPendingToolCalls: input.config.maxPendingToolCalls,
-  });
+  context["__openclawNodeInit"] = new TextDecoder().decode(input.initialization);
+  context["__openclawNodeMaxPending"] = input.config.maxPendingToolCalls;
   context["__openclawNodeFinish"] = (ok: boolean, json: string) => {
     current.outcome = { ok, json };
   };

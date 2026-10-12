@@ -93,12 +93,6 @@ export function renderSettingsPage(
   </div>`;
 }
 
-export function renderDocsLink(url: string, label: unknown): TemplateResult {
-  return html`<a href=${url} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
-    >${label}</a
-  >`;
-}
-
 export function renderSettingsHelpTrigger(props: SettingsHelpTriggerProps): TemplateResult {
   const helpIcon = props.icon === "info" ? icons.info : icons.circleQuestionMark;
   return html`
@@ -348,7 +342,7 @@ function renderSettingsRadioGroup<T extends string>(
   name: string,
 ) {
   return html`<div
-    class="settings-segmented ${props.className ?? ""}"
+    class="settings-segmented ${props.class ?? ""}"
     role="radiogroup"
     aria-label=${props.ariaLabel ?? nothing}
     aria-describedby=${props.descriptionId ?? nothing}
@@ -387,7 +381,7 @@ export function renderSettingsSegmented<T extends string>(
 ): TemplateResult<1> {
   if (props.mode === "buttons") {
     return html`<div
-      class="settings-segmented ${props.variant ? `settings-segmented--${props.variant}` : ""} ${props.className ?? ""}"
+      class="settings-segmented ${props.variant ? `settings-segmented--${props.variant}` : ""} ${props.class ?? ""}"
       role=${props.ariaLabel ? "group" : nothing}
       aria-label=${props.ariaLabel ?? nothing}
     >
@@ -508,48 +502,5 @@ export function renderSettingsLoadingSkeleton(
         )}
       </div>
     </div>
-  `;
-}
-
-/** Secret text input with an inset reveal toggle — one field, no trailing
- * button, so secret rows line up with plain input rows in the same group. */
-export function renderSettingsSecretInput(props: {
-  ariaLabel: string;
-  value: string;
-  placeholder?: string;
-  visible: boolean;
-  disabled?: boolean;
-  showLabel: string;
-  hideLabel: string;
-  toggleLabel: string;
-  onInput: (next: string) => void;
-  onToggle: () => void;
-}): TemplateResult {
-  return html`
-    <span class="settings-secret">
-      <input
-        class="settings-input"
-        type=${props.visible ? "text" : "password"}
-        aria-label=${props.ariaLabel}
-        autocomplete="off"
-        spellcheck="false"
-        .value=${props.value}
-        placeholder=${props.placeholder ?? ""}
-        ?disabled=${props.disabled ?? false}
-        @input=${(e: Event) => props.onInput((e.target as HTMLInputElement).value)}
-      />
-      <openclaw-tooltip .content=${props.visible ? props.hideLabel : props.showLabel}>
-        <button
-          type="button"
-          class="settings-secret__toggle"
-          aria-label=${props.toggleLabel}
-          aria-pressed=${props.visible}
-          ?disabled=${props.disabled ?? false}
-          @click=${props.onToggle}
-        >
-          ${props.visible ? icons.eye : icons.eyeOff}
-        </button>
-      </openclaw-tooltip>
-    </span>
   `;
 }

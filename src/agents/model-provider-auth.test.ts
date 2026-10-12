@@ -52,6 +52,7 @@ const modelAuthAvailabilityMocks = vi.hoisted(() => {
 
 const authProfilesMocks = vi.hoisted(() => ({
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(() => ({ version: 1, profiles: {} })),
 }));
 
 vi.mock("./model-auth.js", () => modelAuthMocks);

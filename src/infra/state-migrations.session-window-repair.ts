@@ -39,8 +39,8 @@ export function repairDoctorSessionWindowOrphans(
   assertCurrent();
   const schemaVersion = readSqliteUserVersion(database);
   if (
-    schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION &&
-    schemaVersion !== CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION - 1
+    schemaVersion > OPENCLAW_AGENT_SCHEMA_VERSION ||
+    schemaVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION - 1
   ) {
     return [];
   }

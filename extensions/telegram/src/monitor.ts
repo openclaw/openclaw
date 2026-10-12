@@ -147,9 +147,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       onInvalidUpdateId: (updateId) => {
         log(`[telegram] Ignoring invalid update_id value: ${String(updateId)}`);
       },
-      onRetry: ({ attempt, delayMs, error, updateId }) => {
+      onError: ({ error, updateId }) => {
         logError(
-          `telegram: failed to persist update offset ${updateId}; retry ${attempt} in ${delayMs}ms: ${formatErrorMessage(error)}`,
+          `telegram: failed to persist update offset ${updateId}; a later update will retry: ${formatErrorMessage(error)}`,
         );
       },
       abortSignal: opts.abortSignal,
