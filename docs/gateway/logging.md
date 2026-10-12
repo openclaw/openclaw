@@ -219,9 +219,12 @@ Tune console verbosity independently:
 
 ## Redaction
 
-OpenClaw masks sensitive tokens in console output, file logs, diagnostic exports,
-and OTLP log records. Matching secret values are masked before those records are
-written or exported.
+File logs store raw records under the Gateway account with owner-only (`0600`)
+permissions. Redaction runs when logs widen their audience: `logs.tail` (including
+the CLI and Control UI), console output, diagnostic/support bundles, and remote
+or OTLP export. Each output redacts independently; direct reads of the file do
+not. Protect raw log files like the agent/state databases and review them before
+sharing.
 
 Tool arguments, tool results, and session transcripts are not secret-masked.
 This includes source-code output and direct reads of `.env` files. Tool payloads
@@ -229,15 +232,15 @@ still receive size limits, image/base64 handling, and structural normalization.
 Configuration snapshots, audit output, command-line diagnostics, and
 credential-bearing URLs retain their masking.
 
-- Log and diagnostic redaction is always enabled.
+- Egress log and diagnostic redaction is always enabled.
 - `logging.redactPatterns`: array of regex strings (replaces the default string list). Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply.
   - Use raw regex strings (auto `gi`), or `/pattern/flags` for custom flags.
   - Matches are masked keeping the first 6 + last 4 chars (values >= 18 chars). Shorter values become `***`.
   - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, popular vendor token prefixes, and payment credential field names (card number, CVC/CVV, shared payment token, payment credential).
 
-File and JSON console records finish masking before final JSON encoding. Rules run in order over decoded values, then serialized record context, with later rules seeing earlier masks. String matches retain their existing token hints so later rules can match those hints. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. File records retain built-in credential patterns when custom patterns are configured.
+JSON console output and log tails preserve valid JSON while masking decoded values and serialized record context. Later rules see earlier masks. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. Log tails retain built-in credential patterns when custom patterns are configured.
 
-Diagnostics exports, provider error logs, and Gateway WebSocket logs retain redaction. `logging.redactPatterns` adds deployment-specific patterns at these log and diagnostic boundaries.
+Diagnostics exports and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
 
 ## Gateway WebSocket logs
 

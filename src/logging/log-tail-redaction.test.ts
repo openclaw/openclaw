@@ -56,3 +56,36 @@ describe("readConfiguredLogTail redaction", () => {
     expect(text).not.toContain(pomeriumJwt);
   });
 });
+
+it("redacts raw JSON credentials and default tokens with custom tail patterns", async () => {
+  const dir = tempDirs.make("openclaw-raw-log-tail-");
+  const logFile = path.join(dir, "openclaw.log");
+  const configFile = path.join(dir, "openclaw.json");
+  await fs.writeFile(configFile, JSON.stringify({ logging: { redactPatterns: ["CUSTOM_VALUE"] } }));
+  const record = {
+    password: 1234,
+    apiKey: false,
+    signature: "short-signature",
+    nested: { "x-pomerium-jwt-assertion": "opaque-header" },
+    message: "sk-syntheticcredential123456 CUSTOM_VALUE",
+    ordinary: "request completed",
+  };
+  const raw = `${JSON.stringify(record)}\n`;
+  await fs.writeFile(logFile, raw);
+  setLoggerOverride({ file: logFile });
+  const tail = await withEnvAsync({ OPENCLAW_CONFIG_PATH: configFile }, () =>
+    readConfiguredLogTail(),
+  );
+  const redacted = JSON.parse(tail.lines[0]);
+  expect(redacted).toMatchObject({
+    password: "***",
+    apiKey: "***",
+    signature: "***",
+    nested: { "x-pomerium-jwt-assertion": "***" },
+    ordinary: "request completed",
+  });
+  expect(redacted.message).not.toContain("sk-syntheticcredential123456");
+  expect(redacted.message).not.toContain("CUSTOM_VALUE");
+  expect(tail.cursor).toBe(Buffer.byteLength(raw));
+  expect(await fs.readFile(logFile, "utf8")).toBe(raw);
+});
