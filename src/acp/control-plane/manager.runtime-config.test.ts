@@ -207,4 +207,61 @@ describe("AcpSessionManager runtime config", () => {
       expect.objectContaining({ key: "effort", value: "high" }),
     );
   });
+
+  it.each([
+    { label: "explicit command", tolerateRejectedThinking: false },
+    { label: "automatic reconciliation", tolerateRejectedThinking: true },
+  ])(
+    "keeps the accepted thinking level when the adapter rejects an inherited one: $label",
+    async ({ tolerateRejectedThinking }) => {
+      const f = fixture({ runtimeOptions: { thinking: "high" } });
+      f.state.getCapabilities.mockResolvedValue({
+        controls: ["session/set_mode", "session/set_config_option", "session/status"],
+        configOptionKeys: ["mode", "model", "effort"],
+      });
+      f.state.setConfigOption.mockImplementation(async ({ key }: { key: string }) => {
+        if (key === "effort") {
+          throw Object.assign(new Error("Internal error"), {
+            name: "RequestError",
+            code: -32603,
+            data: { details: "Invalid value for config option effort: adaptive" },
+          });
+        }
+      });
+
+      const applied = f.manager.setSessionConfigOption({
+        ...f.target,
+        key: "thinking",
+        value: "adaptive",
+        ...(tolerateRejectedThinking ? { tolerateRejectedThinking: true } : {}),
+      });
+      if (tolerateRejectedThinking) {
+        await expect(applied).resolves.toEqual({ thinking: "high" });
+      } else {
+        await expect(applied).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
+      }
+      expect(f.state.setConfigOption).toHaveBeenCalledWith(
+        expect.objectContaining({ key: "effort", value: "adaptive" }),
+      );
+      expect(f.persisted.currentMeta?.runtimeOptions).toEqual({ thinking: "high" });
+    },
+  );
+
+  it("still surfaces a thinking control the adapter cannot take at all", async () => {
+    const f = fixture({ runtimeOptions: { thinking: "high" } });
+    f.state.setConfigOption.mockImplementation(async () => {
+      throw new AcpRuntimeError("ACP_BACKEND_UNSUPPORTED_CONTROL", "Live off is unsupported");
+    });
+
+    // Tolerance covers a level the adapter cannot name, not a control it has lost.
+    await expect(
+      f.manager.setSessionConfigOption({
+        ...f.target,
+        key: "thinking",
+        value: "off",
+        tolerateRejectedThinking: true,
+      }),
+    ).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
+    expect(f.persisted.currentMeta?.runtimeOptions).toEqual({ thinking: "high" });
+  });
 });

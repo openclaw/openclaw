@@ -128,7 +128,14 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(ensured).toEqual({ ok: true, sessionKey });
     expect(managerMocks.setSessionConfigOption.mock.calls).toEqual(
       Object.entries(runtimeOptions).map(([key, value]) => [
-        { cfg: baseCfg, sessionKey, agentId: spec.agentId, key, value },
+        {
+          cfg: baseCfg,
+          sessionKey,
+          agentId: spec.agentId,
+          key,
+          value,
+          ...(key === "thinking" ? { tolerateRejectedThinking: true } : {}),
+        },
       ]),
     );
     expect(managerMocks.closeSession).not.toHaveBeenCalled();
@@ -269,6 +276,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
       agentId: spec.agentId,
       key: "thinking",
       value: "off",
+      tolerateRejectedThinking: true,
     });
     expect(managerMocks.closeSession).not.toHaveBeenCalled();
     expect(managerMocks.initializeSession).not.toHaveBeenCalled();

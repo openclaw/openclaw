@@ -2,7 +2,10 @@ import type { AcpRuntimeConfigOptionResult } from "@openclaw/acp-core/runtime/ty
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
-import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
+import {
+  isRejectedThinkingConfigValue,
+  resolveManagerRuntimeCapabilities,
+} from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
   AcpSessionRuntimeOptions,
@@ -57,6 +60,7 @@ async function resolveRuntimeOptionSessionMeta(params: RuntimeOptionCommandConte
 export async function runSetManagerSessionRuntimeOption(
   params: RuntimeOptionCommandContext & {
     update: { runtimeMode: string } | { key: string; value: string };
+    tolerateRejectedThinking?: boolean;
   },
 ): Promise<AcpSessionRuntimeOptions> {
   const resolvedMeta = await resolveRuntimeOptionSessionMeta(params);
@@ -117,12 +121,23 @@ export async function runSetManagerSessionRuntimeOption(
       );
     }
     params.assertActive?.();
-    result = await withAcpRuntimeErrorBoundary({
-      run: async () =>
-        await runtime.setConfigOption!({ handle, key: wireKey, value: update.value }),
-      fallbackCode: "ACP_TURN_FAILED",
-      fallbackMessage: "Could not update ACP runtime config option.",
-    });
+    try {
+      result = await withAcpRuntimeErrorBoundary({
+        run: async () =>
+          await runtime.setConfigOption!({ handle, key: wireKey, value: update.value }),
+        fallbackCode: "ACP_TURN_FAILED",
+        fallbackMessage: "Could not update ACP runtime config option.",
+      });
+    } catch (error) {
+      // Automatic reconciliation replays an inherited thinking level the adapter may
+      // not be able to name. Keep the accepted selection instead of failing the
+      // caller; explicit operator commands still surface the rejection, and so does
+      // an adapter that cannot take the control at all.
+      if (params.tolerateRejectedThinking && isRejectedThinkingConfigValue(wireKey, error)) {
+        return resolveRuntimeOptionsFromMeta(meta);
+      }
+      throw error;
+    }
   }
   assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
   const nextOptions = reconcileAcceptedRuntimeOptions(
