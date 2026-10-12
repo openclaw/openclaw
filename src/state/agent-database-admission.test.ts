@@ -92,6 +92,33 @@ describe("agent database admission", () => {
     );
   });
 
+  it("directs a corrupt required agent database to session SQLite recovery", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-corrupt-") };
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const pathname = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const file = fs.openSync(pathname, "r+");
+    fs.writeSync(file, "XXXXXXXXX", 0);
+    fs.closeSync(file);
+    await withAgentDatabaseStartupAdmission(
+      async () => {
+        const failure = await assertOpenClawDatabasesReady({
+          env,
+          operation: "gateway-startup",
+          config,
+        }).catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(AgentDatabaseAdmissionError);
+        const { repairHint } = (failure as AgentDatabaseAdmissionError).refusal;
+        expect(repairHint).toContain(
+          "openclaw doctor --session-sqlite recover --session-sqlite-agent main",
+        );
+        expect(repairHint).not.toContain('run "openclaw doctor --fix"');
+      },
+      { deferInspections: false },
+    );
+  });
+
   it("keeps a secondary with malformed ownership isolated while required agents start", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-ownerless-") };
     const config: OpenClawConfig = {

@@ -12,11 +12,13 @@ import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { hasSqliteCorruptionCause } from "../infra/sqlite-error-diagnostics.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
+import { formatAgentDatabaseCorruptionRepairHint } from "../infra/state-migrations.agent-owner-guidance.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import {
   createLegacyStateMigrationStepReceipt,
@@ -38,6 +40,17 @@ import {
 import { migrateLegacySessionEntryState } from "./doctor/shared/session-entry-shape.js";
 
 export type SessionDeliveryStateRepairReport = ReturnType<typeof repairCanonicalSessionEntries>;
+
+/** Entry repair cannot read a damaged database; its refusal names the agent to recover. */
+class SessionEntryDatabaseDamageError extends Error {
+  constructor(
+    readonly agentId: string,
+    cause: unknown,
+  ) {
+    super(`Agent ${agentId} database is damaged: ${formatErrorMessage(cause)}`, { cause });
+    this.name = "SessionEntryDatabaseDamageError";
+  }
+}
 
 type CanonicalSessionRepairOptions = Omit<
   Parameters<typeof repairCanonicalSessionEntries>[0],
@@ -137,6 +150,9 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
           "Session SQLite",
         );
         return [];
+      }
+      if (hasSqliteCorruptionCause(error)) {
+        throw new SessionEntryDatabaseDamageError(target.agentId, error);
       }
       throw error;
     }
@@ -267,6 +283,7 @@ export async function repairLegacySessionEntryStates(params: {
     return report;
   } catch (error) {
     const endpoints = [{ kind: "owner" as const, id: "session-entry-state" }];
+    const message = formatErrorMessage(error);
     throw new DoctorStateMigrationRefusalError([
       createLegacyStateMigrationStepReceipt(
         {
@@ -276,8 +293,17 @@ export async function repairLegacySessionEntryStates(params: {
           target: endpoints,
           requiredness: "required",
           reversibility: "checkpoint-required",
+          ...(error instanceof SessionEntryDatabaseDamageError
+            ? {
+                refusal: {
+                  code: "agent-database-corrupt",
+                  message,
+                  repairHint: formatAgentDatabaseCorruptionRepairHint(error.agentId),
+                },
+              }
+            : {}),
         },
-        { changes: [], warnings: [formatErrorMessage(error)] },
+        { changes: [], warnings: [message] },
       ),
     ]);
   }

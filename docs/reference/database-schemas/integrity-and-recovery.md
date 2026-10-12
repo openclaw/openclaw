@@ -932,6 +932,10 @@ continue to be attempted. A different error, or a failure after a successful
 health-state write, is reported again. Suppressing duplicates does not resolve
 the underlying database error.
 
+### An agent database is damaged
+
+If an agent database fails with `file is not a database` or `database disk image is malformed`, `openclaw doctor --fix` cannot repair it. Stop the Gateway and run `openclaw doctor --session-sqlite recover --session-sqlite-agent <agent-id>`; see [SQLite maintenance](/cli/doctor/sqlite-maintenance).
+
 ### A database is quarantined after integrity verification failed
 
 The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.

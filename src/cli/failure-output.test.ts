@@ -6,6 +6,10 @@ import {
   GatewayExplicitAuthRequiredError,
   GatewayTransportError,
 } from "../gateway/call.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseInspectionRefusal,
+} from "../state/agent-database-admission.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   ExpectedCliError,
@@ -201,6 +205,46 @@ describe("formatCliJsonFailure", () => {
 });
 
 describe("formatCliFailureLines", () => {
+  it.each(["single", "aggregated"])(
+    "shows %s agent database recovery steps instead of a generic doctor hint",
+    (kind) => {
+      const refuse = (agentId: string) => {
+        const cause = Object.assign(new Error("file is not a database"), {
+          code: "ERR_SQLITE_ERROR",
+          errcode: 26,
+        });
+        return new AgentDatabaseAdmissionError(
+          createAgentDatabaseInspectionRefusal({
+            agentId,
+            paths: [`/state/agents/${agentId}/agent/openclaw-agent.sqlite`],
+            reason: cause.message,
+            cause,
+          }),
+        );
+      };
+      const agentIds = kind === "single" ? ["main"] : ["main", "worker"];
+      const failures = agentIds.map(refuse);
+      const error =
+        failures.length === 1
+          ? failures[0]
+          : new AggregateError(failures, failures.map((failure) => failure.message).join("\n"));
+      const output = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error,
+        argv: ["node", "openclaw", "gateway", "run"],
+        env: {},
+      }).join("\n");
+
+      expect(output).toContain("[openclaw] OpenClaw needs a manual recovery step.");
+      for (const agentId of agentIds) {
+        expect(output).toContain(
+          `openclaw doctor --session-sqlite recover --session-sqlite-agent ${agentId}`,
+        );
+      }
+      expect(output).not.toContain("For help, run `openclaw doctor`");
+    },
+  );
+
   it.each([
     ["--profile", "work", "update", "--json"],
     ["plugins", "update", "--all"],

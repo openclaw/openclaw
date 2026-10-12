@@ -266,14 +266,19 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   const stateBusy = collectNestedErrorCandidates(options.error).some(
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
   );
+  // Database preflight aggregates every refused agent; each message carries its own repair step.
+  const agentDatabaseRefused = collectNestedErrorCandidates(options.error).some(
+    (error) => error instanceof Error && error.name === "AgentDatabaseAdmissionError",
+  );
   if (!showDebugDetails && !showUpdateDiagnostics) {
     if (
       options.error instanceof UpdateSchemaRefusalError ||
+      agentDatabaseRefused ||
       (options.error instanceof Error &&
         (options.error.name === "DoctorUnreadableStateDatabaseError" ||
           options.error.name === "OpenClawDatabaseSchemaPreflightError"))
     ) {
-      // Doctor cannot repair these refusals; their producers own the required recovery steps.
+      // Their producers own the required recovery step; a generic doctor hint would contradict it.
       const lines = ["[openclaw] OpenClaw needs a manual recovery step."];
       lines.push(
         `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,

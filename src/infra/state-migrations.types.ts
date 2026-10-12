@@ -177,7 +177,14 @@ export type LegacyStateMigrationStepPlan = {
   requiredness: "required" | "conditional" | "not-required";
   reversibility: "checkpoint-required" | "not-applicable";
   outcome: "planned" | "skipped" | "deferred";
-  refusal?: { code: string; message: string };
+  refusal?: LegacyStateMigrationStepRefusal;
+};
+
+type LegacyStateMigrationStepRefusal = {
+  code: string;
+  message: string;
+  /** Producer-owned next step, printed whole with Doctor's refusal instead of a bounded fact. */
+  repairHint?: string;
 };
 
 export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
@@ -190,7 +197,7 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   refusedAgentDatabasePaths?: readonly string[];
   recoveredAgentDatabasePaths?: readonly string[];
   rehearsal?: MigrationMessages["rehearsal"];
-  refusal?: { code: string; message: string };
+  refusal?: LegacyStateMigrationStepRefusal;
   /** The first refused step that prevented this step's mutation. */
   originatingRefusal?: { stepId: string; code: string; message: string };
 };

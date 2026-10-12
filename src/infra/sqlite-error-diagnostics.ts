@@ -1,4 +1,8 @@
-import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import {
+  coerceErrorMessage,
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -168,4 +172,9 @@ export function isSqliteLockError(error: unknown): boolean {
 export function isSqliteCorruptionError(error: unknown): boolean {
   const primaryCode = sqlitePrimaryResultCode(error);
   return primaryCode === SQLITE_CORRUPT_RESULT_CODE || primaryCode === SQLITE_NOTADB_RESULT_CODE;
+}
+
+/** Wrapped inspection failures keep SQLite's native result in their cause chain. */
+export function hasSqliteCorruptionCause(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(isSqliteCorruptionError);
 }
