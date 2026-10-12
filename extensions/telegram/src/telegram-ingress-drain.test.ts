@@ -405,11 +405,14 @@ describe("createTelegramIngressMonitor", () => {
 
   it("scopes client-created DM topic adoption to the receiving bot account", async () => {
     await withTempState(async (stateDir) => {
-      const resolved: Record<string, Array<ReturnType<typeof resolveTelegramMessageThreadSpec>>> = {
+      const resolved: Record<
+        "a" | "b",
+        Array<ReturnType<typeof resolveTelegramMessageThreadSpec>>
+      > = {
         a: [],
         b: [],
       };
-      const lanes: Record<string, string[]> = { a: [], b: [] };
+      const lanes: Record<"a" | "b", string[]> = { a: [], b: [] };
       const createAccountMonitor = (accountId: "a" | "b") => {
         const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
           channelId: "telegram",
