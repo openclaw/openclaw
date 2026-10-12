@@ -83,6 +83,7 @@ export function createApplicationUpdateOverlays(
   let activeHello = gateway.snapshot.hello;
   let connectedSource: NonNullable<typeof activeClient> | null = null;
   let connectedEpoch = 0;
+  let confirmationTargetGeneration = 0;
   // connectedEpoch also fences scope changes, so it cannot tell a first
   // connection from a reconnect; legacy version-only skew needs that fact.
   let connectedBefore = false;
@@ -397,7 +398,8 @@ export function createApplicationUpdateOverlays(
 
   const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
     const nextScope = gatewayCredentialScope(gateway.connection.gatewayUrl);
-    const nextProfile = next.selfUser?.id ?? null;
+    // Reconnect can admit hello before users.self resolves; only a known profile retires it.
+    const nextProfile = next.selfUser === undefined ? profileId : (next.selfUser?.id ?? null);
     const nextAccess = readGatewayOperatorAccess(next);
     const accessGranted = !operatorAccess.canAdmin && nextAccess.canAdmin;
     const connected = next.phase === "connected";
@@ -408,6 +410,7 @@ export function createApplicationUpdateOverlays(
       (connected && nextProfile !== profileId) ||
       (Boolean(next.hello?.auth) && !nextAccess.canAdmin);
     if (scopeChanged) {
+      confirmationTargetGeneration++;
       connectedEpoch++;
       updateFailureReporter.invalidate();
       updateRunGeneration++;
@@ -557,6 +560,16 @@ export function createApplicationUpdateOverlays(
     },
     refreshUpdateStatus,
     diagnoseUpdateFailure,
+    captureUpdateTarget(this: void) {
+      const generation = confirmationTargetGeneration;
+      const revision = gateway.connectionRevision;
+      // Consent survives this Gateway's restart, but never a target or authority change.
+      return () =>
+        generation === confirmationTargetGeneration &&
+        revision === gateway.connectionRevision &&
+        activeClient !== null &&
+        isCurrentClient(activeClient);
+    },
     acknowledgeUpdateRun(this: void) {
       const run = snapshot.updateRun;
       if (run && run.status !== "running") {

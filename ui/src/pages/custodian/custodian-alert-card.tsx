@@ -50,6 +50,7 @@ export function CustodianAlertCard(props: {
                 context.navigate(target.routeId);
               } else if (canUpdate()) {
                 void confirmAndStartUpdate({
+                  isCurrentTarget: context.overlays.captureUpdateTarget(),
                   startGatewayUpdate: () => void context.overlays.runUpdate(),
                   watchUpdateProgress: createUpdateProgressWatcher(context),
                   onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),

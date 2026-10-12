@@ -74,6 +74,7 @@ function startUpdate(
 ) {
   const startGatewayUpdate = vi.fn();
   const settled = confirmAndStartUpdateRuntime({
+    isCurrentTarget: () => true,
     startGatewayUpdate,
     updateAvailable: UPDATE_AVAILABLE,
     updateSchedule: null,
@@ -438,6 +439,7 @@ it.each(["existing", "started", "initial"] as const)(
     const stream = createProgressStream(entry === "existing" ? progress : undefined);
     const onAcknowledge = vi.fn();
     const settled = confirmAndStartUpdateRuntime({
+      isCurrentTarget: () => true,
       ...(entry !== "started" ? { existingRun: run } : {}),
       onAcknowledge,
       startGatewayUpdate: vi.fn(),
@@ -579,6 +581,8 @@ it.each([
         : {};
     });
     const harness = updateRunHarness(request);
+    const selfUser = { id: "gateway-owner" };
+    harness.update({ selfUser });
     const overlays = createApplicationOverlays(harness.gateway);
     let operation: Promise<void> | undefined;
     let statusOperation: Promise<boolean> | undefined;
@@ -586,6 +590,7 @@ it.each([
     try {
       await overlays.refreshUpdateStatus();
       settled = confirmAndStartUpdateRuntime({
+        isCurrentTarget: overlays.captureUpdateTarget(),
         ...(entry === "existing" ? { existingRun: run } : {}),
         startGatewayUpdate: () => {
           operation = overlays.runUpdate();
@@ -602,6 +607,11 @@ it.each([
         await flushMicrotasks();
         await operation;
       }
+      // Reconnect the same target before exercising recovery from its retained report.
+      harness.update({ phase: "reconnecting", selfUser: undefined });
+      harness.update({ phase: "connected", selfUser: undefined });
+      await flushMicrotasks();
+      harness.update({ selfUser });
       rejectRunReads = true;
       harness.emitEvent("update.run.changed", { ...run, updatedAtMs: run.updatedAtMs + 1 });
       await flushMicrotasks();

@@ -84,6 +84,8 @@ export type ConfirmAndStartUpdateParams = {
    * the Gateway route so a declined handoff cannot end in silence.
    */
   viaNativeApp: boolean;
+  /** Owner-held target captured before loading or showing confirmation. */
+  isCurrentTarget: () => boolean;
   startGatewayUpdate: () => void;
   /**
    * Streams the update lifecycle so the dialog can stay open and report it.
