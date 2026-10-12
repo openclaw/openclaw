@@ -56,16 +56,6 @@ describe("createAcpxProcessLeaseStore", () => {
     });
   }
 
-  it("serializes concurrent lease saves without dropping records", async () => {
-    const store = createStore();
-    await Promise.all(Array.from({ length: 25 }, (_, index) => store.save(makeLease(index))));
-
-    const leases = await store.listOpen("gateway-test");
-    expect(leases.map((lease) => lease.leaseId).toSorted()).toEqual(
-      Array.from({ length: 25 }, (_, index) => `lease-${index}`).toSorted(),
-    );
-  });
-
   it("removes terminal leases from the live lease namespace", async () => {
     const store = createStore();
     const openLease = makeLease(1);

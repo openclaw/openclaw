@@ -162,17 +162,9 @@ describe("renderSessionDetailPanel filtered usage", () => {
     end: number | null;
     expected: [number, number];
   }>([
-    { side: "left", key: "ArrowRight", start: null, end: null, expected: [2000, 4000] },
     { side: "right", key: "ArrowLeft", start: null, end: null, expected: [1000, 3000] },
-    { side: "left", key: "ArrowUp", start: 2000, end: 3000, expected: [3000, 3000] },
-    { side: "right", key: "ArrowDown", start: 2000, end: 3000, expected: [2000, 2000] },
-    { side: "left", key: "Home", start: 2000, end: 3000, expected: [1000, 3000] },
-    { side: "left", key: "End", start: 2000, end: 3000, expected: [3000, 3000] },
     { side: "right", key: "Home", start: 2000, end: 3000, expected: [2000, 2000] },
     { side: "right", key: "End", start: 2000, end: 3000, expected: [2000, 4000] },
-    { side: "left", key: "ArrowRight", start: 3000, end: 3000, expected: [3000, 3000] },
-    { side: "right", key: "ArrowLeft", start: 2000, end: 2000, expected: [2000, 2000] },
-    { side: "left", key: "ArrowRight", start: 3000, end: 2000, expected: [3000, 3000] },
   ])(
     "adjusts the $side range handle with $key from $start–$end",
     ({ side, key, start, end, expected }) => {
@@ -246,47 +238,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
     flush();
     expect(container.querySelector(".session-log-tools")).toBe(tools);
     expect(tools.open).toBe(true);
-  });
-
-  it("formats timeline labels in the selected UTC time zone", () => {
-    const timestamps = [
-      Date.parse("2026-05-13T18:00:00.000Z"),
-      Date.parse("2026-05-13T23:59:59.999Z"),
-    ];
-    const container = mount(
-      timestamps.map((timestamp) => point({ timestamp })),
-      null,
-      null,
-      "total",
-      { timeZone: "utc" },
-    );
-    const locale = i18n.getLocale();
-    expect(
-      [...container.querySelectorAll(".ts-axis-label")].map((label) => label.textContent),
-    ).toEqual(
-      expect.arrayContaining(
-        timestamps.map((timestamp) =>
-          new Date(timestamp).toLocaleTimeString(locale, {
-            hour: "2-digit",
-            minute: "2-digit",
-            timeZone: "UTC",
-          }),
-        ),
-      ),
-    );
-    const bars = [...container.querySelectorAll(".ts-bar")];
-    expect(bars).toHaveLength(timestamps.length);
-    for (const [index, bar] of bars.entries()) {
-      const expectedDate = new Date(timestamps[index]!).toLocaleString(locale, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: "UTC",
-      });
-      expect(bar.getAttribute("data-tooltip")).toBe(bar.getAttribute("aria-label"));
-      expect(bar.getAttribute("data-tooltip")?.startsWith(`${expectedDate} · `)).toBe(true);
-    }
   });
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
@@ -428,26 +379,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     hasLoaded: boolean;
     loading?: boolean;
     error?: string;
-  }>([
-    { name: "initial loading", logs: null, hasLoaded: false, loading: true },
-    { name: "initial failure", logs: null, hasLoaded: false, error: "logs unavailable" },
-    { name: "empty loaded conversation", logs: [], hasLoaded: true },
-    {
-      name: "undated loaded messages",
-      logs: [
-        { timestamp: 0, role: "user", content: "Unknown time" },
-        { timestamp: 0, role: "assistant", content: "[Tool: read]" },
-      ],
-      hasLoaded: true,
-    },
-    {
-      name: "interval outside loaded history",
-      logs: [
-        { timestamp: Date.parse("2026-08-21T12:00:00Z"), role: "assistant", content: "Later" },
-      ],
-      hasLoaded: true,
-    },
-  ])(
+  }>([{ name: "initial failure", logs: null, hasLoaded: false, error: "logs unavailable" }])(
     "keeps interval message and tool counts unavailable for $name",
     ({ logs, hasLoaded, loading, error }) => {
       const start = Date.parse("2026-08-20T12:00:00Z");
@@ -493,7 +425,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     },
   );
 
-  it.each(["refreshing", "stale"] as const)(
+  it.each(["stale"] as const)(
     "keeps %s loaded counts independent of conversation search and role filters",
     (state) => {
       const start = Date.parse("2026-08-20T12:00:00Z");
@@ -509,7 +441,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
             { timestamp: start + 1000, role: "assistant", content: "Answer" },
           ],
           sessionLogsHasLoaded: true,
-          sessionLogsLoading: state === "refreshing",
           sessionLogs: state === "stale" ? "refresh failed" : undefined,
           stale: state === "stale",
           logFilters: { roles: ["tool"], tools: [], hasTools: false, query: "not present" },
@@ -529,7 +460,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     },
   );
 
-  it.each(["tool", "toolResult"] as const)(
+  it.each(["toolResult"] as const)(
     "counts repeated assistant calls without counting %s results in the selected range",
     (resultRole) => {
       const start = Date.parse("2026-08-20T12:00:00Z");

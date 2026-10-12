@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import type {
   ProviderCatalogContext,
+  ProviderCatalogOutcome,
   ProviderCatalogResult,
   ProviderPlugin,
 } from "../plugins/types.js";
@@ -20,6 +21,7 @@ import {
 import {
   buildOpenAICompatibleLiveModels,
   readLiveModelCatalogId,
+  readOpenAICompatibleLiveModelId,
   type ProjectedUpstreamProviderCatalogModel,
 } from "./provider-catalog-live-normalize.internal.js";
 import {
@@ -415,7 +417,7 @@ function prepareOpenAICompatibleLiveModelDiscovery(
           discoveryApiKey: params.discoveryApiKey,
           profileId: params.profileId,
         };
-  const request: BuildLiveModelProviderConfigParams<ModelDefinitionConfig> = {
+  const request = {
     discoveryMode: params.discoveryMode,
     providerId: params.providerId,
     endpoint,
@@ -434,7 +436,7 @@ function prepareOpenAICompatibleLiveModelDiscovery(
       params.modelDiscovery?.projectRows ??
       ((rows, fallbackProvider) =>
         buildOpenAICompatibleLiveModels(rows, fallbackProvider, acceptUnknownModel)),
-  };
+  } satisfies BuildLiveModelProviderConfigParams<ModelDefinitionConfig>;
   return { kind: "live" as const, request, profileId: auth.profileId };
 }
 
@@ -454,9 +456,35 @@ export async function buildOpenAICompatibleLiveProviderCatalog(
   if (discovery.kind === "static") {
     return { provider: discovery.provider };
   }
-  const run = async () => ({
-    provider: await buildLiveModelProviderConfig(discovery.request),
-  });
+  const run = async () => {
+    let modelIdCatalog: ProviderCatalogOutcome["modelIdCatalog"];
+    const projectRows = discovery.request.projectRows;
+    const provider = await buildLiveModelProviderConfig({
+      ...discovery.request,
+      projectRows: (rows, fallback) => {
+        modelIdCatalog = {
+          baseUrl: fallback.baseUrl,
+          modelIds: rows.map(readOpenAICompatibleLiveModelId).filter((id) => id !== undefined),
+        };
+        return projectRows(rows, fallback);
+      },
+    });
+    return {
+      provider,
+      ...(modelIdCatalog
+        ? {
+            outcomes: [
+              {
+                provider: params.providerId,
+                profileId: discovery.profileId,
+                status: "ready" as const,
+                modelIdCatalog,
+              },
+            ],
+          }
+        : {}),
+    };
+  };
   return params.discoveryMode === "strict"
     ? await runLiveProviderCatalog({
         providerId: params.providerId,

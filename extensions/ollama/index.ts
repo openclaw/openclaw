@@ -44,6 +44,7 @@ import {
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
+  getUnlistedOllamaConfiguredModelIds,
   isLocalOllamaBaseUrl,
   readOllamaStringValue,
   resolveOllamaDiscoveryResult,
@@ -101,8 +102,6 @@ const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter =
 const ollamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: OLLAMA_PROVIDER_ID,
   capabilities: ["image"],
-  describeImage: undefined,
-  describeImages: undefined,
 };
 
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
@@ -837,6 +836,7 @@ export default definePluginEntry({
       ],
       catalog: {
         order: "late",
+        getUnlistedConfiguredModelIds: getUnlistedOllamaConfiguredModelIds,
         run: async (ctx: ProviderCatalogContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,

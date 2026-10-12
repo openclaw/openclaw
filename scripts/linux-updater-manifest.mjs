@@ -181,7 +181,9 @@ function readImmutableManifest(repository, source) {
           `OpenClaw-${manifest.version}-darwin-aarch64.app.tar.gz`,
           `OpenClaw-${manifest.version}-windows-x86_64.exe`,
         ]
-      : []),
+      : proof?.assets?.length === 4
+        ? [`OpenClaw-${manifest.version}-windows-x86_64.exe`]
+        : []),
   ];
   const metadata = current.assets.filter((entry) => entry.name === name);
   if (

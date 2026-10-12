@@ -4,7 +4,7 @@ import {
   renderJsonTextareaFixture,
   renderArrayFixture,
   renderObjectFixture,
-} from "../test-helpers/config-form-fixtures.ts";
+} from "../test-helpers/config-form-fixtures.tsx";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);

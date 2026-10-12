@@ -1,6 +1,5 @@
 import type { BuildSessionEntryOptions } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
-import type { SessionCostUsageCacheRead } from "../../infra/session-cost-usage-cache-read.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
@@ -176,13 +175,6 @@ export type VoiceSessionsWorkerInput = {
   kind: "voice-sessions";
   database: { agentId: string; path: string };
   request: VoiceSessionLookup;
-  env: NodeJS.ProcessEnv;
-};
-
-export type SessionUsageCacheWorkerInput = {
-  kind: "usage-cache";
-  database: { agentId: string; path: string };
-  request: SessionCostUsageCacheRead;
   env: NodeJS.ProcessEnv;
 };
 

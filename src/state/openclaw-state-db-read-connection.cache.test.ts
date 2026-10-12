@@ -379,15 +379,15 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect(await value()).toBe(2);
   expect(countOpens()).toBe(2);
   expect(prepare.mock.calls.filter(([sql]) => configSelect.test(sql))).toHaveLength(1);
-  expect(
-    observation.queries.filter(
-      (sql) =>
-        contentVersionSelect.test(sql) ||
-        catalogRead.test(sql) ||
-        /^PRAGMA (?:schema_version|user_version)$/iu.test(sql),
-    ),
-  ).toEqual([]);
-  // Reopened handles borrow admitted format facts without a freshness query.
+  for (const query of [
+    contentVersionSelect,
+    catalogRead,
+    /^PRAGMA schema_version$/iu,
+    userVersion,
+  ]) {
+    expect(observation.queries.filter((sql) => query.test(sql))).toHaveLength(1);
+  }
+  // Final close retires format facts; reopening validates once without a freshness query.
   expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(0);
   observation.restore();
 });

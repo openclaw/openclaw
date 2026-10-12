@@ -517,20 +517,22 @@ suite.define(() => {
               return event.defaultPrevented;
             }),
           ).toBe(false);
-          await page.keyboard.press("ControlOrMeta+K");
           const paletteInput = page.locator(".cmd-palette__input");
-          await paletteInput.waitFor();
-          await page.keyboard.type("Settings");
-          expect(await paletteInput.inputValue()).toBe("Settings");
-          await page.keyboard.press("Escape");
-          await paletteInput.waitFor({ state: "hidden" });
-          await expect
-            .poll(() =>
-              savedNote.evaluate(
-                (element) => document.hasFocus() && document.activeElement === element,
-              ),
-            )
-            .toBe(true);
+          for (const chord of ["ControlOrMeta+K", "ControlOrMeta+P", "ControlOrMeta+Shift+P"]) {
+            await page.keyboard.press(chord);
+            await paletteInput.waitFor();
+            await page.keyboard.type("Settings");
+            expect(await paletteInput.inputValue()).toBe("Settings");
+            await page.keyboard.press("Escape");
+            await paletteInput.waitFor({ state: "hidden" });
+            await expect
+              .poll(() =>
+                savedNote.evaluate(
+                  (element) => document.hasFocus() && document.activeElement === element,
+                ),
+              )
+              .toBe(true);
+          }
           await page.keyboard.type("!");
           expect(await savedNote.inputValue()).toBe("Saved draft!");
           expect(await savedNote.evaluate(() => Boolean(Reflect.get(window, "scrollNonce")))).toBe(

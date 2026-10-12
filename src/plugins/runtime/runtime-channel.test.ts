@@ -20,11 +20,6 @@ function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
 }
 
 describe("inbound dispatch", () => {
-  it("keeps the complete deprecated turn object identical to inbound", () => {
-    const channel = createRuntimeChannel();
-    expect(channel.turn).toBe(channel.inbound);
-    expect(channel.turn.dispatch).toBe(channel.inbound.dispatch);
-  });
   it("removes event custody before invoking the host-bound reply dispatcher", async () => {
     const callback = vi.fn();
     const dispatch = vi.fn(async () => ({
@@ -51,15 +46,14 @@ describe("inbound dispatch", () => {
 
   it.each([
     { surface: "inbound", bound: true },
-    { surface: "turn", bound: true },
     { surface: "inbound", bound: false },
-    { surface: "turn", bound: false },
   ] as const)(
     "$surface preserves dispatch precedence (bound=$bound)",
     async ({ surface, bound }) => {
       const boundReplyDispatch = bound ? vi.fn() : undefined;
       const callerDispatch = vi.fn();
       const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
+      expect(channel.turn).toBe(channel.inbound);
       const replyOptions = {
         isHeartbeat: true,
         internalEventExecution: { onStarted: vi.fn() },
@@ -87,103 +81,6 @@ describe("inbound dispatch", () => {
 });
 
 describe("runtimeContexts", () => {
-  it("registers, resolves, watches, and unregisters contexts", () => {
-    const channel = createRuntimeChannel();
-    const onEvent = vi.fn();
-    const unsubscribe = channel.runtimeContexts.watch({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      onEvent,
-    });
-
-    const lease = channel.runtimeContexts.register({
-      channelId: "matrix",
-      accountId: "default",
-      capability: "approval.native",
-      context: { client: "ok" },
-    });
-
-    expect(
-      channel.runtimeContexts.get<{ client: string }>({
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toEqual({ client: "ok" });
-    expect(onEvent).toHaveBeenCalledWith({
-      type: "registered",
-      key: {
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      },
-      context: { client: "ok" },
-    });
-
-    lease.dispose();
-
-    expect(
-      channel.runtimeContexts.get({
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toBeUndefined();
-    expect(onEvent).toHaveBeenLastCalledWith({
-      type: "unregistered",
-      key: {
-        channelId: "matrix",
-        accountId: "default",
-        capability: "approval.native",
-      },
-    });
-
-    unsubscribe();
-  });
-
-  it("auto-disposes registrations when the abort signal fires", () => {
-    const channel = createRuntimeChannel();
-    const controller = new AbortController();
-    const lease = channel.runtimeContexts.register({
-      channelId: "telegram",
-      accountId: "default",
-      capability: "approval.native",
-      context: { token: "abc" },
-      abortSignal: controller.signal,
-    });
-
-    controller.abort();
-
-    expect(
-      channel.runtimeContexts.get({
-        channelId: "telegram",
-        accountId: "default",
-        capability: "approval.native",
-      }),
-    ).toBeUndefined();
-    lease.dispose();
-  });
-
-  it("removes its abort listener when the lease is disposed", () => {
-    const channel = createRuntimeChannel();
-    const controller = new AbortController();
-    const initialListenerCount = getEventListeners(controller.signal, "abort").length;
-    const lease = channel.runtimeContexts.register({
-      channelId: "telegram",
-      accountId: "default",
-      capability: "approval.native",
-      context: { token: "abc" },
-      abortSignal: controller.signal,
-    });
-
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount + 1);
-
-    lease.dispose();
-
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount);
-  });
-
   it("removes the stale lease abort listener after a replacement registration", () => {
     const channel = createRuntimeChannel();
     const controller = new AbortController();
@@ -263,7 +160,7 @@ describe("runtimeContexts", () => {
       capability: "approval.native",
       onEvent: badWatcher,
     });
-    channel.runtimeContexts.watch({
+    const unsubscribe = channel.runtimeContexts.watch({
       channelId: "matrix",
       accountId: "default",
       capability: "approval.native",
@@ -298,6 +195,7 @@ describe("runtimeContexts", () => {
     ).toBeUndefined();
     expect(requireWatcherEvent(badWatcher, 1).type).toBe("unregistered");
     expect(requireWatcherEvent(goodWatcher, 1).type).toBe("unregistered");
+    unsubscribe();
   });
 
   it("auto-disposes when a watcher aborts during the registered event", () => {

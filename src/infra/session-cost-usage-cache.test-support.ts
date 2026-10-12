@@ -25,7 +25,7 @@ export function readSessionCostUsageRollupRows(
   return result.found ? result.value : [];
 }
 
-/** Seed the obsolete tool-count semantics through the real cache writer and its CAS fence. */
+/** Seed the obsolete tool-count semantics through the real cache writer. */
 export async function writeLegacyUsageCostRollupForTest(sessionFile: string): Promise<void> {
   const currentRow = expectDefined(
     readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
@@ -51,7 +51,6 @@ export async function writeLegacyUsageCostRollupForTest(sessionFile: string): Pr
     expect(
       await lock.writeRollup({
         rollupId: sessionFile,
-        previousValueJson: Buffer.from(currentRow.valueJson),
         valueJson: Buffer.from(encoded.valueJson),
         blob: encoded.blob,
         updatedAt: currentRow.updatedAt + 1,

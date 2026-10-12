@@ -3,8 +3,9 @@ import { For, Show, createMemo } from "solid-js";
 import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
+import { ConfigNode } from "../../components/config-form.node.tsx";
 import { resolveConfigFieldMeta } from "../../components/config-form.search.ts";
-import { analyzeConfigSchema, renderNode } from "../../components/config-form.ts";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import {
@@ -13,7 +14,6 @@ import {
 } from "../../lib/config/config-state-model.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { PluginCredentialEditor } from "../plugins/credential-editor.tsx";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
 import { readConfigValue } from "./search-config.ts";
@@ -43,24 +43,22 @@ function SearchConfigField(
       description={meta().help}
       stackedOnNarrow
       control={
-        <LitContent
-          render={() =>
-            renderNode({
-              schema: props.schema,
-              value: props.value,
-              path: props.path,
-              hints: hints(),
-              unsupported: props.unsupported,
-              disabled: !props.canEdit() || props.busy(),
-              compact: true,
-              commitOnBlur: true,
-              showLabel: false,
-              rawAvailable: false,
-              maskSensitive: true,
-              onPatch: (path, value) => void props.patch(path, value),
-              onRemove: (path) => void props.patch(path, undefined),
-            })
-          }
+        <ConfigNode
+          params={{
+            schema: props.schema,
+            value: props.value,
+            path: props.path,
+            hints: hints(),
+            unsupported: props.unsupported,
+            disabled: !props.canEdit() || props.busy(),
+            compact: true,
+            commitOnBlur: true,
+            showLabel: false,
+            rawAvailable: false,
+            maskSensitive: true,
+            onPatch: (path, value) => void props.patch(path, value),
+            onRemove: (path) => void props.patch(path, undefined),
+          }}
         />
       }
     />
