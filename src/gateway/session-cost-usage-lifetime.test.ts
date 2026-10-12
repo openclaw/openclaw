@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import * as aggregation from "../infra/session-cost-usage-aggregation.js";
 import * as cacheRuntime from "../infra/session-cost-usage-cache-runtime.js";
 import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
@@ -19,7 +21,105 @@ import * as agentList from "./agent-list.js";
 import { startSessionCostUsageProjectionLifetime } from "./session-cost-usage-lifetime.js";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("coalesces usage publications and flushes committed totals for an immediate overview", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config = { agents: { entries: { main: {} } } };
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:usage-coalescing",
+      sessionId: "usage-coalescing",
+    };
+    const timestamp = Date.parse("2026-09-18T12:00:00Z");
+    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
+    const append = (role: string, tokens?: number, updateMode: "inline" | "file-only" = "inline") =>
+      persistSessionTranscriptTurn(target, {
+        messages: [
+          {
+            message: {
+              role,
+              content: "Synthetic usage",
+              timestamp,
+              ...(tokens === undefined
+                ? {}
+                : {
+                    usage: {
+                      input: tokens,
+                      output: 0,
+                      totalTokens: tokens,
+                      cost: { total: tokens / 100 },
+                    },
+                  }),
+            },
+          },
+        ],
+        updateMode,
+        touchSessionEntry: false,
+      });
+    await append("assistant", 10);
+    await aggregation.refreshCostUsageCacheForAgent({ config, agentId: target.agentId });
+    const roster = await agentList.listGatewayAgentsBasic(config);
+    vi.spyOn(agentList, "listGatewayAgentsBasic").mockResolvedValue({ ...roster, agents: [] });
+    const refresh = vi.spyOn(aggregation, "refreshCostUsageCacheForAgent");
+    const lifetime = startSessionCostUsageProjectionLifetime({
+      getConfig: () => config,
+      warn: vi.fn(),
+    });
+    const overview = () =>
+      cacheRuntime.loadSessionCostOverviewFromCache({
+        config,
+        agentId: target.agentId,
+        sessions: [
+          {
+            key: target.sessionKey,
+            agentId: target.agentId,
+            instances: [
+              {
+                sessionId: target.sessionId,
+                sessionFile: formatSqliteSessionFileMarker({
+                  ...target,
+                  storePath: resolveSessionStorePathForScope(target, config),
+                }),
+              },
+            ],
+          },
+        ],
+        options: {},
+        requestRefresh: false,
+      });
+    vi.useFakeTimers();
+    try {
+      await append("user");
+      await append("system");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(refresh).not.toHaveBeenCalled();
+
+      await append("assistant", 20);
+      await vi.advanceTimersByTimeAsync(50);
+      await append("assistant", 30);
+      expect(refresh).not.toHaveBeenCalled();
+      expect(await overview()).toMatchObject({
+        totals: { totalTokens: 60 },
+        aggregates: { messages: { user: 1, assistant: 3 } },
+        cacheStatus: { status: "fresh" },
+      });
+      expect(refresh).toHaveBeenCalledTimes(1);
+
+      // Invalidation-only publications also cover rewrites and compaction.
+      await append("assistant", 40, "file-only");
+      expect(await overview()).toMatchObject({
+        totals: { totalTokens: 100 },
+        cacheStatus: { status: "fresh" },
+      });
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      await lifetime.stop();
+      vi.useRealTimers();
+    }
+  });
 });
 
 it("projects committed usage after startup preparation without borrowing its expired context", ({

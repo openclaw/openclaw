@@ -21,6 +21,7 @@ it("invalidates a scope registered by another isolate during an accepted write",
     ),
     facts: new Map(),
     writeScopes: new Map(),
+    references: new Map(),
   };
   const worker = { ...host, writeScopes: new Map(host.writeScopes) };
   const receipts = createSqliteDatabaseWriteReceipts({
