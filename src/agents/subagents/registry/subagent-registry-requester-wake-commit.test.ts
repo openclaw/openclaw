@@ -4,9 +4,11 @@ import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle
 import {
   commitRequesterWake,
   getPendingWakeCommit,
+  REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS,
   retryPendingWakeCommit,
   shouldReportRequesterSettleWakeFailure,
 } from "./subagent-registry-requester-wake-commit.js";
+import { settleOrParkRequesterWake } from "./subagent-registry-requester-wake-park.js";
 import { createRequesterWakeContextFixture } from "./subagent-registry-requester-yield.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
@@ -252,4 +254,120 @@ describe("requester settle wake failure reporting", () => {
       }
     },
   );
+
+  describe("parked owner-changed settlement (#154252)", () => {
+    const ownerChanged = () =>
+      new Error("subagent completion owner changed before settlement: run-a");
+
+    /** Mirrors the completeBatch caller: a non-delivered settle wrapped by the park policy. */
+    async function openSettleEpisode(entry: SubagentRunRecord, settle: () => Promise<boolean>) {
+      const { context, warn } = makeContext(entry);
+      const attempts = vi.fn(settle);
+      await commitRequesterWake(
+        context,
+        [entry],
+        undefined,
+        (members, episode) => settleOrParkRequesterWake(context, episode, members, attempts),
+        true,
+      ).catch(() => undefined);
+      return { context, attempts, warn };
+    }
+
+    async function retryDue(
+      context: SubagentLifecycleWakeContext,
+      entry: SubagentRunRecord,
+    ): Promise<void> {
+      const pending = getPendingWakeCommit(context, entry)!;
+      vi.setSystemTime(Math.max(Date.now(), pending.nextAttemptAt));
+      await retryPendingWakeCommit(context, pending).catch(() => undefined);
+    }
+
+    it("defers a parked episode by the probe interval and keeps its wake retained", async () => {
+      const entry = makeRetainedChild();
+      const { context, attempts } = await openSettleEpisode(entry, async () => {
+        throw ownerChanged();
+      });
+      for (let i = 0; i < 3; i += 1) {
+        await retryDue(context, entry);
+      }
+      // Four rejections so far: still on the capped backoff.
+      expect(getPendingWakeCommit(context, entry)?.parked).toBeFalsy();
+      expect(getPendingWakeCommit(context, entry)!.nextAttemptAt - Date.now()).toBe(120_000);
+
+      await retryDue(context, entry);
+
+      const parked = getPendingWakeCommit(context, entry)!;
+      expect(parked.parked).toBe(true);
+      expect(attempts).toHaveBeenCalledTimes(5);
+      expect(parked.nextAttemptAt - Date.now()).toBe(
+        REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS,
+      );
+      // A sweeper resume before the deadline is gated; the probe runs once it is due.
+      vi.setSystemTime(Date.now() + REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS - 1);
+      await retryPendingWakeCommit(context, parked);
+      expect(attempts).toHaveBeenCalledTimes(5);
+      vi.setSystemTime(Date.now() + 1);
+      await retryPendingWakeCommit(context, parked).catch(() => undefined);
+      expect(attempts).toHaveBeenCalledTimes(6);
+    });
+
+    it("reports the parked probe interval when parking and sustained failure coincide", async () => {
+      const entry = makeRetainedChild();
+      const { context, warn } = await openSettleEpisode(entry, async () => {
+        throw ownerChanged();
+      });
+      for (let i = 0; i < 4; i += 1) {
+        await retryDue(context, entry);
+      }
+
+      const pending = getPendingWakeCommit(context, entry)!;
+      expect(pending.parked).toBe(true);
+      const sustained = warn.mock.calls.filter(
+        ([message]) => message === "requester settle wake commit still failing; retries continue",
+      );
+      expect(sustained).toHaveLength(1);
+      expect(sustained[0]?.[1]).toMatchObject({
+        failures: 5,
+        retryIntervalMs: REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS,
+      });
+      expect(pending.nextAttemptAt - Date.now()).toBe(
+        REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS,
+      );
+    });
+
+    it("keeps the capped backoff for storage failures, however long they last", async () => {
+      const entry = makeRetainedChild();
+      const { context, attempts } = await openSettleEpisode(entry, async () => {
+        throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR" });
+      });
+      for (let i = 0; i < 30; i += 1) {
+        await retryDue(context, entry);
+      }
+
+      const pending = getPendingWakeCommit(context, entry)!;
+      expect(attempts).toHaveBeenCalledTimes(31);
+      expect(pending.parked).toBeFalsy();
+      expect(pending.nextAttemptAt - Date.now()).toBe(120_000);
+    });
+
+    it("clears the parked episode once a probe settles", async () => {
+      const entry = makeRetainedChild();
+      let healed = false;
+      const { context } = await openSettleEpisode(entry, async () => {
+        if (!healed) {
+          throw ownerChanged();
+        }
+        return true;
+      });
+      for (let i = 0; i < 4; i += 1) {
+        await retryDue(context, entry);
+      }
+      expect(getPendingWakeCommit(context, entry)?.parked).toBe(true);
+
+      healed = true;
+      await retryDue(context, entry);
+
+      expect(getPendingWakeCommit(context, entry)).toBeUndefined();
+    });
+  });
 });

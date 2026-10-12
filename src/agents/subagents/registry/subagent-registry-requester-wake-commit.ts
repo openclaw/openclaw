@@ -25,6 +25,9 @@ const REQUESTER_SETTLE_WAKE_COMMIT_SUSTAINED_FAILURES = 5;
 
 const REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS = 120_000;
 
+// A parked episode keeps probing at this slow cadence instead of the backoff cap.
+export const REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS = 30 * 60_000;
+
 // Count emitted reports separately: not every reported rejection advances commit failures.
 const REQUESTER_SETTLE_WAKE_FAILURE_REPORT_BUDGET = 5;
 
@@ -240,6 +243,10 @@ function deferWakeCommit(
   pending: PendingRequesterSettleWakeCommit,
 ): void {
   pending.failures += 1;
+  // A parked episode probes slowly; the warning below reports the delay actually scheduled.
+  const retryIntervalMs = pending.parked
+    ? REQUESTER_SETTLE_WAKE_PARKED_PROBE_INTERVAL_MS
+    : Math.min(REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS, 30_000 * 2 ** (pending.failures - 1));
   if (
     pending.failures >= REQUESTER_SETTLE_WAKE_COMMIT_SUSTAINED_FAILURES &&
     !pending.sustainedFailureReported
@@ -248,7 +255,7 @@ function deferWakeCommit(
     pending.sustainedFailureReported = true;
     context.options.warn("requester settle wake commit still failing; retries continue", {
       failures: pending.failures,
-      retryIntervalMs: REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS,
+      retryIntervalMs,
       suppressingIdenticalFailures: true,
       runIds: pending.entries.map((entry) => maskLifecycleIdentifier(entry.runId, "run")),
     });
@@ -256,9 +263,7 @@ function deferWakeCommit(
   // Always a future deadline. The lifecycle owner arms its retry timer from
   // this value and skips any deadline that is not ahead of now, so a deadline
   // in the past would strand the pending wake until restart.
-  pending.nextAttemptAt =
-    Date.now() +
-    Math.min(REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS, 30_000 * 2 ** (pending.failures - 1));
+  pending.nextAttemptAt = Date.now() + retryIntervalMs;
 }
 
 // Persistence failure cannot erase a transport result or its replay budget. Keep
