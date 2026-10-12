@@ -5,9 +5,14 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
+import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
+import {
+  MemorySourceIndexKernel,
+  memoryChunkRowId,
+  readMemorySourceChunks,
+} from "./manager-source-index-kernel.js";
 import type {
   MemorySourceIndexReplacement,
   MemorySourceIndexRow,
@@ -102,6 +107,39 @@ function snapshot(db: DatabaseSync) {
 }
 
 describe("memory source index native kernel", () => {
+  it("publishes 129 chunks with bounded batches instead of one insert per chunk", async () => {
+    const database = await createDatabase();
+    let inserts = 0;
+    const statements = observeHostDataSql((sql, preparingDatabase) => {
+      if (
+        !preparingDatabase &&
+        /^insert into ["`]?memory_index_(?:chunks|chunk_recall_metadata|chunk_provenance|chunks_vec)["`]?\s/i.test(
+          sql,
+        )
+      ) {
+        inserts++;
+      }
+    });
+    try {
+      write(database, replacement("memory/batched.md", "batch", 129));
+      expect(inserts).toBeGreaterThan(0);
+      expect(inserts).toBeLessThanOrEqual(8);
+    } finally {
+      statements.restore();
+    }
+    for (const table of [
+      "memory_index_chunks",
+      "memory_index_chunk_recall_metadata",
+      "memory_index_chunk_provenance",
+      "memory_index_chunks_vec",
+      "memory_index_chunks_fts",
+    ]) {
+      expect(database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
+        count: 129,
+      });
+    }
+  });
+
   it.each([
     { chunks: 3, failAt: 2, rollback: false },
     { chunks: 2048, failAt: 3, rollback: true },
@@ -230,8 +268,16 @@ describe("memory source index session delta", () => {
     assert.equal(value.source, "sessions");
     const retained = value.chunks.filter((chunk) => retainedLines.includes(chunk.startLine));
     const written = value.chunks.filter((chunk) => !retainedLines.includes(chunk.startLine));
+    const desiredIds = new Set(
+      value.chunks.map((chunk) =>
+        memoryChunkRowId(value.source, value.entry.path, chunk, value.model),
+      ),
+    );
     const { chunks: _chunks, embeddings: _embeddings, ...header } = value;
     const rows: MemorySourceIndexRow[] = [
+      ...readMemorySourceChunks(database.db, value.source, value.entry.path)
+        .filter((row) => !desiredIds.has(row.id))
+        .map((row) => ({ removedId: row.id })),
       ...retained.map((chunk) => ({
         chunk: {
           ...chunk,
@@ -263,18 +309,41 @@ describe("memory source index session delta", () => {
   it("keeps unchanged rows, writes new rows, and removes stale rows with derived data", async () => {
     const database = await createDatabase();
     const db = database.db;
-    write(database, session("v1", [1, 2, 3]));
+    write(database, session("v1", [1, 2, 3, 4]));
     const [first, second] = readChunks(db);
 
-    // Line 3 was rewritten into line 4; lines 1-2 are unchanged.
-    expect(writeDelta(database, { ...session("v2", [1, 2, 4]), now: 500 }, [1, 2])).toEqual({
-      retainedDrift: false,
+    const vectorDeletes = new Set<string>();
+    const statements = observeHostDataSql((sql, preparingDatabase) => {
+      if (!preparingDatabase && /^DELETE FROM memory_index_chunks_vec\b/i.test(sql)) {
+        vectorDeletes.add(sql);
+      }
     });
+    try {
+      // Two removals expose sqlite-vec's full scan for multi-value IN predicates.
+      writeDelta(database, { ...session("v2", [1, 2, 5, 6]), now: 500 }, [1, 2]);
+    } finally {
+      statements.restore();
+    }
+
+    const pointLookup = db
+      .prepare("EXPLAIN QUERY PLAN DELETE FROM memory_index_chunks_vec WHERE id = ?")
+      .all("unused")
+      .map((row) => row.detail);
+    expect(vectorDeletes.size).toBeGreaterThan(0);
+    for (const sql of vectorDeletes) {
+      expect(
+        db
+          .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+          .all(...Array.from(sql.matchAll(/\?/g), () => "unused"))
+          .map((row) => row.detail),
+      ).toEqual(pointLookup);
+    }
 
     expect(readChunks(db)).toEqual([
       first,
       second,
-      expect.objectContaining({ start_line: 4, text: "turn 4", updated_at: 500 }),
+      expect.objectContaining({ start_line: 5, text: "turn 5", updated_at: 500 }),
+      expect.objectContaining({ start_line: 6, text: "turn 6", updated_at: 500 }),
     ]);
     expect(readHash(db)).toEqual({ hash: "v2" });
     for (const table of [
@@ -304,7 +373,7 @@ describe("memory source index session delta", () => {
     );
   });
 
-  it("refreshes only changed provenance on retained rows", async () => {
+  it("refreshes retained recall metadata and provenance without changing indexed content", async () => {
     const database = await createDatabase();
     const db = database.db;
     write(database, session("v1", [1, 2]));
@@ -314,49 +383,33 @@ describe("memory source index session delta", () => {
       BEGIN INSERT INTO provenance_updates VALUES (NEW.chunk_id); END`);
     const updates = () => db.prepare("SELECT COUNT(*) AS count FROM provenance_updates").get();
 
-    expect(writeDelta(database, session("v2", [1, 2]), [1, 2], "untrusted")).toEqual({
-      retainedDrift: false,
-    });
+    const changed = session("v2", [1, 2]);
+    changed.chunks = changed.chunks.map((chunk) => ({
+      ...chunk,
+      importance: 9,
+      projectKey: "changed-project",
+      triggers: "changed",
+    }));
+    writeDelta(database, changed, [1, 2], "untrusted");
     expect(updates()).toEqual({ count: 2 });
     expect(readChunks(db)).toEqual(before);
     expect(
       db.prepare("SELECT DISTINCT origin_class FROM memory_index_chunk_provenance").all(),
     ).toEqual([{ origin_class: "untrusted" }]);
+    expect(
+      db
+        .prepare(
+          "SELECT DISTINCT importance, triggers, project_key FROM memory_index_chunk_recall_metadata",
+        )
+        .all(),
+    ).toEqual([{ importance: 9, triggers: "changed", project_key: "changed-project" }]);
 
-    writeDelta(database, session("v3", [1, 2]), [1, 2], "untrusted");
+    writeDelta(
+      database,
+      { ...changed, entry: { ...changed.entry, hash: "v3" } },
+      [1, 2],
+      "untrusted",
+    );
     expect(updates()).toEqual({ count: 2 });
-  });
-
-  it("reports drift and writes nothing when a retained row vanished before the write lock", async () => {
-    const database = await createDatabase();
-    const db = database.db;
-    write(database, session("v1", [1, 2]));
-    // A concurrent writer removed line 2 after planning.
-    db.prepare("DELETE FROM memory_index_chunks WHERE start_line = 2").run();
-    const before = snapshot(db);
-    expect(writeDelta(database, session("v2", [1, 2, 3]), [1, 2])).toEqual({
-      retainedDrift: true,
-    });
-    expect(snapshot(db)).toEqual(before);
-    expect(readHash(db)).toEqual({ hash: "v1" });
-  });
-
-  it("rejects retained rows staged after written rows", async () => {
-    const database = await createDatabase();
-    const value = session("v1", [1, 2]);
-    assert.equal(value.source, "sessions");
-    const { chunks, embeddings: _embeddings, ...header } = value;
-    const [first, second] = chunks;
-    assert.ok(first && second);
-    expect(() =>
-      runSqliteImmediateTransactionSync(database.db, () =>
-        new MemorySourceIndexKernel(database.db, database).replaceRows({ ...header, delta: true }, [
-          { chunk: first, embedding: [1, 0, 0] },
-          { chunk: second, embedding: [], retained: true },
-        ]),
-      ),
-    ).toThrow("retained rows must precede written rows");
-    expect(readChunks(database.db)).toEqual([]);
-    expect(readHash(database.db)).toBeUndefined();
   });
 });

@@ -25,7 +25,7 @@ import { buildExecApprovalPendingToolResult } from "./bash-tools.exec-host-share
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import {
   fakeTool,
   pluginToolWithExecute,
@@ -700,7 +700,9 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       tools: [fakeTool("client_probe", "Client probe")],
     });
     expect(testing.activeRuns.get(runId)).toBe(initial);
-    expect(exec.description).toContain("client_probe");
+    expect(buildCodeModeCatalogPrompt(owner, owner.catalogRef.current?.entries ?? [])).toContain(
+      "client_probe",
+    );
 
     for (let index = 0; index < 2; index += 1) {
       const previous = expectDefined(testing.activeRuns.get(runId), "previous snapshot");

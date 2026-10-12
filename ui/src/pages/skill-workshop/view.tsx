@@ -79,10 +79,10 @@ export function SkillWorkshopView(props: { view: WorkshopView }) {
         onSelect={(tab) => props.view().context.navigate(tab)}
       />
       <SettingsWorkspace>
-        <wa-tab-panel
+        <div
           id={PLUGINS_HUB_PANEL_ID}
-          name="skill-workshop"
-          prop:active={true}
+          role="tabpanel"
+          tabindex="0"
           aria-labelledby="plugins-tab-skill-workshop"
         >
           <SettingsPage wide carapace>
@@ -109,7 +109,7 @@ export function SkillWorkshopView(props: { view: WorkshopView }) {
               <Library view={props.view} />
             </Show>
           </SettingsPage>
-        </wa-tab-panel>
+        </div>
       </SettingsWorkspace>
     </>
   );

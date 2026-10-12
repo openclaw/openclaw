@@ -371,6 +371,7 @@ it.for([
     }
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let inspectionSettled: Promise<unknown> | undefined;
+    let waitForHealthyAgent = (): Promise<void> | undefined => undefined;
     let suppliedBroker: Awaited<ReturnType<typeof spawnBroker.startGatewaySpawnBroker>>;
     let unadoptedPortClaim: TestPortClaim | undefined;
     try {
@@ -404,6 +405,8 @@ it.for([
         }
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         inspectionSettled = admission.pendingPreparation;
+        waitForHealthyAgent = () =>
+          admission.waitForAgentPreparation(healthyAgentId, { env, signal });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
           suppliedBroker = await spawnBroker.startGatewaySpawnBroker({
@@ -455,7 +458,9 @@ it.for([
         await withinTest(inspectionSettled ?? Promise.resolve(), signal);
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
-          repairHint: expect.stringContaining("doctor --fix"),
+          repairHint: expect.stringContaining(
+            `openclaw doctor --session-sqlite recover --session-sqlite-agent ${agentId}`,
+          ),
         });
         expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(
@@ -472,6 +477,8 @@ it.for([
           agentDatabases: [readAgentDatabaseAdmissionRefusal(agentId, { env })],
         });
       }
+      // Sidecar readiness can precede an unpaused sibling's database admission.
+      await waitForHealthyAgent();
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
       if (paused) {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({

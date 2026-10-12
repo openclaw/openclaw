@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.js";
@@ -14,7 +15,7 @@ import type { GatewayHostLifecycle } from "./server-public.js";
 type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
-/** Completes the socket-free request and internal-dispatch half of Gateway startup. */
+/** Prepares request bindings and the one-shot initializer shared by startup and transports. */
 export async function prepareGatewayKernelRequestRuntime(params: {
   coreRuntime: GatewayCoreRuntime;
   log: GatewayLogger;
@@ -55,23 +56,10 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
-  const projectionReady = runtime.opts.updateCanary
-    ? Promise.resolve(undefined)
-    : startupTrace.measure("sessions.projection", async () => {
-        const { createSessionRowProjection } = await import("./session-row-projection.js");
-        return createSessionRowProjection({
-          cfg: getRuntimeConfig(),
-          getConfig: getRuntimeConfig,
-          getPolicyConfig: gatewayRequestContext.getCommittedRuntimeConfig ?? getRuntimeConfig,
-          getModelCatalog: () =>
-            readPreparedServerMethodModelCatalogs(
-              gatewayRequestContext,
-              listAgentIds(getRuntimeConfig()),
-            ),
-          context: gatewayRequestContext,
-          placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
-        });
-      });
+  let projectionReady:
+    | ReturnType<(typeof import("./session-row-projection.js"))["createSessionRowProjection"]>
+    | undefined;
+  let requestRuntimeReady: Promise<void> | undefined;
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };
   runtime.registerGatewayLifetimeSidecars({
     stop: async () => {
@@ -81,7 +69,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       retireQuestionChannelGateway(runtime.connectionWork.signal);
       closeGatewayDeviceRevocation(gatewayRequestContext);
       await gatewayRequestContext.scopeUpgradeCoordinator?.close();
-      const projection = await projectionReady.catch(() => undefined);
+      const projection = await projectionReady?.catch(() => undefined);
       await shutdownRuntime.flushPendingSessionsChangedEvents(gatewayRequestContext);
       if (projection) {
         await shutdownRuntime.drainSessionEventPublications(projection);
@@ -90,36 +78,57 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       projection?.dispose();
     },
   });
-  const projection = await projectionReady;
-  if (projectionLifetime.closing) {
-    throw new Error("Gateway closed during session projection startup");
-  }
-  if (projection) {
-    projectionLifetime.detach = runtime.attachSessionRowProjection(projection);
-    // The initial roster must be usable before reconnecting clients can issue lists.
-    await startupTrace.measure("sessions.materialize", () => projection.ensureMaterialized());
+  // An early request may initialize this while other listeners bind; keep startup ownership.
+  const initializeRequestRuntime = AsyncLocalStorage.bind(async () => {
+    projectionReady = runtime.opts.updateCanary
+      ? undefined
+      : startupTrace.measure("sessions.projection", async () => {
+          const { createSessionRowProjection } = await import("./session-row-projection.js");
+          return createSessionRowProjection({
+            cfg: getRuntimeConfig(),
+            getConfig: getRuntimeConfig,
+            getPolicyConfig: gatewayRequestContext.getCommittedRuntimeConfig ?? getRuntimeConfig,
+            getModelCatalog: () =>
+              readPreparedServerMethodModelCatalogs(
+                gatewayRequestContext,
+                listAgentIds(getRuntimeConfig()),
+              ),
+            context: gatewayRequestContext,
+            placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
+          });
+        });
+    const projection = await projectionReady;
     if (projectionLifetime.closing) {
       throw new Error("Gateway closed during session projection startup");
     }
-  }
+    if (projection) {
+      projectionLifetime.detach = runtime.attachSessionRowProjection(projection);
+      // The initial roster must be usable before reconnecting clients can issue lists.
+      await startupTrace.measure("sessions.materialize", () => projection.ensureMaterialized());
+      if (projectionLifetime.closing) {
+        throw new Error("Gateway closed during session projection startup");
+      }
+    }
+    if (!runtime.opts.updateCanary) {
+      await startupTrace.measure("gateway.lifetime-sidecars", () =>
+        attachInitialGatewayLifetimeSidecars({
+          scheduler: runtime.scheduler,
+          chatMetadataLifecycle,
+          gatewayRequestContext,
+          flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
+          minimalTestGateway,
+          logWarning: (message) => log.warn(message),
+          ...(!workerPlacementRuntime && githubPublicationRuntime
+            ? { reconcileGitHubPublications: githubPublicationRuntime.reconcilePublications }
+            : {}),
+          publishSidecars: runtimeState.gatewayLifetimeSidecars.publish,
+        }),
+      );
+    }
+  });
+  const ensureRequestRuntimeReady = () => (requestRuntimeReady ??= initializeRequestRuntime());
   gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);
-  if (!runtime.opts.updateCanary) {
-    await startupTrace.measure("gateway.lifetime-sidecars", () =>
-      attachInitialGatewayLifetimeSidecars({
-        scheduler: runtime.scheduler,
-        chatMetadataLifecycle,
-        gatewayRequestContext,
-        flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
-        minimalTestGateway,
-        logWarning: (message) => log.warn(message),
-        ...(!workerPlacementRuntime && githubPublicationRuntime
-          ? { reconcileGitHubPublications: githubPublicationRuntime.reconcilePublications }
-          : {}),
-        publishSidecars: runtimeState.gatewayLifetimeSidecars.publish,
-      }),
-    );
-  }
   pluginGatewayContext.current = gatewayRequestContext;
   gatewayRequestContext.dispatchHookAgentTurn = async (pluginId, hookParams) => {
     const transport = runtime.transportBridge.current();
@@ -175,7 +184,13 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     gatewayRequestContext.resolveGatewayContext,
   );
   gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;
-  return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };
+  return {
+    ...runtime,
+    chatMetadataLifecycle,
+    gatewayRequestContext,
+    gatewayInstanceRuntime,
+    ensureRequestRuntimeReady,
+  };
 }
 
 export type GatewayKernelRuntime = Awaited<ReturnType<typeof prepareGatewayKernelRequestRuntime>>;

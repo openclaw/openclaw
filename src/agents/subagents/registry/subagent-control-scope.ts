@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { execRequestMatches, type ExecRequestOwner } from "../../../infra/exec-request-context.js";
+import {
+  execRequestMatches,
+  type ExecRequestIdentity,
+  type ExecRequestOwner,
+} from "../../../infra/exec-request-context.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import {
   isSubagentSessionKey,
@@ -143,6 +147,8 @@ export type ExecRequestSubagentSelection = {
   ownsRoot: (entry: SubagentRunRecord) => boolean;
   selectPublishedRoot?: (entry: SubagentRunRecord) => boolean;
   sessionGeneration?: SubagentRequestSessionOrigin["target"];
+  /** Resolve exact authority after the existing kill scope holds its candidates. */
+  prepare?: () => Promise<void>;
 };
 
 /** Freeze native owners before cancellation yields; routed IDs never grant control. */
@@ -151,10 +157,19 @@ export function captureExecRequestSubagentSelection(params: {
   controller: ResolvedSubagentController;
   requesterTurnRunId?: string;
   owners: readonly ExecRequestOwner[];
+  acceptsRequest?: (identity: Readonly<ExecRequestIdentity>) => boolean;
   sessionOrigin?: SubagentRequestSessionOrigin;
+  /** Logical candidates reserve dispatch only; preparation replaces them before effects. */
+  candidateOrigin?: {
+    target: Pick<SubagentRequestSessionOrigin["target"], "sessionKey" | "agentId">;
+    acceptsRequest: SubagentRequestSessionOrigin["acceptsRequest"];
+  };
 }): ExecRequestSubagentSelection {
   const owners = new Set(params.owners);
-  const origin = params.requesterTurnRunId === undefined ? params.sessionOrigin : undefined;
+  const origin =
+    params.requesterTurnRunId === undefined
+      ? (params.sessionOrigin ?? params.candidateOrigin)
+      : undefined;
   if (
     origin &&
     (origin.target.sessionKey !== params.controller.controllerSessionKey ||
@@ -192,14 +207,22 @@ export function captureExecRequestSubagentSelection(params: {
     requestOwners?: ReadonlySet<ExecRequestOwner>,
   ) => {
     const key = getSubagentRunRuntimeKey(entry);
-    if (selected.has(key)) {
+    const existing = selected.get(key);
+    if (existing) {
+      if (params.acceptsRequest && requestOwners) {
+        // Refine the same captured run with its exact request owners before cancellation.
+        existing.requestOwners = requestOwners;
+      }
       return false;
     }
     selected.set(key, { entry, controller, requestOwners });
     return true;
   };
   const selectPublishedRoot = (entry: SubagentRunRecord) => {
-    const controller = readSubagentExecRequestController(entry, (owner) => owners.has(owner));
+    const controller = readSubagentExecRequestController(
+      entry,
+      (owner) => owners.has(owner) && (params.acceptsRequest?.(owner.identity) ?? true),
+    );
     return controller !== undefined && capture(entry, controller, owners);
   };
   let selectedByOrigin = false;
@@ -232,7 +255,7 @@ export function captureExecRequestSubagentSelection(params: {
     runs: [...selected.values()].map(({ entry }) => entry),
     // Late publication must prove the captured request object, never a new session match.
     selectPublishedRoot: owners.size > 0 ? selectPublishedRoot : undefined,
-    sessionGeneration: selectedByOrigin ? origin?.target : undefined,
+    sessionGeneration: selectedByOrigin ? params.sessionOrigin?.target : undefined,
     ownsRoot(entry) {
       const captured = selected.get(getSubagentRunRuntimeKey(entry));
       return Boolean(
@@ -243,7 +266,9 @@ export function captureExecRequestSubagentSelection(params: {
         (!captured.requestOwners ||
           readSubagentExecRequestController(
             entry,
-            (owner) => captured.requestOwners?.has(owner) === true,
+            (owner) =>
+              captured.requestOwners?.has(owner) === true &&
+              (params.acceptsRequest?.(owner.identity) ?? true),
           )) &&
         !ensureSubagentControllerOwnsRun({
           cfg: params.cfg,

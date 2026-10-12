@@ -138,6 +138,7 @@ describe("session suggestion handlers", () => {
       let revoked = false;
       let hostCurrent = true;
       let admittedCheck: (() => void) | undefined;
+      let releaseChatAuthority: (() => void) | undefined;
       const assertAdmittedCurrent = () => {
         if (!hostCurrent) {
           throw new Error("host closed");
@@ -156,6 +157,7 @@ describe("session suggestion handlers", () => {
           respond,
           sessionMutationAuthorization,
         }: Pick<GatewayRequestHandlerOptions, "respond" | "sessionMutationAuthorization">) => {
+          releaseChatAuthority = sessionMutationAuthorization?.takeRelease?.();
           sessionMutationAuthorization?.assertCurrent();
           admittedCheck = sessionMutationAuthorization?.assertAdmittedInputCurrent;
           reservation = runOpenClawAgentWorkerWrite({ ...scope, path: database.path }, async () => {
@@ -215,6 +217,7 @@ describe("session suggestion handlers", () => {
       } finally {
         release.resolve();
         await Promise.allSettled([pending, reservation]);
+        releaseChatAuthority?.();
       }
     });
   });

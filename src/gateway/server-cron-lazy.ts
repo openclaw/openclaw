@@ -83,6 +83,14 @@ export function createLazyGatewayCronState(
     return await cronStateLoader.load();
   };
   const bindCron = createLazyRuntimeMethodBinder(load);
+  const bindStartedCron = createLazyRuntimeMethodBinder(async () => {
+    const resolved = await load();
+    // Startup recovery must finish before a new receipt can become running.
+    if (!stopped) {
+      await cron.start();
+    }
+    return resolved;
+  });
 
   const stopResolvedCron = async (resolved: LoadedGatewayCronState): Promise<void> => {
     resolved.phase = "stopped";
@@ -260,8 +268,8 @@ export function createLazyGatewayCronState(
       return await (await load()).state.cron.removeAgentJobsTransactional(agentId, commit);
     },
     quiesceJobs: bindCron(({ state }) => state.cron.quiesceJobs.bind(state.cron)),
-    run: bindCron(({ state }) => state.cron.run.bind(state.cron)),
-    enqueueRun: bindCron(({ state }) => state.cron.enqueueRun.bind(state.cron)),
+    run: bindStartedCron(({ state }) => state.cron.run.bind(state.cron)),
+    enqueueRun: bindStartedCron(({ state }) => state.cron.enqueueRun.bind(state.cron)),
     waitForManualRun: bindCron(({ state }) => state.cron.waitForManualRun.bind(state.cron)),
     getJob(id) {
       return loaded?.state.cron.getJob(id);

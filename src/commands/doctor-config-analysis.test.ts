@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfiguredModelFallbacks } from "../agents/model-selection-resolve.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   noteDoctorHookConfigWarnings,
@@ -25,6 +29,39 @@ function collectImplicitFallbackClobberWarnings(cfg: unknown): string[] {
 }
 
 describe("doctor config analysis helpers", () => {
+  it.each(["missing", "pending"] as const)(
+    "reports %s hook credentials with guidance without exposing or rewriting the token",
+    (kind) => {
+      noteMock.mockClear();
+      const cfg: OpenClawConfig = {
+        hooks: { enabled: true, token: "synthetic-private-hook-value" },
+      };
+      setConfigResolutionFacts(
+        cfg,
+        createConfigResolutionFacts(
+          kind === "missing" ? [{ varName: "MISSING_HOOK_SECRET", configPath: "hooks.token" }] : [],
+          kind === "pending" ? new Map([["hooks.token", "PENDING_HOOK_SECRET"]]) : new Map(),
+        ),
+      );
+      noteDoctorHookConfigWarnings(cfg, "/virtual/.openclaw/openclaw.json");
+      const message = String(noteMock.mock.calls[0]?.[0]);
+      expect(message).toContain("hooks.token has an unresolved environment reference");
+      expect(message).toContain("CLI and service environments may differ");
+      expect(message).toContain("openclaw config set hooks.enabled false");
+      expect(message).not.toContain("synthetic-private-hook-value");
+      expect(cfg.hooks?.token).toBe("synthetic-private-hook-value");
+    },
+  );
+
+  it.each([true, false])("does not warn about literal hook tokens (enabled=%s)", (enabled) => {
+    noteMock.mockClear();
+    noteDoctorHookConfigWarnings(
+      { hooks: { enabled, token: "synthetic-literal-hook-value" } },
+      "/virtual/.openclaw/openclaw.json",
+    );
+    expect(noteMock).not.toHaveBeenCalled();
+  });
+
   it("warns when hooks transformsDir points outside the hook transforms root", () => {
     noteMock.mockClear();
     noteDoctorHookConfigWarnings(

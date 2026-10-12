@@ -102,7 +102,7 @@ it("retains durable callback ordering and warns once per plugin across legacy wr
       }
       for (const [message] of warning.mock.calls) {
         expect(message).toContain("preparation.prepareMessage / preparation.source");
-        expect(message).toContain("next Plugin SDK major");
+        expect(message).toContain("later release after stable deprecation");
       }
     } finally {
       warning.mockRestore();

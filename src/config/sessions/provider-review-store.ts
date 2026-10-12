@@ -168,7 +168,20 @@ export async function compareSessionProviderReview(
             throw new Error("Provider review commit omitted its publication receipt");
           }
           admitted = { admission, retained };
-          publication.begin([sessionKey], []);
+          // SAFETY: The paired review kernel supplies this pre-COMMIT publication.
+          const receipt = facts.publication as SessionEntryReplacementPublication;
+          publication.begin(
+            [sessionKey],
+            [],
+            undefined,
+            undefined,
+            undefined,
+            new Map(
+              [...receipt.current].filter(
+                ([key]) => !receipt.unavailableParticipantKeys?.includes(key),
+              ),
+            ),
+          );
         },
       );
     },

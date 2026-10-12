@@ -93,6 +93,8 @@ export type SqliteWalMaintenanceOptions = SqliteWalCheckpointOptions & {
   checkpointMode?: SqliteWalCheckpointMode;
   /** Owner-held synchronous exclusion around maintenance writes, including periodic vacuum. */
   runMaintenance?: (operation: () => boolean) => boolean;
+  /** Offline maintenance retains the worker but excludes autonomous checkpoint writes. */
+  isScheduledMaintenanceSuspended?: () => boolean;
 };
 
 export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
@@ -416,7 +418,10 @@ export function configureSqliteWalMaintenance(
     db,
     maintainPeriodic,
     (maxPages) =>
-      timerIntervalMs > 0 && !scope.signal.aborted && !invalidated
+      timerIntervalMs > 0 &&
+      !scope.signal.aborted &&
+      !invalidated &&
+      !options.isScheduledMaintenanceSuspended?.()
         ? { maxPages, checkpointMode: periodicCheckpointMode, checkpoint: checkpointOwner.snapshot }
         : undefined,
     checkpointOwner.adopt,

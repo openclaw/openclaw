@@ -404,7 +404,8 @@ export async function retainSharedCodexAppServerClientByInstanceId(
       // Only writer handoffs should wait for a still-usable retired owner.
       release: (waitForRetirement = false) => {
         release();
-        return client.getCloseError() || (waitForRetirement && entry.closeWhenIdle)
+        return options?.waitForExit !== false &&
+          (client.getCloseError() || (waitForRetirement && entry.closeWhenIdle))
           ? waitForCodexAppServerClientExit(client)
           : undefined;
       },

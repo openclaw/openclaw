@@ -12,6 +12,7 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "../../infra/kysely-sync.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
@@ -120,12 +121,17 @@ export function isMissingDatabasePath(pathname: string): boolean {
 
 export function acquireAuthProfileReadDatabase(
   pathname: string,
+  schema?: SqliteAuthSchema,
 ): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
   const resolvedPath = path.resolve(pathname);
   if (isDeletedAgentDatabasePath(resolvedPath)) {
     return { status: "missing" };
   }
   const inspection = isArtifactPreservingStateRead("agent", resolvedPath);
+  if (!inspection && schema && schema.userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
+    closeAuthProfileReadDatabase(resolvedPath);
+    return { status: "unreadable" };
+  }
   const cached = inspection ? undefined : authProfileReadDatabases.get(resolvedPath);
   if (cached?.ready && cached.db.isOpen) {
     authProfileReadDatabases.delete(resolvedPath);
@@ -162,6 +168,8 @@ export function acquireAuthProfileReadDatabase(
     enableNodeSqliteKyselyStatementCache(db);
     if (inspection) {
       readable = readSqliteUserVersion(db) <= OPENCLAW_AGENT_SCHEMA_VERSION;
+    } else if (schema) {
+      readable = true;
     } else {
       admitSqliteSchema(db, (version) => {
         if (version > OPENCLAW_AGENT_SCHEMA_VERSION) {

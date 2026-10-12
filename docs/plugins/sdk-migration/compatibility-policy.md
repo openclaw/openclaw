@@ -59,6 +59,15 @@ incognito owner during its separate migration.
 
 ### Retained helper contracts
 
+`openclaw/plugin-sdk/sandbox.resolveSandboxRuntimeStatus` is deprecated. Await
+`resolveSandboxRuntimeStatusAsync` for a session lookup, or use
+`resolvePreparedSandboxRuntimeStatus` with an already selected full session entry
+(or `null` for acknowledged absence). The synchronous adapter retains its old
+behavior and emits one bounded `sandbox-runtime-status` warning per plugin. It
+will be removed in a later release after stable deprecation. Bundled execution
+paths prepare policy through the session worker and retain its authority through the effect;
+this migration changes no schema, retention, or update behavior.
+
 Transcript append and lock preparation now uses
 [`preparation.prepareMessage`, `preparation.source`, and `withSessionTranscriptWrite`](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
 The `transcript-lock-sync-message-preparation` and
@@ -251,10 +260,26 @@ activity and never replace current channel or session authority.
 
 The synchronous timestamp and envelope APIs shipped in OpenClaw 2026.9.8 remain
 deprecated compatibility until the next Plugin SDK major and explicit breaking-release
-approval. This includes the callback-based `inbound-envelope` helpers and
+approval. Calling `readSessionUpdatedAt` through either the SDK subpath or
+`runtime.channel.session` emits the same deprecation warning. The compatibility
+window includes the callback-based `inbound-envelope` helpers and
 `dispatchInboundDirectDmWithRuntime`; bundled callers use the awaited preparation
 and `dispatchInboundDirectDm`. Existing synchronous signatures and callback timing
 remain unchanged. No schema, stored data, retention, or update migration is required.
+
+### Combined session-store reads
+
+Await `loadCombinedSessionStoreForGatewayAsync` from
+`openclaw/plugin-sdk/session-transcript-hit`. It preserves the full-entry result
+and excludes incognito sessions while reading durable stores and foreign parent
+metadata in the database workers. Each call observes committed in-process writes;
+its returned view retains the facts captured for that call.
+
+The synchronous `loadCombinedSessionStoreForGateway` emits a deprecation warning
+and keeps its existing signature and behavior during its deprecation period. It
+will be removed in a later release after stable deprecation. Bundled Memory search
+uses the async method.
+No schema, retained data, or update migration is required.
 
 ### Progress card handoff
 
@@ -492,9 +517,13 @@ published in `v2026.9.8`: `buildSessionEntry(path, options?)`,
 `onTranscriptMessage(message, observedAt)` observer remain unchanged. Internal
 incognito actor sources are not plugin arguments.
 
+Corpus discovery accepts `options.config` to use the caller's prepared config
+and session store without reading the host's global runtime snapshot. Memory
+Core passes its manager or dreaming config through this option. Callers that
+omit it continue to use the prepared host runtime config.
+
 The `memory-session-released-signatures` compatibility record is active. These
-APIs remain supported without warnings or a required migration; changing their
-released contracts requires an explicitly approved Plugin SDK major release.
+APIs remain supported without warnings or a required migration.
 
 ### Session upstream-link writes
 

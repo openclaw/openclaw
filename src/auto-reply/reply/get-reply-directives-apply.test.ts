@@ -53,7 +53,7 @@ async function runRuntimePolicyDirective(
   const { handleDirectiveOnly } = await vi.importActual<
     typeof import("./directive-handling.impl.js")
   >("./directive-handling.impl.js");
-  using runtime = vi.spyOn(sandboxRuntime, "resolveSandboxRuntimeStatus");
+  using runtime = vi.spyOn(sandboxRuntime, "resolveSandboxRuntimeStatusAsync");
   const sessionEntry = { sessionId: "runtime-policy", updatedAt: 1 };
   let outcome:
     | { kind: "reply"; reply: Awaited<ReturnType<typeof handleDirectiveOnly>> }
@@ -86,7 +86,7 @@ async function runRuntimePolicyDirective(
   if (result?.type !== "return") {
     throw new Error("Directive runtime classification did not return");
   }
-  assertRuntime(result.value);
+  assertRuntime(await result.value);
   if (outcome.kind === "error") {
     throw outcome.error;
   }

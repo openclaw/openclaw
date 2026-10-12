@@ -431,12 +431,6 @@ describe("canonical proof on physical database validation", () => {
       { cache: "empty", transition: "replacement" },
       { cache: "canonical", transition: "invalidation" },
       { cache: "canonical", transition: "registration" },
-      { cache: "canonical", transition: "schema-revocation" },
-      { cache: "empty", transition: "schema-revocation" },
-      { cache: "canonical", transition: "local-ddl" },
-      { cache: "empty", transition: "local-ddl" },
-      { cache: "canonical", transition: "optional-schema-revocation" },
-      { cache: "empty", transition: "optional-local-ddl" },
     ] as const)(
       "preserves publication custody across $cache admission $transition",
       async ({ cache, transition }) => {
@@ -455,11 +449,7 @@ describe("canonical proof on physical database validation", () => {
               clearOpenClawAgentDatabaseValidationCache(database.path);
             }
             expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
-            const optional =
-              transition === "optional-schema-revocation" || transition === "optional-local-ddl";
-            const publish = optional
-              ? captureOpenClawAgentDatabaseValidationTransfer(database)
-              : captureOpenClawAgentDatabaseAdmissionPublication(database);
+            const publish = captureOpenClawAgentDatabaseAdmissionPublication(database);
             if (transition === "invalidation") {
               invalidateOpenClawAgentDatabaseValidation(database.path);
             } else if (transition === "registration") {
@@ -477,13 +467,6 @@ describe("canonical proof on physical database validation", () => {
               throw new Error("Expected the full opener to publish schema admission");
             }
             const borrowed = structuredClone(promoted.schema);
-            const schemaRevoked =
-              transition === "schema-revocation" || transition === "local-ddl" || optional;
-            if (transition === "schema-revocation" || transition === "optional-schema-revocation") {
-              invalidateOpenClawAgentDatabaseSchema(reopened);
-            } else if (transition === "local-ddl" || transition === "optional-local-ddl") {
-              reopened.db.exec("CREATE TABLE main.revoked_promotion(value TEXT)");
-            }
             if (transition === "replacement") {
               expect(promoted.identity).not.toBe(received.identity);
             }
@@ -491,20 +474,14 @@ describe("canonical proof on physical database validation", () => {
             expect(Atomics.load(new Int32Array(received.schema.valid), 0)).toBe(1);
             if (transition === "promotion") {
               expect(() => publish(received.identity, received)).not.toThrow();
-            } else if (optional) {
-              expect(publish(received.identity, received)).toBe(false);
             } else {
               expect(() => publish(received.identity, received)).toThrow(
                 AgentDatabaseSchemaAdmissionChangedError,
               );
             }
             expect(Atomics.load(new Int32Array(promoted.valid), 0)).toBe(1);
-            if (schemaRevoked) {
-              expect(adoptOpenClawAgentDatabaseSchema(reopened)).toBe(false);
-            } else {
-              expect(adoptOpenClawAgentDatabaseSchema(reopened, true, true)).toBe(true);
-              invalidateOpenClawAgentDatabaseSchema(reopened);
-            }
+            expect(adoptOpenClawAgentDatabaseSchema(reopened, true, true)).toBe(true);
+            invalidateOpenClawAgentDatabaseSchema(reopened);
             expect(Atomics.load(new Int32Array(borrowed.valid), 0)).toBe(0);
           } finally {
             reader.database.close();

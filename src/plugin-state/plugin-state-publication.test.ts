@@ -54,6 +54,64 @@ function observe() {
 }
 
 describe("plugin state committed facts", () => {
+  it("shares committed facts and invalidation across SQLite text-key aliases", async () => {
+    await withOpenClawTestState({ label: "plugin-state-key-aliases" }, async ({ env }) => {
+      const store = createPluginStateKeyedStore<number>("receipt-test", {
+        namespace: "aliases",
+        maxEntries: 10,
+        env,
+      });
+      for (const rawKey of ["high-\ud800", "low-\udc00"]) {
+        const normalizedKey = rawKey.startsWith("high") ? "high-\ufffd" : "low-\ufffd";
+        await store.register(rawKey, 1);
+        const raw = await capturePluginStateReadDependencies(() => store.observe(rawKey));
+        const normalized = await capturePluginStateReadDependencies(() =>
+          store.observe(normalizedKey),
+        );
+        const unrelated = await capturePluginStateReadDependencies(() => store.observe("other"));
+        const read = async (expected: number | undefined) => {
+          for (const key of [rawKey, normalizedKey]) {
+            expect(await store.lookup(key)).toBe(expected);
+            expect((await store.observe(key)).value).toBe(expected);
+          }
+          expect(await store.lookupMany([rawKey, normalizedKey])).toEqual([
+            { ok: true, value: expected },
+            { ok: true, value: expected },
+          ]);
+        };
+        try {
+          expect(raw.value.value).toBe(1);
+          expect(normalized.value.value).toBe(1);
+          await store.register(rawKey, 2);
+          await read(2);
+          expect(raw.isCurrent()).toBe(false);
+          expect(normalized.isCurrent()).toBe(false);
+          expect(unrelated.isCurrent()).toBe(true);
+          await store.delete(normalizedKey);
+          await read(undefined);
+          expect(await store.entries()).toEqual([]);
+          await store.register(normalizedKey, 3);
+          await read(3);
+          const observation = await store.observe(rawKey);
+          const alias = await store.observe(normalizedKey);
+          expect(alias.comparison).not.toBe(observation.comparison);
+          expect(
+            await store.compareAndApply(rawKey, observation.comparison, {
+              operation: "update",
+              action: "keep",
+            }),
+          ).toEqual({ status: "unchanged" });
+          await store.delete(rawKey);
+          await read(undefined);
+        } finally {
+          raw.release();
+          normalized.release();
+          unrelated.release();
+        }
+        expect(raw.isCurrent()).toBe(false);
+      }
+    });
+  });
   it("reuses namespace lists until a committed write changes their rows", async () => {
     await withOpenClawTestState(
       { label: "plugin-state-namespace-read-receipts" },
@@ -173,6 +231,48 @@ describe("plugin state committed facts", () => {
       } finally {
         captured.release();
       }
+    });
+  });
+
+  it("keeps cached reads coherent after conditional writes and capacity rollback", async () => {
+    await withOpenClawTestState({ label: "plugin-state-conditional-receipts" }, async ({ env }) => {
+      const options = {
+        namespace: "receipts",
+        maxEntries: 1,
+        overflowPolicy: "reject-new" as const,
+        env,
+      };
+      const worker = createPluginStateKeyedStore<number>("receipt-test", options);
+      const native = createPluginStateSyncKeyedStore<number>("receipt-test", options);
+      const read = async (expected: number | undefined) => {
+        expect(await worker.lookup("key")).toBe(expected);
+        expect((await worker.observe("key")).value).toBe(expected);
+        expect(await worker.lookup("overflow")).toBeUndefined();
+        expect((await worker.observe("overflow")).value).toBeUndefined();
+        expect((await worker.entries()).map(({ key, value }) => ({ key, value }))).toEqual(
+          expected === undefined ? [] : [{ key: "key", value: expected }],
+        );
+      };
+
+      await read(undefined);
+      expect(await worker.registerIfAbsent("key", 1)).toBe(true);
+      await read(1);
+      expect(native.registerIfAbsent("key", 2)).toBe(false);
+      expect(await worker.registerIfAbsent("key", 3)).toBe(false);
+      await read(1);
+      expect(() => native.registerIfAbsent("overflow", 4)).toThrow("1-row limit");
+      await read(1);
+      await expect(worker.registerIfAbsent("overflow", 5)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await read(1);
+
+      expect(native.delete("key")).toBe(true);
+      await read(undefined);
+      expect(native.registerIfAbsent("key", 6)).toBe(true);
+      await read(6);
+      clearPluginStateStoreForTests();
+      await read(undefined);
     });
   });
 

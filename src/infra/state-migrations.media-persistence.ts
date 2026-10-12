@@ -69,6 +69,7 @@ import {
 } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
+import { formatAgentDatabaseCorruptionRepairHint } from "./state-migrations.agent-owner-guidance.js";
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
 import {
   scanTranscriptRows,
@@ -460,6 +461,7 @@ export async function migrateLegacyMediaPersistence(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   let recoverableWarningCount = 0;
   const refusedAgentDatabasePaths: string[] = [];
   const recoveredAgentDatabasePaths = new Set<string>();
@@ -579,6 +581,10 @@ export async function migrateLegacyMediaPersistence(
             resolveSqliteTranscriptArchiveDirectory({ agentId: entry.agentId, path: pathname }),
           );
           warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
+          const repairHint = formatAgentDatabaseCorruptionRepairHint(entry.agentId, error);
+          if (repairHint) {
+            notices.push(repairHint);
+          }
         }
       }
 
@@ -636,6 +642,7 @@ export async function migrateLegacyMediaPersistence(
   return {
     changes,
     warnings,
+    ...(notices.length > 0 ? { notices } : {}),
     ...(recoveredAgentDatabasePaths.size > 0
       ? { recoveredAgentDatabasePaths: [...recoveredAgentDatabasePaths] }
       : {}),

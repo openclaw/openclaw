@@ -598,7 +598,7 @@ serveOwnedWorkerTasks(
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
           if (request.kind === "session-activity-summary-source") {
             const { readActivitySummaryBatch } =
-              await import("../../gateway/session-activity-summary-source.js");
+              await import("../../gateway/session-activity-summary-source.worker.js");
             return {
               kind: "session-activity-summary-source" as const,
               source: readActivitySummaryBatch(request),
@@ -633,15 +633,8 @@ serveOwnedWorkerTasks(
               await import("./session-transcript-hydration-read.worker.js");
             return readSessionEntrySnapshotRequest(request);
           }
-          const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
-            await import("../../../packages/memory-host-sdk/src/host/session-files.js");
-          const entry = await buildSessionEntryInProcess(request.absPath, request.options);
-          return {
-            entry,
-            resetRecallCutoff: entry
-              ? readSessionEntryResetRecallCutoff(entry)
-              : { state: "absent" },
-          };
+          const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
+          return prepareSessionMemoryEntry(request);
         },
       );
     };
