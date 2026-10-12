@@ -853,9 +853,17 @@ it.each([
           }
           expect(execution.databaseBackup).toBeUndefined();
           const captured = execution.result.steps.find((step) => step.name === "database snapshot");
+          const capturedText = [...(captured?.warnings ?? []), ...(captured?.diagnostics ?? [])].join(
+            "\n",
+          );
           expect(captured?.warnings).toEqual([
             expect.stringContaining("Automatic database restoration is disabled"),
           ]);
+          // Successful activation deletes this directory. The recorded step is
+          // what the success report reprints, so it cannot promise the copies remain.
+          expect(capturedText).toContain("Verified successful activation removes these snapshots");
+          expect(capturedText).not.toContain("Snapshots remain available");
+          expect(capturedText).not.toContain("later writes must be preserved");
           expect(execution.result.steps.some((step) => step.name === "database rollback")).toBe(
             false,
           );

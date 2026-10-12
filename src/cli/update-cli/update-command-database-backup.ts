@@ -141,9 +141,14 @@ export async function captureUpdateDatabases(params: {
     maintenance !== null &&
     unavailable === undefined &&
     backup.databases.every((entry) => typeof backup.sourceGenerations[entry.path] === "string");
+  // Verified success retires these copies with the package backup. A warning
+  // recorded on the snapshot step is reprinted after that cleanup, so it must
+  // not promise that the copies are still available.
+  const snapshotLifetime =
+    "Verified successful activation removes these snapshots; they are retained with the update's recovery artifacts only when activation does not succeed.";
   if (!restorable) {
     backup.warnings.push(
-      `Automatic database restoration is disabled because ${unavailable ? `the Gateway could not be confirmed stopped during capture: ${unavailable}` : "a source database changed or its write generation could not be captured"}. Snapshots remain available at ${backup.directory}; later writes must be preserved.`,
+      `Automatic database restoration is disabled because ${unavailable ? `the Gateway could not be confirmed stopped during capture: ${unavailable}` : "a source database changed or its write generation could not be captured"}. ${snapshotLifetime}`,
     );
   }
   const step: UpdateStepResult = {
@@ -153,7 +158,7 @@ export async function captureUpdateDatabases(params: {
     durationMs: Date.now() - startedAt,
     exitCode: 0,
     diagnostics: [
-      `Databases snapshotted at ${backup.directory}. Verified successful activation removes these snapshots; otherwise retain them with the update's recovery artifacts.`,
+      `Databases snapshotted at ${backup.directory}. ${snapshotLifetime}`,
       ...backup.databases.map(
         (entry) =>
           `${entry.path} -> ${entry.snapshotPath}; schema ${entry.userVersion}; ${entry.sizeBytes} bytes; SHA-256 ${entry.sha256}`,
