@@ -1398,9 +1398,10 @@ extension DashboardWindowController {
     func waitForDocumentLoad(at url: URL) async throws {
         // The shell can bootstrap after HTML finishes; its listener-owned readiness
         // signal, rather than didFinish, completes the first-run handoff.
-        try await AsyncTimeout.withTimeout(seconds: 120, onTimeout: { URLError(.timedOut) }) {
-            try await self.awaitDocumentLoad(at: url)
-        }
+        try await AsyncTimeout.withTimeout(
+            seconds: 120,
+            onTimeout: { URLError(.timedOut) },
+            operation: { try await self.awaitDocumentLoad(at: url) })
     }
 
     private func awaitDocumentLoad(at url: URL) async throws {

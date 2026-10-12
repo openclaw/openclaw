@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import type { SetupAutoResult } from "./custodian-auto-setup.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -61,6 +63,7 @@ afterEach(() => {
   localStorage.clear();
   delete window["__OPENCLAW_NATIVE_SETUP__"];
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("custodian automatic setup", () => {
@@ -201,6 +204,40 @@ describe("custodian automatic setup", () => {
     expect(openGateways).toHaveBeenCalledOnce();
     expect(reviewPermissions).toHaveBeenCalledOnce();
     expect(page.textContent).not.toContain("openclaw onboard");
+  });
+
+  it("updates native recovery when its capability snapshot arrives", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const post = vi.fn().mockResolvedValue(snapshot);
+    vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
+    vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
+    const nativeDeviceSettings = createNativeDeviceSettingsCapability()!;
+    const request = vi.fn(async () => ({
+      status: "unavailable",
+      alternatives: [],
+      attempts: [],
+      installedPlugins: [],
+    }));
+    const { context } = createContext(request, methods, { agentsList });
+    try {
+      const { page } = await mountPage({ ...context, nativeDeviceSettings });
+      await settled(page);
+      expect(page.textContent).toContain("openclaw onboard");
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-device-settings-changed", {
+          detail: {
+            ...snapshot,
+            capabilities: { ...snapshot.capabilities, aiSetupAvailable: true },
+          },
+        }),
+      );
+      await settled(page);
+      click(page, "Open AI setup");
+      expect(post).toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
+      expect(page.textContent).not.toContain("openclaw onboard");
+    } finally {
+      nativeDeviceSettings.dispose();
+    }
   });
 
   it("shows RPC failures and retries without a premature greeting", async () => {

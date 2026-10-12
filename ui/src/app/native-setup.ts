@@ -17,7 +17,9 @@ declare global {
   }
 }
 
-export function nativeSetupCapability(context: ApplicationContext): NativeSetupCapability | null {
+export function nativeSetupCapability(
+  context: Pick<ApplicationContext, "nativeDeviceSettings" | "navigate">,
+): NativeSetupCapability | null {
   // Tauri and other shells supply actions directly; cards never depend on a transport.
   const supplied = typeof window === "undefined" ? undefined : window["__OPENCLAW_NATIVE_SETUP__"];
   if (supplied) {
@@ -37,7 +39,10 @@ export function nativeSetupCapability(context: ApplicationContext): NativeSetupC
           kind: current.kind,
         }
       : undefined,
-    openAiSetup: settings ? () => settings.openPanel("ai-setup") : undefined,
+    openAiSetup:
+      settings?.snapshot?.capabilities?.aiSetupAvailable === true
+        ? () => settings.openPanel("ai-setup")
+        : undefined,
     openGateways: gateways ? () => gateways.openSettings() : undefined,
     reviewPermissions: settings ? () => context.navigate("device-permissions") : undefined,
   };

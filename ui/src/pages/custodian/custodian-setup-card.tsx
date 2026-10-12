@@ -87,13 +87,18 @@ defineSolidBridge<Props>(
   (props) => {
     const context = useApplication();
     const { host, revision } = useSolidControllerHost(() => props.store);
-    new SubscriptionsController(host).watchStore(() => props.store);
+    new SubscriptionsController(host)
+      .watchStore(() => props.store)
+      .watchStore(() => context.nativeDeviceSettings);
     const setup = () => {
       revision();
       return props.store.autoSetup;
     };
     const result = () => setup().result;
-    const native = () => nativeSetupCapability(context);
+    const native = () => {
+      revision();
+      return nativeSetupCapability(context);
+    };
     const busy = () => {
       const current = setup();
       return (
