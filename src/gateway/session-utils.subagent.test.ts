@@ -62,10 +62,12 @@ describe("session list subagent metadata", () => {
     resetAgentEventsForTest({ preserveListeners: true });
     await closeOpenClawStateDatabaseAsync();
     await resetSubagentRegistryForTests({ persist: false });
+    resetConfigRuntimeState();
   });
   beforeEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
     await resetSubagentRegistryForTests({ persist: false });
+    setRuntimeConfigSnapshot(cfg, cfg);
   });
 
   const cfg = {

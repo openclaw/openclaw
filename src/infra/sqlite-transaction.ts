@@ -437,7 +437,7 @@ export function runSqliteReservedTransactionSync<T>(
   options: SqliteTransactionOptions,
 ): T {
   if (isPostgresSqlConnection(db)) {
-    return db.runTransaction(operation, options, false, true, false);
+    return db.runTransaction(operation, options, false, true);
   }
   assertTransactionUsable(db);
   if (isMainThread || !db.isTransaction) {
@@ -612,19 +612,13 @@ export function runSqliteWorkerTransactionSync<T>(
 ): T {
   if (isPostgresSqlConnection(context.database)) {
     context.admit("transaction");
-    return context.database.runTransaction(
-      operation,
-      {
-        ...options,
-        withCommit(commit) {
-          context.admit("commit");
-          return options?.withCommit ? options.withCommit(commit) : commit();
-        },
+    return context.database.runTransaction(operation, {
+      ...options,
+      withCommit(commit) {
+        context.admit("commit");
+        return options?.withCommit ? options.withCommit(commit) : commit();
       },
-      false,
-      false,
-      false,
-    );
+    });
   }
   assertTransactionUsable(context.database);
   context.admit("transaction");

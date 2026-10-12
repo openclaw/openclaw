@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentRunContext,
@@ -18,6 +22,9 @@ import {
 } from "./run-entry.test-support.js";
 
 const state = setupRunEntryTestState();
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type EntryParams = Parameters<typeof runEmbeddedAgentEntry>[0];
 

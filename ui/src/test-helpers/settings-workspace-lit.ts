@@ -1,5 +1,4 @@
-// Shared body wrapper for settings and settings-adjacent pages. Settings
-// section navigation lives in the takeover sidebar (settings-sidebar.ts).
+// Retained Lit reference for the presentation primitives parity fixture.
 import { html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { shellLayoutTraits } from "../app/shell-layout-traits.ts";

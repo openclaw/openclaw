@@ -304,9 +304,6 @@ export async function readPersonalCatalogProfiles(
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userModelAccounts.catalog")) {
-    throw new Error(reply.ok ? "Unexpected personal model catalog reply" : reply.message);
-  }
   const result = reply?.catalog;
   for (const profile of Object.values(result?.profiles ?? {})) {
     registerUserModelAuthProfileSecrets(profile.credential);

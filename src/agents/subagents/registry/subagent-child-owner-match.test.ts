@@ -110,4 +110,25 @@ describe("subagent child authority policy", () => {
       { runId: entry.runId },
     );
   });
+  it("warns once per legacy run even when the legacy population exceeds any cache bound", () => {
+    const warn = vi.fn();
+    const entries: SubagentRunRecord[] = Array.from({ length: 5000 }, (_, index) => ({
+      ...owned,
+      runId: `legacy-population-${index}`,
+      createdAt: index,
+      requesterDisplayKey: "parent",
+      task: "legacy population",
+      cleanup: "keep",
+      execution: { status: "running" },
+      childSessionIdentity: undefined,
+    }));
+    // Recovery sweeps revisit every retained run; a second sweep must not warn again.
+    for (const sweep of [1, 2]) {
+      for (const entry of entries) {
+        warnLegacySubagentAuthority({ ...entry }, warn);
+      }
+      expect(warn).toHaveBeenCalledTimes(entries.length);
+      expect(sweep).toBeGreaterThan(0);
+    }
+  });
 });

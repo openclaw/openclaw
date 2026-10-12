@@ -5,14 +5,18 @@ import { existsSync } from "node:fs";
 import * as os from "node:os";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import * as retry from "@openclaw/retry";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import * as logging from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import * as stateOwner from "./gateway-state-owner.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import {
   useSqliteWorkerStoreFixture,
@@ -39,6 +43,149 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
+
+function holdDatabaseAdmission(pathname: string) {
+  const pending = new StateDatabaseAdmissionPendingError(pathname, "Schema publication pending");
+  const assertAccessAllowed = stateOwner.assertStateDatabaseAccessAllowed;
+  let held = true;
+  vi.spyOn(stateOwner, "assertStateDatabaseAccessAllowed").mockImplementation(
+    (location, options) => {
+      if (held && location === pathname) {
+        throw pending;
+      }
+      assertAccessAllowed(location, options);
+    },
+  );
+  const sleeping = createDeferredCore();
+  const sleepWithAbort = retry.sleepWithAbort;
+  vi.spyOn(retry, "sleepWithAbort").mockImplementation((...args) => {
+    sleeping.resolve();
+    return sleepWithAbort(...args);
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  return {
+    sleeping: sleeping.promise,
+    pending,
+    release: () => {
+      held = false;
+    },
+  };
+}
+
+it("waits for schema publication after opening, then dispatches queued writes once in order", async () => {
+  const file = databasePath();
+  const store = await open(file);
+  const admission = holdDatabaseAdmission(file);
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  const first = append(store, "first");
+  const second = append(store, "second");
+  const outcomes = Promise.allSettled([first, second]);
+  try {
+    expect(
+      await Promise.race([
+        admission.sleeping.then(() => "waiting"),
+        outcomes.then(() => "settled"),
+      ]),
+    ).toBe("waiting");
+    expect(requests).not.toHaveBeenCalled();
+    admission.release();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await outcomes).toMatchObject([
+      { status: "fulfilled", value: { writes: 1 } },
+      { status: "fulfilled", value: { writes: 2 } },
+    ]);
+    expect(await read(store)).toEqual(["first", "second"]);
+  } finally {
+    admission.release();
+    await vi.advanceTimersByTimeAsync(10);
+    vi.useRealTimers();
+    await outcomes;
+  }
+});
+
+it.each(["cancellation", "revocation", "deadline"] as const)(
+  "settles an unsent schema waiter after %s without writing",
+  async (ending) => {
+    const file = databasePath();
+    const store = await open(file);
+    const admission = holdDatabaseAdmission(file);
+    const requests = vi.spyOn(Worker.prototype, "postMessage");
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const cancel = new AbortController();
+    const revoked = new Error("Write authority revoked");
+    let current = true;
+    const pending = runSqliteWorkerStoreOperation(
+      store,
+      (scope) =>
+        scope.execute({ type: "append", input: { value: "refused" } }, { signal: cancel.signal }),
+      undefined,
+      () => {
+        if (!current) {
+          throw revoked;
+        }
+      },
+    );
+    const outcome = Promise.allSettled([pending]);
+    try {
+      expect(
+        await Promise.race([
+          admission.sleeping.then(() => "waiting"),
+          outcome.then(() => "settled"),
+        ]),
+      ).toBe("waiting");
+      const canceled = new Error("Write canceled");
+      if (ending === "cancellation") {
+        cancel.abort(canceled);
+      } else {
+        if (ending === "revocation") {
+          current = false;
+          admission.release();
+        } else {
+          now = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
+        }
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      const expectedReason =
+        ending === "cancellation"
+          ? { name: "AbortError", cause: canceled }
+          : ending === "revocation"
+            ? revoked
+            : admission.pending;
+      expect(await outcome).toMatchObject([{ status: "rejected", reason: expectedReason }]);
+      expect(requests).not.toHaveBeenCalled();
+      admission.release();
+      expect(await append(store, "successor")).toMatchObject({ writes: 1 });
+      expect(await read(store)).toEqual(["successor"]);
+    } finally {
+      admission.release();
+      await vi.advanceTimersByTimeAsync(10);
+      vi.useRealTimers();
+      await outcome;
+    }
+  },
+);
+
+it("does not wait on permanent refusal or another database's admission", async () => {
+  const file = databasePath();
+  const store = await open(file);
+  const requests = vi.spyOn(Worker.prototype, "postMessage");
+  const sleep = vi.spyOn(retry, "sleepWithAbort");
+  const access = vi.spyOn(stateOwner, "assertStateDatabaseAccessAllowed");
+  for (const error of [
+    new Error("Maintenance authority required"),
+    new StateDatabaseAdmissionPendingError(databasePath(), "Another database is unavailable"),
+  ]) {
+    access.mockImplementation(() => {
+      throw error;
+    });
+    await expect(append(store, "refused")).rejects.toBe(error);
+  }
+  expect(sleep).not.toHaveBeenCalled();
+  expect(requests).not.toHaveBeenCalled();
+  access.mockRestore();
+  expect(await read(store)).toEqual([]);
+});
 
 it("cancels queued opens without overtaking an accepted open or abandoning its settlement", async ({
   signal,

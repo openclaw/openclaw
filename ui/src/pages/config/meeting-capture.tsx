@@ -44,7 +44,7 @@ type SettingsProps = {
   buildEditor: (() => JSX.Element) | undefined;
   advancedExpanded: boolean;
 };
-export function MeetingCaptureSettingsContent(props: SettingsProps) {
+function MeetingCaptureSettingsContent(props: SettingsProps) {
   const context = useApplication();
   const gatewayProjection = projectGateway(context.gateway);
   const configProjection = projectRuntimeConfig(context.runtimeConfig);

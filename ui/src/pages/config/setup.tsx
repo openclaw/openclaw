@@ -77,7 +77,3 @@ export function SetupSection(props: {
     </SettingsPage>
   );
 }
-
-export function renderSetupSection(schema: JsonSchema, props: ConfigProps, disabled: boolean) {
-  return <SetupSection schema={schema} config={props} disabled={disabled} />;
-}

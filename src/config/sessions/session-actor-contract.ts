@@ -249,6 +249,8 @@ export type SessionActorReceipt = {
     after: SessionTranscriptContextVersion;
     /** Includes idempotency adoption, not only newly inserted messages. */
     appendedMessages: SessionTurnCommitted["result"]["appendedMessages"];
+    /** Complete append delta in this generation; absent when payloads are unavailable. */
+    appendedEvents?: Array<{ rawSeq: number; event: unknown; serializedBytes: number }>;
     append?: SessionActorAppendCommitted;
     projectionNeedsReconcile: boolean;
   };

@@ -20,7 +20,6 @@ import {
   resolveCloudProfileIcon,
 } from "../components/provider-icon.ts";
 import * as settings from "../components/settings-ui.ts";
-import { renderSettingsWorkspace } from "../components/settings-workspace.ts";
 import "../components/solid/panel-empty-state.tsx";
 import {
   SettingsLoadingSkeleton,
@@ -31,6 +30,7 @@ import {
 } from "../components/solid/settings-ui.tsx";
 import { solidContent } from "../lit/solid-content.tsx";
 import { finishFixture, group, recordAction, root } from "./presentation-primitives-fixture.ts";
+import { renderSettingsWorkspace } from "./settings-workspace-lit.ts";
 
 const keyboardStyles = document.createElement("style");
 keyboardStyles.textContent = kbdStyles.cssText;

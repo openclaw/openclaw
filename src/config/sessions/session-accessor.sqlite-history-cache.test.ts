@@ -1,13 +1,14 @@
 import { renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -31,8 +32,11 @@ import {
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
+afterAll(clearRuntimeConfigSnapshot);
+
 describe("SQLite transcript history cache", () => {
   const fixtureScope = useHistoryEventScope();
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   const limits = { maxMessages: 20, maxLines: 20, maxBytes: 64 * 1024 };
   const read = () => readRecentSessionTranscriptHistoryEvents(fixtureScope, limits);
   const readHeadPage = () =>

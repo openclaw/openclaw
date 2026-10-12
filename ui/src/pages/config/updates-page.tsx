@@ -77,7 +77,3 @@ export function UpdatesPage(props: UpdatesPageProps) {
     />
   );
 }
-
-export function renderUpdatesPage(props: UpdatesPageProps) {
-  return <UpdatesPage {...props} />;
-}

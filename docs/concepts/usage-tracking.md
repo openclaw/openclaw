@@ -67,8 +67,9 @@ comparison table. JSON export loads the full matching report.
 
 The overview uses a rebuildable usage projection maintained after committed
 transcript changes. A restart or pricing change can require background backfill;
-the page shows partial totals while it advances. Transcripts remain the source
-of truth. Detailed reports retain exact timestamp boundaries and the recorded
+the page shows partial totals while it advances. Sessions without a cached
+projection remain pending without waiting for transcript statistics. Transcripts
+remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
 order of floating-point cost additions.
 
 ## Usage date ranges

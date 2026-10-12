@@ -6,6 +6,7 @@ import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -39,6 +40,7 @@ describe("session startup catch-up", () => {
       prefix: "openclaw-session-startup-",
       layout: "state-only",
     });
+    await captureRuntimeConfigAsyncReader()();
     stateDir = testState.stateDir;
     resetTranscriptUpdateListener();
   });
@@ -84,6 +86,7 @@ describe("session startup catch-up", () => {
     await testState.writeConfig({ session: { store: storePath } });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    await captureRuntimeConfigAsyncReader()();
   }
 
   async function writeSqliteSession(

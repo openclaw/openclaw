@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -590,6 +591,7 @@ describe("sessions.dispatch", () => {
           projectProfiles: { "github.com/acme/app": "mapped" },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       replaceSessionEntrySync(
         { agentId: "main", sessionKey, storePath: cfg.session.store },
         {

@@ -385,6 +385,8 @@ describe("gateway connection state", () => {
 
   it("broadcasts to 50 members from committed facts while rows are dirty and revokes immediately without SQL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(cfg);
       const scope = { agentId: "main", sessionKey: "agent:main:broadcast-members" };
       await upsertSessionEntryCore(scope, {
         sessionId: "broadcast-members",
@@ -399,11 +401,11 @@ describe("gateway connection state", () => {
           broadcastDuringPublication?.();
         }
       });
-      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const state = createGatewayConnectionState({
         scheduler: createTestGatewayScheduler(),
         bootId: "members",
-        cfg: {},
+        cfg,
       });
       const detach = state.attachSessionRowProjection(projection);
       const peers = Array.from({ length: 50 }, (_, index) => {

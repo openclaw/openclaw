@@ -113,7 +113,8 @@ describe("CI changed Node test plan", () => {
   it.each([
     ["ui/src/main.ts", true],
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
-    ["packages/gateway-client/src/index.ts", false],
+    // TSX memory pages conservatively retain their Gateway server type-import edges.
+    ["packages/gateway-client/src/index.ts", true],
     ["packages/gateway-client/src/browser.ts", true],
   ] as const)("selects UI performance for %s: %s", (file, expected) => {
     expect(hasControlUiPerformanceAffectingChange([file])).toBe(expected);

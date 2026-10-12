@@ -34,6 +34,7 @@ import type { AuthProfileStore } from "./types.js";
 export type AuthStoreUpdatePrepared = {
   store: AuthProfileStore;
   mainStore: AuthProfileStore | null;
+  storePresent: boolean;
 };
 export type AuthStoreUpdateCommitted = {
   store: AuthProfileStore;
@@ -44,6 +45,8 @@ export type AuthStoreUpdateResponse =
   | {
       save: true;
       store: AuthProfileStore;
+      /** Compensation may restore an originally absent credential row. */
+      deleteEmptyStore?: boolean;
       scopedSharedStore?: AuthProfileStore;
       externalProfiles: RuntimeExternalOAuthProfile[];
       runtimeStore?: AuthProfileStore;
@@ -138,6 +141,7 @@ export function updateAuthProfileStoreInDatabase(
         ? markRuntimePersistedProfiles(prepared.loaded ?? createEmptyAuthProfileStore())
         : createEmptyAuthProfileStore(),
       mainStore: prepared && !isMainStore ? prepared.mainStore : null,
+      storePresent: prepared?.existingRaw !== undefined,
     });
     requestSqliteWorkerOperationAdmission(
       {
@@ -172,7 +176,11 @@ export function updateAuthProfileStoreInDatabase(
       selectionProfiles: { ...mainStore?.profiles, ...response.store.profiles, ...next.profiles },
     });
     if (publication.credentialsChanged) {
-      writeAuthProfileJsonCell(database, "store", kind, payload);
+      if (response.deleteEmptyStore && Object.keys(payload.profiles).length === 0) {
+        deleteAuthProfileJsonCell(database, "store", kind);
+      } else {
+        writeAuthProfileJsonCell(database, "store", kind, payload);
+      }
     }
     if (publication.stateChanged) {
       if (statePayload) {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionCatalogHost } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -106,6 +107,7 @@ async function withCreatorRows(
       },
     },
     async (state) => {
+      setRuntimeConfigSnapshot({});
       expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
       expect(process.env.VITEST).toBeUndefined();
       expect(process.env.NODE_ENV).toBe("production");

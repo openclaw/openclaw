@@ -153,7 +153,7 @@ describe("repository workspace editor admission", () => {
       .spyOn(brokerReply, "dispatchSqliteWorkerJob")
       .mockImplementation((slot, job, onRejected) => {
         dispatchedSlots.set(slot, slot);
-        dispatch(slot, job, onRejected);
+        return dispatch(slot, job, onRejected);
       });
     const replies = vi
       .spyOn(brokerReply, "receiveSqliteWorkerReply")

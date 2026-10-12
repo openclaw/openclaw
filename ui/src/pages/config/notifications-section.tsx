@@ -638,7 +638,3 @@ export function NotificationsSection(props: NotificationsSectionProps) {
     </SettingsPage>
   );
 }
-
-export function renderNotificationsSection(props: NotificationsSectionProps) {
-  return <NotificationsSection {...props} />;
-}

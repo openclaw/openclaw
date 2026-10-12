@@ -756,7 +756,12 @@ it("retires a real CLI reply before its corrected source snapshot arrives", asyn
   };
   await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: Date.now() });
   harness.registerRun(runId, target.sessionKey);
-  const context = buildPreparedCliRunContext({ runId, sessionTarget: target, workspaceDir: root });
+  const context = buildPreparedCliRunContext({
+    runId,
+    sessionTarget: target,
+    workspaceDir: root,
+    config: {},
+  });
   context.params.storePath = target.storePath;
   context.params.persistAssistantTranscript = true;
   const cli = createCliEventHandlers({

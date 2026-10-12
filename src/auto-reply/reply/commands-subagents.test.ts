@@ -24,6 +24,10 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -56,9 +60,15 @@ function commandReadContext(runs: SubagentRunRecord[]) {
   };
 }
 
+afterEach(async () => {
+  await resetSubagentRegistryForTests({ persist: false });
+  clearRuntimeConfigSnapshot();
+});
+
 describe("subagents status", () => {
   beforeEach(async () => {
     await resetSubagentRegistryForTests({ persist: false });
+    setRuntimeConfigSnapshot(baseCommandTestConfig);
   });
 
   it.each([
@@ -192,11 +202,8 @@ describe("subagents status", () => {
 describe("subagents command snapshots", () => {
   beforeEach(async () => {
     await resetSubagentRegistryForTests({ persist: false });
+    setRuntimeConfigSnapshot(baseCommandTestConfig);
     await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
-  });
-
-  afterEach(async () => {
-    await resetSubagentRegistryForTests({ persist: false });
   });
 
   it("renders the captured controlled run and descendant facts after a concurrent settlement", async () => {
@@ -319,8 +326,15 @@ describe("subagents command snapshots", () => {
 });
 
 describe("subagents global-session inspection", () => {
+  const cfg: OpenClawConfig = {
+    ...baseCommandTestConfig,
+    agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+    session: { scope: "global" },
+  };
+
   beforeEach(async () => {
     await resetSubagentRegistryForTests({ persist: false });
+    setRuntimeConfigSnapshot(cfg);
     callGatewayMock.mockReset().mockResolvedValue({ messages: [] });
     for (const agentId of ["research", "ops"]) {
       seedSubagentRunForReadTest({
@@ -338,16 +352,9 @@ describe("subagents global-session inspection", () => {
     }
   });
 
-  afterEach(() => resetSubagentRegistryForTests({ persist: false }));
-
   it.each(["/subagents info 1", "/subagents log 1", "/agents"])(
     "keeps the selected agent's global children visible through %s",
     async (command) => {
-      const cfg: OpenClawConfig = {
-        ...baseCommandTestConfig,
-        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
-        session: { scope: "global" },
-      };
       const params = buildCommandTestParams(command, cfg, { SessionKey: "global" });
       params.sessionKey = "global";
       params.agentId = "research";
@@ -405,10 +412,15 @@ describe("subagents info", () => {
 
   beforeEach(async () => {
     await resetSubagentRegistryForTests({ persist: false });
+    setRuntimeConfigSnapshot(buildCommandTestConfig());
   });
 
   it("reads a raw child's session id from its recorded agent", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {
+        session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+      };
+      setRuntimeConfigSnapshot(cfg);
       for (const agentId of ["main", "research"]) {
         await replaceSessionEntry(
           { agentId, sessionKey: "global" },
@@ -429,7 +441,7 @@ describe("subagents info", () => {
       seedSubagentRunForReadTest(run);
       const result = await handleSubagentsInfoAction(
         buildInfoContext({
-          cfg: { session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") } },
+          cfg,
           runs: [run],
           restTokens: [run.runId],
         }),

@@ -43,6 +43,12 @@ refresh without a config edit or restart. To list only configured models, set
 `models.providers.ollama.apiKey` alone does not select that provider for Gateway
 model browsing.
 
+With native Ollama, discovery also fills a configured model's missing
+`thinkingLevelMap` from that same server. This keeps reasoning separate from answer
+text for models that always think, including when reasoning display is off.
+Explicit thinking maps and other configured settings are preserved; models using
+the OpenAI-compatible API or a different endpoint do not inherit that metadata.
+
 Failed discovery records an unavailable or catalog-authentication failure and
 keeps the last successful inventory for the same endpoint and credentials. A
 successful empty response clears discovered models. Manual models stay separate.

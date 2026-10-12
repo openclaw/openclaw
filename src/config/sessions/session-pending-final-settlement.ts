@@ -1,5 +1,6 @@
 import { mergeRestartRecoveryTerminalDeliveryEvidence } from "./restart-recovery-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
+import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type { InternalSessionEntry } from "./types.js";
 
 type PendingFinalDelivery = NonNullable<InternalSessionEntry["pendingFinalDelivery"]>;
@@ -11,6 +12,13 @@ export type PendingFinalDeliverySettlementInput = {
   deliveryId: string;
   state: PendingFinalDeliveryState;
   expectedStates?: readonly ("prepared" | "queued" | "unknown")[];
+  /** Only the settled delivery owner may clear custody; pre-ACK receipts omit this. */
+  cleanup?: {
+    sessionKey: string;
+    recoveryRunId?: string;
+    now: number;
+    preserveActivity?: boolean;
+  };
 };
 
 /** Harness evidence reaches this reducer only after the host validates its live claim. */
@@ -26,6 +34,32 @@ export function projectPendingFinalDeliverySettlement(
   state: PendingFinalDeliveryState | "stale";
   wakeRecovery: boolean;
 } {
+  const settlement = projectPendingFinalDeliveryState(entry, input, evidence);
+  if (!input.cleanup) {
+    return settlement;
+  }
+  const settledEntry = settlement.patch ? { ...entry, ...settlement.patch } : entry;
+  const cleaned = projectSessionEntryPatch({
+    existing: settledEntry,
+    writeBase: settledEntry,
+    sessionKey: input.cleanup.sessionKey,
+    preserveActivity: input.cleanup.preserveActivity,
+    operation: {
+      kind: "pending-final-clear",
+      sessionId: input.sessionId,
+      intentId: input.intentId,
+      recoveryRunId: input.cleanup.recoveryRunId,
+      now: input.cleanup.now,
+    },
+  });
+  return { ...settlement, patch: cleaned ?? settlement.patch };
+}
+
+function projectPendingFinalDeliveryState(
+  entry: InternalSessionEntry,
+  input: PendingFinalDeliverySettlementInput,
+  evidence: Parameters<typeof projectPendingFinalDeliverySettlement>[2],
+): ReturnType<typeof projectPendingFinalDeliverySettlement> {
   const pending = entry.pendingFinalDelivery;
   const deliveries = pending?.deliveries;
   const index = deliveries?.findIndex(({ id }) => id === input.deliveryId) ?? -1;

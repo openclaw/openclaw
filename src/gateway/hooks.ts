@@ -15,7 +15,7 @@ import {
 } from "../config/sessions/session-store-owner.js";
 import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
+import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import {
   normalizeAgentId,
   normalizeAgentIdStrict,
@@ -191,9 +191,11 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
 export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
+  timeoutMs?: number,
 ): Promise<Result<unknown, string>> {
   const result = await readJsonBodyWithLimit(req, {
     maxBytes,
+    timeoutMs,
     emptyObjectOnEmpty: true,
     destroyOnLimit: false,
   });
@@ -205,9 +207,6 @@ export async function readJsonBody(
   }
   if (result.code === "REQUEST_BODY_TIMEOUT") {
     return { ok: false, error: "request body timeout" };
-  }
-  if (result.code === "CONNECTION_CLOSED") {
-    return { ok: false, error: requestBodyErrorToText("CONNECTION_CLOSED") };
   }
   return { ok: false, error: result.error };
 }

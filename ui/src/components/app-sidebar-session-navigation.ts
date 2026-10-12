@@ -366,9 +366,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   sessionNavigationAgentId(session: Pick<SidebarRecentSession, "key" | "agentId">): string {
-    if (this.sidebarAgentsMode !== "roster") {
-      return this.selectedAgentIdForSessions();
-    }
     return resolveUiSessionRowAgentId(
       session,
       resolveUiDefaultAgentId({
@@ -560,7 +557,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   private agentResumeKey(agentId: string): string {
     const latest = resolveLatestSidebarAgentSession({
       agentId,
-      sessionData: this.sessionData,
+      result: this.selectedAgentSessionResult(agentId),
       context: this.context,
     });
     return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey: this.sessionMainKey() });
@@ -658,7 +655,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     );
   }
 
-  /** The list follows the chip-selected agent without flashing stale rows mid-switch. */
+  /** Personal windows retain their configured-agent scope while the chat selection changes. */
   protected selectedAgentSessionRows(
     navigationState: SidebarSessionNavigationState,
   ): SidebarRecentSession[] {
@@ -676,7 +673,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
           host: this,
           navigationState,
           selected,
-          agentIds: roster?.agentIds ?? [selected],
+          agentIds: roster?.agentIds ??
+            (this.sessionData.sessionsAgentId === null
+              ? this.context?.agents.state.agentsList?.agents.map((agent) => agent.id)
+              : undefined) ?? [selected],
           result: roster?.result,
           compareSessions: createSidebarSessionRowsComparator(this.readSidebarSessionSortOptions),
           resolveAttention: this.resolveSessionAttention,
@@ -697,12 +697,13 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return rows;
   }
 
-  private selectedAgentSessionResult(): SessionsListResult | null {
+  private selectedAgentSessionResult(agentId = this.expandedAgentId()): SessionsListResult | null {
     if (this.groupedSessionSource) {
       return this.groupedSessionSource.result;
     }
-    const selected = this.expandedAgentId();
-    return selected === normalizeAgentId(this.sessionData.sessionsAgentId ?? "")
+    const selected = normalizeAgentId(agentId);
+    return this.sessionData.sessionsAgentId === null ||
+      selected === normalizeAgentId(this.sessionData.sessionsAgentId)
       ? this.sessionData.sessionsResult
       : (this.sessionData.sessionResultsByAgent[selected] ?? null);
   }
@@ -737,11 +738,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   mainSessionRow(agentId?: string): GatewaySessionRow | null {
     const normalized = normalizeAgentId(agentId ?? this.expandedAgentId());
     const mainKey = this.selectedAgentMainSessionKey(normalized);
-    const rows =
-      this.groupedSessionSource?.result?.sessions ??
-      (normalized === normalizeAgentId(this.sessionData.sessionsAgentId ?? "")
-        ? (this.sessionData.sessionsResult?.sessions ?? [])
-        : (this.sessionData.sessionResultsByAgent[normalized]?.sessions ?? []));
+    const rows = this.selectedAgentSessionResult(normalized)?.sessions ?? [];
     const lineage = this.sessionData.activeSessionLineageRoot;
     return (
       (lineage ? [...rows, lineage] : rows).find((row) =>
@@ -787,7 +784,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   agentUnreadCount(agentId: string): number {
-    const rows = this.sessionData.sessionResultsByAgent[normalizeAgentId(agentId)]?.sessions ?? [];
-    return rows.filter((row) => row.unread === true && row.archived !== true).length;
+    const normalized = normalizeAgentId(agentId);
+    const rows = this.selectedAgentSessionResult(normalized)?.sessions ?? [];
+    return rows.filter(
+      (row) => row.unread && !row.archived && this.sessionNavigationAgentId(row) === normalized,
+    ).length;
   }
 }

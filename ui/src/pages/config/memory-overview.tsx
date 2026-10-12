@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
@@ -388,8 +387,4 @@ export function MemoryOverview(props: MemoryOverviewProps) {
       </div>
     </ShellLayoutBoundary>
   );
-}
-
-export function renderMemoryOverview(props: MemoryOverviewProps): JSX.Element {
-  return <MemoryOverview {...props} />;
 }

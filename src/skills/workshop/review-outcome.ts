@@ -1,8 +1,8 @@
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
+import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -127,23 +127,6 @@ export async function postWorkshopChangeNotice(params: {
   }
   const { generation } = params;
   const { agentId, sessionKey } = generation;
-  const isReviewedGeneration = () => {
-    const current = loadSessionEntryReadOnly({
-      agentId,
-      sessionKey,
-      storePath: generation.storePath,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-    });
-    return (
-      current?.sessionId === generation.sessionId &&
-      (current.lifecycleRevision ?? null) === generation.lifecycleRevision
-    );
-  };
-  if (!isReviewedGeneration()) {
-    log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
-    return;
-  }
   const { deliveryContext: target, threadId } = await extractDeliveryInfo(sessionKey, {
     cfg: params.config,
   });
@@ -153,14 +136,37 @@ export async function postWorkshopChangeNotice(params: {
     log.debug(`skill workshop notice skipped: Slack session ${sessionKey}`);
     return;
   }
-  const { text, presentation, marker, undoContext } = formatWorkshopChangeNotice(
-    agentId,
-    params.runId,
-    params.changes,
+  const notice = await withSessionEntriesFromStoresInWorker(
+    [
+      {
+        agentId,
+        storePath: generation.storePath,
+        sessionKeys: [sessionKey],
+        projection: "exact",
+        snapshotFields: [],
+      },
+    ],
+    ([read]) => {
+      const current = read?.result.entries.find((row) => row.sessionKey === sessionKey)?.entry;
+      if (
+        current?.sessionId !== generation.sessionId ||
+        (current.lifecycleRevision ?? null) !== generation.lifecycleRevision
+      ) {
+        log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
+        return undefined;
+      }
+      const formatted = formatWorkshopChangeNotice(agentId, params.runId, params.changes);
+      enqueueSystemEvent(formatted.undoContext, {
+        sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
+      });
+      return formatted;
+    },
+    { ordered: true },
   );
-  enqueueSystemEvent(undoContext, {
-    sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
-  });
+  if (!notice) {
+    return;
+  }
+  const { text, presentation, marker } = notice;
   const idempotencyKey = `skill-workshop-notice:${params.runId}`;
   try {
     if (channel && isDeliverableMessageChannel(channel) && target?.to) {
@@ -211,10 +217,6 @@ export async function postWorkshopChangeNotice(params: {
       throw new Error(appended.reason);
     }
   } catch (error) {
-    if (!isReviewedGeneration()) {
-      log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
-      return;
-    }
     // The system event above still carries the change to the next turn.
     log.warn(`skill workshop notice delivery failed: ${String(error)}`);
   }

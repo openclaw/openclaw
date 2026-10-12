@@ -591,9 +591,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onReasoningStream: params.onReasoningStream,
     streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
     onReasoningEnd: params.onReasoningEnd,
-    onToolResult: async (payload) => {
-      await params.onToolResult?.(payload);
-    },
+    onToolResult: params.onToolResult,
     onAgentToolResult: params.onAgentToolResult,
     onAgentEvent: async (event) => {
       await params.onAgentEvent?.(event);

@@ -36,8 +36,7 @@ import {
 import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
-export { createConfigViewState } from "./view-state.ts";
-export type { ConfigProps, ConfigViewState } from "./view-types.ts";
+export type { ConfigProps } from "./view-types.ts";
 void warmJson5().catch(() => undefined);
 
 function resetContentScroll(target: EventTarget | null) {

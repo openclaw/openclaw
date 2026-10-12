@@ -9,28 +9,22 @@ const reviewed = new Map<string, readonly string[]>([
   [
     "src/plugin-sdk/sqlite-runtime-legacy.ts",
     [
-      "openOpenClawAgentDatabaseLegacy",
-      "borrowOpenClawAgentDatabaseLegacy",
-      "withOpenClawAgentDatabaseAsyncLegacy",
-      "withOpenClawAgentDatabaseRuntimeLegacy",
-      "withOpenClawAgentDatabaseWriteLegacy",
-      "runOpenClawAgentWriteAdmissionLegacy",
-      "executeSqliteQueryTakeFirstSyncLegacy",
-      "iterateSqliteQuerySyncLegacy",
-      "prepareSqliteQuerySyncLegacy",
-      "runSqliteImmediateTransactionLegacy",
+      "sdkOpenOpenClawAgentDatabase",
+      "sdkBorrowOpenClawAgentDatabase",
+      "sdkWithOpenClawAgentDatabaseAsync",
+      "sdkWithOpenClawAgentDatabaseWrite",
+      "sdkRunOpenClawAgentWriteAdmission",
+      "sdkExecuteSqliteQueryTakeFirstSync",
+      "sdkIterateSqliteQuerySync",
+      "sdkPrepareSqliteQuerySync",
+      "sdkRunSqliteImmediateTransaction",
     ],
   ],
   ["src/sessions/session-upstream-links.ts", ["deleteSessionUpstreamLink"]],
   ["src/sessions/stored-model-overrides.ts", ["resolveStoredModelOverride"]],
   [
     "src/plugin-sdk/memory-core-host-engine-sessions.ts",
-    [
-      "loadArchivedSessions",
-      "loadMemorySessionMetadata",
-      "loadMemorySessionMetadataBatch",
-      "resolveMemorySessionTargets",
-    ],
+    ["loadArchivedSessions", "loadMemorySessionMetadata", "resolveMemorySessionTargets"],
   ],
   [
     "src/plugin-sdk/codex-session-transcript-runtime.ts",
@@ -97,7 +91,6 @@ const nonRuntimeCandidates = new Map<string, readonly string[]>([
     "src/state/github-publication-session-lifecycles.ts",
     ["insertGitHubPublicationSessionLifecycle"],
   ],
-  ["src/state/user-github-connections.kernel.ts", ["listUserGitHubConnectionsInDatabase"]],
 ]);
 
 // These exact declarations consume their inline callbacks synchronously.
@@ -106,14 +99,6 @@ const synchronousScopes = new Map<string, ReadonlyMap<string, number>>([
   [
     "src/state/openclaw-state-db-maintenance.ts",
     new Map([["runStateSchemaMigrationTransaction", 2]]),
-  ],
-]);
-
-// Installed by openclaw-state-worker-registry.ts; this table is never a host callback API.
-const workerHandlers = new Map([
-  [
-    "src/state/user-github-connections.worker.ts",
-    "userGitHubConnectionOperations.userGitHubConnections.list",
   ],
 ]);
 
@@ -202,23 +187,6 @@ export function inspectDatabaseWorkerBoundaries(
     return target && (forwarded.get(target) ?? target);
   };
   const isInlineInvocation = (node: ts.Node): boolean => {
-    const property = node.parent;
-    if (ts.isPropertyAssignment(property) && ts.isObjectLiteralExpression(property.parent)) {
-      const initializer = property.parent.parent;
-      const declaration = ts.isSatisfiesExpression(initializer) ? initializer.parent : initializer;
-      const file = path.relative(root, node.getSourceFile().fileName).split(path.sep).join("/");
-      if (
-        ts.isVariableDeclaration(declaration) &&
-        ts.isVariableDeclarationList(declaration.parent) &&
-        ts.isVariableStatement(declaration.parent.parent) &&
-        ts.isSourceFile(declaration.parent.parent.parent) &&
-        ts.isIdentifier(declaration.name) &&
-        (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
-        workerHandlers.get(file) === `${declaration.name.text}.${property.name.text}`
-      ) {
-        return true;
-      }
-    }
     const call = node.parent;
     if (!ts.isCallExpression(call)) {
       return false;
