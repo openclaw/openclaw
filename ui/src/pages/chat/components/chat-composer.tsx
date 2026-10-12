@@ -9,7 +9,7 @@ export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.
 
 type ChatComposerInput = ChatComposerProps & { renderRevision?: object };
 
-export function ChatComposer(props: ChatComposerInput) {
+function ChatComposer(props: ChatComposerInput) {
   const state = getChatComposerState(untrack(() => props.paneId));
   const [revision, setRevision] = createSignal(0);
   let inputDepth = 0;

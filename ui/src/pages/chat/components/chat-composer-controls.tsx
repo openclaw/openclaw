@@ -94,7 +94,7 @@ function renderMicrophoneNotice(className: string, message: string, role?: "stat
   );
 }
 
-export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
+function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
   // Without an available capture route, a checked "System default" would claim
   // a selection that cannot exist. Show the discovery issue alone.
   const unavailable = createMemo(() =>
@@ -303,7 +303,7 @@ type ComposerVoiceButtonProps = {
   onToggleVoice?: () => void;
 };
 
-export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) {
+function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) {
   const active = () => props.readDictation?.()?.active === true;
   const arming = () => props.readDictation?.()?.arming === true;
   const finalizing = () => props.readDictation?.()?.finalizing === true;

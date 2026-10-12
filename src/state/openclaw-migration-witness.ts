@@ -177,10 +177,7 @@ function hashCell(hash: Hash, type: unknown, value: unknown): void {
   hash.update(`${type}:${bytes.byteLength}:`).update(bytes).update(";");
 }
 
-function witnessIdentifier(name: string, allowedNames: readonly string[], qualifier?: "witness") {
-  if (!allowedNames.includes(name)) {
-    throw new Error(`Migration witness identifier is outside its schema inventory: ${name}`);
-  }
+function witnessIdentifier(name: string, qualifier?: "witness") {
   return /* kysely-allow-raw: closed schema inventory, preserving literal dots and empty names. */ sql.id(
     ...(qualifier ? [qualifier, name] : [name]),
   );
@@ -190,7 +187,6 @@ function captureTable(
   database: DatabaseSync,
   role: OpenClawMigrationWitness["role"],
   table: string,
-  tableNames: readonly string[],
   withoutRowid: boolean,
   registry?: RegistryMigrationContext,
 ): OpenClawMigrationWitness["tables"][number] {
@@ -233,11 +229,11 @@ function captureTable(
   let query = db
     .selectFrom(
       // kysely-allow-raw: table and columns come from the pinned schema inventory, including plugin stores.
-      sql<Record<string, Cell>>`${witnessIdentifier(table, tableNames)}`.as("witness"),
+      sql<Record<string, Cell>>`${witnessIdentifier(table)}`.as("witness"),
     )
     .select(
       names.flatMap((name, index) => {
-        const column = witnessIdentifier(name, names, "witness");
+        const column = witnessIdentifier(name, "witness");
         return [
           // kysely-allow-raw: preserve SQLite value kinds and exact 64-bit integers without JS number rounding.
           sql<string>`typeof(${column})`.as(`type_${index}`),
@@ -253,7 +249,7 @@ function captureTable(
   const primary = columns.filter(({ pk }) => pk > 0).toSorted((a, b) => a.pk - b.pk);
   const primaryNames = primary.map(({ name }) => name);
   for (const column of [...primaryNames, ...names.filter((name) => !primaryNames.includes(name))]) {
-    query = query.orderBy(witnessIdentifier(column, names, "witness"));
+    query = query.orderBy(witnessIdentifier(column, "witness"));
   }
   let rowCount = 0;
   const expectedRegistrations = new Set(
@@ -465,7 +461,6 @@ export function captureOpenClawMigrationWitness(
         database,
         role,
         name,
-        tableNames,
         kind.withoutRowid,
         name === "agent_databases" ? registry : undefined,
       );

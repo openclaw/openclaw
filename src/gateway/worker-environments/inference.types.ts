@@ -11,8 +11,6 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerInferenceStore, WorkerInferenceTurnInput } from "./inference-store.js";
 
-export type { WorkerInferenceExecutor } from "./connection-identity.js";
-
 type WorkerInferenceFenceReason = Extract<
   WorkerInferenceErrorReason,
   "epoch-mismatch" | "session-not-attached"

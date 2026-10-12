@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import { chatItemGroups } from "./chat-agent-run-grouping.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -15,7 +16,7 @@ import { retryQueuedChatMessage, steerQueuedChatMessage } from "./chat-send-acti
 import { buildChatItems } from "./chat-thread-build.ts";
 import { readPendingSendStatus } from "./chat-thread-items.ts";
 import { renderChatQueue } from "./components/chat-composer-queue.tsx";
-import { renderChatSendStatus } from "./components/chat-message-send-status.ts";
+import { ChatSendStatus } from "./components/chat-message-send-status.ts";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
@@ -167,9 +168,12 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
               ),
       );
       render(
-        renderChatSendStatus(sendStatus, {
-          onRetryQueuedMessage: (id) => {
-            sending = retryQueuedChatMessage(host, id);
+        solidContent(ChatSendStatus, {
+          status: sendStatus,
+          actions: {
+            onRetryQueuedMessage: (id) => {
+              sending = retryQueuedChatMessage(host, id);
+            },
           },
         }),
         recovery,
