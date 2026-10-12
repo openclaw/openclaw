@@ -479,7 +479,6 @@ suite.define(() => {
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first();
         // Keep keyboard navigation free of hover tooltips while the drawer slides in.
-        await page.mouse.move(389, 843);
         await drawerToggle.press("Enter");
         await waitForMobileSidebarDrawerOpen(page);
         for (const trigger of [chip, workspace]) {
