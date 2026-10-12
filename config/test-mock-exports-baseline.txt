@@ -6035,7 +6035,6 @@
 ["src/commands/models/set.test.ts","../../config/logging.js","093747b0c64202bf30d5592d828519b86ed9c578f5a94336ad74360cea02052e",1]
 ["src/commands/models/set.test.ts","../runtime-plugin-install.js","4b36f9eea1d6e2bd4313f73316362b0c5403ffb99cbfb393b2f22ef11d77a322",1]
 ["src/commands/models/set.test.ts","./model-selection.runtime.js","d4e97d7b8d131cc219e2a43577f0fb212ca314a38beaa294f7a59d43d149cb3d",1]
-["src/commands/models/shared.test.ts","../../config/config.js","14c8906c53d5b543a64d4f503895beced3112264862cf3b6d90ee81e86a9cd62",1]
 ["src/commands/node-daemon-install-helpers.test.ts","../daemon/program-args.js","193938cbe605862fce9b704fd4a2d84dac070db1711198fe455f41f5ff877da9",1]
 ["src/commands/node-daemon-install-helpers.test.ts","../daemon/runtime-paths.js","814e4920f69c407bec79b904a5d62f5968dab73b6fbc829fd29186a613d3e411",1]
 ["src/commands/node-daemon-install-helpers.test.ts","../daemon/service-env.js","1a44ca95418089abddaa740085ec2094768c44bdef88ee945704b25176b4b010",1]
