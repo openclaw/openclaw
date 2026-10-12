@@ -7,11 +7,11 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionSuggestionInWorker as addSessionSuggestion } from "../../config/sessions/session-metadata-write.async.js";
 import {
   addSessionMember,
   listSessionMembers,
 } from "../../config/sessions/session-sharing-store.js";
-import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -208,7 +208,7 @@ describe("session metadata writer admission", () => {
         await addSessionMember(scope, { identityId: other.id, addedBy: owner.id });
       }
       if (method === "session.suggestions.resolve") {
-        addSessionSuggestion(scope, {
+        await addSessionSuggestion(scope, {
           id: "pending",
           authorId: owner.id,
           text: "synthetic suggestion",

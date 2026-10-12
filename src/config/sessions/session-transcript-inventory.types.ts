@@ -5,7 +5,11 @@ import type {
   SessionTranscriptCorpusEntry,
 } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
-import type { SessionAccessScope } from "./session-accessor.types.js";
+import type {
+  SessionTranscriptInstance,
+  SessionTranscriptInstanceListOptions,
+} from "./session-accessor.sqlite-contract.js";
+import type { SessionAccessScope, SessionEntryListScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type {
@@ -51,6 +55,14 @@ type MemorySessionTargetsWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+type SessionTranscriptInstancesWorkerInput = {
+  kind: "session-transcript-instances";
+  database: { agentId: string; path: string };
+  scope: Omit<SessionEntryListScope, "sessionKeys">;
+  options: SessionTranscriptInstanceListOptions;
+  continuation?: CanonicalSessionReaderContinuation;
+};
+
 type SessionArchivePresenceWorkerInput = TranscriptArchivePresenceRead & {
   kind: "session-archive-presence";
 };
@@ -74,11 +86,16 @@ export type SessionColdStorageInventoryWorkerInput = {
 };
 
 export type SessionTranscriptInventoryWorkerInput =
+  | SessionTranscriptInstancesWorkerInput
   | MemorySessionTargetsWorkerInput
   | SessionArchiveInventoryWorkerInput
   | SessionCorpusInventoryWorkerInput
   | SessionArchivePresenceWorkerInput;
 export type SessionTranscriptInventoryWorkerValues = {
+  "session-transcript-instances": {
+    kind: "session-transcript-instances";
+    instances: SessionTranscriptInstance[];
+  };
   "memory-session-targets": { kind: "memory-session-targets"; targets: MemorySessionTarget[] };
   "session-archive-inventory": {
     kind: "session-archive-inventory";
@@ -91,6 +108,9 @@ export type SessionTranscriptInventoryWorkerValues = {
   "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
 };
 export type SessionTranscriptInventoryReaders = {
+  readTranscriptInstances: (
+    input: Omit<SessionTranscriptInstancesWorkerInput, "kind" | "database">,
+  ) => Promise<SessionTranscriptInstance[]>;
   readMemorySessionTargets: (
     input: Omit<MemorySessionTargetsWorkerInput, "kind" | "database">,
   ) => Promise<MemorySessionTarget[]>;

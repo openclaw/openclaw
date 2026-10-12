@@ -104,7 +104,6 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
   let cachedConnected = gateway.snapshot.phase === "connected";
   let connectionGeneration = 0;
   const identities = new Map<string, AgentIdentityResult>();
-  const invalidationEpochs = new Map<string, number>();
   const listeners = new Set<() => void>();
 
   const publish = () => {
@@ -124,7 +123,6 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     cachedConnected = connected;
     connectionGeneration += 1;
     identities.clear();
-    invalidationEpochs.clear();
     if (hadIdentities) {
       publish();
     }
@@ -136,7 +134,6 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     const ids = normalizeUniqueTrimmedStringList(agentIds);
     invalidateAgentIdentityCache(cachedClient, ids);
     for (const agentId of ids) {
-      invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
       identities.delete(agentId);
     }
     // Chat can hold a shared request without a capability snapshot.
@@ -159,7 +156,6 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     invalidateAgentIdentityCache(cachedClient);
     connectionGeneration += 1;
     identities.clear();
-    invalidationEpochs.clear();
     publish();
   });
 
@@ -187,14 +183,10 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
         return;
       }
       const results = await Promise.all(
-        missing.map(async (agentId) => {
-          const invalidationEpoch = invalidationEpochs.get(agentId) ?? 0;
-          return [
-            agentId,
-            invalidationEpoch,
-            await fetchAgentIdentity(client, agentId).catch(() => null),
-          ] as const;
-        }),
+        missing.map(
+          async (agentId) =>
+            [agentId, await fetchAgentIdentity(client, agentId).catch(() => null)] as const,
+        ),
       );
       if (
         connectionGeneration !== generation ||
@@ -204,14 +196,10 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
         return;
       }
       let changed = false;
-      for (const [agentId, invalidationEpoch, identity] of results) {
+      for (const [agentId, identity] of results) {
         // Overlapping ensure calls share the request, so only its first
         // publication changes the snapshot observed by subscribers.
-        if (
-          identity &&
-          identities.get(agentId) !== identity &&
-          invalidationEpoch === (invalidationEpochs.get(agentId) ?? 0)
-        ) {
+        if (identity && identities.get(agentId) !== identity) {
           identities.set(agentId, identity);
           changed = true;
         }

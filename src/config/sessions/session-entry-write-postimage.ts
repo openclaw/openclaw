@@ -1,6 +1,7 @@
 import type { SessionEntrySnapshot } from "./session-entry-snapshots.js";
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Exact persisted facts retained by the synchronous transaction that wrote them. */
@@ -9,6 +10,7 @@ export type SessionEntryWritePostimage = {
   entry: SessionEntry;
   row: ResolvedSessionEntryRow["row"];
   window: SessionEntryWindowRow;
+  transcriptWatermark?: SessionTranscriptWatermark;
   sideTables: {
     memberIdsJson: string;
     hasBoard: boolean;

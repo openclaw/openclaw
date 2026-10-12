@@ -14,6 +14,7 @@ import {
 } from "../../../src/gateway/control-ui-csp.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -368,7 +369,7 @@ suite.define(() => {
           await note.fill("State survives rerenders");
           await boardNote.fill("Dashboard state survives swaps");
           for (const region of ["main", "side"]) {
-            await page.locator(".chat-panel-swap").click();
+            await selectChatLayoutAction(page, /^Swap /);
             await expect
               .poll(() => page.locator('[data-panel-slot="dashboard"]').getAttribute("data-region"))
               .toBe(region);

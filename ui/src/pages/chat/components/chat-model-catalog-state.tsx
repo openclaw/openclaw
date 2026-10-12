@@ -50,9 +50,9 @@ export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | unde
                 aria-label={text()}
               >
                 <span class="btn__spinner" aria-hidden="true" />
+                <span>{text()}</span>
               </button>
             </openclaw-tooltip>
-            <span class="sr-only">{text()}</span>
           </span>
         );
       }}

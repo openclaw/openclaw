@@ -118,6 +118,8 @@ import type {
   SessionMembersWorkerInput,
   SessionMembershipFactsWorkerInput,
   SessionSuggestionsWorkerInput,
+  SessionReactionsWorkerInput,
+  SessionReactionsWorkerResult,
 } from "./session-sharing-read.types.js";
 import type { SessionMembersSnapshot } from "./session-sharing-store.kernel.js";
 import type { StoredSessionSuggestion } from "./session-sharing-store.types.js";
@@ -348,6 +350,7 @@ export type SessionHistoryWorkerInput =
   | SessionProjectionStatusWorkerInput
   | SessionMembersWorkerInput
   | SessionSuggestionsWorkerInput
+  | SessionReactionsWorkerInput
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
   | PendingInputHistoryWorkerInput
@@ -475,6 +478,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "projection-status": boolean;
     "session-members": { kind: "session-members" } & SessionMembersSnapshot;
     "session-suggestions": { kind: "session-suggestions"; suggestions: StoredSessionSuggestion[] };
+    "session-reactions": SessionReactionsWorkerResult;
     "session-membership-facts": SessionMembershipFacts;
     "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
     "goal-operation-receipt": {
@@ -697,6 +701,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readDiagnosticText: SessionHistoryReader<SessionDiagnosticTextWorkerInput, string | undefined>;
     readMembers: SessionHistoryReader<SessionMembersWorkerInput>;
     readSuggestions: SessionHistoryReader<SessionSuggestionsWorkerInput, StoredSessionSuggestion[]>;
+    readReactions: SessionHistoryReader<
+      SessionReactionsWorkerInput,
+      SessionReactionsWorkerResult["reactions"]
+    >;
     readMembershipFacts: SessionHistoryReader<SessionMembershipFactsWorkerInput>;
     readProgressCard: SessionHistoryReader<SessionProgressCardWorkerInput, ProgressCard | null>;
     readConversationDelivery: SessionHistoryReader<

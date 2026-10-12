@@ -9,6 +9,21 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Await durable session persistence
+
+Use the asynchronous `SessionManager` methods for durable sessions on the
+Gateway main thread, including
+`openAsync`, `openModelContextAsync`, `readSessionContextAsync`, and
+`appendMessageAsync`. Deprecated synchronous SDK methods remain compatible until
+the next SDK major. Replace
+`readCodexSessionContext` with the reader from `createCodexSessionContextReader`.
+
+Opaque `AgentHarnessSessionDeletionMutation.commit` callbacks are deprecated.
+Use `createNativeSessionBindingLifecycleV2` for stored native bindings or
+`createNativeSessionCommitFinalizer` for effects that only run after commit.
+These existing participants let session deletion stay in the database worker;
+opaque callbacks retain the synchronous compatibility adapter until removal.
+
 ## Await GitHub publication operations
 
 The Gateway context's `githubPublicationService` provides versioned requests and
@@ -27,6 +42,8 @@ no new GitHub-specific SDK subpath.
 | `deferOrphanedRequests`     | `await deferOrphanedRequestsAsync` |
 | `listUnreportedResults`     | `await listUnreportedResultsAsync` |
 | `markReported`              | `await markReportedAsync`          |
+| `read`                      | `await readAsync`                  |
+| `personalStatus`            | `await personalStatusAsync`        |
 
 The same Gateway context exposes personal connection operations through
 `githubOAuthService.personal`. Replace
@@ -95,13 +112,12 @@ one destination transaction. The source remains reserved until that transaction
 settles. Async completion includes installation of its committed facts. Keep the
 requester's owner alive until the operation and its cleanup settle.
 
-Legacy requester assertions may read or mutate SQLite. The service selects their
-native compatibility route before invoking them; it does not serialize closures
-or invoke arbitrary host policy from inside a reserved worker transaction.
-Migrating to V2 changes that callback ordering: preparation precedes reservation,
-and typed predicates authorize commit. It does not preserve arbitrary
-transaction-local callback visibility. A failed or uncertain worker operation
-never retries through the legacy route or replays an accepted external effect.
+Publication no longer runs a native compatibility path. Legacy publication
+methods warn and fail with the replacement method name; they never fall back to
+synchronous SQLite. Migrate to V2 before calling publication. Preparation precedes
+reservation, and typed predicates authorize commit; arbitrary transaction-local
+callback visibility is not supported. A failed or uncertain worker operation never
+replays an accepted external effect.
 
 Await deferral and reporting before dependent reads or shutdown. Reporting and
 claim deferral each update the relevant publication kinds in one worker transaction. Accepted
@@ -119,12 +135,13 @@ without source reservations. A checkpoint becoming available or a session being
 restored after the check may require a new publication request; the original
 content and recorded GitHub effects remain intact.
 
-The deprecated methods retain their released signatures and completion timing;
-synchronous mutations still commit before returning. Actual legacy use emits one
-warning per plugin and the `github-publication` family per Gateway process,
+Deprecated publication methods retain their TypeScript signatures to make the
+migration discoverable, but fail explicitly at invocation. Actual legacy use emits
+one warning per plugin and the `github-publication` family per Gateway process,
 through the shared SDK warning helper. Unknown direct SDK consumers share one
 bounded family warning. These methods will be **removed in the next Plugin SDK
-major**. No schema, stored-data, retention, or update migration is required.
+major**. Personal OAuth compatibility methods described above retain their existing
+completion behavior. No schema, stored-data, retention, or update migration is required.
 
 ## Replace native SQLite runtime writes
 
@@ -347,11 +364,13 @@ The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
 remain synchronous third-party adapters until the next Plugin SDK major and
 explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
 deprecation warning once per plugin and capability family per process; calls outside a
-plugin invocation warn once per method. Existing return values and completion
-timing stay intact, including recording before an immediate synchronous list.
-Notifications publish after the enclosing transaction commits and are discarded
-on rollback. This migration changes no schema, retained data, retention, or
-update behavior.
+plugin invocation warn once per method. Legacy `recordCommittedInput` queues the
+worker operation after the enclosing transaction commits; rollback discards the
+submission. It no longer completes before an immediate synchronous list. Await
+`recordCommittedInputAsync` before reading the resulting Inbox. Accepted queued
+work drains during orderly shutdown; abrupt process termination can lose a queued
+legacy submission. Other synchronous methods retain their existing completion
+timing. This migration changes no schema, retained data, retention, or update behavior.
 
 ## Await personal model-account operations
 
@@ -868,10 +887,12 @@ User-turn transcript recorders also provide optional
 `completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
 Await processing completion before publishing its outcome. Completion records
 processing separately from transcript consumption; it does not append or consume
-the pending input. The synchronous `completeProcessing` callback shipped in
-`v2026.9.8` retains its immediate result for existing SDK consumers. The host
-uses that legacy callback only when a supplied recorder has no async companion,
-never after an async failure or an undefined async result.
+the pending input. Bundled callers complete through the awaited methods. Host-created recorders
+retain the deprecated synchronous `completeProcessing` adapter and its immediate
+return and transaction semantics until the next Plugin SDK major. Using it warns
+once per plugin. Replace it with `completeProcessingAsync`. The host also accepts
+plugin-supplied legacy callbacks when a recorder has no async companion, never
+after an async failure or an undefined async result.
 
 `finishPendingInput(disposition)` still revokes prompt custody synchronously.
 After calling it, await `waitForPendingInputSettlement()` when available before

@@ -699,6 +699,7 @@ src/config/utility-model-separation-migration.ts
 src/config/validation-channel-rules.ts
 src/config/validation-core.ts
 src/config/validation-issues.ts
+src/config/validation-model-params.ts
 src/config/validation-plugin-config.ts
 src/config/validation-plugin-registry.ts
 src/config/validation-plugin-rules.ts
@@ -1305,6 +1306,7 @@ src/plugins/compat/progress-receipt-handoff-record.ts
 src/plugins/compat/sqlite-runtime-records.ts
 src/plugins/compat/binding-persistence-records.ts
 src/plugins/compat/registry-records.ts
+src/plugins/compat/memory-session-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
@@ -1975,6 +1977,7 @@ packages/gateway-protocol/src/schema/session-participant.ts
 src/config/sessions/internal-session-key.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-state.ts
 src/config/sessions/session-accessor.sqlite-entry-read.ts
+src/config/sessions/session-accessor.sqlite-entry-select.ts
 src/config/sessions/session-accessor.sqlite-entry-revision.ts
 src/config/sessions/session-accessor.sqlite-participant-projection.ts
 src/config/sessions/session-participant-identity.ts
@@ -2288,3 +2291,5 @@ src/shared/text/text-projection.ts
 src/shared/text/xml-tag-at.ts
 src/shared/widget-theme.ts
 packages/markdown-core/package.json
+src/config/sessions/transcript-recent-text.ts
+src/config/sessions/transcript-recent-window.ts

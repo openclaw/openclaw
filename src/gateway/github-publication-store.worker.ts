@@ -5,7 +5,6 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type {
   GitHubPublicationReceiptTarget,
   GitHubPublicationRow,
@@ -26,14 +25,9 @@ import type {
   SharedGitHubPublicationPublishingFacts,
   SharedGitHubPublicationWorkspaceSnapshot,
 } from "../state/github-publication-worker.types.js";
-import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
 import {
   checkSharedWorktreeReceipt,
@@ -49,14 +43,6 @@ type GitHubPublicationDatabase = Pick<
 >;
 export const githubPublicationDatabase = (db: Parameters<typeof getNodeSqliteKysely>[0]) =>
   getNodeSqliteKysely<GitHubPublicationDatabase>(db);
-
-export function ensureGitHubPublicationStore(): void {
-  ensureGitHubPublicationSchema(openOpenClawStateDatabase().db);
-}
-
-export function hasGitHubPublicationStore(): boolean {
-  return tableExists(openOpenClawStateDatabase().db, "github_publication_requests");
-}
 
 export function readGitHubPublicationRequest(
   db: Parameters<typeof getNodeSqliteKysely>[0],
@@ -98,13 +84,6 @@ export function readKnownGitHubPublicationPullRequestUrlsInDatabase(
     }
   }
   return [...known];
-}
-
-export function listGitHubPublicationsForClaim(
-  claim: WorkerSessionTurnClaim,
-  options: { pendingOnly?: boolean } = {},
-): GitHubPublicationRow[] {
-  return listGitHubPublicationsForClaimInDatabase(openOpenClawStateDatabase().db, claim, options);
 }
 
 export function listGitHubPublicationsForClaimInDatabase(
@@ -229,23 +208,6 @@ export function assertSharedGitHubPublicationClaimInDatabase(
   ) {
     throw new Error("GitHub publication turn authority changed before recording.");
   }
-}
-
-/** @deprecated Use claimGitHubPublicationExecutionAsync; removed in the next Plugin SDK major. */
-export function claimGitHubPublicationExecution(
-  requestId: string,
-  gatewayInstanceId: string,
-): GitHubPublicationRow {
-  warnPluginSdkDeprecation({
-    family: "github-publication",
-    method: "claimGitHubPublicationExecution",
-    replacement: "claimGitHubPublicationExecutionAsync",
-  });
-  return runOpenClawStateWriteTransaction(
-    (database) => claimGitHubPublicationExecutionInDatabase(database, requestId, gatewayInstanceId),
-    undefined,
-    { operationLabel: "github-publication.claim" },
-  );
 }
 
 export function claimGitHubPublicationExecutionInDatabase(
@@ -405,23 +367,6 @@ function writeGitHubPublicationExecutionInDatabase(
   return updated;
 }
 
-/** @deprecated Use createGitHubPublicationExecutionStoreAsync; removed in the next Plugin SDK major. */
-export function createGitHubPublicationExecutionStore(instanceId: string) {
-  return createSharedExecutionTransitions((row, values, transition) => {
-    warnPluginSdkDeprecation({
-      family: "github-publication",
-      method: "createGitHubPublicationExecutionStore",
-      replacement: "createGitHubPublicationExecutionStoreAsync",
-    });
-    return runOpenClawStateWriteTransaction(
-      (database) =>
-        writeGitHubPublicationExecutionInDatabase(database, instanceId, row, values, transition),
-      undefined,
-      { operationLabel: `github-publication.${transition}` },
-    );
-  });
-}
-
 export function createGitHubPublicationExecutionStoreInDatabase(
   database: OpenClawStateDatabase,
   instanceId: string,
@@ -496,23 +441,6 @@ function createSharedExecutionTransitions(
   };
 }
 
-/** @deprecated Use deferGitHubPublicationRequestsAsync; removed in the next Plugin SDK major. */
-export function deferGitHubPublicationRequests(requestIds: string[]): void {
-  warnPluginSdkDeprecation({
-    family: "github-publication",
-    method: "deferGitHubPublicationRequests",
-    replacement: "deferGitHubPublicationRequestsAsync",
-  });
-  if (!requestIds.length) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    (database) => deferGitHubPublicationRequestsInDatabase(database, requestIds),
-    undefined,
-    { operationLabel: "github-publication.defer" },
-  );
-}
-
 const sharedGitHubPublicationAuthorityColumns = [
   "request_id",
   "idempotency_key",
@@ -584,61 +512,6 @@ export function deferGitHubPublicationRequestsInDatabase(
       deferSharedGitHubPublicationChanged(db, row);
     }
   }
-}
-
-export function isGitHubPublicationExecutionOwner(
-  requestId: string,
-  gatewayInstanceId: string,
-): boolean {
-  const db = openOpenClawStateDatabase().db;
-  if (!tableExists(db, "github_publication_requests")) {
-    return false;
-  }
-  const row = executeSqliteQuerySync(
-    db,
-    githubPublicationDatabase(db)
-      .selectFrom("github_publication_requests")
-      .select(["status", "gateway_instance_id"])
-      .where("request_id", "=", requestId),
-  ).rows[0];
-  return row?.status === "publishing" && row.gateway_instance_id === gatewayInstanceId;
-}
-
-/** @deprecated Use runGitHubPublicationMaintenanceAsync; removed in the next Plugin SDK major. */
-export function markGitHubPublicationReported(
-  kind: "personal" | "repository",
-  requestId: string,
-): void {
-  warnPluginSdkDeprecation({
-    family: "github-publication",
-    method: "markGitHubPublicationReported",
-    replacement: "runGitHubPublicationMaintenanceAsync",
-  });
-  const table =
-    kind === "personal"
-      ? "github_personal_publication_requests"
-      : "github_repository_publication_requests";
-  if (!tableExists(openOpenClawStateDatabase().db, table)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const changed = executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<Pick<StateDatabase, typeof table>>(db)
-          .updateTable(table)
-          .set({ reported_at_ms: Date.now() })
-          .where("request_id", "=", requestId)
-          .where("status", "in", ["published", "failed"])
-          .returningAll(),
-      ).rows;
-      for (const row of changed) {
-        githubPublicationReceipts.stageRow(db, kind, row);
-      }
-    },
-    undefined,
-    { operationLabel: `github-${kind}-publication.report` },
-  );
 }
 
 export function bindAcceptedGitHubPublicationClaimSnapshotInDatabase(

@@ -217,6 +217,21 @@ serveOwnedWorkerTasks(
           pending: result.found && result.value,
         };
       }
+      if (request.kind === "session-transcript-instances") {
+        const { listSessionTranscriptInstances } = await import("./session-history.js");
+        return {
+          kind: request.kind,
+          instances: listSessionTranscriptInstances(
+            {
+              ...request.scope,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            },
+            request.options,
+            request.continuation,
+          ),
+        };
+      }
       if (request.kind === "memory-session-targets") {
         const { readMemorySessionTargets } = await import("./session-memory-targets.js");
         return {
@@ -471,6 +486,16 @@ serveOwnedWorkerTasks(
           kind: "session-members" as const,
           ...(result.found ? result.value : { entry: undefined, members: [] }),
         };
+      }
+      if (request.kind === "session-reactions") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { listSessionReactionsInDatabase } = await import("./session-reaction-store.read.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) => listSessionReactionsInDatabase(database, request.sessionKey, request),
+          { ...request.database, env: request.env },
+        );
+        return { kind: "session-reactions" as const, reactions: result.found ? result.value : {} };
       }
       if (request.kind === "session-suggestions") {
         const { withOpenClawAgentDatabaseReadOnly } =

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -166,6 +167,38 @@ describe("transcript turn physical identity", () => {
       targets: [{ agentId: "other", storePath }],
     });
     expect(reads.mock.calls.length).toBeGreaterThan(initialReads);
+  });
+
+  it("reuses per-agent inventory and cleanup after ordinary session writes", async () => {
+    const storePath = fixture.storePath();
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.resolve(fixture.sessionsDir(), "../../.."),
+    };
+    const session = { agentId: "main", storePath, sessionKey: "agent:main:global", env };
+    replaceSessionEntrySync(session, { sessionId, updatedAt: 1 });
+    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const closes = vi.spyOn(targetDiscoveryLane.pool, "closeResources");
+    const select = () =>
+      prepareSessionStoreTargetInventoryRead(
+        prepareSessionStoreTargetInventory(
+          {
+            agents: { entries: { main: {} } },
+          },
+          ["main"],
+          env,
+        ),
+      ).withRead(async (inventory) => inventory.agents[0]?.result);
+    const expected = { available: true, targets: [{ agentId: "main", storePath }] };
+    expect(await select()).toEqual(expected);
+    const initialReads = reads.mock.calls.length;
+    const initialCloses = closes.mock.calls.length;
+    expect(initialReads).toBeGreaterThan(0);
+
+    replaceSessionEntrySync(session, { sessionId, updatedAt: 2 });
+    expect(await select()).toEqual(expected);
+    expect(reads).toHaveBeenCalledTimes(initialReads);
+    expect(closes).toHaveBeenCalledTimes(initialCloses);
   });
 
   it("refreshes family inventory after writing an already registered sibling", async () => {
