@@ -10,11 +10,7 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
-import {
-  executeExistingOpenClawStateRead,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "./openclaw-state-db-readonly.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
@@ -27,12 +23,8 @@ import {
 import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   profileCatalogPath,
-  projectUserProfileDisplays,
   projectHasMultipleSessionSharingIdentities,
   resolveUserProfileReferenceInCatalog,
-  selectHasMultipleSessionSharingIdentities,
-  selectUserProfileIdentityInDatabase,
-  selectUserProfileDisplaysInDatabase,
 } from "./user-profile-identity.read.js";
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
 import {
@@ -41,9 +33,6 @@ import {
   projectUserProfileDisplay,
   projectCatalogUserProfileIdentity,
   resolveCatalogProfile,
-  selectResolvedUserProfile,
-  userProfileDisplaySelection,
-  userProfilesDb,
 } from "./user-profiles-internal.js";
 import { UserProfileNotFoundError } from "./user-profiles-schema.js";
 import type {
@@ -56,21 +45,15 @@ import type {
 export { projectUserProfileDisplay } from "./user-profiles-internal.js";
 
 export const hasMultipleSessionSharingIdentities = (options: OpenClawStateDatabaseOptions = {}) =>
-  readProfileCatalog(
-    options,
-    projectHasMultipleSessionSharingIdentities,
-    selectHasMultipleSessionSharingIdentities,
-  ) ?? false;
+  readProfileCatalog(options, projectHasMultipleSessionSharingIdentities) ?? false;
 
 /** Exact durable identity facts; never use display-reference prefix matching for authority. */
 export function readUserProfileIdentity(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ) {
-  return readProfileCatalog(
-    options,
-    (resident) => projectCatalogUserProfileIdentity(resident, profileId),
-    (db) => selectUserProfileIdentityInDatabase(db, profileId),
+  return readProfileCatalog(options, (resident) =>
+    projectCatalogUserProfileIdentity(resident, profileId),
   );
 }
 
@@ -239,16 +222,9 @@ function observeEmailBindings(): void {
 function readProfileCatalog<T>(
   options: OpenClawStateDatabaseOptions,
   resident: (rows: Map<string, ProfileDisplayRow>) => T,
-  stored: (db: DatabaseSync) => T,
 ): T | undefined {
-  // Released tool/MentionInbox SDK readers and history workers retain native cold reads.
   const catalog = profileCatalogs.get(profileCatalogPath(options));
-  return catalog
-    ? resident(catalog.rows)
-    : withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => (tableExists(db, "user_profiles") ? stored(db) : undefined),
-        options,
-      );
+  return catalog?.valid ? resident(catalog.rows) : undefined;
 }
 
 function retainProfileMutationPublicationCatalog(
@@ -504,9 +480,6 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
       { current: true },
     );
     context.admission.assertCurrent();
-    if (reply && (!reply.ok || reply.type !== "userProfiles.catalog")) {
-      throw new Error(reply.ok ? "Unexpected profile catalog reply" : reply.message);
-    }
     if (
       profileRevision !== readUserProfileVersion() ||
       bindingRevision !== readUserProfileEmailBindingRevision()
@@ -653,46 +626,18 @@ export function publishUserProfilesChange(db: DatabaseSync, ...profileIds: strin
   deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
 }
 
-/** Reads merge-aware display data without loading avatar bytes. */
+/** Reads the prepared Gateway catalog without opening storage or loading avatar bytes. */
 export function getUserProfileDisplay(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ) {
-  const profile = readProfileCatalog(
-    options,
-    (resident) => resolveCatalogProfile(resident, profileId),
-    (db) =>
-      selectResolvedUserProfile(
-        db,
-        profileId,
-        userProfilesDb(db).selectFrom("user_profiles").select(userProfileDisplaySelection),
-      ),
+  const profile = readProfileCatalog(options, (resident) =>
+    resolveCatalogProfile(resident, profileId),
   );
   if (!profile) {
     throw new UserProfileNotFoundError(profileId);
   }
   return projectUserProfileDisplay(profile);
-}
-
-/** Read a bounded display cohort and its one-hop merge targets without initializing storage. */
-export function getUserProfileDisplays(
-  profileIds: readonly string[],
-  options: OpenClawStateDatabaseOptions = {},
-): Map<string, ReturnType<typeof getUserProfileDisplay>> {
-  const ids = [...new Set(profileIds)];
-  if (ids.length === 0) {
-    return new Map();
-  }
-  return (
-    readProfileCatalog(
-      options,
-      (resident) => projectUserProfileDisplays(ids, (id) => resolveCatalogProfile(resident, id)),
-      (db) => {
-        const rows = selectUserProfileDisplaysInDatabase(db, ids);
-        return projectUserProfileDisplays(ids, (id) => rows.get(id));
-      },
-    ) ?? new Map()
-  );
 }
 
 /** Activity references are display navigation, never authentication identifiers. */

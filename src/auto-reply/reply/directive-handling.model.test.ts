@@ -113,6 +113,10 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -309,6 +313,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   cliBackendsTesting.resetDepsForTest();
   setDirectiveTestProviders([]);
   pluginPolicyMock.channels.clear();
@@ -597,6 +602,8 @@ describe("/model chat UX", () => {
       const tempRoot = tempDirs.make("openclaw-model-terminal-display-");
       const stateDir = path.join(tempRoot, "state");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const cfg = baseConfig();
+        setRuntimeConfigSnapshot(cfg);
         const sessionKey = "agent:main:main";
         const storePath = path.join(tempRoot, "custom-store", "openclaw-agent.sqlite");
         const scope = { agentId: "main", sessionKey, sessionId: "terminal-display", storePath };
@@ -637,6 +644,7 @@ describe("/model chat UX", () => {
           const before = structuredClone(sessionEntry);
           const reply = await handleDirectiveOnly(
             createDirectiveHandlingParams({
+              cfg,
               directives: parseInlineSessionDirectives(command),
               sessionEntry,
               sessionKey,

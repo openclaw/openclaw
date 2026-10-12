@@ -44,7 +44,7 @@ import { ComposerRunStatus } from "./chat-composer-run-status.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
 import { resetSkillMenuState, SkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import { SlashMenu, resetSlashMenuState, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
-import { commitComposerDraft, isChatRunWorking } from "./chat-composer-state.ts";
+import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
@@ -132,74 +132,75 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const slashMenuAnnouncementId = createMemo(() =>
     paneDomId(props.paneId, "slash-active-announcement"),
   );
-  const disabledBanner = createMemo(() =>
-    props.disabledBanner && props.disabledBanner.presentation !== "hidden" ? (
-      <>
-        <div
-          class={`agent-chat__disabled-banner ${
-            props.disabledBanner.kind === "composer-replacement"
-              ? "agent-chat__disabled-banner--replacement"
-              : ""
-          } ${props.disabledBanner.presentation === "compact" ? "agent-chat__disabled-banner--compact" : ""} callout ${
-            props.disabledBanner.tone === "neutral"
-              ? "agent-chat__disabled-banner--neutral"
-              : "info"
-          } callout--action`}
-          role="status"
-        >
-          {props.disabledBanner.icon ? (
-            <>
-              <span
-                class={`agent-chat__disabled-banner-icon agent-chat__disabled-banner-icon--${props.disabledBanner.icon}`}
-                aria-hidden="true"
-              >
-                {props.disabledBanner.icon === "archive" ? (
-                  <Icon name="archive" />
-                ) : props.disabledBanner.icon === "eye" ? (
-                  <Icon name="eye" />
-                ) : (
-                  <Icon name="alertTriangle" />
-                )}
-              </span>
-            </>
-          ) : undefined}
-          <div class="callout__content">
-            {props.disabledBanner.title ? (
+  // Owner refreshes replace the banner and callback values, not the focused action's DOM.
+  const disabledBanner = (
+    <Show when={props.disabledBanner?.presentation !== "hidden" ? props.disabledBanner : undefined}>
+      {(banner) => (
+        <>
+          <div
+            class={`agent-chat__disabled-banner ${
+              banner().kind === "composer-replacement"
+                ? "agent-chat__disabled-banner--replacement"
+                : ""
+            } ${banner().presentation === "compact" ? "agent-chat__disabled-banner--compact" : ""} callout ${
+              banner().tone === "neutral" ? "agent-chat__disabled-banner--neutral" : "info"
+            } callout--action`}
+            role="status"
+          >
+            {banner().icon ? (
               <>
-                <div class="agent-chat__disabled-banner-title">{props.disabledBanner.title}</div>
+                <span
+                  class={`agent-chat__disabled-banner-icon agent-chat__disabled-banner-icon--${banner().icon}`}
+                  aria-hidden="true"
+                >
+                  {banner().icon === "archive" ? (
+                    <Icon name="archive" />
+                  ) : banner().icon === "eye" ? (
+                    <Icon name="eye" />
+                  ) : (
+                    <Icon name="alertTriangle" />
+                  )}
+                </span>
               </>
             ) : undefined}
-            <div class="agent-chat__disabled-banner-detail">{props.disabledBanner.text}</div>
+            <div class="callout__content">
+              {banner().title ? (
+                <>
+                  <div class="agent-chat__disabled-banner-title">{banner().title}</div>
+                </>
+              ) : undefined}
+              <div class="agent-chat__disabled-banner-detail">{banner().text}</div>
+            </div>
+            <Show when={banner().onAction}>
+              {(onAction) => (
+                <button
+                  type="button"
+                  class={`btn btn--sm ${banner().actionStyle ?? ""}`}
+                  disabled={Boolean(banner().disabledReason) || banner().busy}
+                  aria-busy={banner().busy ? "true" : "false"}
+                  title={banner().disabledReason ?? undefined}
+                  onClick={() => onAction()()}
+                >
+                  {banner().busy ? (
+                    <>
+                      <span class="btn__spinner" aria-hidden="true"></span>
+                      {banner().busyLabel ?? banner().actionLabel}
+                    </>
+                  ) : (
+                    banner().actionLabel
+                  )}
+                </button>
+              )}
+            </Show>
+            {banner().kind === "composer-replacement" &&
+            banner().presentation !== "compact" &&
+            context.showAbortableUi
+              ? renderChatAbortActionSolid(context.runControlsProps)
+              : undefined}
           </div>
-          {props.disabledBanner.onAction ? (
-            <>
-              <button
-                type="button"
-                class={`btn btn--sm ${props.disabledBanner.actionStyle ?? ""}`}
-                disabled={Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
-                aria-busy={props.disabledBanner.busy ? "true" : "false"}
-                title={props.disabledBanner.disabledReason ?? undefined}
-                onClick={props.disabledBanner.onAction}
-              >
-                {props.disabledBanner.busy ? (
-                  <>
-                    <span class="btn__spinner" aria-hidden="true"></span>
-                    {props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel}
-                  </>
-                ) : (
-                  props.disabledBanner.actionLabel
-                )}
-              </button>
-            </>
-          ) : undefined}
-          {props.disabledBanner.kind === "composer-replacement" &&
-          props.disabledBanner.presentation !== "compact" &&
-          context.showAbortableUi
-            ? renderChatAbortActionSolid(context.runControlsProps)
-            : undefined}
-        </div>
-      </>
-    ) : undefined,
+        </>
+      )}
+    </Show>
   );
   const showComposerInput = createMemo(
     () => context.showComposer && props.disabledBanner?.kind !== "composer-replacement",
@@ -282,17 +283,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ) : undefined;
   });
   const fallbackStatus = createMemo(() => renderFallbackIndicatorSolid(props.fallbackStatus));
-  const runStatus = () => (
-    <ComposerRunStatus
-      waitingSubagents={props.waitingSubagents ?? null}
-      working={isChatRunWorking(props) && !props.waitingApproval}
-      onOpenSubagents={props.onOpenSubagents}
-    />
-  );
   return (
     <>
       <div class="agent-chat__composer-shell">
-        {props.waitingSubagents || !showComposerInput() ? runStatus() : undefined}
+        <ComposerRunStatus
+          waitingSubagents={props.waitingSubagents ?? null}
+          onOpenSubagents={props.onOpenSubagents}
+        />
         <div class="chat-footer__context">
           <LitContent value={props.footerContent ?? undefined} />
           <div class="agent-chat__composer-notices">
@@ -300,7 +297,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             {fallbackStatus()}
           </div>
           <ComposerQuestionDock panel={context.questionPanelProps} />
-          {props.disabledBanner?.kind === "above-composer" ? disabledBanner() : undefined}
+          {props.disabledBanner?.kind === "above-composer" ? disabledBanner : undefined}
           <ComposerProgress composer={props} shown={context.showComposer} />{" "}
           <ComposerQueue composer={props} showAbortableUi={context.showAbortableUi} />
           <ComposerGoal
@@ -537,7 +534,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-meta agent-chat__composer-context">
-                    {!props.waitingSubagents ? runStatus() : undefined}
                     <ContextNotice
                       session={activeSession()}
                       messages={props.messages}
@@ -560,7 +556,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             </div>
           </ComposerInputScope>
         ) : props.disabledBanner?.kind === "composer-replacement" ? (
-          disabledBanner()
+          disabledBanner
         ) : undefined}
       </div>
     </>

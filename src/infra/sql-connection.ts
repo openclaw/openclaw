@@ -61,7 +61,7 @@ export interface PostgresSqlConnection extends Pick<
   runTransaction<T>(
     operation: () => T,
     options?: { withCommit?: (commit: () => void) => void },
-    ...modes: [readOnly?: boolean, reserved?: boolean, admitWorker?: boolean]
+    ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T;
 }
 

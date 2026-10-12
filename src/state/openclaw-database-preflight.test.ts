@@ -152,7 +152,7 @@ describe("OpenClaw database schema preflight", () => {
   it("refuses a configured legacy agent database without mutating its WAL or creating stores", async () => {
     const stateDir = tempDirs.make("openclaw-agent-startup-admission-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentPath = path.join(stateDir, "custom", "sessions.sqlite");
+    const agentPath = path.join(stateDir, "custom", "openclaw-agent.sqlite");
     openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env });
     closeDatabases();
     const { DatabaseSync } = requireNodeSqlite();

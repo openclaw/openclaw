@@ -85,6 +85,7 @@ async function startGatewayCron(
   const state = buildGatewayCronService({
     scheduler,
     cfg,
+    storePath: path.join(stateDir, "cron", "jobs.json"),
     deps: {} as CliDeps,
     broadcast,
     env: { ...process.env, OPENCLAW_SKIP_CRON: "0", OPENCLAW_STATE_DIR: stateDir },
@@ -289,9 +290,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     }
   });
 
-  it("joins a self-stopped timer before run admission without closing sibling schedules", async ({
-    signal,
-  }) => {
+  it("joins a self-stopped worker tick without closing sibling schedules", async ({ signal }) => {
     stopAllMock.mockResolvedValue(undefined);
     let ownedState: ReturnType<typeof cronServiceState.createCronServiceState> | undefined;
     const createState = cronServiceState.createCronServiceState;
@@ -316,22 +315,14 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "must remain due" },
     });
-    const realLoad = cronStore.loadCronJobsStoreWithConfigJobs;
-    let holdTick = true;
-    const load = vi
-      .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
-      .mockImplementation(async (storePath) => {
-        const snapshot = await realLoad(storePath);
-        if (holdTick && storePath === original.state.storePath) {
-          holdTick = false;
-          original.state.cron.stop();
-          entered.resolve();
-          await release.promise;
-        }
-        return snapshot;
+    const sessionAgents = vi
+      .spyOn(cronState.deps, "resolveSessionStoreAgentIds")
+      .mockImplementationOnce(async () => {
+        original.state.cron.stop();
+        entered.resolve();
+        await release.promise;
+        return [];
       });
-    // A commit notice makes maintenance cross the reload boundary held above.
-    cronStore.noteCronJobsStoreCommit(original.state.storePath);
     original.clock.setTime(original.clock.clock.now() + 1_000);
     const tick = wake(cronState);
     let drain: Promise<void> | undefined;
@@ -340,7 +331,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
         awaitGateBeforeSettlement(
           entered.promise,
           Promise.resolve(tick),
-          "Cron timer settled before entering the admission gate",
+          "Cron worker tick settled before entering the maintenance gate",
         ),
         signal,
       );
@@ -351,7 +342,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       expect(drain).toBeDefined();
       original.scheduler.schedule({ id: "cron-drain-sibling", delayMs: 0, run: sibling });
       await withinTest(Promise.resolve(original.clock.advanceBy(0)), signal);
-      await realLoad(original.state.storePath);
+      await cronStore.loadCronJobsStoreWithConfigJobs(original.state.storePath);
       expect(sibling).toHaveBeenCalledOnce();
       expect(original.scheduler.signal.aborted).toBe(false);
       expect(drained).toBe(false);
@@ -363,7 +354,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       release.resolve();
       original.state.cron.stop();
       original.scheduler.beginClose();
-      load.mockRestore();
+      sessionAgents.mockRestore();
       await withinTest(
         (async () => {
           await Promise.allSettled([tick, drain]);

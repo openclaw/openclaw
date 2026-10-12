@@ -2,6 +2,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { resetLogger, setLoggerOverride } from "../../../src/logging/logger.ts";
 import type { SessionsUsageResult } from "../../../src/shared/usage-types.ts";
@@ -131,7 +133,7 @@ suite.define(() => {
             await import("../../../src/config/sessions/session-accessor.js");
 
           signal.throwIfAborted();
-          await state.writeConfig({
+          const config: OpenClawConfig = {
             agents: {
               ownership: "explicit",
               defaults: { workspace: state.workspaceDir },
@@ -151,7 +153,9 @@ suite.define(() => {
             session: {
               store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
             },
-          });
+          };
+          await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
 
           for (const agentId of ["main", "opus"]) {
             signal.throwIfAborted();

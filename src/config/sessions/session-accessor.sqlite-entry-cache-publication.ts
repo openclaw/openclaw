@@ -185,6 +185,9 @@ export async function withSessionEntryCreationPublication<T>(
   ),
   run: (operation: SessionEntryCreationOperation) => Promise<T>,
 ): Promise<T> {
+  // Creation must reach the replica even before its first reader or after lifecycle cleanup.
+  const { ensureReplicaSubscription } = await import("./session-actor-replica.js");
+  ensureReplicaSubscription();
   const operation = createSessionEntryCreationOperation();
   const creation: CreationRecord = {
     agentId: params.agentId,

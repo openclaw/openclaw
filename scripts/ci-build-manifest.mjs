@@ -949,6 +949,32 @@ const runSqliteSessionLifecycle =
   supportsSqliteSessionLifecycleProof &&
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
+const postgresConformancePaths = [
+  "scripts/generate-postgres-schema.mts",
+  "scripts/lib/postgres-schema-catalog.mts",
+  "test/scripts/generate-postgres-schema.test.ts",
+  "src/state/*schema*",
+  "src/state/openclaw-state-db-contract.ts",
+  "src/state/postgres-schema.generated/**",
+  "src/cron/store/runtime-authority-store.ts",
+  "src/infra/database-engine/**",
+  "src/infra/postgres-sync/**",
+  "src/infra/sql-connection.ts",
+  "src/infra/sql-query-compiler.ts",
+  "src/infra/kysely-sync*.ts",
+  "src/infra/sqlite-transaction.ts",
+  "extensions/workboard/**",
+  "src/config/zod-schema.database.ts",
+  "scripts/test-database-conformance*.mjs",
+];
+const runPostgresConformance =
+  existsSync("scripts/test-database-conformance.mjs") &&
+  (eventName === "schedule" ||
+    ((eventName === "pull_request" || releaseGate) &&
+      (changedPaths === null ||
+        changedPaths.some((file) =>
+          postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
+        ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
   (runNodeFull &&
@@ -1201,6 +1227,7 @@ const nodeTestShards = targetNodeTestShards
           "src/agents/sessions/tools/grep.byte-path.test.ts",
           "src/agents/filesystem-tools-output-contract.test.ts",
           "test/scripts/check-database-worker-ratchet.test.ts",
+          "test/scripts/pr-baseline-successor.test.ts",
         ],
         (plan) =>
           ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
@@ -1216,7 +1243,7 @@ const nodeTestShards = targetNodeTestShards
         (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
       ),
     };
-    if (compactReleaseMatrixRows) {
+    if (compactReleaseMatrixRows || (packedGroups && !frozenTarget)) {
       // The workflow treats absent feature flags as false and history as [].
       // Encoded groups own their names; the outer name is only a legacy fallback.
       for (const key of [
@@ -1299,14 +1326,14 @@ const additionalChecks = [
     group,
     runner: "blacksmith-4vcpu-ubuntu-2404",
   })),
-  // Only dispatches execute this report; scheduled tips have no change range.
-  ...(eventName === "workflow_dispatch"
+  // Main-shaped qualifications are still dispatches with an exact comparison range.
+  ...(eventName === "workflow_dispatch" || mainQualification
     ? [
-        // Diff generation took 209–246s on smaller hosts; keep its 8GiB heap isolated.
+        // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {
           check_name: "report-plugin-sdk-api-diff",
           group: "plugin-sdk-api-diff",
-          runner: "blacksmith-8vcpu-ubuntu-2404",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
         },
       ]
     : []),
@@ -1456,6 +1483,7 @@ const manifest = {
   ),
   run_prompt_snapshots: runNodeFull && !releaseFastLane && changedScopeHasPromptSnapshotImpact,
   run_sqlite_session_lifecycle: runSqliteSessionLifecycle,
+  run_postgres_conformance: runPostgresConformance,
   checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
   run_plugin_contracts_shards: pluginContractShards.length > 0,
   plugin_contracts_matrix: createContractMatrix(pluginContractShards, "contracts-plugins"),
@@ -1706,6 +1734,7 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
+    "postgres-conformance": count(manifest.run_postgres_conformance),
     "skills-python": count(manifest.run_skills_python_job),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),

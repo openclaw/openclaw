@@ -1,3 +1,4 @@
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -18,6 +19,7 @@ import {
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { formatErrorMessageWithCode } from "./errors.js";
+import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
@@ -78,37 +80,51 @@ type BackupInput = {
   additionalPaths?: readonly string[];
   additionalFiles?: readonly string[];
   preserveSourceArtifacts?: boolean;
+  /** Native migration owns the stopped Gateway until Doctor takes custody. */
+  stopped?: boolean;
 };
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
 
 async function inspectRestorableDatabaseFiles(
   databases: readonly string[],
-  previous?: ReadonlyMap<string, Awaited<ReturnType<typeof fs.lstat>>>,
+  previous?: ReadonlyMap<string, BigIntStats>,
+  stopped = false,
 ) {
-  const identities = new Map<string, Awaited<ReturnType<typeof fs.lstat>>>();
+  const identities = new Map<string, BigIntStats>();
   for (const database of databases) {
     for (const suffix of ["", "-wal", "-shm", "-journal"]) {
       const file = `${database}${suffix}`;
       let info;
       try {
-        info = await fs.lstat(file);
+        info = await fs.lstat(file, { bigint: true });
       } catch (error) {
         if (suffix && hasNodeErrorCode(error, "ENOENT")) {
           continue;
         }
         throw error;
       }
-      if (!info.isFile() || info.nlink !== 1) {
+      if (!info.isFile() || info.nlink !== 1n) {
         throw new Error(
           `Update database rollback requires a regular file with one link: ${file}. Resolve database aliases before retrying; the databases have not been migrated.`,
         );
       }
       const before = previous?.get(file);
-      if (before && !sameFileIdentity(before, info)) {
+      if (
+        before &&
+        !(stopped ? sameFileMutationFingerprint(before, info) : sameFileIdentity(before, info))
+      ) {
         throw new Error(`Update database file changed during backup: ${file}.`);
       }
       identities.set(file, info);
     }
+  }
+  if (
+    stopped &&
+    previous &&
+    (identities.size !== previous.size ||
+      [...identities.keys()].some((file) => !previous.has(file)))
+  ) {
+    throw new Error("Update database journal state changed during stopped backup.");
   }
   return identities;
 }
@@ -266,7 +282,8 @@ export async function createUpdateDatabaseBackupInProcess(
   const identities = await inspectRestorableDatabaseFiles(inventory.present);
   const warnings = await checkDatabaseBackupSpace(directory, inventory.present);
   const { buildBackupArchivePath } = await import("../commands/backup-shared.js");
-  const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
+  const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
+    await import("./sqlite-snapshot.js");
   const databases: UpdateDatabaseBackup["databases"] = [];
   const sourceGenerations: UpdateDatabaseBackup["sourceGenerations"] = Object.fromEntries(
     inventory.missing.map((file) => [file, null]),
@@ -290,25 +307,38 @@ export async function createUpdateDatabaseBackupInProcess(
       await ensureDurableDirectory({ directoryPath: parent, create: createPrivateSqliteDirectory });
     }
     const snapshotPath = path.join(directory, archivePath);
-    const before = readGeneration(sourcePath);
-    const snapshot = await createVerifiedSqliteSnapshot({
-      sourcePath,
-      targetPath: snapshotPath,
-      sourceAcquisition: {
-        mode: "isolated-process",
-        stagingRoot: input.stagingRoot,
-        preserveSourceArtifacts: input.preserveSourceArtifacts,
-      },
-      preserveRowIds: true,
-      requireNonEmptySource: true,
-    });
-    const after = readGeneration(sourcePath);
-    if (after !== undefined && before === after) {
-      sourceGenerations[sourcePath] = after;
-    } else {
-      warnings.push(
-        `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
-      );
+    const stopped =
+      input.stopped &&
+      !identities.has(`${sourcePath}-journal`) &&
+      (identities.get(`${sourcePath}-wal`)?.size ?? 0n) === 0n;
+    const before = input.stopped ? undefined : readGeneration(sourcePath);
+    const snapshot = stopped
+      ? await createStoppedSqliteSnapshot({
+          sourcePath,
+          targetPath: snapshotPath,
+          sourceIdentity: identities.get(sourcePath)!,
+        })
+      : await createVerifiedSqliteSnapshot({
+          sourcePath,
+          targetPath: snapshotPath,
+          sourceAcquisition: {
+            mode: "isolated-process",
+            stagingRoot: input.stagingRoot,
+            preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
+          },
+          preserveRowIds: true,
+          requireNonEmptySource: true,
+        });
+    // Native restore uses its supervisor's stopped-state fence, not live-writer generations.
+    if (!input.stopped) {
+      const after = readGeneration(sourcePath);
+      if (after !== undefined && before === after) {
+        sourceGenerations[sourcePath] = after;
+      } else {
+        warnings.push(
+          `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
+        );
+      }
     }
     databases.push({
       path: sourcePath,
@@ -318,11 +348,16 @@ export async function createUpdateDatabaseBackupInProcess(
       sizeBytes: snapshot.sizeBytes,
     });
   }
-  const current = await inventoryFor(await discoverUpdateStateSchemaInspectionInProcess(input));
+  const current = await inventoryFor(
+    await discoverUpdateStateSchemaInspectionInProcess({
+      ...input,
+      preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
+    }),
+  );
   if (JSON.stringify(current) !== JSON.stringify(inventory)) {
     throw new Error("Update database inventory changed during backup; retry after writers stop.");
   }
-  await inspectRestorableDatabaseFiles(inventory.present, identities);
+  await inspectRestorableDatabaseFiles(inventory.present, identities, input.stopped);
   return {
     directory,
     databases,
@@ -360,13 +395,14 @@ export async function createUpdateDatabaseBackup({
     const backupRoot = path.resolve(input.backupRoot);
     const directory = `${backupRoot}.databases`;
     await createPrivateSqliteDirectory(directory);
-    const identity = await fs.lstat(directory);
+    const identity = await fs.lstat(directory, { bigint: true });
     try {
       const sourceEnv = input.env ?? process.env;
       const worker = { nodeRunner, timeoutMs, signal, sourceEnv, stagingRoot: directory };
       // Each SQLite reader owns its token-protected scratch beneath this private backup directory.
       const workerInput = {
         ...input,
+        preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
         additionalPaths,
         additionalFiles,
         backupRoot,
@@ -418,7 +454,7 @@ export async function createUpdateDatabaseBackup({
         UpdateDatabaseBackupSchema,
       );
       rehearsal?.assertCurrent();
-      if (!sameFileIdentity(identity, await fs.lstat(directory))) {
+      if (!sameFileIdentity(identity, await fs.lstat(directory, { bigint: true }))) {
         throw new Error(`Database backup directory changed during capture: ${directory}.`);
       }
       requireDirectorySync(await syncDirectory(path.dirname(directory)), "Database backup parent");

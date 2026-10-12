@@ -43,6 +43,7 @@ import {
   type SessionSourceValidation,
 } from "./session-source-authority.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
   completeSessionTurnPublication,
   publishCommittedSessionTurn,
@@ -195,40 +196,12 @@ export async function appendSessionTurnInWorker(
       if (incognito || memory) {
         return undefined;
       }
-      const { restoreSessionColdTranscript, SessionColdTurnReboundError } =
-        await import("./session-cold-storage.js");
-      assertCurrent();
-      try {
-        await restoreSessionColdTranscript(
-          { ...scope, storePath: scope.path },
-          assertCurrent,
-          undefined,
-          options.keyFormat === "agent-qualified"
-            ? {
-                kind: "turn",
-                agentId: scope.agentId,
-                sessionKey: scope.sessionKey,
-                options: {
-                  keyFormat: options.keyFormat,
-                  expectedSessionId: options.expectedSessionId,
-                  selectedSessionId: options.selectedSessionId,
-                  selectedLifecycleRevision: options.selectedLifecycleRevision,
-                  expectedLifecycleRevision: options.expectedLifecycleRevision,
-                  expectedWriterRunId: options.expectedWriterRunId,
-                  expectedSessionState: options.expectedSessionState,
-                  initialSessionEntry: plan.options.initialSessionEntry,
-                },
-                goalOperation: options.sessionTurnMutation?.operation,
-              }
-            : undefined,
-        );
-      } catch (error) {
-        if (error instanceof SessionColdTurnReboundError) {
-          return { ...error.result, sessionFile: options.sessionFile };
-        }
-        throw error;
-      }
-      return undefined;
+      return restoreSessionTurnColdTranscript(
+        scope,
+        options,
+        assertCurrent,
+        plan.options.initialSessionEntry,
+      );
     };
     if (!prepareColdTranscript) {
       const rebound = await restore();

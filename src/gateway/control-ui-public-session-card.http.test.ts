@@ -7,6 +7,7 @@ import {
 } from "@openclaw/session-url-contract/public-share";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -55,6 +56,7 @@ it("serves real publication documents and PNGs once, and withholds closed public
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const targets = {
       published: { name: "published", shareId: "a".repeat(48) },
       private: { name: "private", shareId: "b".repeat(48) },

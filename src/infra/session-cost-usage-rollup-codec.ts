@@ -23,6 +23,8 @@ export type UsageCostJsonlCheckpoint = {
 
 export type UsageCostSqliteCheckpoint = {
   kind: "sqlite";
+  /** Existing transcript rewrite watermark; absent legacy checkpoints rebuild once. */
+  generation?: string | null;
   maxSeq: number;
   eventCount: number;
   size: number;

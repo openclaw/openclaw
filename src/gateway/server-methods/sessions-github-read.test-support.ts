@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import { getRuntimeConfig } from "../../config/io.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -53,6 +53,7 @@ export async function withReadFixture(
         },
       });
     }
+    await captureRuntimeConfigAsyncReader()();
     const profile = options.personal
       ? ensureProfileForEmail("publication-reader@example.test")
       : undefined;

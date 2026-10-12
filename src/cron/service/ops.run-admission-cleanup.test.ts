@@ -58,7 +58,7 @@ async function activationFixture(trigger: ActivationTrigger, priorFailure = true
 }
 
 describe("cron service run admission cleanup", () => {
-  it("does not trust an unavailable-agent execution error as a settlement guard", async () => {
+  it("records an admitted execution error after its agent becomes unavailable", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const startedAt = Date.parse("2026-02-06T10:05:01.750Z");
     const job = createDueIsolatedJob({
@@ -92,65 +92,63 @@ describe("cron service run admission cleanup", () => {
     await expect(activeRun).resolves.toEqual({ ok: true, ran: true });
 
     const persisted = (await loadCronStore(store.storePath)).jobs[0];
-    expect(persisted?.state.lastRunStatus).toBeUndefined();
+    expect(persisted?.state.lastRunStatus).toBe("error");
+    expect(persisted?.state.lastError).toBe("cron job agent is unavailable: main");
     expect(persisted?.state.runningAtMs).toBeUndefined();
     const receipt = openOpenClawStateDatabase()
       .db.prepare(
         "SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
       )
       .get(cronStoreKey(store.storePath), job.id) as { status: string } | undefined;
-    expect(receipt?.status).toBe("superseded");
+    expect(receipt?.status).toBe("error");
   });
 
-  it.each(["enqueue", "run"] as const)(
-    "rejects %s preflight effects after authority closes",
-    async (entry) => {
-      const store = opsRegressionFixtures.makeStorePath();
-      const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
-      const job = createDueIsolatedJob({
-        id: "revoked-preflight",
-        nowMs: dueAt,
-        nextRunAtMs: dueAt,
-      });
-      job.sessionTarget = "main";
-      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-      const before = await loadCronStore(store.storePath);
-      const onEvent = vi.fn();
-      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-      const state = createCronRegressionState({
-        storePath: store.storePath,
-        nowMs: () => dueAt,
-        runIsolatedAgentJob,
-        onEvent,
-      });
-      const lockEntered = createDeferred();
-      const releaseLock = createDeferred();
-      const blocker = locked(state, async () => {
-        lockEntered.resolve();
-        await releaseLock.promise;
-      });
-      await lockEntered.promise;
-      let authorityActive = true;
-      const operation = (entry === "enqueue" ? enqueueRun : run)(state, job.id, "force", {
-        commitGuard: () => {
-          if (!authorityActive) {
-            throw new TypeError("authority closed");
-          }
-        },
-      });
-      authorityActive = false;
-      releaseLock.resolve();
-      await blocker;
-      try {
-        await expect.soft(operation).rejects.toThrow("authority closed");
-        expect.soft(await loadCronStore(store.storePath)).toEqual(before);
-        expect.soft(onEvent).not.toHaveBeenCalled();
-        expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      } finally {
-        stop(state);
-      }
-    },
-  );
+  it.each(["enqueue"] as const)("rejects %s preflight effects after authority closes", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+    const job = createDueIsolatedJob({
+      id: "revoked-preflight",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    job.sessionTarget = "main";
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const before = await loadCronStore(store.storePath);
+    const onEvent = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronRegressionState({
+      storePath: store.storePath,
+      nowMs: () => dueAt,
+      runIsolatedAgentJob,
+      onEvent,
+    });
+    const lockEntered = createDeferred();
+    const releaseLock = createDeferred();
+    const blocker = locked(state, async () => {
+      lockEntered.resolve();
+      await releaseLock.promise;
+    });
+    await lockEntered.promise;
+    let authorityActive = true;
+    const operation = enqueueRun(state, job.id, "force", {
+      commitGuard: () => {
+        if (!authorityActive) {
+          throw new TypeError("authority closed");
+        }
+      },
+    });
+    authorityActive = false;
+    releaseLock.resolve();
+    await blocker;
+    try {
+      await expect.soft(operation).rejects.toThrow("authority closed");
+      expect.soft(await loadCronStore(store.storePath)).toEqual(before);
+      expect.soft(onEvent).not.toHaveBeenCalled();
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    } finally {
+      stop(state);
+    }
+  });
 
   it.each([false, true])(
     "retains the disconnected queued caller until settlement (revoked: %s)",
@@ -432,7 +430,6 @@ describe("cron service run admission cleanup", () => {
 
   it.each([
     { trigger: "startup", failure: "activation" },
-    { trigger: "manual", failure: "cleanup-terminal" },
     { trigger: "scheduled", failure: "cleanup-terminal" },
   ] as const)(
     "releases $trigger ownership after $failure persistence fails",

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
@@ -10,6 +11,7 @@ import {
   resetSubagentRegistryForTests,
   resumeSubagentRun,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import {
   installGatewayTestHooks,
   testState,
@@ -68,6 +70,7 @@ describe("subagent completion blocked Gateway E2E", () => {
         });
 
         await writeSessionStore({
+          agentId: "main",
           entries: {
             [subagent.requesterSessionKey]: {
               sessionId: "requester-blocked-gateway-e2e",
@@ -79,7 +82,22 @@ describe("subagent completion blocked Gateway E2E", () => {
             },
           },
         });
-        await addSubagentRunForTests(subagent);
+        const sessionEntry = expectDefined(
+          loadExactSessionEntryReadOnly({
+            agentId: "main",
+            storePath: testState.sessionStorePath,
+            sessionKey: subagent.childSessionKey,
+          })?.entry,
+          "persisted child session",
+        );
+        await addSubagentRunForTests({
+          ...subagent,
+          childAgentId: "main",
+          childSessionIdentity: {
+            sessionId: sessionEntry.sessionId,
+            lifecycleRevision: sessionEntry.lifecycleRevision,
+          },
+        });
 
         // Native suspension completes in detached work. Join its owner before
         // asserting or closing the Gateway, including cold worker startup.

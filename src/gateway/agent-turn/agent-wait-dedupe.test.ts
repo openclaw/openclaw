@@ -1,6 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -262,6 +263,7 @@ describe("agent.wait gateway dedupe observations", () => {
   it("keeps visible queued waits available after the terminal observation expires", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const owner = roleClient("none", "queued-owner");
       const other = roleClient("none", "queued-other");
       const session = {
@@ -338,6 +340,8 @@ describe("agent.wait gateway dedupe observations", () => {
     "keeps a pending wait bound to its original registration after %s",
     async (transition) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
         const owner = roleClient("none", "timeout-owner");
         const session = {
           sessionKey: "agent:main:timeout-rotation",
@@ -359,7 +363,7 @@ describe("agent.wait gateway dedupe observations", () => {
         const runId = `wait-timeout-${transition}`;
         registerAgentRunContext(runId, session);
         const context = createGatewayRequestContext(makeContextParams());
-        context.getRuntimeConfig = rolePolicyConfig;
+        context.getRuntimeConfig = () => cfg;
         const respond = vi.fn();
         const handler = expectDefined(agentHandlers["agent.wait"], "registered wait handler");
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

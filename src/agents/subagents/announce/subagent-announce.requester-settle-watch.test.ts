@@ -1,6 +1,10 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
@@ -50,10 +54,14 @@ describe("requester settle watch admission", () => {
         prefix: "settle-watch-",
         layout: "state-only",
       });
-      onTestFinished(() => state.cleanup());
+      onTestFinished(async () => {
+        await state.cleanup();
+        clearRuntimeConfigSnapshot();
+      });
       const storePath = state.statePath("requester-watch.sqlite");
       const target = { agentId: "main", sessionKey: REQUESTER_KEY, storePath };
       const cfg = { session: { store: storePath } };
+      setRuntimeConfigSnapshot(cfg);
       await replaceSessionEntry(target, {
         sessionId: "requester-session",
         lifecycleRevision: "requester-revision",

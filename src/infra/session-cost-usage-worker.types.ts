@@ -143,7 +143,6 @@ export type UsageCostWorkerReply =
 
 type UsageCostPreparedRollup = {
   key: string;
-  previousValue: Uint8Array | null;
   value: Uint8Array;
   blob: Uint8Array;
   updatedAt: number;

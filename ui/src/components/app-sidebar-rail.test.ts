@@ -13,6 +13,7 @@ import {
 import "../test-helpers/app-sidebar-suite.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import "./app-sidebar.ts";
 
@@ -232,7 +233,7 @@ describe("personal navigation rail", () => {
       '.sidebar-rail [data-sidebar-entry="session:agent:main:mine"]',
     )!;
     expect(pin.querySelector("a")?.getAttribute("aria-label")).toBe(label);
-    expect(pin.querySelector("openclaw-tooltip")?.content).toBe(label);
+    expect(pin.getAttribute("title")).toBe(label);
     expect(pin.querySelector(".sidebar-rail__monogram")?.textContent).toBe(monogram);
     if (icon?.startsWith("data:")) {
       expect(pin.querySelector(".session-glyph__icon img")?.getAttribute("src")).toBe(icon);
@@ -530,14 +531,17 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"]`)).toBeNull();
     expect(describeRead).toHaveBeenCalledExactlyOnceWith({ key });
+    const cached = { key, label: "Saved title", pinned: true, isChild: false, children: [] };
+    sidebar.pinnedSessions.seed([cached]);
     sidebar.requestUpdate();
     await sidebar.updateComplete;
+    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Saved title"]')).not.toBeNull();
     expect(describeRead).toHaveBeenCalledTimes(1);
     pending.resolve({
       session: { ...result.sessions[1]!, key, label: "Release notes", icon: "📝" },
     });
     await pending.promise;
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     const link = sidebar.querySelector<HTMLAnchorElement>(
       `.sidebar-rail [data-sidebar-entry="session:${key}"] a`,
     )!;
@@ -548,6 +552,10 @@ describe("personal navigation rail", () => {
     link.click();
     expect(navigate).toHaveBeenCalledTimes(1);
     expect(describeRead).toHaveBeenCalledTimes(1);
+    sidebar.pinnedSessions.seed([cached]);
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+    expect(link.getAttribute("aria-label")).toBe("Release notes");
     // Once the authoritative row loads, it wins over the scoped descriptor snapshot.
     sessions.publishList({
       agentId: "main",
@@ -559,7 +567,7 @@ describe("personal navigation rail", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(
       sidebar
         .querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"] a`)
@@ -585,16 +593,80 @@ describe("personal navigation rail", () => {
     expect(sidebar.querySelector('.sidebar-rail a[aria-label="Detached result"]')).not.toBeNull();
   });
 
+  it("keeps cached pins while chat loads and skips queued reads after the sidebar is removed", async () => {
+    const { sidebar, sessions, result } = await fixture();
+    const key = "agent:other:unloaded";
+    const bootstrap = sidebar.sessionDataContext!.connectionBootstrap;
+    bootstrap.setForegroundRoute("agent:main:selected");
+    const read = vi.spyOn(sessions.sessions, "describe").mockResolvedValue({
+      session: { ...result.sessions[1]!, key, label: "Current title" },
+    });
+    sidebar.sidebarEntries = [`session:${key}`];
+    sidebar.pinnedSessions.seed([
+      { key, label: "Saved title", pinned: true, isChild: false, children: [] },
+    ]);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Saved title"]')).not.toBeNull();
+    expect(read).not.toHaveBeenCalled();
+
+    const parent = sidebar.parentElement!;
+    sidebar.remove();
+    bootstrap.setForegroundRoute(null);
+    await bootstrap.run({}, async () => {});
+    expect(read).not.toHaveBeenCalled();
+
+    parent.append(sidebar);
+    await settleLitElement(sidebar);
+    expect(read).toHaveBeenCalledExactlyOnceWith({ key });
+    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Current title"]')).not.toBeNull();
+  });
+
+  it("paints a burst of unloaded pins together without changing their saved order", async () => {
+    const { sidebar, sessions, result } = await fixture();
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(++frameId, callback);
+      return frameId;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const keys = Array.from({ length: 30 }, (_, index) => `agent:other:pin-${index}`);
+    const reads = keys.map(() =>
+      createDeferred<Awaited<ReturnType<typeof sessions.sessions.describe>>>(),
+    );
+    vi.spyOn(sessions.sessions, "describe").mockImplementation(
+      ({ key }) => reads[keys.indexOf(key)]!.promise,
+    );
+    sidebar.sidebarEntries = keys.map((key) => `session:${key}`);
+    await sidebar.updateComplete;
+    const render = vi.spyOn(sidebar, "render");
+    for (const [index, pending] of reads.entries()) {
+      pending.resolve({
+        session: { ...result.sessions[1]!, key: keys[index]!, label: `Pinned ${index}` },
+      });
+      await pending.promise;
+      await sidebar.updateComplete;
+    }
+    expect(render).not.toHaveBeenCalled();
+    for (const callback of frames.values()) {
+      callback(0);
+    }
+    frames.clear();
+    await sidebar.updateComplete;
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(
+      [...sidebar.querySelectorAll(".sidebar-rail [data-sidebar-entry]")].map((row) =>
+        row.getAttribute("data-sidebar-entry"),
+      ),
+    ).toEqual(keys.map((key) => `session:${key}`));
+  });
+
   it.each(["not-found", "failure"] as const)(
     "hides %s sessions and unavailable destinations without pruning or retrying",
     async (outcome) => {
       const { sidebar, sessions } = await fixture();
-      const read = vi.spyOn(sessions.sessions, "describe");
-      if (outcome === "failure") {
-        read.mockRejectedValue(new Error("Unavailable"));
-      } else {
-        read.mockResolvedValue({ session: null });
-      }
+      const pending = createDeferred<Awaited<ReturnType<typeof sessions.sessions.describe>>>();
+      const read = vi.spyOn(sessions.sessions, "describe").mockReturnValue(pending.promise);
       const showToast = vi.spyOn(toast, "showToast");
       const navigate = vi.fn();
       sidebar.onNavigate = navigate;
@@ -602,7 +674,25 @@ describe("personal navigation rail", () => {
       const entries = ["session:agent:other:missing", "route:usage", "plugin:missing/navigation"];
       sidebar.sidebarEntries = entries;
       await sidebar.updateComplete;
-      await Promise.resolve();
+      const cached = {
+        key: "agent:other:missing",
+        label: "Saved title",
+        pinned: true,
+        isChild: false,
+        children: [],
+      };
+      sidebar.pinnedSessions.seed([cached]);
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector('.sidebar-rail a[aria-label="Saved title"]')).not.toBeNull();
+      if (outcome === "failure") {
+        pending.reject(new Error("Unavailable"));
+      } else {
+        pending.resolve({ session: null });
+      }
+      await pending.promise.catch(() => undefined);
+      await settleLitElement(sidebar);
+      sidebar.pinnedSessions.seed([cached]);
       sidebar.requestUpdate();
       await sidebar.updateComplete;
       expect(sidebar.querySelectorAll(".sidebar-rail__pin")).toHaveLength(0);

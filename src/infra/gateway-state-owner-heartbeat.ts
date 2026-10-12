@@ -5,6 +5,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { GATEWAY_OWNER_HEARTBEAT_MS } from "./gateway-lock-payload.js";
 import type { GatewayStateOwnerHeartbeatData } from "./gateway-state-owner-heartbeat.runtime.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
@@ -25,14 +26,17 @@ export function startGatewayStateOwnerHeartbeat(
       throw new Error("OpenClaw state ownership is no longer current");
     }
   }
+  const { moduleUrl: url, runtimeGeneration } = captureRuntimeWorkerSource(
+    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat),
+  );
   return runInDetachedAsyncContext(() => {
     const lastBeat = new BigInt64Array(new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT));
     // Match the lock's mtime clock; Bun workers have independent hrtime origins.
     Atomics.store(lastBeat, 0, BigInt(now()));
     const { port1, port2 } = new MessageChannel();
-    const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat);
     const worker = createCpuTrackedWorker(url, {
       workerData: {
+        clock: "epoch",
         locks,
         intervalMs: GATEWAY_OWNER_HEARTBEAT_MS,
         failureMs: 60_000,
@@ -76,16 +80,25 @@ export function startGatewayStateOwnerHeartbeat(
       }
     };
     watch();
+    let termination: Promise<number> | undefined;
+    const stop = () => {
+      if (termination) {
+        return;
+      }
+      clearTimeout(timer);
+      port1.close();
+      worker.postMessage("stop", []);
+      termination ??= worker.terminate();
+    };
+    runtimeGeneration?.retain(worker, async () => async () => {
+      stop();
+      await termination;
+    });
     return {
       worker,
       paths: new Set(Object.keys(locks)),
       inspect,
-      stop() {
-        clearTimeout(timer);
-        port1.close();
-        worker.postMessage("stop", []);
-        void worker.terminate();
-      },
+      stop,
     };
   });
 }

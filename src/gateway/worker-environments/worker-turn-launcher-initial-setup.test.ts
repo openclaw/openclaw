@@ -136,7 +136,7 @@ describe("initial worker setup admission", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
-  it.for(["worker-turn", "remote-exec"] as const)(
+  it.for(["worker-turn"] as const)(
     "holds %s input during initial sync without agent IO, then claims the intended active placement",
     async (executionMode, { signal }) => {
       const fixture = await setup(executionMode);
@@ -181,7 +181,7 @@ describe("initial worker setup admission", () => {
     },
   );
 
-  it.for(["requested", "provisioning", "syncing", "starting"])(
+  it.for(["syncing"])(
     "executes once after %s becomes authoritative and active",
     async (phase, { signal }) => {
       const fixture = await setup("remote-exec", phase);

@@ -2654,6 +2654,57 @@ struct ChatViewModelTests {
         #expect(await transport.listSessionsQueries().count == 1)
     }
 
+    @Test(arguments: ["lifecycle", "subagent-status"]) @MainActor
+    func `finished helper clears parent wait without reopening the sidebar`(reason: String) async {
+        var parent = sessionEntry(key: "main", updatedAt: 1, hasActiveRun: true, activeRunIds: ["parent-run"])
+        parent.status = "running"
+        parent.hasActiveSubagentRun = true
+        var helper = sessionEntry(
+            key: "agent:main:subagent:helper",
+            updatedAt: 1,
+            hasActiveRun: true,
+            activeRunIds: ["helper-run"])
+        helper.status = "running"
+        helper.parentSessionKey = parent.key
+        var waiting = parent
+        waiting.updatedAt = 2
+        waiting.hasActiveRun = false
+        waiting.activeRunIds = []
+        waiting.status = "done"
+        var idle = waiting
+        idle.updatedAt = 3
+        // Ordinary parents omit this field once their last descendant finishes.
+        idle.hasActiveSubagentRun = nil
+        var finished = helper
+        finished.updatedAt = 3
+        finished.status = "done"
+        finished.hasActiveRun = false
+        finished.activeRunIds = []
+        let transport = TestChatTransport(
+            historyResponses: [],
+            sessionsResponses: [sessionsResponse([waiting, helper]), sessionsResponse([idle, finished])])
+        let viewModel = OpenClawChatViewModel(sessionKey: parent.key, transport: transport)
+        viewModel.sessions = [parent, helper]
+        #expect(viewModel.subagentWait == nil)
+
+        await viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: parent.key,
+            reason: "lifecycle",
+            phase: "end",
+            runId: "parent-run",
+            session: waiting)))?.value
+        #expect(viewModel.subagentWait?.child?.key == helper.key)
+
+        await viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: helper.key,
+            parentSessionKey: parent.key,
+            reason: reason,
+            phase: reason == "lifecycle" ? "end" : nil,
+            runId: "helper-run",
+            session: finished)))?.value
+        #expect(viewModel.subagentWait == nil)
+    }
+
     @Test @MainActor func `global Swarm activity follows the selected agent owner`() async {
         let (_, viewModel) = await makeViewModel(
             sessionKey: "global",

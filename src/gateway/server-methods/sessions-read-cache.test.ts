@@ -8,6 +8,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
@@ -696,6 +697,7 @@ describe("resident sessions.list", () => {
     async (projection) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+        setRuntimeConfigSnapshot(config);
         const context = requestContext(config);
         const clients = ["ada@example.com", "bob@example.com"].map((email) => {
           const client = identifiedClient(ensureProfileForEmail(email).id);

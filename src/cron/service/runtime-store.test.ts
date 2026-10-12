@@ -24,10 +24,6 @@ import {
 import { cronStoreKey } from "../store/key.js";
 import { readCronRunReceiptCurrentFactsInDatabase } from "../store/run-receipt-read.js";
 import {
-  assertCronRunReceiptCurrentFacts,
-  CronRunReceiptRevisionError,
-} from "../store/run-receipt-store.js";
-import {
   claimCronRunReceiptInDatabaseForTest,
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
@@ -265,7 +261,7 @@ describe("cron runtime row publication", () => {
     }
   });
 
-  it("bounds the receipt snapshot kernel to its exact job and rejects a malformed target", async () => {
+  it("bounds receipt reads to the exact job and omits a malformed target", async () => {
     const { storePath } = runtimeStoreFixtures.makeStorePath();
     const now = Date.now();
     const jobs = Array.from({ length: 128 }, (_, index) =>
@@ -289,23 +285,19 @@ describe("cron runtime row publication", () => {
       }),
     );
     try {
-      const assertCurrent = () =>
-        assertCronRunReceiptCurrentFacts({
+      const readFacts = () =>
+        readCronRunReceiptCurrentFactsInDatabase(openOpenClawStateDatabase().db, {
+          type: "cron.currentReceipt",
           handle,
-          resolveAgentId: (current) => current.agentId ?? "main",
-          facts: readCronRunReceiptCurrentFactsInDatabase(openOpenClawStateDatabase().db, {
-            type: "cron.currentReceipt",
-            handle,
-            includeJob: true,
-            includeAvailability: true,
-          }),
+          includeJob: true,
+          includeAvailability: true,
         });
-      assertCurrent();
+      expect(readFacts().receipt?.receiptId).toBe(handle.receiptId);
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(2);
       openOpenClawStateDatabase()
         .db.prepare("UPDATE cron_jobs SET job_json = '{}' WHERE store_key = ? AND job_id = ?")
         .run(handle.storeKey, job.id);
-      expect(assertCurrent).toThrow(CronRunReceiptRevisionError);
+      expect(readFacts().job).toBeUndefined();
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(3);
     } finally {
       reads.restore();

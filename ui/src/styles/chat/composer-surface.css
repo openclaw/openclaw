@@ -50,11 +50,6 @@
   flex-shrink: 0;
 }
 
-.agent-chat__composer-run-status--working {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
 .agent-chat__composer-run-spinner svg {
   width: 14px;
   height: 14px;
@@ -572,9 +567,11 @@
   flex: 0 0 auto;
 }
 
-/* Keep settings, split view, and run status together in the footer's middle
-   track. The track is sized to content, so this group shrinks before it ever
-   pushes mic and send off the right edge. */
+.agent-chat__composer-context:not(:has(> .context-usage)) {
+  display: none;
+}
+
+/* Model controls shrink before pushing mic and send off the right edge. */
 .agent-chat__composer-controls {
   display: flex;
   position: relative;
@@ -1324,10 +1321,6 @@
     grid-row: 1;
     min-height: var(--chat-composer-control-size);
     justify-content: flex-end;
-  }
-
-  .agent-chat__composer-context .agent-chat__composer-run-status--working {
-    margin-inline-end: auto;
   }
 
   .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {

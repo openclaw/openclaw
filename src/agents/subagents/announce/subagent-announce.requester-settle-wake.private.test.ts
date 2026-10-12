@@ -1,5 +1,9 @@
 // Private completion batches: session binding and yielded-final delivery policy.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   registryRuntimeMock,
   setSessionStore,
@@ -14,11 +18,20 @@ import {
   completeBatchSpy,
   deliveredCallArg,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
+import { getRuntimeConfig } from "./subagent-announce.runtime.js";
 
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
+  beforeEach(() => {
+    setRuntimeConfigSnapshot(getRuntimeConfig());
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
   const settledPrivateChildren = ({
     mixed,
     yielded,

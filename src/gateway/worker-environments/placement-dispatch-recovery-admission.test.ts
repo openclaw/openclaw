@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -72,6 +76,8 @@ async function git(root: string, ...args: string[]) {
 
 describe("placement recovery session admission with persisted placements", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
+  afterAll(() => clearRuntimeConfigSnapshot());
   let releaseOwnedWork: (() => Promise<void>) | undefined;
   afterEach(async () => {
     // Release blocked provider work before the service fixture drains on a failed test.
@@ -388,6 +394,33 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
+  it("does not start orphan discovery for sessions created after startup", async () => {
+    const placements = createStore();
+    const readChangeSnapshot = vi.spyOn(placements, "readChangeSnapshot");
+    const resolveWorkspace = vi.fn(async () => ({
+      kind: "local" as const,
+      path: support.testState.root,
+    }));
+    const harness = await createHarness(support.testState.stateDb, placements, {
+      resolveWorkspace,
+    });
+    const coordinated = coordinate(harness);
+    await coordinated.reconcile("startup");
+
+    const claim = await placements.claimTurn({
+      ...REQUEST,
+      owner: { kind: "local" },
+      claimId: "after-startup",
+      runId: "after-startup",
+    });
+    await placements.releaseTurnIfOwned(claim);
+    await coordinated.reconcileActive();
+    await coordinated.reconcileActive();
+
+    expect(readChangeSnapshot).not.toHaveBeenCalled();
+    expect(resolveWorkspace).not.toHaveBeenCalled();
+  });
+
   it("spreads startup orphan inventories across idle sweeps and eventually reclaims every checkout", async () => {
     const template = path.join(support.testState.root, "template");
     await fs.mkdir(template);
@@ -503,7 +536,7 @@ describe("placement recovery session admission with persisted placements", () =>
     }
   });
 
-  it("retries orphan cleanup on the next full sweep when a sharing session was busy", async () => {
+  it("retries startup orphan cleanup after a busy placement becomes inactive", async () => {
     const root = support.testState.root;
     await git(root, "init", "--quiet");
     await fs.writeFile(path.join(root, "result.txt"), "retired workspace result");
@@ -512,18 +545,15 @@ describe("placement recovery session admission with persisted placements", () =>
     const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
     await git(root, "update-ref", cleanupRef, tree);
     const placements = createStore();
-    const idle = await placements.startDispatch({
-      ...REQUEST,
-      sessionId: "idle",
-      sessionKey: "agent:main:idle",
-    });
+    const requested = await placements.startDispatch(REQUEST);
     await placements.fail({
-      sessionId: idle.sessionId,
-      expectedGeneration: idle.generation,
+      sessionId: requested.sessionId,
+      expectedGeneration: requested.generation,
       recoveryError: "finished fixture",
     });
     const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: root,
+      environmentGeneration: 3,
     });
     const coordinated = coordinate(harness);
     await coordinated.reconcile("startup");
@@ -545,6 +575,9 @@ describe("placement recovery session admission with persisted placements", () =>
       releaseProvider.resolve();
       await dispatch;
     }
+    await coordinated.reclaim(REQUEST);
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
     await coordinated.reconcileActive();
     expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
   });

@@ -2,8 +2,12 @@
 // Control UI tests cover application-owned overlay races.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
-import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
+import {
+  createGatewayStoreTestStore,
+  GATEWAY_STORE_TEST_HELLO,
+  stubGatewayStoreTestGlobals,
+} from "./gateway-store.test-support.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   approval,
@@ -15,7 +19,9 @@ import {
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
-vi.mock("../build-info.ts", () => ({
+vi.mock("../build-info.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../build-info.ts")>()),
+  CONTROL_UI_BUILD_INFO: { version: "1.0.0", buildId: "test" },
   controlUiBuildDiffersFrom: (identity: {
     version?: string | null;
     buildId?: string | null;
@@ -35,40 +41,45 @@ afterEach(() => {
 });
 
 describe("Control UI refresh nudge", () => {
-  it.each([{ version: "1.0.0", buildId: "gateway-build" }])(
-    "does not ask the configured dev proxy to reload for a mismatched build (%#)",
-    (server) => {
-      const gatewayClient = client(async () => []);
-      const harness = createGatewayHarness(null, false);
-      vi.stubGlobal("location", new URL("http://localhost:5173/"));
+  it.each([
+    { surface: "a hosted Control UI", page: "https://control.example/", devProxy: false },
+    { surface: "the ui:dev proxy", page: "http://localhost:5173/", devProxy: true },
+  ])("never asks $surface to reload for a cross-origin Gateway build", ({ page, devProxy }) => {
+    const gatewayUrl = "ws://127.0.0.1:18789";
+    stubGatewayStoreTestGlobals();
+    // Reloading refetches this origin's build, never the dialed Gateway's.
+    vi.stubGlobal("location", new URL(page));
+    if (devProxy) {
       vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
-        gatewayUrl: harness.gateway.connection.gatewayUrl,
+        gatewayUrl,
         proxyPath: "/__openclaw_dev_gateway__/fixture",
       });
-      const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        expect(hasSameOriginGatewayTransport(harness.gateway.connection.gatewayUrl)).toBe(true);
-        const hello = { server } as ApplicationGatewaySnapshot["hello"];
-        harness.update({ client: gatewayClient, phase: "connected", hello });
-        expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+    }
+    const store = createGatewayStoreTestStore();
+    const overlays = createApplicationOverlays(store.gateway);
+    try {
+      store.gateway.connect({ gatewayUrl });
+      store.current().opts.onHello?.({
+        ...GATEWAY_STORE_TEST_HELLO,
+        server: { version: "1.0.0", buildId: "gateway-build", connId: "first" },
+      });
+      expect(store.gateway.snapshot.phase).toBe("connected");
+      expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
-        harness.update({ phase: "stopped", hello: null });
-        expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
-        harness.update({ phase: "connected", hello });
-        expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
-
-        harness.update({ client: null, phase: "stopped", hello: null });
-        harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
-        harness.update({ client: gatewayClient, phase: "connected", hello });
-        harness.update({ phase: "stopped", hello: null });
-        harness.update({ phase: "connected", hello });
-        expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
-      } finally {
-        overlays.dispose();
-        vi.unstubAllGlobals();
-      }
-    },
-  );
+      // A restart onto another package version stays a reconnect, not a refresh.
+      store.current().opts.onClose?.({ code: 1012, reason: "restarting", willRetry: true });
+      store.current().opts.onHello?.({
+        ...GATEWAY_STORE_TEST_HELLO,
+        server: { version: "2.0.0", connId: "restarted" },
+      });
+      expect(store.gateway.snapshot.phase).toBe("connected");
+      expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+    } finally {
+      overlays.dispose();
+      store.gateway.stop();
+      vi.unstubAllGlobals();
+    }
+  });
 
   it("runs automatic connection refreshes through the bootstrap coordinator", async () => {
     const request = vi.fn<RequestFn>((method) =>
@@ -110,28 +121,23 @@ describe("Control UI refresh nudge", () => {
     overlays.dispose();
   });
 
-  it("does not flag a matching reconnect and resets on a fresh client lifetime", () => {
+  it("projects the store's stale-build fence until admission or a fresh client lifetime", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);
     const overlays = createApplicationOverlays(harness.gateway);
-    const matchingHello = {
-      server: { version: "1.0.0" },
-    } as ApplicationGatewaySnapshot["hello"];
-    const mismatchedHello = {
-      server: { version: "2.0.0" },
-    } as ApplicationGatewaySnapshot["hello"];
+    const hello = { server: { version: "2.0.0" } } as ApplicationGatewaySnapshot["hello"];
 
-    harness.update({ client: gatewayClient, phase: "connected", hello: matchingHello });
-    harness.update({ phase: "stopped", hello: null });
-    harness.update({ phase: "connected", hello: matchingHello });
-    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
-
-    harness.update({ phase: "stopped", hello: null });
-    harness.update({ phase: "connected", hello: mismatchedHello });
+    // The store fences a stale same-origin hello by publishing it without connecting.
+    harness.update({ client: gatewayClient, phase: "reconnecting", hello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+    harness.update({ phase: "reconnecting", hello: null });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
 
+    harness.update({ phase: "connected", hello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+    harness.update({ phase: "reconnecting", hello });
     harness.update({ client: null, phase: "stopped", hello: null });
-    harness.update({ client: gatewayClient, phase: "connected", hello: mismatchedHello });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
     overlays.dispose();

@@ -5,10 +5,10 @@ import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -41,15 +41,18 @@ afterEach(async () => {
   titleMocks.open.mockReset();
   titleMocks.lookup.mockReset();
   dispatchInboundMessageMock.mockReset();
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
 });
 
-test.each(["keep", "delete"] as const)(
+test.for(["keep", "delete"] as const)(
   "names a remote session without blocking placement or deletion (%s)",
-  async (outcome) => {
+  async (outcome, { signal }) => {
     const naming = createDeferredCore<string>();
-    titleMocks.generate.mockReturnValue(naming.promise);
+    const namingStarted = createDeferredCore();
+    titleMocks.generate.mockImplementation(() => {
+      namingStarted.resolve();
+      return naming.promise;
+    });
     const { storePath } = await createSessionStoreDir();
     const context = {
       broadcastToConnIds: vi.fn(),
@@ -70,7 +73,8 @@ test.each(["keep", "delete"] as const)(
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload?.runStarted).toBe(false);
       key = created.payload!.key;
-      await vi.waitFor(() => expect(titleMocks.generate).toHaveBeenCalledOnce());
+      await racePromiseWithAbortSignal(namingStarted.promise, signal);
+      expect(titleMocks.generate).toHaveBeenCalledOnce();
       expect(
         loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.displayName,
       ).toBeUndefined();

@@ -7,6 +7,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
@@ -50,6 +54,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     clearSessionStoreCacheForTest();
+    clearRuntimeConfigSnapshot();
     cleanup();
   }),
 );
@@ -438,6 +443,8 @@ describe("Codex native Task assignment upgrade", () => {
           },
         );
         params.agentId = identity.agentId;
+        assert(params.config);
+        setRuntimeConfigSnapshot(params.config);
         const host = await createAdmittedHostCapabilityTestFixture(params, {
           gatewayContext: true,
         });

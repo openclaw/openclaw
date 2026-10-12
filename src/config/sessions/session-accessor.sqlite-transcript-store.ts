@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
+import { projectSessionRowTranscriptPreview } from "../../gateway/session-row-transcript-preview.js";
 import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   sqliteSessionIdWriteScope,
@@ -66,6 +67,7 @@ import {
   createTranscriptEventInserter,
   createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
+  readTranscriptStorageEncoding,
   transcriptEventJsonSql,
   type PreparedTranscriptPayload,
 } from "./transcript-payload.js";
@@ -223,7 +225,10 @@ export function appendTranscriptEventInTransaction(
         actor.hot.transcript.version.rawSeq = seq;
         actor.hot.transcript.watermark.maxSeq = seq;
         const stored: unknown = JSON.parse(eventJson);
-        actor.transcript.payloads.set(seq, stored);
+        actor.transcript.payloads.set(seq, {
+          event: stored,
+          serializedBytes: Buffer.byteLength(eventJson) + 1,
+        });
         // SAFETY: The same canonical event feeds the existing projection and tree codecs.
         actor.transcript.navigation.push({ ...(stored as SessionTreeEntry), seq });
       }
@@ -299,6 +304,15 @@ export function appendTranscriptEventInTransaction(
           database,
           scope.sessionId,
           deferWindowTouch ? windowUpdatedAt : undefined,
+          projectionNeedsRebuild
+            ? undefined
+            : projectSessionRowTranscriptPreview(
+                persistedEvent,
+                Buffer.byteLength(
+                  eventJson,
+                  readTranscriptStorageEncoding(database.db) === "UTF-8" ? "utf8" : "utf16le",
+                ) + 1,
+              ),
         );
       }
       scheduleTranscriptProjectionReconcile(

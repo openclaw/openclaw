@@ -427,6 +427,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   ])(
     "persists the $name context window and provenance",
     async ({ reported, locked, expected, source }) => {
+      resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
       const session = makeCronSession({
         sessionEntry: makeCronSessionEntry({
           modelProvider: "openai",

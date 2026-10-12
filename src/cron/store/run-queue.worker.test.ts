@@ -273,28 +273,15 @@ it("recovers a timed request without replaying active work or reconstructing a l
   const timedJob = job("recover", { schedule: { kind: "at", at: new Date(now).toISOString() } });
   const queue = await store("recover", [timedJob]);
   const requested = (await queue.request([scheduled(queue.storeKey, timedJob)])).accepted[0]!;
-  const repair = (entry: typeof requested, queuedAtMs?: number, runningAtMs?: number) =>
+  const recover = () =>
     executeOpenClawStateWorker(context, {
-      type: "cron.repairRun",
-      input: {
-        storeKey: queue.storeKey,
-        mode: "startup",
-        proposal: {
-          jobId: entry.job.id,
-          queuedAtMs,
-          runningAtMs,
-          runningReceiptId: runningAtMs === undefined ? undefined : entry.runReceipt.receiptId,
-          receipt: entry.runReceipt,
-        },
-        snapshot: { nowMs: now + 2, proposedReceiptIsStale: true },
-      },
+      type: "cron.recoverRuns",
+      input: { storeKey: queue.storeKey, nowMs: now + 2 },
     });
-  expect(await repair(requested, now)).toMatchObject({ outcome: { result: { kind: "repaired" } } });
+  expect((await recover()).jobs[0]?.state.queuedAtMs).toBe(now);
   const active = (await queue.drain()).launches[0]!;
   expect(active.runReceipt.receiptId).toBe(requested.runReceipt.receiptId);
-  expect(await repair(active, undefined, now + 1)).toMatchObject({
-    outcome: { result: { kind: "repaired" } },
-  });
+  expect((await recover()).interruptedRuns).toHaveLength(1);
   expect((await queue.drain()).launches).toEqual([]);
   const interrupted = (await queue.read()).jobs[0]!;
   expect(interrupted.state.lastRunStatus).toBe("error");
@@ -310,15 +297,15 @@ it("recovers a timed request without replaying active work or reconstructing a l
     configRevision: resolveCronJobConfigRevision(manualJob),
   };
   await legacy.request([manual]);
-  const lost = await legacy.drain();
-  expect(lost.launches).toEqual([]);
-  expect(lost.skipped).toMatchObject([
-    {
-      error: "cron: queued request lost its launch context",
-      runReceipt: { receiptId: manual.receiptId },
-    },
-  ]);
+  const held = await legacy.drain();
+  expect(held).toEqual({ launches: [], skipped: [] });
+  expect((await legacy.read()).jobs[0]?.state.queuedAtMs).toBe(now);
+  await executeOpenClawStateWorker(context, {
+    type: "cron.recoverRuns",
+    input: { storeKey: legacy.storeKey, nowMs: now + 2 },
+  });
   expect((await legacy.read()).jobs[0]?.state.queuedAtMs).toBeUndefined();
+  expect((await legacy.drain()).launches).toEqual([]);
   const history = projectCronRunHistoryPage(await readCronRunRecords(legacy.storeKey), {
     storeKey: legacy.storeKey,
   });

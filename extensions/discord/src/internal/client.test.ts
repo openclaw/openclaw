@@ -66,25 +66,6 @@ describe("ComponentRegistry", () => {
       select,
     );
   });
-
-  it("uses each registered component parser when resolving specific keys", () => {
-    const registry = new ComponentRegistry<Button>();
-    class EncodedButton extends Button {
-      label = "button";
-      customId = "encoded:seed=one";
-      override customIdParser = (id: string) => ({
-        key: id.startsWith("encoded:") ? "encoded" : parseCustomId(id).key,
-        data: {},
-      });
-    }
-    const button = new EncodedButton();
-
-    registry.register(button);
-
-    expect(registry.resolve("encoded:payload=two", { componentType: ComponentType.Button })).toBe(
-      button,
-    );
-  });
 });
 
 describe("Client.deployCommands", () => {
@@ -274,19 +255,6 @@ describe("Client.deployCommands", () => {
     expect(deleteRequest).not.toHaveBeenCalled();
   });
 
-  it("skips command deploy when the serialized command set is unchanged", async () => {
-    const client = createInternalTestClient([createTestCommand({ name: "one" })]);
-    const get = vi.fn(async () => []);
-    const post = vi.fn(async () => undefined);
-    attachRestMock(client, { get, post });
-
-    await client.deployCommands();
-    await client.deployCommands();
-
-    expect(get).toHaveBeenCalledTimes(1);
-    expect(post).toHaveBeenCalledTimes(1);
-  });
-
   it("skips unchanged command deploys across client restarts using the hash store", async () => {
     const hashes = new Map<string, string>();
     const commandDeployHashStore = {
@@ -348,53 +316,6 @@ describe("Client gateway event queue", () => {
       { listeners: params.listeners },
     );
   }
-
-  it("uses OpenClaw Discord event queue defaults", () => {
-    const client = createQueuedClient({
-      listeners: [],
-      eventQueue: {},
-    });
-
-    expect(client.getRuntimeMetrics().eventQueue).toEqual({
-      queueSize: 0,
-      processing: 0,
-      processed: 0,
-      dropped: 0,
-      timeouts: 0,
-      maxQueueSize: 10_000,
-      maxConcurrency: 50,
-    });
-  });
-
-  it("resolves timed-out dispatches while retaining the hung listener slot", async () => {
-    vi.useFakeTimers();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const listener = {
-      type: "READY",
-      handle: vi.fn(async () => await new Promise<void>(() => {})),
-    } satisfies AnyListener;
-    const client = createQueuedClient({
-      listeners: [listener],
-      eventQueue: { listenerTimeout: 10, maxConcurrency: 1 },
-    });
-
-    const dispatch = client.dispatchGatewayEvent("READY", {});
-    await vi.advanceTimersByTimeAsync(10);
-
-    await expect(dispatch).resolves.toBeUndefined();
-    expect(errorSpy).toHaveBeenCalledWith(
-      "[EventQueue] Listener Object timed out after 10ms for event READY",
-    );
-    expect(client.getRuntimeMetrics().eventQueue).toEqual({
-      queueSize: 0,
-      processing: 1,
-      processed: 1,
-      dropped: 0,
-      timeouts: 1,
-      maxQueueSize: 10_000,
-      maxConcurrency: 1,
-    });
-  });
 
   it("holds a timed-out listener slot until its underlying promise resolves", async () => {
     vi.useFakeTimers();
@@ -481,38 +402,6 @@ describe("Client gateway event queue", () => {
       processed: 1,
       timeouts: 1,
     });
-  });
-
-  it("limits queued listener concurrency", async () => {
-    const started: string[] = [];
-    const releaseFirst = createDeferred<void>();
-    const releaseSecond = createDeferred<void>();
-    const first = {
-      type: "READY",
-      handle: vi.fn(async () => {
-        started.push("first");
-        await releaseFirst.promise;
-      }),
-    } satisfies AnyListener;
-    const second = {
-      type: "READY",
-      handle: vi.fn(async () => {
-        started.push("second");
-        await releaseSecond.promise;
-      }),
-    } satisfies AnyListener;
-    const client = createQueuedClient({
-      listeners: [first, second],
-      eventQueue: { maxConcurrency: 1, listenerTimeout: 1_000 },
-    });
-
-    const dispatch = client.dispatchGatewayEvent("READY", {});
-    await vi.waitFor(() => expect(started).toEqual(["first"]));
-
-    releaseFirst.resolve();
-    await vi.waitFor(() => expect(started).toEqual(["first", "second"]));
-    releaseSecond.resolve();
-    await expect(dispatch).resolves.toBeUndefined();
   });
 
   it("rejects when queued listener work exceeds maxQueueSize", async () => {

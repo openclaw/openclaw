@@ -322,8 +322,8 @@ async function fixture(
 }
 
 it.each(
-  ["control", "anchor", "superseded"].flatMap((kind) =>
-    [false, true].map((explicitLink) => ({ kind, explicitLink })),
+  ["control", "anchor", "superseded", "legacy-journal", "legacy-helper", "unknown-suffix"].flatMap(
+    (kind) => [false, true].map((explicitLink) => ({ kind, explicitLink })),
   ),
 )(
   "leaves package recovery $kind untouched during runtime retention (explicitLink=$explicitLink)",
@@ -333,20 +333,25 @@ it.each(
     const recoveryRoot =
       kind === "control"
         ? resolvePackageActivationControl(anchor)
-        : kind === "anchor"
-          ? anchor
-          : `${anchor}.superseded-00000000-0000-4000-8000-000000000001`;
-    const recoveryFile = path.join(
-      recoveryRoot,
-      kind === "control" ? "operation.sqlite" : "previous/dist/entry.js",
-    );
+        : kind === "legacy-journal"
+          ? `${anchor}.sqlite`
+          : kind === "legacy-helper"
+            ? `${anchor}.recovery.mjs`
+            : kind === "unknown-suffix"
+              ? `${anchor}.notes`
+              : kind === "anchor"
+                ? anchor
+                : `${anchor}.superseded-00000000-0000-4000-8000-000000000001`;
+    const recoveryFile = kind.startsWith("legacy-")
+      ? recoveryRoot
+      : path.join(recoveryRoot, kind === "control" ? "operation.sqlite" : "previous/dist/entry.js");
     await mkdir(path.dirname(recoveryFile), { recursive: true, mode: 0o700 });
     await writeFile(recoveryFile, "preserved recovery evidence", { mode: 0o600 });
     const before = await fs.lstat(recoveryFile, { bigint: true });
     const assets = [
       path.join("node_modules", "runtime.control", "asset.sqlite"),
-      path.join("node_modules", `${path.basename(anchor)}.notes`, "asset.sqlite"),
-      path.join("node_modules", `${path.basename(anchor)}.superseded-not-a-uuid`, "asset.sqlite"),
+      path.join("node_modules", "runtime-activation.notes", "asset.sqlite"),
+      path.join("dist", `${path.basename(anchor)}.superseded-not-a-uuid`, "asset.sqlite"),
       path.join("dist", path.basename(recoveryRoot), "asset.sqlite"),
     ];
     for (const relative of assets) {

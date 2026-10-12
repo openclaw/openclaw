@@ -48,7 +48,7 @@ const COMPANION_HINT_KEYS = {
   Parameters<typeof t>[0]
 >;
 
-export type ChatSessionRailProps = {
+type ChatSessionRailProps = {
   sessionKey: string;
   digest: SessionObserverDigest | null;
   running: boolean;
@@ -67,7 +67,7 @@ export type ChatSessionRailProps = {
 };
 export type ChatSessionRailElement = SolidBridgeElement<ChatSessionRailProps>;
 
-export function ChatSessionRailContent(props: ChatSessionRailProps) {
+function ChatSessionRailContent(props: ChatSessionRailProps) {
   let region!: HTMLElement;
   let thread!: HTMLDivElement;
   const blocks = markdownBlocksRef(() => props.presented);
@@ -314,29 +314,25 @@ export function ChatSessionRailContent(props: ChatSessionRailProps) {
   );
 }
 
-export const ChatSessionRail = defineSolidBridge<ChatSessionRailProps>(
-  "openclaw-chat-session-rail",
-  ChatSessionRailContent,
-  {
-    properties: {
-      sessionKey: { default: "", attribute: false },
-      digest: { default: null, attribute: false },
-      running: { default: false, attribute: false },
-      activeRunId: { default: null, attribute: false },
-      pullRequests: { default: [], attribute: false },
-      companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
-      connected: { default: false, attribute: false },
-      sendShortcut: { default: "enter", attribute: false },
-      onSubmit: { default: undefined, attribute: false },
-      onDraftChange: { default: undefined, attribute: false },
-      onAttachmentsChange: { default: undefined, attribute: false },
-      attachmentLimits: { default: undefined, attribute: false },
-      uploadConfig: { default: undefined, attribute: false },
-      presented: { default: false, type: Boolean },
-      focusRequest: { default: undefined, attribute: false },
-    },
+defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessionRailContent, {
+  properties: {
+    sessionKey: { default: "", attribute: false },
+    digest: { default: null, attribute: false },
+    running: { default: false, attribute: false },
+    activeRunId: { default: null, attribute: false },
+    pullRequests: { default: [], attribute: false },
+    companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
+    connected: { default: false, attribute: false },
+    sendShortcut: { default: "enter", attribute: false },
+    onSubmit: { default: undefined, attribute: false },
+    onDraftChange: { default: undefined, attribute: false },
+    onAttachmentsChange: { default: undefined, attribute: false },
+    attachmentLimits: { default: undefined, attribute: false },
+    uploadConfig: { default: undefined, attribute: false },
+    presented: { default: false, type: Boolean },
+    focusRequest: { default: undefined, attribute: false },
   },
-);
+});
 
 declare module "@solidjs/web" {
   namespace JSX {

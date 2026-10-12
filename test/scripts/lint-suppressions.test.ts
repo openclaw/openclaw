@@ -234,7 +234,7 @@ describe("production lint suppressions", () => {
         "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/infra/device-pairing-row-mapping.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/infra/net/fetch-guard.ts|no-warning-comments|1",
         "src/infra/net/undici-dispatcher-options.ts|typescript/unbound-method|1",
@@ -243,7 +243,6 @@ describe("production lint suppressions", () => {
         "src/infra/sqlite-database-admission.worker.test-support.ts|typescript/unbound-method|1",
         // Iterator wrappers capture native next/return and invoke them with the caller's receiver.
         "src/infra/sqlite-native-observer.ts|typescript/unbound-method|2",
-        "src/logging/redact.ts|unicorn/no-new-array|1",
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",

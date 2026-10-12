@@ -25,10 +25,7 @@ import type {
 } from "../store/job-mutations.types.js";
 import { publishCronJobNames } from "../store/job-name.js";
 import { cronStoreKey } from "../store/key.js";
-import {
-  CronRunReceiptConflictError,
-  CronRunReceiptRevisionError,
-} from "../store/run-receipt-store.js";
+import { CronRunReceiptRevisionError } from "../store/run-receipt-store.js";
 import type { CronRuntimeMutationInputs } from "../store/runtime-worker.types.js";
 import { CronJobsStoreChangedError } from "../store/save-error.js";
 import type { CronJob, CronStoreFile } from "../types.js";
@@ -253,10 +250,7 @@ async function persistQuarantinedJobs(
     });
     loadedCronStoreRevisions.set(state, committed);
   } catch (error) {
-    if (
-      error instanceof CronRunReceiptConflictError ||
-      error instanceof CronRunReceiptRevisionError
-    ) {
+    if (error instanceof CronRunReceiptRevisionError) {
       throw error;
     }
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -405,7 +399,7 @@ export async function persistCronJobMutation(params: {
     source.assertCurrent();
     if (
       params.agentId !== undefined &&
-      state.deps.isAgentAvailable?.(params.agentId, undefined, { deletionBlocked: false }) === false
+      state.deps.isAgentAvailable?.(params.agentId, { deletionBlocked: false }) === false
     ) {
       throw new Error(describeUnavailableCronAgent(params.agentId));
     }
@@ -468,12 +462,10 @@ export async function persistCronJobMutation(params: {
         loadedCronStoreRevisions.set(state, { revision: -1 });
       }
     },
-    onRolledBackMutation(refusal) {
-      // A foreign receipt owner can advance runtime rows without publishing in this process.
+    onRolledBackMutation() {
+      // Refresh after a refused write before preparing another mutation.
       loadedCronStoreRevisions.set(state, { revision: -1 });
-      throw refusal.kind === "receipt-conflict"
-        ? new CronRunReceiptConflictError(refusal.receipt)
-        : new CronJobsStoreChangedError(source.storeKey);
+      throw new CronJobsStoreChangedError(source.storeKey);
     },
   });
   await runPostPersistCronNotifications(state, notifications);

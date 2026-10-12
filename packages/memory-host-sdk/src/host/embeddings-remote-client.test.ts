@@ -1,7 +1,10 @@
 // Memory Host SDK tests cover embeddings remote client behavior.
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { reserveTestPortListener } from "../../../../src/test-utils/port-claims.js";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
+import { createRemoteEmbeddingProvider } from "./embeddings-remote-provider.js";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 
 // Unit tests run in worker threads, where shared auth state requires the Gateway host broker.
@@ -22,6 +25,118 @@ const configuredProvider = {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+
+describe("remote embedding private-network policy", () => {
+  const requests: string[] = [];
+  let baseUrl: string;
+  let cleanup: () => Promise<void>;
+
+  beforeAll(async () => {
+    const target = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((_req, res) => {
+          requests.push("redirect-target");
+          res.end('{"data":[{"embedding":[1,2,3]}]}');
+        }),
+    });
+    const source = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((req, res) => {
+          requests.push(req.url ?? "");
+          if (req.url === "/redirect/embeddings") {
+            res.writeHead(307, {
+              location: `http://127.0.0.1:${target.claim.port}/embeddings`,
+            });
+            res.end();
+          } else {
+            res.end('{"data":[{"embedding":[1,2,3]}]}');
+          }
+        }),
+    });
+    baseUrl = `http://127.0.0.1:${source.claim.port}`;
+    cleanup = async () => {
+      await source.releaseListener();
+      await target.releaseListener();
+      await source.claim.release();
+      await target.claim.release();
+    };
+  });
+
+  beforeEach(() => {
+    requests.length = 0;
+  });
+
+  afterAll(async () => await cleanup());
+
+  it.each<{
+    allow: boolean | undefined;
+    path: string;
+    permitted: boolean;
+    hits: string[];
+    remoteOverride?: boolean;
+  }>([
+    { allow: undefined, path: "/v1", permitted: true, hits: ["/v1/embeddings"] },
+    { allow: true, path: "/v1", permitted: true, hits: ["/v1/embeddings"] },
+    { allow: false, path: "/v1", permitted: false, hits: [] },
+    { allow: undefined, path: "/redirect", permitted: false, hits: ["/redirect/embeddings"] },
+    {
+      allow: true,
+      path: "/redirect",
+      permitted: true,
+      hits: ["/redirect/embeddings", "redirect-target"],
+    },
+    {
+      allow: undefined,
+      path: "/v1",
+      permitted: true,
+      hits: ["/v1/embeddings"],
+      remoteOverride: true,
+    },
+    { allow: false, path: "/v1", permitted: false, hits: [], remoteOverride: true },
+  ])(
+    "uses inference policy for allow=$allow and $path",
+    async ({ allow, path, permitted, hits, remoteOverride }) => {
+      const client = await resolveRemoteEmbeddingBearerClient({
+        provider: "fixture",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        options: {
+          config: {
+            models: {
+              providers: {
+                fixture: {
+                  api: "openai-completions",
+                  baseUrl: remoteOverride
+                    ? "https://provider.example.test/v1"
+                    : `${baseUrl}${path}`,
+                  apiKey: "fixture-key",
+                  request: { allowPrivateNetwork: allow },
+                  models: [],
+                },
+              },
+            },
+          },
+          model: "fixture-model",
+          ...(remoteOverride
+            ? { remote: { baseUrl: `${baseUrl}${path}`, apiKey: "remote-fixture-key" } }
+            : {}),
+        },
+      });
+      const provider = createRemoteEmbeddingProvider({
+        id: "fixture",
+        client: { ...client, model: "fixture-model" },
+        errorPrefix: "fixture embeddings",
+      });
+      if (permitted) {
+        await expect(provider.embed("fixture")).resolves.toEqual([1, 2, 3]);
+      } else {
+        await expect(provider.embed("fixture")).rejects.toThrow(/private\/internal\/special-use/);
+      }
+      expect(requests).toEqual(hits);
+    },
+  );
 });
 
 describe("resolveRemoteEmbeddingBearerClient", () => {

@@ -57,6 +57,7 @@ import {
   listConfiguredSessionStoreAgentIds,
   listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
+  resolveConfiguredAgentDatabaseCandidatePaths,
   resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "./targets.js";
@@ -489,13 +490,18 @@ export function applyGatewaySessionStoreAdmission(
   if (opts.agentId?.trim()) {
     assertAgentDatabaseAdmitted(opts.agentId, { env });
   }
+  const configuredTargets =
+    opts.preserveSentinelOwners === "physical" && getAgentDatabaseStartupAdmission()
+      ? resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }).map((pathname) => ({
+          path: pathname,
+        }))
+      : undefined;
   const admitted = (target: SessionStoreTarget): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
     if (
-      opts.preserveSentinelOwners === "physical" &&
-      getAgentDatabaseStartupAdmission() &&
+      configuredTargets &&
       physical &&
-      !isConfiguredAgentDatabaseTarget(cfg, physical.agentId, physical.storePath, env)
+      !isConfiguredAgentDatabaseTarget(configuredTargets, physical.agentId, physical.storePath)
     ) {
       return false;
     }

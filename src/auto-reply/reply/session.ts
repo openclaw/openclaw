@@ -747,22 +747,28 @@ async function initSessionStateAttemptLocked(
       expectedRevision: initializationSnapshot.revision,
       relatedSessionKeys,
       maintenanceConfig,
-      prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
+      prepareSessionEntry:
+        parentSessionKey && parentSessionKey !== sessionKey && !alreadyForked
+          ? async ({ readEntry, sessionEntry: entryToCommit }) => {
+              if (params.signal?.aborted === true) {
+                throw new Error("reply session initialization aborted");
+              }
+              return await prepareReplySessionParentFork({
+                ...sessionTarget,
+                alreadyForked,
+                parentSessionKey,
+                requireParentForkReplacement: restartTombstoneParentFork,
+                readEntry,
+                sessionEntry: entryToCommit,
+                warn: (message) => log.warn(message),
+              });
+            }
+          : undefined,
+      ...(resetBoundary ? { resetBoundary } : {}),
+      beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {
         if (params.signal?.aborted === true) {
           throw new Error("reply session initialization aborted");
         }
-        return await prepareReplySessionParentFork({
-          ...sessionTarget,
-          alreadyForked,
-          parentSessionKey,
-          requireParentForkReplacement: restartTombstoneParentFork,
-          readEntry,
-          sessionEntry: entryToCommit,
-          warn: (message) => log.warn(message),
-        });
-      },
-      ...(resetBoundary ? { resetBoundary } : {}),
-      beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {
         if (!previousSessionEntry || !currentEntry) {
           return;
         }

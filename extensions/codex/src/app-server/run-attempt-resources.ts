@@ -29,10 +29,10 @@ import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import {
   createNativeSubagentAssignmentStore,
   createNativeSubagentSessionAuthority,
+  createNativeSubagentSubmissionStore,
 } from "./native-subagent-assignment-store.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
-import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import {
   reportCodexBackgroundCleanupFailure,
@@ -43,7 +43,6 @@ import {
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
-import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
 import { clearCodexBindingForClient } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
@@ -241,6 +240,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     await nativeSubagentMonitorSettlement;
   };
   const registerNativeSubagentMonitor = async (parentThreadId: string) => {
+    const requestCustody = params.hostCapabilities.captureRequestCustody?.();
     const { client, thread, nativeHookRelay, turnRoute } = state;
     const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
     const storePath = params.sessionTarget?.storePath;
@@ -270,35 +270,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await parent?.assertCurrent();
     };
     const parentWriteAuthority = createNativeSubagentSessionAuthority(parent);
-    const submissionStore: CodexNativeSubagentSubmissionStore | undefined =
+    const submissionStore =
       historyOwner && thread.lifecycle.preserveExistingBinding !== true
-        ? {
-            assertCurrent: () => {
-              const current = bindingStore.read(bindingIdentity);
-              if (!current || !matchesCodexNativeSubagentSubmissionBinding(current, historyOwner)) {
-                throw new Error("Native submission binding is no longer current.");
-              }
-            },
-            assertCurrentAsync: async () => {
-              await assertParentSessionCurrent();
-              submissionStore!.assertCurrent();
-            },
-            read: () => bindingStore.readNativeSubagentSubmissions(bindingIdentity, historyOwner),
-            record: (receipt, assertCurrent) =>
-              bindingStore.mutate(
-                bindingIdentity,
-                { kind: "record-native-subagent-submission", owner: historyOwner, receipt },
-                assertCurrent,
-                parentWriteAuthority,
-              ),
-            consume: (receipt, assertCurrent) =>
-              bindingStore.mutate(
-                bindingIdentity,
-                { kind: "consume-native-subagent-submission", owner: historyOwner, receipt },
-                assertCurrent,
-                parentWriteAuthority,
-              ),
-          }
+        ? createNativeSubagentSubmissionStore({
+            bindingStore,
+            identity: bindingIdentity,
+            owner: historyOwner,
+            assertLifecycleCurrentAsync: assertParentSessionCurrent,
+            authority: parentWriteAuthority,
+          })
         : undefined;
     const assignmentStore =
       historyOwner && submissionStore
@@ -344,6 +324,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         unqualifiedModelExecution: modelSource && !configurationQualification ? true : undefined,
         onUnqualifiedModelCancelled: connection.abortExplicitly,
         requesterSessionKey: params.sessionKey,
+        requesterTurnRunId: params.runId,
+        requestCustody,
         completionScope: params.agentHarnessCompletionScope,
         historyOwner,
         submissionStore,

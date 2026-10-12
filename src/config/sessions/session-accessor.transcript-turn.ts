@@ -332,47 +332,52 @@ async function persistExpectedSessionTranscriptTurn(
   const { selectedSessionId, selectedLifecycleRevision, ...target } =
     preparedTarget ??
     (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
+  const ownerScope = { ...target, sessionKey: requestedSessionKey ?? target.sessionKey };
   const inheritedWriterFence = getOwnedSessionTranscriptWriterFence({
     sessionFile: target.sessionKey,
-    sessionKey: target.sessionKey,
-    sessionTarget: target,
+    sessionKey: ownerScope.sessionKey,
+    sessionTarget: ownerScope,
   });
   const turn = await runWithOwnedSessionTranscriptWrite(
     {
       sessionFile: target.sessionKey,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
+      sessionKey: ownerScope.sessionKey,
+      sessionTarget: ownerScope,
     },
     () =>
-      appendExpectedSessionTranscriptTurn(target, {
-        config: options.config,
-        cwd: options.cwd,
-        keyFormat: "agent-qualified",
-        selectedSessionId,
-        selectedLifecycleRevision,
-        expectedLifecycleRevision:
-          options.expectedLifecycleRevision !== undefined
-            ? options.expectedLifecycleRevision
-            : inheritedWriterFence?.expectedLifecycleRevision,
-        expectedWriterRunId:
-          options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
-        expectedSessionState: options.expectedSessionState,
-        assertCurrent: options.assertCurrent,
-        acceptedResultGuard: options.acceptedResultGuard,
-        expectedSessionId,
-        initialSessionEntry: options.initialSessionEntry,
-        atomicGroup: options.atomicGroup,
-        messages: options.messages.map((append) => ({
-          ...append,
-          message: attachSessionTranscriptRunId(append.message, options.runId),
-        })),
-        onMessageCommitted: options.onMessageCommitted,
-        onCommittedSource,
-        sessionLifecyclePatch: options.sessionLifecyclePatch,
-        sessionTurnMutation: options.sessionTurnMutation,
-        sessionFile: target.sessionKey!,
-        touchSessionEntry: options.touchSessionEntry,
-      }),
+      appendExpectedSessionTranscriptTurn(
+        target,
+        {
+          config: options.config,
+          cwd: options.cwd,
+          keyFormat: "agent-qualified",
+          selectedSessionId,
+          selectedLifecycleRevision,
+          expectedLifecycleRevision:
+            options.expectedLifecycleRevision !== undefined
+              ? options.expectedLifecycleRevision
+              : inheritedWriterFence?.expectedLifecycleRevision,
+          expectedWriterRunId:
+            options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
+          expectedSessionState: options.expectedSessionState,
+          assertCurrent: options.assertCurrent,
+          acceptedResultGuard: options.acceptedResultGuard,
+          expectedSessionId,
+          initialSessionEntry: options.initialSessionEntry,
+          atomicGroup: options.atomicGroup,
+          messages: options.messages.map((append) => ({
+            ...append,
+            message: attachSessionTranscriptRunId(append.message, options.runId),
+          })),
+          onMessageCommitted: options.onMessageCommitted,
+          onCommittedSource,
+          sessionLifecyclePatch: options.sessionLifecyclePatch,
+          sessionTurnMutation: options.sessionTurnMutation,
+          sessionFile: target.sessionKey!,
+          touchSessionEntry: options.touchSessionEntry,
+        },
+        ownerScope,
+      ),
   );
 
   if (turn.rejectedReason === "session-rebound") {

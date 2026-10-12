@@ -2398,10 +2398,11 @@ export const single = {
     },
     {
       directory: "extensions/matrix/src/matrix/sdk",
-      selected: [
-        "extensions/matrix/src/matrix/sdk/idb-persistence.test.ts",
-        "extensions/matrix/src/matrix/sdk/recovery-key-store.test.ts",
-      ],
+      // Worker membership belongs to the database lane; this case protects the
+      // directory intersection as that membership grows.
+      selected: databaseWorkerExtensionTestFiles.filter((file) =>
+        file.startsWith("extensions/matrix/src/matrix/sdk/"),
+      ),
       inherited: ["extensions/matrix/**/*.test.ts"],
     },
   ])(

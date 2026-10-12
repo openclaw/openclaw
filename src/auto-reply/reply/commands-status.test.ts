@@ -13,6 +13,10 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import * as logger from "../../logger.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
@@ -193,6 +197,7 @@ function saveStatusTestAuthProfiles(params: {
 }
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   cliBackendsTesting.resetDepsForTest();
   clearAgentHarnesses();
   providerUsageMock.loadProviderUsageSummary.mockReset();
@@ -222,6 +227,7 @@ afterEach(() => {
 
 describe("buildStatusReply subagent summary", () => {
   beforeEach(async () => {
+    setRuntimeConfigSnapshot(baseCfg);
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupRegistry: () => ({
         providers: [],

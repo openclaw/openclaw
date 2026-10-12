@@ -1,3 +1,4 @@
+import { selectLocalWorkspaceCanonicalPaths } from "./local-workspace-inventory.js";
 import type {
   WorkerLocalWorkspaceReconcileRequest,
   WorkerWorkspaceReconcileResult,
@@ -53,6 +54,13 @@ export async function prepareLocalWorkspaceReconciliation(params: {
     manifestRef: () => string;
     verifyStable: () => Promise<void>;
   }): Promise<WorkerWorkspaceReconcileResult> => {
+    const additionalPaths = snapshot.current.baseCommit
+      ? await selectLocalWorkspaceCanonicalPaths({
+          root: request.localPath,
+          admittedPaths: "[]",
+          assertCurrent: () => request.assertCurrent?.(),
+        })
+      : undefined;
     const inspected =
       snapshot.currentManifestRef === request.baseManifestRef
         ? await runLocal(() =>
@@ -61,6 +69,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
               expectedManifestRef: request.baseManifestRef,
               base: snapshot.base,
               current: snapshot.current,
+              additionalPaths,
             }),
           )
         : undefined;
@@ -77,6 +86,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
         currentManifestRaw: snapshot.currentRaw,
         publishAcceptedManifest: snapshot.publishAcceptedManifest,
         unchanged,
+        additionalPaths,
       }),
     );
     const { acceptUnchangedStagedResult } = staged;

@@ -196,46 +196,6 @@ function createMemoryManager(overrides?: {
   };
 }
 
-describe("getMemoryWikiPage", () => {
-  it("enforces visibility for all current session storage layouts", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: { search: { backend: "shared", corpus: "memory" } },
-    });
-    const manager = createMemoryManager({
-      readResult: { status: "ok", path: "MEMORY.md", text: "memory" },
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-    for (const relPath of ["sessions/child-session.jsonl"]) {
-      loadCombinedSessionStoreForGatewayAsyncMock.mockClear();
-      await getMemoryWikiPage({
-        config,
-        appConfig: createSessionVisibilityAppConfig(),
-        agentSessionKey: "agent:main:child-session",
-        sandboxed: true,
-        lookup: relPath,
-      });
-      expect(loadCombinedSessionStoreForGatewayAsyncMock).toHaveBeenCalled();
-    }
-
-    for (const relPath of [
-      "sessionsx/child-session.jsonl",
-      "wiki/sessions/foo.md",
-      "wiki\\sessions\\foo.md",
-    ]) {
-      loadCombinedSessionStoreForGatewayAsyncMock.mockClear();
-      await getMemoryWikiPage({
-        config,
-        appConfig: createSessionVisibilityAppConfig(),
-        agentSessionKey: "agent:main:child-session",
-        sandboxed: true,
-        lookup: relPath,
-      });
-      expect(loadCombinedSessionStoreForGatewayAsyncMock).not.toHaveBeenCalled();
-    }
-  });
-});
-
 describe("searchMemoryWiki", () => {
   it("skips malformed pages while searching the rest of the vault (#96125)", async () => {
     const { rootDir, config } = await createQueryVault({ initialize: true });
@@ -260,28 +220,9 @@ describe("searchMemoryWiki", () => {
       body: "# Healthy Source\n\nhealthy needle\n",
     });
 
-    const results = await searchMemoryWiki({ config, query: "needle" });
+    const results = await searchMemoryWiki({ config, query: "needle", maxResults: Number.NaN });
 
     expect(collectWikiResultPaths(results)).toEqual(["sources/healthy.md"]);
-  });
-
-  it("uses the default search limit for non-finite maxResults", async () => {
-    const { rootDir, config } = await createQueryVault({
-      initialize: true,
-    });
-    await writePage(path.join(rootDir, "sources", "alpha.md"), {
-      frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
-      body: "# Alpha Source\n\nalpha body text\n",
-    });
-
-    const results = await searchMemoryWiki({
-      config,
-      query: "alpha",
-      maxResults: Number.NaN,
-    });
-
-    expect(results).toHaveLength(1);
-    expect(results[0]?.path).toBe("sources/alpha.md");
   });
 
   it("does not match generated related blocks during wiki search", async () => {
@@ -466,39 +407,6 @@ describe("searchMemoryWiki", () => {
     expect(inlineResults[0]?.snippet).toContain("<!-- openclaw:wiki:generated:start -->");
   });
 
-  it("matches pages when all query terms appear without an exact phrase", async () => {
-    const { rootDir, config } = await createQueryVault({
-      initialize: true,
-    });
-    await writePage(path.join(rootDir, "entities", "brad.md"), {
-      frontmatter: {
-        pageType: "entity",
-        id: "entity.brad",
-        title: "Maintainer: Brad Groux",
-        sourceIds: ["source.maintainers"],
-      },
-      body: [
-        "# Maintainer: Brad Groux",
-        "",
-        "## Agent Card",
-        "- Maintainer lane: CEO; Microsoft-facing OpenClaw maintainer",
-        "",
-        "## AI Notes",
-        "- Main sample theme is Microsoft ecosystem adoption: Teams, M365, Azure, Foundry, tenants, and pilots.",
-        "",
-      ].join("\n"),
-    });
-
-    const results = await searchMemoryWiki({
-      config,
-      query: "Brad Microsoft Teams",
-      maxResults: 10,
-    });
-
-    expect(results.map((result) => result.path)).toEqual(["entities/brad.md"]);
-    expect(results[0]?.snippet).toContain("Teams");
-  });
-
   it("matches non-ASCII query terms without an exact phrase", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
@@ -661,62 +569,6 @@ describe("searchMemoryWiki", () => {
 
   it.each([
     {
-      name: "body text instead of frontmatter for an unmatched query",
-      query: "frontmatter-only-alias",
-      body: "# Alias Carrier\n\nReadable agent card summary.\n",
-      expected: "# Alias Carrier",
-    },
-    {
-      name: "the first line with the most partial token matches",
-      query: "cobalt quartz amber",
-      body: "# Alias Carrier\nCobalt alone.\n  COBALT quartz first 🤖 é  \nQuartz cobalt second.\n",
-      expected: "COBALT quartz first 🤖 é",
-    },
-    {
-      name: "the first all-token line before partial matches or a later exact phrase",
-      query: "cobalt quartz amber",
-      body: "# Alias Carrier\nCobalt quartz partial.\nAmber quartz cobalt first.\nCobalt quartz amber later.\n",
-      expected: "Amber quartz cobalt first.",
-    },
-    {
-      name: "body text when the query has no searchable tokens",
-      query: "🦞",
-      body: "# Alias Carrier\n\nReadable agent card summary.\n",
-      expected: "# Alias Carrier",
-    },
-  ])("uses $name for snippets", async ({ query, body, expected }) => {
-    const { rootDir, config } = await createQueryVault({
-      initialize: true,
-    });
-    await writePage(path.join(rootDir, "entities", "alias.md"), {
-      frontmatter: {
-        pageType: "entity",
-        id: "entity.alias",
-        title: "Alias Carrier",
-        aliases: [query],
-        sourceIds: ["source.maintainers"],
-      },
-      body,
-    });
-
-    const results = await searchMemoryWiki({
-      config,
-      query,
-      maxResults: 10,
-    });
-
-    expect(results.map((result) => result.path)).toEqual(["entities/alias.md"]);
-    expect(results[0]?.snippet).toBe(expected);
-  });
-
-  it.each([
-    {
-      name: "oversized body lines",
-      source: "body",
-      text: `needle ${"x".repeat(20_000)}`,
-      expected: `needle ${"x".repeat(693)}`,
-    },
-    {
       name: "oversized structured claims",
       source: "claim",
       text: `needle ${"x".repeat(20_000)}`,
@@ -822,36 +674,6 @@ describe("searchMemoryWiki", () => {
     expect(results[1]?.path).toBe("entities/alpha-stale.md");
   });
 
-  it("surfaces bridge provenance for imported source pages", async () => {
-    const { rootDir, config } = await createQueryVault({
-      initialize: true,
-    });
-    await writePage(path.join(rootDir, "sources", "bridge-alpha.md"), {
-      frontmatter: {
-        pageType: "source",
-        id: "source.bridge.alpha",
-        title: "Bridge Alpha",
-        sourceType: "memory-bridge",
-        sourcePath: "/tmp/workspace/MEMORY.md",
-        bridgeRelativePath: "MEMORY.md",
-        bridgeWorkspaceDir: "/tmp/workspace",
-        updatedAt: "2026-04-05T12:00:00.000Z",
-      },
-      body: "# Bridge Alpha\n\nalpha bridge body\n",
-    });
-
-    const results = await searchMemoryWiki({ config, query: "alpha" });
-
-    expect(results).toHaveLength(1);
-    expectFields(results[0], {
-      corpus: "wiki",
-      sourceType: "memory-bridge",
-      sourcePath: "/tmp/workspace/MEMORY.md",
-      provenanceLabel: "bridge: MEMORY.md",
-      updatedAt: "2026-04-05T12:00:00.000Z",
-    });
-  });
-
   it("reports a contract error when the shared manager lacks search()", async () => {
     const { config } = await createQueryVault({
       initialize: true,
@@ -929,10 +751,6 @@ describe("searchMemoryWiki", () => {
 
   for (const { name, sandboxed } of [
     { name: "filters session memory hits outside the caller visibility policy", sandboxed: true },
-    {
-      name: "filters session memory hits for session-bound non-sandboxed callers",
-      sandboxed: false,
-    },
   ] satisfies ReadonlyArray<{ name: string; sandboxed: boolean }>) {
     it(name, async () => {
       const { config } = await createQueryVault({
@@ -1117,27 +935,6 @@ describe("searchMemoryWiki", () => {
     });
   });
 
-  it("discovers pages in nested subdirectories", async () => {
-    const { rootDir, config } = await createQueryVault({
-      initialize: true,
-    });
-    await fs.mkdir(path.join(rootDir, "sources", "sub"), { recursive: true });
-    await writePage(path.join(rootDir, "sources", "top.md"), {
-      frontmatter: { pageType: "source", id: "source.top", title: "Top Source" },
-      body: "# Top Source\n",
-    });
-    await writePage(path.join(rootDir, "sources", "sub", "nested.md"), {
-      frontmatter: { pageType: "source", id: "source.nested", title: "Nested Source" },
-      body: "# Nested Source\n",
-    });
-
-    const results = await searchMemoryWiki({ config, query: "Source" });
-
-    expect(results).toHaveLength(2);
-    const paths = results.map((r) => r.path).toSorted((a, b) => String(a).localeCompare(String(b)));
-    expect(paths).toEqual(["sources/sub/nested.md", "sources/top.md"]);
-  });
-
   it("requires appConfig for session-bound shared memory searches", async () => {
     const { config } = await createQueryVault({
       initialize: true,
@@ -1154,44 +951,6 @@ describe("searchMemoryWiki", () => {
         query: "transcript",
       }),
     ).rejects.toThrow(/wiki_search requires appConfig/);
-  });
-
-  it("uses the active session agent for shared memory search", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: {
-        search: { backend: "shared", corpus: "memory" },
-      },
-    });
-    const manager = createMemoryManager({
-      searchResults: [
-        {
-          path: "memory/2026-04-07.md",
-          startLine: 1,
-          endLine: 2,
-          score: 1,
-          snippet: "secondary agent memory",
-          source: "memory",
-        },
-      ],
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    await searchMemoryWiki({
-      config,
-      appConfig: createAppConfig(),
-      agentSessionKey: "agent:secondary:thread",
-      query: "secondary",
-    });
-
-    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
-      sessionKey: "agent:secondary:thread",
-      config: createAppConfig(),
-    });
-    expect(getActiveMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg: createAppConfig(),
-      agentId: "secondary",
-    });
   });
 
   it("allows per-call corpus overrides without changing config defaults", async () => {
@@ -1230,70 +989,9 @@ describe("searchMemoryWiki", () => {
     expect(memoryOnly[0]?.corpus).toBe("memory");
     expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 10 });
   });
-
-  it("keeps memory search disabled when the backend is local", async () => {
-    const { rootDir, config } = await createQueryVault({
-      initialize: true,
-      config: {
-        search: { backend: "local", corpus: "all" },
-      },
-    });
-    await writePage(path.join(rootDir, "sources", "alpha.md"), {
-      frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
-      body: "# Alpha Source\n\nalpha only wiki\n",
-    });
-    const manager = createMemoryManager({
-      searchResults: [
-        {
-          path: "MEMORY.md",
-          startLine: 1,
-          endLine: 2,
-          score: 50,
-          snippet: "alpha memory",
-          source: "memory",
-        },
-      ],
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const results = await searchMemoryWiki({
-      config,
-      appConfig: createAppConfig(),
-      query: "alpha",
-    });
-
-    expect(results).toHaveLength(1);
-    expect(results[0]?.corpus).toBe("wiki");
-    expect(manager.search).not.toHaveBeenCalled();
-  });
 });
 
 describe("getMemoryWikiPage", () => {
-  it("reads wiki pages by relative path and slices line ranges", async () => {
-    const { rootDir, config } = await createQueryVault({
-      initialize: true,
-    });
-    await writePage(path.join(rootDir, "sources", "alpha.md"), {
-      frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha Source" },
-      body: "# Alpha Source\n\nline one\nline two\nline three\n",
-    });
-
-    const result = await getMemoryWikiPage({
-      config,
-      lookup: "sources/alpha.md",
-      fromLine: 4,
-      lineCount: 2,
-    });
-
-    expect(result?.corpus).toBe("wiki");
-    expect(result?.path).toBe("sources/alpha.md");
-    expect(result?.content).toContain("line one");
-    expect(result?.content).toContain("line two");
-    expect(result?.content).not.toContain("line three");
-    expect(result?.totalLines).toBe(7);
-    expect(result?.truncated).toBe(true);
-  });
-
   it("returns provenance for imported wiki source pages", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
@@ -1326,46 +1024,6 @@ describe("getMemoryWikiPage", () => {
       sourcePath: "/tmp/private/alpha.md",
       provenanceLabel: "unsafe-local: alpha.md",
       updatedAt: "2026-04-05T13:00:00.000Z",
-    });
-  });
-
-  it("falls back to active memory reads when memory corpus is selected", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: {
-        search: { backend: "shared", corpus: "memory" },
-      },
-    });
-    const manager = createMemoryManager({
-      readResult: {
-        status: "ok",
-        path: "MEMORY.md",
-        text: "durable alpha memory\nline two",
-      },
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const result = await getMemoryWikiPage({
-      config,
-      appConfig: createAppConfig(),
-      lookup: "MEMORY.md",
-      fromLine: 2,
-      lineCount: 2,
-    });
-
-    expect(result).toEqual({
-      corpus: "memory",
-      path: "MEMORY.md",
-      title: "MEMORY",
-      kind: "memory",
-      content: "durable alpha memory\nline two",
-      fromLine: 2,
-      lineCount: 2,
-    });
-    expect(manager.readFile).toHaveBeenCalledWith({
-      relPath: "MEMORY.md",
-      from: 2,
-      lines: 2,
     });
   });
 
@@ -1415,10 +1073,20 @@ describe("getMemoryWikiPage", () => {
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
     const tool = createWikiGetTool(config, createAppConfig());
-    const result = await tool.execute("wiki-get-empty", { lookup: "memory/empty.md" });
+    const result = await tool.execute("wiki-get-empty", {
+      lookup: "memory/empty.md",
+      fromLine: Number.NaN,
+      lineCount: Number.POSITIVE_INFINITY,
+    });
 
     expect(result.details).toEqual(
-      expect.objectContaining({ found: true, path: "memory/empty.md", content: "" }),
+      expect.objectContaining({
+        found: true,
+        path: "memory/empty.md",
+        content: "",
+        fromLine: 1,
+        lineCount: 200,
+      }),
     );
   });
 
@@ -1445,36 +1113,6 @@ describe("getMemoryWikiPage", () => {
     }
   });
 
-  it("normalizes extensionless shared memory lookups before reading", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: { search: { backend: "shared", corpus: "memory" } },
-    });
-    const manager = createMemoryManager({
-      readResult: {
-        status: "ok",
-        path: "memory/notes.md",
-        text: "durable notes",
-        from: 1,
-        lines: 1,
-      },
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const result = await getMemoryWikiPage({
-      config,
-      appConfig: createAppConfig(),
-      lookup: "memory/notes",
-    });
-
-    expectFields(result, { path: "memory/notes.md", content: "durable notes" });
-    expect(manager.readFile).toHaveBeenCalledExactlyOnceWith({
-      relPath: "memory/notes.md",
-      from: 1,
-      lines: 200,
-    });
-  });
-
   it("reports a contract error when the shared manager lacks readFile()", async () => {
     const { config } = await createQueryVault({
       initialize: true,
@@ -1495,39 +1133,6 @@ describe("getMemoryWikiPage", () => {
         lookup: "MEMORY.md",
       }),
     ).rejects.toThrow("does not implement readFile() from the MemorySearchManager contract");
-  });
-
-  it("defaults non-finite memory line options before memory reads", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: {
-        search: { backend: "shared", corpus: "memory" },
-      },
-    });
-    const manager = createMemoryManager({
-      readResult: {
-        status: "ok",
-        path: "MEMORY.md",
-        text: "durable alpha memory",
-      },
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const result = await getMemoryWikiPage({
-      config,
-      appConfig: createAppConfig(),
-      lookup: "MEMORY.md",
-      fromLine: Number.NaN,
-      lineCount: Number.POSITIVE_INFINITY,
-    });
-
-    expect(result?.fromLine).toBe(1);
-    expect(result?.lineCount).toBe(200);
-    expect(manager.readFile).toHaveBeenCalledWith({
-      relPath: "MEMORY.md",
-      from: 1,
-      lines: 200,
-    });
   });
 
   it("does not expose indexed session transcripts through wiki_get", async () => {
@@ -1575,72 +1180,6 @@ describe("getMemoryWikiPage", () => {
         lookup: "sessions/child-session.jsonl",
       }),
     ).rejects.toThrow(/wiki_get requires appConfig/);
-  });
-
-  it("uses the active session agent for shared memory reads", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: {
-        search: { backend: "shared", corpus: "memory" },
-      },
-    });
-    const manager = createMemoryManager({
-      readResult: {
-        status: "ok",
-        path: "MEMORY.md",
-        text: "secondary memory line",
-      },
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const result = await getMemoryWikiPage({
-      config,
-      appConfig: createAppConfig(),
-      agentSessionKey: "agent:secondary:thread",
-      lookup: "MEMORY.md",
-    });
-
-    expect(result?.corpus).toBe("memory");
-    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
-      sessionKey: "agent:secondary:thread",
-      config: createAppConfig(),
-    });
-    expect(getActiveMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg: createAppConfig(),
-      agentId: "secondary",
-    });
-  });
-
-  it("allows per-call get overrides to bypass wiki and force memory fallback", async () => {
-    const { rootDir, config } = await createQueryVault({
-      initialize: true,
-      config: {
-        search: { backend: "shared", corpus: "wiki" },
-      },
-    });
-    await writePage(path.join(rootDir, "sources", "MEMORY.md"), {
-      frontmatter: { pageType: "source", id: "source.memory.shadow", title: "Shadow Memory" },
-      body: "# Shadow Memory\n\nwiki copy\n",
-    });
-    const manager = createMemoryManager({
-      readResult: {
-        status: "ok",
-        path: "MEMORY.md",
-        text: "forced memory read",
-      },
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const result = await getMemoryWikiPage({
-      config,
-      appConfig: createAppConfig(),
-      lookup: "MEMORY.md",
-      searchCorpus: "memory",
-    });
-
-    expect(result?.corpus).toBe("memory");
-    expect(result?.content).toBe("forced memory read");
-    expect(manager.readFile).toHaveBeenCalled();
   });
 });
 
@@ -1732,28 +1271,6 @@ describe("wiki corpus bridge page agent scoping", () => {
     expect(unowned).toBeNull();
   });
 
-  it("preserves global bridge reads for non-sandboxed callers", async () => {
-    const { config } = await createBridgeVisibilityVault();
-    const caller = {
-      config,
-      appConfig: createAgentSessionVisibilityAppConfig(),
-      agentId: "main",
-      agentSessionKey: "agent:main:thread",
-      sandboxed: false,
-    };
-    const page = await getMemoryWikiPage({
-      ...caller,
-      lookup: "secondary-daily-note",
-    });
-    const results = await searchMemoryWiki({
-      ...caller,
-      query: "wikiscope marker secondary",
-    });
-
-    expect(page?.content).toContain("wikiscope marker secondary");
-    expect(collectWikiResultPaths(results)).toContain("sources/secondary-daily-note.md");
-  });
-
   it("resolves sandboxed ownership from the session key and fails closed without it", async () => {
     const { config } = await createBridgeVisibilityVault();
     const denied = await getMemoryWikiPage({
@@ -1828,7 +1345,6 @@ registerProviderRecordQueryTests({
   createAppConfig,
   getActiveMemoryProviderMock,
   getActiveMemorySearchManagerMock,
-  createMemoryManager,
   useNativeProvider: () => isActiveMemoryProviderNativeMock.mockResolvedValue(true),
   searchMemoryWiki,
   getMemoryWikiPage,

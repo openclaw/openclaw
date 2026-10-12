@@ -300,6 +300,16 @@ export async function dispatchSessionsSendFollowup(
     start,
     completion,
     registryCompletion: Boolean(start.ok && completionTurn),
-    watchField: options.watch ? { watched } : {},
+    watchField: options.watch
+      ? {
+          watched,
+          ...(!watched && start.ok
+            ? {
+                watchError:
+                  "The send was accepted, but no proactive state watch was registered. Watches require distinct, valid agent-qualified session keys and current session authority. Use owner-scoped session_status changesSince to reconcile state.",
+              }
+            : {}),
+        }
+      : {},
   };
 }

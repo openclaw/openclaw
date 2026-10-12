@@ -57,11 +57,16 @@ describe("native SQLite schema snapshots and callbacks", () => {
         expect(tableExists(sibling, "added")).toBe(true);
         expect(readSqliteTextEncoding(writer)).toBe(encoding);
         sibling.close();
+        expect(readSqliteTextEncoding(writer)).toBe(encoding);
+        expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
+          "PRAGMA encoding",
+        ]);
         writer.close();
         const reopened = openDatabase("", true, filename);
         reopened.exec("CREATE INDEX added_id ON added(id)");
         expect(getAdmittedSqliteSchemaFacts(reopened)?.textEncoding).toBe(encoding);
         expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
+          "PRAGMA encoding",
           "PRAGMA encoding",
         ]);
       } finally {

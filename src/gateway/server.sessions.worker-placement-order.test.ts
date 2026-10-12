@@ -105,6 +105,7 @@ test.each(["delete", "archive", "recover"] as const)(
         readEnvironmentSessionIds: unexpectedPlacementOperation,
         reconcile: unexpectedPlacementOperation,
         reconcileActive: unexpectedPlacementOperation,
+        isInterruptedTurn: () => false,
         resumeProvisioning: unexpectedPlacementOperation,
         move: async () => {
           await moveBarrier({

@@ -54,6 +54,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   canStartNativeUpdate: ConfirmAndStartUpdateParams["canStartNativeUpdate"] = undefined;
   @property({ attribute: false }) canHoldUpdate = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
+  @property({ attribute: false }) captureUpdateTarget: (() => () => boolean) | undefined =
+    undefined;
   @property({ attribute: false }) refreshRequired = false;
   @property({ attribute: false }) onRefresh: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
@@ -186,12 +188,18 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   };
 
   private confirmUpdate(existingRun?: UpdateRunRecord, viaNativeApp = hasNativeUpdateBridge()) {
+    const isCurrentTarget = this.captureUpdateTarget?.();
+    if (!isCurrentTarget) {
+      return;
+    }
+    const onUpdate = this.onUpdate;
     void confirmAndStartUpdate({
+      isCurrentTarget,
       existingRun,
       prepareRetry: viaNativeApp ? undefined : this.prepareRetry,
       prepareGatewayFallback: this.prepareRetry,
       canStartNativeUpdate: this.canStartNativeUpdate,
-      startGatewayUpdate: () => this.onUpdate(),
+      startGatewayUpdate: onUpdate,
       onCheckStatus: this.onCheckStatus,
       onReviewUpdate: this.onReviewUpdate,
       onAcknowledge: this.onAcknowledge,

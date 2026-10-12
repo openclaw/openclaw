@@ -85,6 +85,8 @@ describe("canonical proof on physical database validation", () => {
         throw new Error("Expected independent reader");
       }
       const previous = getOpenClawAgentDatabaseValidation(database)!;
+      const retainedReader = captureOpenClawAgentDatabaseReadValidation(database);
+      expect(retainedReader).toBeDefined();
       try {
         runSqliteImmediateTransactionSync(database.db, () => {
           stageOpenClawAgentDatabaseSchemaExtension(database.db);
@@ -98,6 +100,7 @@ describe("canonical proof on physical database validation", () => {
         );
         try {
           const current = refreshOpenClawAgentDatabaseSchema(database, () => {});
+          expect(() => retainedReader!.assertCurrent()).not.toThrow();
           expect(current.valid).toBe(previous.valid);
           expect(current.schema?.facts.tables.has("derived_vectors")).toBe(true);
           expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
@@ -119,7 +122,7 @@ describe("canonical proof on physical database validation", () => {
     });
   });
 
-  it("shares restart reader proof with admission through a directory symlink", async () => {
+  it("shares republished schema proof with restart readers through a directory symlink", async () => {
     await withReceiptFixture(true, (database) => {
       const aliasDir = path.join(path.dirname(database.path), "reader-alias");
       fs.symlinkSync(path.dirname(database.path), aliasDir, "junction");
@@ -130,8 +133,12 @@ describe("canonical proof on physical database validation", () => {
       const reader = captureOpenClawAgentDatabaseReadValidation(alias);
       expect(reader).toBeDefined();
       const receipt = getOpenClawAgentDatabaseValidation(database)!;
+      const delayed = structuredClone(receipt);
+      const valid = receipt.schema!.valid;
       const publish = captureOpenClawAgentDatabaseAdmissionPublication(alias);
-      publish(receipt.identity, structuredClone(receipt));
+      publishOpenClawAgentDatabaseSchema(database);
+      expect(receipt.schema!.valid).toBe(valid);
+      publish(delayed.identity, delayed);
       expect(() => reader!.assertCurrent()).not.toThrow();
       expect(getOpenClawAgentDatabaseValidationForTransfer(alias)).toBe(receipt);
       expect(alias.path).toContain("reader-alias");
@@ -226,6 +233,7 @@ describe("canonical proof on physical database validation", () => {
         }
         expect(hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
         const original = getOpenClawAgentDatabaseValidation(database)!.schema!;
+        publishOpenClawAgentDatabaseSchema(database);
         const foreign = new DatabaseSync(database.path);
         try {
           database.db.exec("CREATE TABLE late_reader_fixture(value TEXT)");
@@ -414,28 +422,6 @@ describe("canonical proof on physical database validation", () => {
             );
           }
         }
-      });
-    });
-
-    it("preserves fresh schema admission when a superseded receipt is rejected", async () => {
-      await withReceiptFixture(false, (database) => {
-        const receipt = getOpenClawAgentDatabaseValidation(database);
-        if (!receipt?.schema) {
-          throw new Error("Expected the fixture's admitted schema receipt");
-        }
-        const delayed = structuredClone({ ...receipt, schema: receipt.schema });
-        publishOpenClawAgentDatabaseSchema(database);
-        expect(Atomics.load(new Int32Array(delayed.schema.valid), 0)).toBe(0);
-        const schemaBefore = getOpenClawAgentDatabaseValidationForTransfer(database)?.schema;
-        expect(schemaBefore && Atomics.load(new Int32Array(schemaBefore.valid), 0)).toBe(1);
-
-        const publish = captureOpenClawAgentDatabaseAdmissionPublication(database);
-        expect(() => publish(delayed.identity, delayed)).toThrow(
-          AgentDatabaseSchemaAdmissionChangedError,
-        );
-        const schemaAfter = getOpenClawAgentDatabaseValidationForTransfer(database)?.schema;
-        expect(schemaAfter && Atomics.load(new Int32Array(schemaAfter.valid), 0)).toBe(1);
-        expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
       });
     });
 

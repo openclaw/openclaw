@@ -214,7 +214,12 @@ export function getOpenClawAgentDatabaseValidation(
       ) {
         // Promotion keeps custody captured before this physical proof arrived.
         entry.agentId = database.agentId;
-        entry.validation = validation;
+        if (entry.validation && entry.validation.receiptId === validation.receiptId) {
+          // Schema publication refreshes the same receipt without replacing its borrowers' owner.
+          entry.validation.schema = validation.schema;
+        } else {
+          entry.validation = validation;
+        }
         entry.integrityVerified = true;
       } else {
         entry = { agentId: database.agentId, validation, integrityVerified: true };
@@ -673,9 +678,12 @@ export function publishOpenClawAgentDatabaseSchema(database: ValidationDatabase)
   const validation = getOpenClawAgentDatabaseValidation(database);
   const facts = getAdmittedSqliteSchemaFacts(database.db);
   if (validation && facts && !database.db.isTransaction) {
-    invalidateOpenClawAgentDatabaseSchema(database);
-    const valid = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-    Atomics.store(new Int32Array(valid), 0, 1);
+    // Repeated publication preserves borrowers; real DDL revokes their shared cell.
+    let valid = validation.schema?.valid;
+    if (!valid || Atomics.load(new Int32Array(valid), 0) !== 1) {
+      valid = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      Atomics.store(new Int32Array(valid), 0, 1);
+    }
     validation.schema = { facts, valid };
     publishSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey, validation);
   }

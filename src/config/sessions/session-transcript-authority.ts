@@ -36,6 +36,8 @@ export type SessionTranscriptAuthority = SessionTranscriptContextVersion & {
   indexedSeq: number | null;
   activeMessageCount: number | null;
   needsRebuild: number | null;
+  /** Absent needs a tail lookup; null is a known empty bounded preview. */
+  lastMessagePreview?: string | null;
 };
 export type SessionTranscriptAuthorityReceipt = SqliteCommitReceipt<
   SessionTranscriptAuthority,
@@ -200,8 +202,15 @@ export function publishUnchangedSessionTranscriptReceipts(
   ) {
     throw new Error("Transcript materialization changed its content authority receipt");
   }
+  publishCommittedSessionTranscriptReceipts(receipts);
+}
+
+/** The native settlement owner publishes these while it still holds the writer FIFO. */
+export function publishCommittedSessionTranscriptReceipts(
+  receipts: readonly SessionTranscriptAuthorityReceipt[] | undefined,
+): void {
   sessionChanges.emitBatch(
-    receipts.flatMap((receipt) =>
+    (receipts ?? []).flatMap((receipt) =>
       receiptChanges(receipt, undefined, receipt.source.canonicalPath ?? receipt.source.filename),
     ),
   );
@@ -245,7 +254,10 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       (row.generation !== null && typeof row.generation !== "string") ||
       (row.leafEventId !== null && typeof row.leafEventId !== "string") ||
       ![row.rawSeq, row.updatedAt, row.indexedSeq, row.activeMessageCount].every(nullableNumber) ||
-      (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1)
+      (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1) ||
+      (row.lastMessagePreview !== undefined &&
+        row.lastMessagePreview !== null &&
+        typeof row.lastMessagePreview !== "string")
     ) {
       return false;
     }

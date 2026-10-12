@@ -182,6 +182,8 @@ export function createSessionTranscriptTurnKernel(
         );
       }
 
+      options.assertCurrent?.();
+
       // Later explicit parents can abandon earlier rows. Capture every cursor
       // from the final active projection before this atomic transaction commits.
       rememberCommittedTranscriptMessageSequencesInTransaction(

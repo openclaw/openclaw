@@ -16,6 +16,7 @@ import {
   repairLegacySubagentRetainedResults,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 function ensureTable(
@@ -23,7 +24,7 @@ function ensureTable(
   table: string,
   options?: Parameters<typeof extractSqliteTableSchema>[2],
 ): void {
-  database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, options)); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
+  database.exec(getOpenClawStateFeatureSchemaSql(table, options)); // sqlite-allow-raw -- Canonical feature-owned additive DDL only.
 }
 
 export function ensureRepositoryWorkspacePendingResultSchema(database: DatabaseSync): void {

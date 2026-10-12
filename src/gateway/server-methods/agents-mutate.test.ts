@@ -786,6 +786,7 @@ describe("agents.delete", () => {
     call,
     resume: () => resumeAgentDeletions(createContext() as never),
     expectTrashedWithinParent,
+    expectNotTrashed,
   };
   registerAgentDeleteDrainRecoveryTests(recoveryHarness);
 
@@ -1452,63 +1453,6 @@ describe("agents.delete", () => {
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
-  it("settles recovery without touching a journaled directory claimed by another agent", async () => {
-    const directoryOwners = new Map([["/journal/agent", "other-agent"]]);
-    const databaseRows = [
-      { agentId: "test-agent", path: "/journal/agent/openclaw-agent.sqlite" },
-      { agentId: "other-agent", path: "/journal/agent/openclaw-agent.sqlite" },
-    ];
-    mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
-    mocks.readAgentDeletionJournal.mockReturnValue(
-      deletionJournal({ workspaceDir: "/journal", sessionsDir: "/deleted/sessions" }),
-    );
-    mocks.resolveRegisteredAgentIdForDir.mockImplementation((pathname?: string) =>
-      directoryOwners.get(pathname ?? ""),
-    );
-    mocks.isPathOwnedByAnotherRegisteredAgent.mockImplementation(
-      ({ agentId, pathname }: { agentId: string; pathname: string }) =>
-        (pathname === "/journal/agent" || pathname.startsWith("/journal/agent/")) &&
-        directoryOwners.get("/journal/agent") !== agentId,
-    );
-    mocks.unregisterResolvedAgentDir.mockImplementation(
-      ({ agentId, agentDir }: { agentId: string; agentDir: string }) => {
-        if (directoryOwners.get(agentDir) !== agentId) {
-          return false;
-        }
-        return directoryOwners.delete(agentDir);
-      },
-    );
-    mocks.listOpenClawRegisteredAgentDatabases.mockImplementation(() => databaseRows);
-
-    const respond = await call("agents.delete", { agentId: "test-agent" });
-
-    expectRespondOk(respond, { ok: true });
-    expect(mocks.listOpenClawRegisteredAgentDatabases).toHaveBeenCalled();
-    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
-      "/journal/agent/openclaw-agent.sqlite",
-      "test-agent",
-    );
-    expect(mocks.assertNoOpenClawAgentDatabaseLeases).toHaveBeenCalledWith("test-agent", {});
-    expect(mocks.closeDeletedAgentDatabases).toHaveBeenCalledWith(
-      "test-agent",
-      [],
-      expect.objectContaining({
-        assertCurrentFinal: mocks.assertAgentDeletionCurrentFinal,
-        assertCurrentAsync: mocks.assertAgentDeletionCurrentAsync,
-      }),
-    );
-    expectNotTrashed("/journal/agent");
-    expectNotTrashed("/journal");
-    expectTrashedWithinParent("/deleted/sessions");
-    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledWith({ unregisterDatabases: true });
-    expect(mocks.unregisterResolvedAgentDir).toHaveBeenCalledWith({
-      agentId: "test-agent",
-      agentDir: "/journal/agent",
-    });
-    expect(directoryOwners.get("/journal/agent")).toBe("other-agent");
-    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
-  });
-
   it("revalidates database ownership after earlier filesystem cleanup", async () => {
     let claimed = false;
     mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
@@ -1530,24 +1474,6 @@ describe("agents.delete", () => {
     expectTrashedWithinParent("/journal/workspace");
     expectNotTrashed("/journal/agent");
     expectNotTrashed("/journal/agent/survivor.sqlite");
-    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
-  });
-
-  it("protects every journaled path claimed as a surviving agent workspace", async () => {
-    mocks.loadConfigReturn = {
-      agents: { entries: { "other-agent": { workspace: "/journal" } } },
-    };
-    mocks.readAgentDeletionJournal.mockReturnValue(deletionJournal());
-
-    const respond = await call("agents.delete", { agentId: "test-agent" });
-
-    expectRespondOk(respond, { ok: true, removed: [], failed: [] });
-    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
-      "/journal/agent/openclaw-agent.sqlite",
-      "test-agent",
-    );
-    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 

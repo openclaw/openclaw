@@ -38,7 +38,6 @@ import {
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId } from "./ops-shared.js";
-import { prepareCronRunReceiptOwnerMutation } from "./run-receipts.js";
 import { captureCronSchedulerSnapshot } from "./scheduler-config.js";
 import type {
   CronAddOptions,
@@ -295,12 +294,6 @@ async function updateLoadedJob(params: {
     explicitlyMutatesToolsAllow:
       patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
   });
-  const ownerPreparation = prepareCronRunReceiptOwnerMutation({
-    state,
-    previousJob,
-    nextJob,
-  });
-  const ownerMutation = ownerPreparation ? await ownerPreparation : undefined;
   source.assertCurrent();
   return await persistUpdatedJob({
     state,
@@ -314,7 +307,6 @@ async function updateLoadedJob(params: {
         : undefined,
     preconditionJob: precondition ? job : undefined,
     mutationMethod: "cron.update",
-    ownerMutation,
     jobMutation: mutation,
     jobMutationSnapshot: mutationSnapshot,
   });

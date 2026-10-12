@@ -900,14 +900,14 @@ process.exitCode = 1;
       );
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
       if (marker) {
-        vi.stubEnv("OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS", "1");
+        vi.stubEnv("OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS", "reported-checks");
       }
       const plugins = { ...successfulPluginUpdate, changed: false };
       mocks.updatePlugins.mockResolvedValue(plugins);
       mocks.completePluginUpdate.mockImplementation(async ({ beforeDoctor }) => {
         await beforeDoctor?.();
         expect(process.env.OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS).toBe(
-          runs ? "1" : "0",
+          runs ? "reported-checks" : "0",
         );
         return { pluginUpdate: plugins, configSnapshot: validConfigSnapshot };
       });
@@ -930,6 +930,11 @@ process.exitCode = 1;
         cwd: root,
         durationMs: 1,
         exitCode: 0,
+        deferredInspectionCheckIds: [
+          "core/doctor/hooks-model",
+          "core/doctor/runtime-tool-schemas",
+          "core/doctor/provider-catalog-projection",
+        ],
       };
       const initialSteps = [doctorStep];
 
@@ -977,7 +982,7 @@ process.exitCode = 1;
       doctor.parseOptions(lint.argv.slice(1));
       const options = doctor.opts();
       expect(options.severityMin).toBe("info");
-      expect(options.only).toHaveLength(12);
+      expect(options.only).toHaveLength(3);
       expect(options.only).toEqual(
         expect.arrayContaining([
           "core/doctor/hooks-model",
