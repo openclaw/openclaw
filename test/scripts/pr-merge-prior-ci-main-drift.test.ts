@@ -407,7 +407,7 @@ describePosix("prior-CI forward main admission", () => {
     f.adminPriorCi(f.path);
     expect(f.record()).toMatchObject({ phase: "intent", route: "admin" });
     expect(f.state().mutations).toBe(1);
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
     const outcome = f.git(["rev-parse", "refs/openclaw/pr-merge-outcomes/123"]);
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     f.save({ ...f.state(), observations: [{}, { main }] });

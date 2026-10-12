@@ -80,7 +80,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       "Conflicting path: owner.txt",
       `Local outcome ref ${outcomeRef}: absent`,
       "Legacy .local/merge-output.log: absent",
-      "lock-recover, then rerun merge-run",
+      "rerun merge-run; if the operation lock was retained",
     ]) {
       expect(run.output).toContain(line);
     }
@@ -118,7 +118,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(existsSync(f.worktree)).toBe(true);
       expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
       expect(run.output).toContain(`mergeStateStatus: observed="${mergeStateStatus}"; expected=`);
-      expect(run.output).toContain("lock-recover, then rerun merge-run");
+      expect(run.output).toContain("rerun merge-run; if the operation lock was retained");
       if (mergeStateStatus === "DIRTY") {
         expect(run.output).toContain("Conflicts exist");
       }
@@ -402,14 +402,15 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.captures()).toEqual([]);
     expect(existsSync(f.worktree)).toBe(true);
     expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
-    expect(f.git(["cat-file", "-t", lockRef])).toBe("blob");
+    // A pre-dispatch stop drains cleanly, so the supervisor releases the process lock.
+    expect(() => f.git(["rev-parse", "--verify", lockRef])).toThrow();
     expect(run.output).toContain("Waiting for GitHub mergeability to settle");
     if (persistent) {
       expect(run.output).toContain("stopped before intent/dispatch");
     }
     if (finalRead) {
       expect(run.output).toContain("PR or main changed during observation");
-      expect(run.output).toContain("lock-recover, then rerun merge-run");
+      expect(run.output).toContain("rerun merge-run; if the operation lock was retained");
       expect(run.output).toContain(
         fault === "final UNKNOWN mergeable"
           ? 'mergeable: observed="UNKNOWN"; expected="MERGEABLE"'
