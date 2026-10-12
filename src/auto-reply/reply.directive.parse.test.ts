@@ -363,6 +363,23 @@ describe("level directive preserves message text after an invalid level", () => 
   });
 });
 
+describe("typed level directives accept digit and underscore aliases", () => {
+  it.each([
+    ["verbose", "1", "verboseLevel", "on", ""],
+    ["think", "think_hard", "thinkLevel", "low", ""],
+    ["think", "extra_high", "thinkLevel", "xhigh", ""],
+    ["reasoning", "0", "reasoningLevel", "off", ""],
+    ["verbose", "3d printing tips", "verboseLevel", undefined, "3d printing tips"],
+  ] as const)("/%s %s", (name, args, levelKey, level, cleaned) => {
+    const parsed = parseInlineSessionDirectives(`/${name} ${args}`, {
+      command: { kind: "text", name },
+    });
+
+    expect(parsed[levelKey]).toBe(level);
+    expect(parsed.cleaned).toBe(cleaned);
+  });
+});
+
 describe("native directive commands own their complete argument boundary", () => {
   it.each([
     ["think", "rawThinkLevel", "about", "my deployment plan"],
