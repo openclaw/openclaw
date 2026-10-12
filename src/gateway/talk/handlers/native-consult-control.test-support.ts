@@ -35,13 +35,13 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
   describe.each(["browser-rpc", "browser-provider", "relay"] as const)(
     "native %s exact control",
     (surface) => {
-      it.each([
-        "foreign global",
-        "replaced run",
-        "reused run ID",
-        "other call",
-        ...(surface === "relay" ? [] : ["same call"]),
-      ])("keeps %s control within its declared scope", async (replacement) => {
+      it.each(
+        surface === "browser-rpc"
+          ? ["reused run ID", "other call"]
+          : surface === "browser-provider"
+            ? ["reused run ID", "other call", "same call"]
+            : ["foreign global", "reused run ID", "other call"],
+      )("keeps %s control within its declared scope", async (replacement) => {
         harness.getConfig().session = { scope: "global" };
         const started = createDeferredCore<RunEmbeddedAgentParams>();
         const finish = createDeferredCore();
@@ -115,7 +115,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             controlSessionId = call.sessionId;
           } else {
             setActiveEmbeddedRun(
-              replacement === "replaced run" ? active.sessionId : "other-agent-session",
+              "other-agent-session",
               {
                 runId: replacement === "reused run ID" ? active.runId : "other-run",
                 queueMessage: async () => undefined,

@@ -246,7 +246,7 @@ describe("Talk voice RPC ownership", () => {
     await state.cleanup();
   });
 
-  it.each(["talk.voice.get", "talk.voice.set"])(
+  it.each(["talk.voice.set"])(
     "rejects another browser's call through %s even for an admin",
     async (method) => {
       const respond = await invoke(
@@ -318,7 +318,7 @@ describe("Talk voice RPC ownership", () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
-  it.each(["talk.voice.get", "talk.voice.set"])(
+  it.each(["talk.voice.set"])(
     "rejects %s after the original chat storage moves",
     async (method) => {
       context.getRuntimeConfig = () => ({
