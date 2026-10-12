@@ -1,14 +1,18 @@
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { sleepWithAbort } from "@openclaw/retry";
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners } from "../shared/listeners.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { resolveQuarantineStorePath } from "../state/openclaw-state-db.paths.js";
 import {
   retainOpenClawStateWorkerErrorPayload,
   hydrateOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import {
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
@@ -45,11 +49,11 @@ import {
 
 const databaseAdmissionCursors = new WeakMap<Slot, SqliteDatabaseAdmissionCursor>();
 
-export function dispatchSqliteWorkerJob(
+export async function dispatchSqliteWorkerJob(
   slot: Slot,
   job: Job,
   onRejected: (error: unknown, retire: boolean) => void,
-): void {
+): Promise<void> {
   const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
   const assertCurrentJob = () => {
     if (slot.failed || slot.current !== job) {
@@ -66,11 +70,43 @@ export function dispatchSqliteWorkerJob(
     assertCurrentJob();
   };
   try {
-    assertDispatchable();
+    job.signal?.throwIfAborted();
+    assertCurrentJob();
     prepareSqliteWorkerActorContext(actor, job);
+    const databasePath = actor?.target
+      ? undefined
+      : (job.request.stateDatabasePath ?? actor?.databasePath);
+    // Retirement must drain even after ordinary database access is revoked.
+    if (databasePath && job.request.type !== "close") {
+      const assertAccessAllowed = () => {
+        job.signal?.throwIfAborted();
+        assertCurrentJob();
+        assertStateDatabaseAccessAllowed(databasePath, {
+          maintenanceScope: job.maintenanceScope,
+        });
+      };
+      const isPending = (error: unknown) =>
+        error instanceof StateDatabaseAdmissionPendingError && error.databasePath === databasePath;
+      try {
+        assertAccessAllowed();
+      } catch (error) {
+        if (!isPending(error)) {
+          throw error;
+        }
+        // Keep the queue slot, but create no admission and send no command until custody clears.
+        await acquireWithWait({
+          acquire: assertAccessAllowed,
+          shouldRetry: isPending,
+          deadlineMs: performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          pollIntervalMs: 10,
+          sleep: (ms) => sleepWithAbort(ms, job.signal),
+        });
+      }
+    }
     job.request.operationAdmission = prepareSqliteWorkerOperationAdmission(
       job,
       actor,
+      databasePath,
       assertDispatchable,
       assertCurrentJob,
     );
@@ -100,12 +136,10 @@ export function dispatchSqliteWorkerJob(
 function prepareSqliteWorkerOperationAdmission(
   job: Job,
   actor: Actor | undefined,
+  databasePath: string | undefined,
   assertDispatchable: () => void,
   assertCurrentJob: () => void,
 ) {
-  const databasePath = actor?.target
-    ? undefined
-    : (job.request.stateDatabasePath ?? actor?.databasePath);
   if (!job.createAdmission && !databasePath) {
     return undefined;
   }
@@ -161,13 +195,6 @@ function prepareSqliteWorkerOperationAdmission(
           schemaLease,
         });
       };
-      // Retirement must drain even after ordinary database access is revoked.
-      if (job.request.type !== "close") {
-        assertStateDatabaseAccessAllowed(databasePath, {
-          maintenanceScope: job.maintenanceScope,
-          schemaLease,
-        });
-      }
       retained.admission.bindDatabaseAuthority({
         databasePath,
         ...(job.request.type === "open" &&

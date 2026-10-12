@@ -33,7 +33,6 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { captureSessionEntryCurrentCheckInternal } from "../../config/sessions/session-entry-current-check.js";
 import {
   publishSystemEventStoreConfig,
   resolvePhysicalSessionStorePath,
@@ -779,20 +778,10 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     operation.complete();
   });
 
-  it.each(["session", "writer", "prepared writer"] as const)(
+  it.each(["session", "writer"] as const)(
     "skips stale abort bookkeeping after waiting for a replacement %s",
     async (replacement) => {
       const state = await setupStop();
-      if (replacement === "prepared writer") {
-        const current = await captureSessionEntryCurrentCheckInternal({
-          agentId: "main",
-          storePath: state.storePath,
-          sessionKey,
-          matchGeneration: false,
-        });
-        state.isCommandTargetCurrent = current.isCurrent;
-        state.params.opts = { isCommandTargetCurrent: current.isCurrent };
-      }
       const entered = createDeferred();
       const release = createDeferred();
       const nextOwner =

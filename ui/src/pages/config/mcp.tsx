@@ -79,10 +79,3 @@ export function Mcp(props: McpViewProps) {
     </section>
   );
 }
-
-export function renderMcpIntro() {
-  return <McpIntro />;
-}
-export function renderMcp(props: McpViewProps) {
-  return <Mcp {...props} />;
-}

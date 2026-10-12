@@ -609,12 +609,11 @@ missing result, while a retained ended actor rejects. Archive discovery returns
 no durable artifacts for that actor. Private transcripts are not added to the
 durable Memory ingestion corpus.
 
-The synchronous `loadMemorySessionMetadata` and
-`loadMemorySessionMetadataBatch` helpers are deprecated. Await
+The synchronous `loadMemorySessionMetadata` helper is deprecated. Await
 `loadMemorySessionMetadataAsync` and `loadMemorySessionMetadataBatchAsync`
 instead; bundled ingestion resolves each store batch in the existing history
-worker. The synchronous helpers retain their signatures until the next Plugin
-SDK major. Main-thread calls emit one shared Memory session deprecation warning
+worker. The synchronous helper retains its signature through the deprecation
+period and may be removed in a later release. Main-thread calls emit one shared Memory session deprecation warning
 per plugin. Batch transcript statistics now offer
 `readTranscriptStatsBatchReadOnlyAsync`; `session-store-runtime` offers
 `readTranscriptStatsAsync` for individual transcripts. Their synchronous

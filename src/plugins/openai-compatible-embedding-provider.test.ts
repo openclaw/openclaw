@@ -84,6 +84,7 @@ async function startEmbeddingServer(params?: {
   token?: string;
   respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown> | null;
   status?: number;
+  redirectUrl?: string;
 }): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -104,7 +105,10 @@ async function startEmbeddingServer(params?: {
           expect(req.headers.authorization).toBeUndefined();
         }
 
-        res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
+        res.writeHead(params?.status ?? 200, {
+          "content-type": "application/json",
+          ...(params?.redirectUrl ? { location: params.redirectUrl } : {}),
+        });
         res.end(
           JSON.stringify(
             params?.respond
@@ -293,6 +297,48 @@ afterEach(async () => {
 });
 
 describe("openai-compatible generic embedding provider", () => {
+  it("honors private-network denial for a configured provider and remote override", async () => {
+    const server = await startEmbeddingServer();
+    for (const remoteOverride of [false, true]) {
+      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+        createOptions({
+          provider: "private-fixture",
+          config: {
+            models: {
+              providers: {
+                "private-fixture": {
+                  api: "openai-completions",
+                  baseUrl: remoteOverride ? "https://provider.example.test/v1" : server.baseUrl,
+                  request: { allowPrivateNetwork: false },
+                  models: [],
+                },
+              },
+            },
+          },
+          ...(remoteOverride ? { remote: { baseUrl: server.baseUrl } } : {}),
+        }),
+      );
+      await expect(provider.embed("private input")).rejects.toThrow(
+        /private\/internal\/special-use/,
+      );
+    }
+    expect(server.requests).toEqual([]);
+  });
+
+  it("does not extend configured private-network trust to another origin", async () => {
+    const target = await startEmbeddingServer();
+    const source = await startEmbeddingServer({
+      status: 307,
+      redirectUrl: `${target.baseUrl}/embeddings`,
+    });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({ remote: { baseUrl: source.baseUrl } }),
+    );
+    await expect(provider.embed("private input")).rejects.toThrow(/private\/internal\/special-use/);
+    expect(source.requests).toHaveLength(1);
+    expect(target.requests).toEqual([]);
+  });
+
   it.each([true, false])("preserves caller-owned HTTP deadlines: signal=%s", async (withSignal) => {
     const server = await startEmbeddingServer();
     const { provider } = await createOpenAICompatibleEmbeddingProvider(

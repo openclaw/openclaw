@@ -1,8 +1,10 @@
 import type { CDPSession } from "@vitest/browser-playwright";
-import { nothing, render } from "lit";
+import { createSignal, type Setter } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cdp } from "vitest/browser";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../components/tooltip.ts";
 import { buildCompactionDividerItem } from "../chat-progress.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
@@ -13,6 +15,24 @@ import chatComposerStyles from "../../../styles/chat/composer.css?inline";
 import groupedStyles from "../../../styles/chat/grouped.css?inline";
 import chatLayoutStyles from "../../../styles/chat/layout.css?inline";
 import componentStyles from "../../../styles/components.css?inline";
+
+function mountCompaction(container: HTMLElement) {
+  let setPhase!: Setter<"active" | "complete">;
+  mountSolid(
+    () => {
+      const [phase, updatePhase] = createSignal<"active" | "complete">("active");
+      setPhase = updatePhase;
+      return (
+        <LitContent value={renderChatDivider(buildCompactionDividerItem({}, 1_000, 0, phase()))} />
+      );
+    },
+    { container },
+  );
+  return (phase: "active" | "complete") => {
+    setPhase(phase);
+    flush();
+  };
+}
 
 describe("inline compaction motion", () => {
   let container: HTMLDivElement;
@@ -39,14 +59,14 @@ describe("inline compaction motion", () => {
   });
 
   afterEach(async () => {
-    render(nothing, container);
+    container.replaceChildren();
     container.remove();
     styles.remove();
     await session.send("Emulation.setEmulatedMedia", { features: [] });
   });
 
   it("folds lines inline without a floating scrim, then reveals the completion check", async () => {
-    render(renderChatDivider(buildCompactionDividerItem({}, 1_000, 0, "active")), container);
+    const setPhase = mountCompaction(container);
     const indicator = container.querySelector<HTMLElement>(".chat-compaction")!;
     const lines = Array.from(container.querySelectorAll(".chat-compaction__line"));
     const check = container.querySelector<SVGElement>(".chat-compaction__glyph svg")!;
@@ -64,7 +84,7 @@ describe("inline compaction motion", () => {
       expect(getComputedStyle(element).animationName).not.toContain("spin");
     }
 
-    render(renderChatDivider(buildCompactionDividerItem({}, 1_000, 0, "complete")), container);
+    setPhase("complete");
     for (const line of lines) {
       expect(getComputedStyle(line).visibility).toBe("hidden");
       expect(getComputedStyle(line).animationName).toBe("none");
@@ -84,8 +104,9 @@ describe("inline compaction motion", () => {
       features: [{ name: "prefers-reduced-motion", value: "reduce" }],
     });
     expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+    const setPhase = mountCompaction(container);
     for (const phase of ["active", "complete"] as const) {
-      render(renderChatDivider(buildCompactionDividerItem({}, 1_000, 0, phase)), container);
+      setPhase(phase);
       const indicator = container.querySelector<HTMLElement>(".chat-compaction")!;
       const label = container.querySelector<HTMLElement>(".chat-divider__title")!;
       const check = container.querySelector<SVGElement>(".chat-compaction__glyph svg")!;

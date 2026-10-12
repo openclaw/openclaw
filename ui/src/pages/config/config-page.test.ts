@@ -29,7 +29,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/talk/session.ts";
 import { mountConfigPage, publishConfigSource } from "./config-page.test-support.ts";
 import { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.ts";
-import type { ConfigViewState } from "./view.tsx";
+import type { ConfigViewState } from "./view-types.ts";
 
 const switchActiveRealtimeTalkCameras =
   vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();

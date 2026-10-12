@@ -604,7 +604,7 @@ class TalkSettingsController {
   }
 }
 
-export function TalkSettingsContent(props: TalkSettingsPageProps) {
+function TalkSettingsContent(props: TalkSettingsPageProps) {
   const context = useApplication();
   const controller = new TalkSettingsController(context, props);
   const catalog = projectSource(controller, {

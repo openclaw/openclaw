@@ -6,7 +6,8 @@ import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./revie
 
 const mocks = vi.hoisted(() => ({
   extractDeliveryInfo: vi.fn(),
-  loadSessionEntryReadOnly: vi.fn(),
+  withSessionEntriesFromStoresInWorker: vi.fn(),
+  readEntry: vi.fn(),
   sendDurableMessageBatchCore: vi.fn(async () => ({ status: "sent" })),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true })),
   enqueueSystemEvent: vi.fn(() => true),
@@ -15,9 +16,9 @@ vi.mock("../../config/sessions/delivery-info.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/delivery-info.js")>()),
   extractDeliveryInfo: mocks.extractDeliveryInfo,
 }));
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
-  loadSessionEntryReadOnly: mocks.loadSessionEntryReadOnly,
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  withSessionEntriesFromStoresInWorker: mocks.withSessionEntriesFromStoresInWorker,
 }));
 vi.mock("../../channels/message/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../channels/message/runtime.js")>()),
@@ -106,10 +107,19 @@ describe("postWorkshopChangeNotice", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadSessionEntryReadOnly.mockReturnValue({
+    mocks.readEntry.mockReturnValue({
       sessionId: "reviewed-session",
       lifecycleRevision: "reviewed-revision",
     });
+    mocks.withSessionEntriesFromStoresInWorker.mockImplementation(async (inputs, consume) =>
+      consume(
+        inputs.map(({ sessionKeys }: { sessionKeys: readonly string[] }) => ({
+          result: {
+            entries: sessionKeys.map((sessionKey) => ({ sessionKey, entry: mocks.readEntry() })),
+          },
+        })),
+      ),
+    );
   });
 
   it("stays quiet when the review changed nothing", async () => {
@@ -270,6 +280,8 @@ describe("postWorkshopChangeNotice", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey,
+        expectedSessionId: "reviewed-session",
+        expectedLifecycleRevision: "reviewed-revision",
         deliveryMirror: {
           kind: "skill-workshop-change",
           agentId: "main",
@@ -287,12 +299,18 @@ describe("postWorkshopChangeNotice", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(expect.any(String), { sessionKey });
   });
 
-  it("leaves a conversation reset since the review started untouched", async () => {
-    // A Gateway reset keeps the sessionId and rotates the lifecycle revision.
-    mocks.loadSessionEntryReadOnly.mockReturnValue({
-      sessionId: "reviewed-session",
-      lifecycleRevision: "reset-revision",
-    });
+  it.each([
+    {
+      change: "reset",
+      entry: { sessionId: "reviewed-session", lifecycleRevision: "reset-revision" },
+    },
+    {
+      change: "replacement",
+      entry: { sessionId: "replacement-session", lifecycleRevision: "reviewed-revision" },
+    },
+    { change: "deletion", entry: undefined },
+  ])("leaves a conversation untouched after $change", async ({ entry }) => {
+    mocks.readEntry.mockReturnValue(entry);
     mocks.extractDeliveryInfo.mockReturnValue({
       deliveryContext: { channel: "telegram", to: "42" },
       threadId: undefined,
@@ -301,5 +319,32 @@ describe("postWorkshopChangeNotice", () => {
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("observes a reset during delivery lookup before enqueueing undo instructions", async () => {
+    mocks.extractDeliveryInfo.mockImplementationOnce(async () => {
+      mocks.readEntry.mockReturnValueOnce({
+        sessionId: "reviewed-session",
+        lifecycleRevision: "reset-revision",
+      });
+      return { deliveryContext: { channel: "telegram", to: "42" } };
+    });
+    await post([change({})]);
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("keeps undo instructions after delivery failure without rereading the generation", async () => {
+    mocks.extractDeliveryInfo.mockReturnValue({
+      deliveryContext: { channel: "telegram", to: "42" },
+    });
+    mocks.sendDurableMessageBatchCore.mockRejectedValueOnce(new Error("delivery failed"));
+    await post([change({})], undefined, {
+      skills: { workshop: { autonomous: { channelNotices: true } } },
+    });
+    expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledOnce();
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(mocks.withSessionEntriesFromStoresInWorker).toHaveBeenCalledOnce();
   });
 });

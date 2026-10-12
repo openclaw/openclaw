@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { renderNotificationsSection } from "./notifications-section.tsx";
+import { NotificationsSection } from "./notifications-section.tsx";
 
 const userPreferences = {
   categories: {
@@ -27,12 +27,15 @@ describe("native notification test outcome", () => {
     const container = document.createElement("div");
 
     mountSolid(
-      () =>
-        renderNotificationsSection({
-          connected: true,
-          nativeNotifications: { permission: "granted", test: { state: "pending" } },
-          onNativeNotificationsSendTest: onSend,
-        }),
+      () => (
+        <NotificationsSection
+          {...{
+            connected: true,
+            nativeNotifications: { permission: "granted", test: { state: "pending" } },
+            onNativeNotificationsSendTest: onSend,
+          }}
+        />
+      ),
       { container },
     );
 
@@ -47,14 +50,17 @@ describe("native notification test outcome", () => {
     const container = document.createElement("div");
 
     mountSolid(
-      () =>
-        renderNotificationsSection({
-          connected: true,
-          nativeNotifications: {
-            permission: "granted",
-            test: { state: "error", message: "Open System Settings and try again." },
-          },
-        }),
+      () => (
+        <NotificationsSection
+          {...{
+            connected: true,
+            nativeNotifications: {
+              permission: "granted",
+              test: { state: "error", message: "Open System Settings and try again." },
+            },
+          }}
+        />
+      ),
       { container },
     );
 
@@ -66,11 +72,14 @@ describe("native notification test outcome", () => {
   it("renders queued success independently from permission", () => {
     const container = document.createElement("div");
     mountSolid(
-      () =>
-        renderNotificationsSection({
-          connected: true,
-          nativeNotifications: { permission: "granted", test: { state: "sent" } },
-        }),
+      () => (
+        <NotificationsSection
+          {...{
+            connected: true,
+            nativeNotifications: { permission: "granted", test: { state: "sent" } },
+          }}
+        />
+      ),
       { container },
     );
 
@@ -83,25 +92,27 @@ describe("Web Push preference saves", () => {
   it("lets recipients opt in to mentions and override them for one browser", () => {
     const onUserPreferences = vi.fn();
     const onDevicePreferences = vi.fn();
-    const view = mountSolid(() =>
-      renderNotificationsSection({
-        connected: true,
-        webPush: {
-          supported: true,
-          permission: "granted",
-          subscription: "registered",
-          loading: false,
-          preferences: {
-            durableIdentity: true,
-            user: userPreferences,
-            device: { enabled: true, label: "phone" },
-            effective: { ...userPreferences, enabled: true, label: "phone" },
+    const view = mountSolid(() => (
+      <NotificationsSection
+        {...{
+          connected: true,
+          webPush: {
+            supported: true,
+            permission: "granted",
+            subscription: "registered",
+            loading: false,
+            preferences: {
+              durableIdentity: true,
+              user: userPreferences,
+              device: { enabled: true, label: "phone" },
+              effective: { ...userPreferences, enabled: true, label: "phone" },
+            },
           },
-        },
-        onWebPushSetUserPreferences: onUserPreferences,
-        onWebPushSetDevicePreferences: onDevicePreferences,
-      }),
-    );
+          onWebPushSetUserPreferences: onUserPreferences,
+          onWebPushSetDevicePreferences: onDevicePreferences,
+        }}
+      />
+    ));
     const { container } = view;
 
     const accountToggle = view.getByRole("switch", { name: "Someone mentions me" });
@@ -133,22 +144,25 @@ describe("Web Push preference saves", () => {
     const container = document.createElement("div");
 
     mountSolid(
-      () =>
-        renderNotificationsSection({
-          connected: true,
-          webPush: {
-            supported: true,
-            permission: "granted",
-            subscription: "registered",
-            loading: true,
-            preferences: {
-              durableIdentity: true,
-              user: userPreferences,
-              device: { enabled: true, label: "phone" },
-              effective: { ...userPreferences, enabled: true, label: "phone" },
+      () => (
+        <NotificationsSection
+          {...{
+            connected: true,
+            webPush: {
+              supported: true,
+              permission: "granted",
+              subscription: "registered",
+              loading: true,
+              preferences: {
+                durableIdentity: true,
+                user: userPreferences,
+                device: { enabled: true, label: "phone" },
+                effective: { ...userPreferences, enabled: true, label: "phone" },
+              },
             },
-          },
-        }),
+          }}
+        />
+      ),
       { container },
     );
 
@@ -163,14 +177,14 @@ describe("Web Push preference saves", () => {
 });
 
 type DevicePreferencesListener = NonNullable<
-  Parameters<typeof renderNotificationsSection>[0]["onWebPushSetDevicePreferences"]
+  Parameters<typeof NotificationsSection>[0]["onWebPushSetDevicePreferences"]
 >;
 
 describe("Web Push preference controls", () => {
   function renderPreferences(
     options: {
       onDevice?: DevicePreferencesListener;
-      onUser?: Parameters<typeof renderNotificationsSection>[0]["onWebPushSetUserPreferences"];
+      onUser?: Parameters<typeof NotificationsSection>[0]["onWebPushSetUserPreferences"];
       timeZone?: string;
     } = {},
   ) {
@@ -184,27 +198,29 @@ describe("Web Push preference controls", () => {
       },
     });
     const device = { enabled: true, label: "phone", agentIds: ["main"] };
-    const mounted = mountSolid(() =>
-      renderNotificationsSection({
-        connected: true,
-        onWebPushSetDevicePreferences: options.onDevice,
-        onWebPushSetUserPreferences: options.onUser,
-        get webPush(): WebPushSnapshot {
-          return {
-            supported: true,
-            permission: "granted",
-            subscription: "registered",
-            loading: false,
-            preferences: {
-              durableIdentity: true,
-              user: user(),
-              device,
-              effective: { ...user(), ...device },
-            },
-          };
-        },
-      }),
-    );
+    const mounted = mountSolid(() => (
+      <NotificationsSection
+        {...{
+          connected: true,
+          onWebPushSetDevicePreferences: options.onDevice,
+          onWebPushSetUserPreferences: options.onUser,
+          get webPush(): WebPushSnapshot {
+            return {
+              supported: true,
+              permission: "granted",
+              subscription: "registered",
+              loading: false,
+              preferences: {
+                durableIdentity: true,
+                user: user(),
+                device,
+                effective: { ...user(), ...device },
+              },
+            };
+          },
+        }}
+      />
+    ));
     return { ...mounted, setTimeZone };
   }
 

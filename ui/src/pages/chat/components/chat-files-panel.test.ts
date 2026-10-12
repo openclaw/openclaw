@@ -1,4 +1,3 @@
-import { html } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
@@ -6,6 +5,7 @@ import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   readPanelHostedTabs,
 } from "../../../components/panel-hosted-tabs.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -491,11 +491,12 @@ describe("workspace file tabs", () => {
     const state = host();
     const a = openSessionWorkspacePreview(state, "a", "a.md", { kind: "markdown", content: "A" });
     openSessionWorkspacePreview(state, "b", "b.txt", { kind: "markdown", content: "B" });
+    const Draft = () => Object.assign(document.createElement("textarea"), { textContent: "draft" });
     const panel = document.createElement("openclaw-chat-files-panel");
     Object.assign(panel, {
       previews: getSessionWorkspace(state).previews,
       activeId: "a",
-      renderDetail: () => html`<textarea>draft</textarea>`,
+      renderDetail: () => solidContent(Draft, {}),
       onSelect: (id: string | null) => selectSessionWorkspacePreview(state, id),
       onClose: (id: string) => closeSessionWorkspacePreview(state, id),
     });
@@ -526,7 +527,7 @@ describe("workspace file tabs", () => {
   it("opens the file browser from its action hosted outside the panel", async () => {
     const panel = mountPanel();
     panel.tabsInHeader = true;
-    panel.browser = html`<button>reports</button>`;
+    panel.browser = Object.assign(document.createElement("button"), { textContent: "reports" });
     const onSelect = vi.fn((id: string | null) => {
       panel.activeId = id;
     });
@@ -554,8 +555,11 @@ describe("workspace file tabs", () => {
     await panel.updateComplete;
     expect(changed).toHaveBeenCalledOnce();
 
-    panel.browser = html`<div>Refreshed workspace</div>`;
-    panel.renderDetail = () => html`<div>File contents</div>`;
+    panel.browser = Object.assign(document.createElement("div"), {
+      textContent: "Refreshed workspace",
+    });
+    panel.renderDetail = () =>
+      Object.assign(document.createElement("div"), { textContent: "File contents" });
     panel.onSelect = vi.fn();
     panel.onClose = vi.fn();
     await panel.updateComplete;

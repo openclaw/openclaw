@@ -6,10 +6,10 @@ import { ConfigForm } from "../../components/config-form.render.tsx";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { memorySettingsSchema } from "./memory-schema.ts";
-import { Memory, renderMemory } from "./memory.tsx";
+import { Memory } from "./memory.tsx";
 
 /** The view is the only public surface, so its props type comes from its signature. */
-type MemoryViewProps = Parameters<typeof renderMemory>[0];
+type MemoryViewProps = Parameters<typeof Memory>[0];
 
 function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps {
   return {
@@ -59,12 +59,12 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
 }
 
 function renderInto(props: MemoryViewProps): HTMLElement {
-  const { container } = mountSolid(() => renderMemory(props));
+  const { container } = mountSolid(() => <Memory {...props} />);
   flush();
   return container;
 }
 
-describe("renderMemory", () => {
+describe("Memory", () => {
   it("retains engine and add-on controls when their owner publishes new state", () => {
     const [props, setProps] = createSignal(createProps());
     const { container } = mountSolid(() => <Memory {...props()} />);

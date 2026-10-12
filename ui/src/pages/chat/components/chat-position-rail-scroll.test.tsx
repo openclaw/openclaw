@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { html, LitElement, nothing } from "lit";
+import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
@@ -19,17 +21,78 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-class RailScrollTestHost extends LitElement {
-  readonly transcriptRoot = document.createElement("div");
-  renderTranscript: () => unknown = () => nothing;
+type TranscriptHostController = {
+  hostConnected?(): void;
+  hostDisconnected?(): void;
+  hostUpdated?(): void;
+};
 
-  protected override createRenderRoot() {
-    this.append(this.transcriptRoot);
-    return this.transcriptRoot;
+class RailScrollTestHost extends HTMLElement {
+  readonly transcriptRoot = document.createElement("div");
+  renderTranscript: () => unknown = () => null;
+  isUpdatePending = false;
+  updateComplete = Promise.resolve(true);
+  private readonly controllers = new Set<TranscriptHostController>();
+  private view?: ReturnType<typeof mountSolid>;
+  private renderContent?: () => void;
+
+  addController(controller: TranscriptHostController) {
+    this.controllers.add(controller);
   }
 
-  protected override render() {
-    return this.renderTranscript();
+  removeController(controller: TranscriptHostController) {
+    this.controllers.delete(controller);
+  }
+
+  connectedCallback() {
+    this.append(this.transcriptRoot);
+    for (const controller of this.controllers) {
+      controller.hostConnected?.();
+    }
+    this.view = mountSolid(
+      () => {
+        const [revision, setRevision] = createSignal(0);
+        const content = createMemo(() => {
+          revision();
+          return this.renderTranscript();
+        });
+        this.renderContent = () => {
+          setRevision((value) => value + 1);
+          flush();
+        };
+        return <LitContent value={content()} />;
+      },
+      { container: this.transcriptRoot },
+    );
+    this.requestUpdate();
+  }
+
+  disconnectedCallback() {
+    for (const controller of this.controllers) {
+      controller.hostDisconnected?.();
+    }
+    this.view?.unmount();
+    this.renderContent = undefined;
+  }
+
+  // Controller receipts coalesce into the next host commit, as they did under Lit.
+  requestUpdate() {
+    if (this.isUpdatePending) {
+      return;
+    }
+    this.isUpdatePending = true;
+    this.updateComplete = Promise.resolve().then(() => {
+      this.isUpdatePending = false;
+      this.performUpdate();
+      return true;
+    });
+  }
+
+  performUpdate() {
+    this.renderContent?.();
+    for (const controller of this.controllers) {
+      controller.hostUpdated?.();
+    }
   }
 }
 
@@ -53,7 +116,11 @@ describe("conversation position rail scroll rendering", () => {
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row-${index}`,
-      content: html`<div class="chat-bubble" data-entry-id=${`row-${index}`}>${index}</div>`,
+      content: (
+        <div class="chat-bubble" data-entry-id={`row-${index}`}>
+          {index}
+        </div>
+      ),
     }));
     const ids = rows.map((row) => row.key);
     const positions = {
@@ -81,7 +148,7 @@ describe("conversation position rail scroll rendering", () => {
         );
         return session.render(
           rows,
-          (row) => (row.kind === "content" ? row.content : nothing),
+          (row) => (row.kind === "content" ? row.content : null),
           null,
           false,
           solidContent(ChatPositionRail, { positions, transcript: session }),
@@ -149,7 +216,11 @@ describe("conversation position rail scroll rendering", () => {
         expect(computedStyle.mock.calls.filter(([element]) => element === marks)).toEqual([]);
       };
       // A stream commit can dirty the transcript without changing any markers.
-      rows[0]!.content = html`<div class="chat-bubble" data-entry-id="row-0">Updated content</div>`;
+      rows[0]!.content = (
+        <div class="chat-bubble" data-entry-id="row-0">
+          Updated content
+        </div>
+      );
       host.requestUpdate();
       await settleUpdates();
       clearRailReads();
