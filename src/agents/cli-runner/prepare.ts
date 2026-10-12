@@ -1463,11 +1463,13 @@ async function prepareCliRunContextWithinReadFence(
     // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
     const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
     // Native compatibility and transcript account ownership are independent gates.
+    // A session-less backend starts every turn fresh, so the account-owned transcript is
+    // its only continuity; the backend's raw-reseed opt-in still decides delivery.
     const rawTranscriptReseedReason = !historyAllowed
       ? "auth-unknown"
       : reusableCliSessionId
         ? "session-expired"
-        : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
+        : (invalidatedReason ?? (ignoreCliSessionCandidate ? "stateless" : "missing-transcript"));
     const sessionPromptContext =
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined

@@ -68,7 +68,8 @@ type RawTranscriptReseedReason =
   | "mcp"
   | "missing-transcript"
   | "orphaned-tool-use"
-  | "session-expired";
+  | "session-expired"
+  | "stateless";
 
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
   if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
