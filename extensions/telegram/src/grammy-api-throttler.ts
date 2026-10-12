@@ -72,7 +72,8 @@ export function createOwnedGrammyApiThrottler(): OwnedGrammyApiThrottler {
       // connections). Clear the internal handle so a retired token leaves no
       // timers behind. Pinned bottleneck 2.19.5 — revisit on upgrade.
       for (const group of [groupThrottler, outThrottler]) {
-        const interval = (group as unknown as { interval?: ReturnType<typeof setInterval> })
+        const groupWithInterval: unknown = group;
+        const interval = (groupWithInterval as { interval?: ReturnType<typeof setInterval> })
           .interval;
         if (interval !== undefined) {
           clearInterval(interval);

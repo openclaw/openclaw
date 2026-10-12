@@ -32,6 +32,10 @@ const TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS = 5 * 60_000;
 // no state carried into later responses.
 const FLOOD_PAUSE_WITHOUT_RETRY_AFTER_MS = 1_000;
 const floodLog = createSubsystemLogger("telegram/flood");
+// Mirrors grammy-api-throttler.ts: a retired token's limiter rejects new work loudly.
+const telegramThrottlerReleasedError = new Error(
+  "Telegram throttler for this token has been released",
+);
 type TelegramRequestScope = { replaceable?: true; assertCurrent?: () => void };
 const requestScopes = new AsyncLocalStorage<TelegramRequestScope>();
 
@@ -226,14 +230,21 @@ class GroupRequestScheduler {
   private running = false;
   private actionTail = Promise.resolve();
   private nextActionAtMs = 0;
+  private retiredReason: Error | null = null;
 
   enqueueAction<T>(
     run: () => Promise<T>,
     signal: Parameters<ApiThrottlerTransformer>[3],
   ): Promise<T> {
     const { controller, detach } = bridgeTelegramAbortSignal(signal);
+    if (this.retiredReason) {
+      return Promise.reject(this.retiredReason);
+    }
     const result = this.actionTail.then(async () => {
       controller.signal.throwIfAborted();
+      if (this.retiredReason) {
+        throw this.retiredReason;
+      }
       const waitMs = this.nextActionAtMs - Date.now();
       if (waitMs > 0) {
         await sleepWithAbort(waitMs, controller.signal);
@@ -260,6 +271,20 @@ class GroupRequestScheduler {
     });
   }
 
+  /** Rejects new and queued work once the owning account is retired. */
+  settleForRetirement(reason: Error): void {
+    if (this.retiredReason) {
+      return;
+    }
+    this.retiredReason = reason;
+    for (const queue of this.lanes.values()) {
+      for (const request of queue) {
+        request.reject(reason);
+      }
+    }
+    this.lanes.clear();
+  }
+
   /** Holds priority for a reply until it settles, including its flood waits. */
   async withPriority<T>(run: () => Promise<T>): Promise<T> {
     this.pendingPriority += 1;
@@ -275,6 +300,9 @@ class GroupRequestScheduler {
     run: () => Promise<T>,
     replaceable: { skip: () => T } | undefined,
   ): Promise<T> {
+    if (this.retiredReason) {
+      return Promise.reject(this.retiredReason);
+    }
     // Replaceable updates never queue behind pending replies; the next update carries their content.
     if (replaceable && this.pendingPriority > 0) {
       return Promise.resolve(replaceable.skip());
@@ -375,12 +403,26 @@ function createTelegramAccountThrottler(
 ): TelegramAccountThrottler {
   const created = createThrottler();
   const baseThrottler = typeof created === "function" ? created : created.transformer;
-  const dispose = typeof created === "function" ? async () => {} : () => created.dispose();
   const chatActions = createTelegramSendChatActionHandler({
     logger: (message) => logVerbose(`telegram: ${message}`),
     minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
   });
   const schedulersByChat = new Map<string, GroupRequestScheduler>();
+  let retired = false;
+  const dispose = async () => {
+    // Retirement is owner-level admission: a retired token configures no
+    // account, so new and queued work rejects and in-flight sends settle.
+    if (retired) {
+      return;
+    }
+    retired = true;
+    for (const scheduler of schedulersByChat.values()) {
+      scheduler.settleForRetirement(telegramThrottlerReleasedError);
+    }
+    if (typeof created !== "function") {
+      await created.dispose();
+    }
+  };
   const floodGate = new TelegramFloodGate();
   const getScheduler = (groupChatKey: string) => {
     let scheduler = schedulersByChat.get(groupChatKey);
@@ -425,6 +467,9 @@ function createTelegramAccountThrottler(
     };
 
   const transformer: ApiThrottlerTransformer = (prev, method, payload, signal) => {
+    if (retired) {
+      return Promise.reject(telegramThrottlerReleasedError);
+    }
     // Classify at the call site: queued work later runs in the drain's async context.
     const callerScope = requestScopes.getStore();
     const effect = captureEffectAuthority();
