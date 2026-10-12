@@ -27,17 +27,21 @@ it("writes a confirmed isolated heartbeat to its destination without an awarenes
     const target = "+15551234567";
     const sessionKey = `agent:main:whatsapp:direct:${target}`;
     const sessionId = "heartbeat-recipient";
-    const cfg = heartbeatTestConfig(tmpDir, "last", "whatsapp", storePath);
+    const cfg = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
     cfg.agents!.entries = { main: {} };
     cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
+    cfg.agents!.defaults!.heartbeat!.to = target;
     cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
     await seedSessionStore(storePath, "agent:main:main", {
       sessionId: "heartbeat-source",
       updatedAt: Date.now(),
+    });
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId,
+      updatedAt: 1,
       lastChannel: "whatsapp",
       lastTo: target,
     });
-    await seedSessionStore(storePath, sessionKey, { sessionId, updatedAt: 1 });
     const sendText = vi.fn(async () => ({
       channel: "whatsapp" as const,
       messageId: "heartbeat-message",
