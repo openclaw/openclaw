@@ -6,7 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
-import { FsSafeError, root } from "../../infra/fs-safe.js";
+import { FsSafeError, root, type ReadResult } from "../../infra/fs-safe.js";
 import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
 import { registerAgentDeleteFilesystemTests } from "./agents-delete-filesystem.test-support.js";
 import {
@@ -116,16 +116,28 @@ const mocks = vi.hoisted(() => ({
   fsReadlink: vi.fn(async (_pathname: string) => ""),
   fsRm: vi.fn(async () => undefined),
   fsOpen: vi.fn(async () => ({}) as unknown),
-  rootRead: vi.fn(async (_params: { rootDir: string; relativePath: string }) => ({
-    buffer: Buffer.from(""),
-    realPath: "/workspace/test-agent/AGENTS.md",
-    stat: { size: 0, mtimeMs: 0 },
-  })),
-  rootOpen: vi.fn(async (_params?: unknown) => ({
-    handle: { close: vi.fn(async () => {}) },
-    realPath: "/workspace/test-agent/AGENTS.md",
-    stat: { size: 0, mtimeMs: 0 },
-  })),
+  rootRead: vi.fn(
+    async (_params: { rootDir: string; relativePath: string }): Promise<ReadResult> => ({
+      buffer: Buffer.from(""),
+      containment: "best-effort",
+      realPath: "/workspace/test-agent/AGENTS.md",
+      stat: makeFileStat({ size: 0, mtimeMs: 0 }),
+      exactIdentity: { dev: 1n, ino: 1n },
+    }),
+  ),
+  rootOpen: vi.fn(async (_params?: unknown) => {
+    const handle = { close: vi.fn(async () => {}) };
+    return {
+      handle,
+      containment: "best-effort",
+      realPath: "/workspace/test-agent/AGENTS.md",
+      stat: makeFileStat({ size: 0, mtimeMs: 0 }),
+      exactIdentity: { dev: 1n, ino: 1n },
+      async [Symbol.asyncDispose]() {
+        await handle.close();
+      },
+    };
+  }),
   rootStat: vi.fn(async (_params: { rootDir: string; relativePath: string }) => ({
     isFile: true,
     isSymbolicLink: false,
@@ -554,15 +566,23 @@ beforeEach(() => {
   mocks.resolveAgentWorkspaceDir.mockImplementation((cfg: unknown, agentId?: string) =>
     resolveMockWorkspaceDir(cfg, agentId),
   );
+  const handle = { close: vi.fn(async () => {}) };
   mocks.rootOpen.mockResolvedValue({
-    handle: { close: vi.fn(async () => {}) },
+    handle,
+    containment: "best-effort",
     realPath: "/workspace/test-agent/AGENTS.md",
-    stat: { size: 0, mtimeMs: 0 },
+    stat: makeFileStat({ size: 0, mtimeMs: 0 }),
+    exactIdentity: { dev: 1n, ino: 1n },
+    async [Symbol.asyncDispose]() {
+      await handle.close();
+    },
   });
   mocks.rootRead.mockResolvedValue({
     buffer: Buffer.from(""),
+    containment: "best-effort",
     realPath: "/workspace/test-agent/AGENTS.md",
-    stat: { size: 0, mtimeMs: 0 },
+    stat: makeFileStat({ size: 0, mtimeMs: 0 }),
+    exactIdentity: { dev: 1n, ino: 1n },
   });
   mocks.rootStat.mockImplementation(async ({ rootDir, relativePath }) => {
     const stat = await mocks.fsLstat(path.join(rootDir, relativePath));
@@ -1947,8 +1967,10 @@ describe("agents.files.get/set symlink safety", () => {
   it("uses non-blocking safe reads for agents.files.get", async () => {
     mocks.rootRead.mockResolvedValue({
       buffer: Buffer.from("hello"),
+      containment: "best-effort",
       realPath: "/workspace/test-agent/AGENTS.md",
       stat: makeFileStat({ size: 5 }),
+      exactIdentity: { dev: 1n, ino: 1n },
     });
 
     const respond = await call("agents.files.get", {
