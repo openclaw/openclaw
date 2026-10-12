@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { useNodeModuleHooks } from "../plugins/native-module-require.js";
+import { readRecordValue } from "../shared/safe-record.js";
+import { hasErrnoCode } from "./errno.js";
 import { UPDATE_PRELOAD_IMPORTS_FILE } from "./update-retained-imports-contract.js";
 import {
   prepareRuntimeRelocations,
@@ -48,7 +50,7 @@ function isRetainedEsModule(file: string): boolean {
   }
   const manifest = Module.findPackageJSON(pathToFileURL(file));
   const type = manifest
-    ? (JSON.parse(fs.readFileSync(manifest, "utf8")) as { type?: unknown }).type
+    ? readRecordValue(JSON.parse(fs.readFileSync(manifest, "utf8")), "type")
     : undefined;
   if (type === "module" || type === "commonjs") {
     return type === "module";
@@ -197,12 +199,12 @@ export async function preloadUpdaterPostSwapImports(packageRoot: string): Promis
   try {
     listed = JSON.parse(fs.readFileSync(path.join(distDir, UPDATE_PRELOAD_IMPORTS_FILE), "utf8"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return false;
     }
     throw error;
   }
-  const chunks = (listed as { chunks?: unknown }).chunks;
+  const chunks = readRecordValue(listed, "chunks");
   if (
     !Array.isArray(chunks) ||
     !chunks.every(
