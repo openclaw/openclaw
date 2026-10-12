@@ -6,6 +6,7 @@ import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-bindi
 import {
   clawRemovalJournalRequestSchema,
   clawRemovalJournalResultSchema,
+  serializeClawRemovalJournal,
   type ClawRemovalJournalGateway,
 } from "../claws/removal-journal-contract.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -27,7 +28,7 @@ export const clawRemovalJournalGateway: ClawRemovalJournalGateway = async (input
     sourceIdentity: authority.sourceIdentity,
     expectedInstallDigest: input.expectedInstallDigest,
     expectedJournalDigest: digestClawValue(
-      input.kind === "begin" ? input.expectedJournal : input.journal,
+      serializeClawRemovalJournal(input.kind === "begin" ? input.expectedJournal : input.journal),
     ),
     configDigest: input.configDigest,
   });
@@ -63,5 +64,5 @@ export const clawRemovalJournalGateway: ClawRemovalJournalGateway = async (input
       "Claw journal outcome is unknown: Gateway returned a different deletion operation; inspect claws status before retrying.",
     );
   }
-  return ok(result.journal);
+  return ok(result.journal ? { ...result.journal, phase: "retiring" } : null);
 };

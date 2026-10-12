@@ -4,7 +4,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
 
@@ -70,6 +70,8 @@ describe("chat composer pointer activation", () => {
     const send = button(sendContainer, t("chat.runControls.sendMessage"));
 
     sendInput.focus();
+    // A native target listener runs before Solid's delegated bubble handler.
+    send.addEventListener("pointerdown", () => sendInput.blur(), { once: true });
     const sendPointerDown = primaryPointerDown();
     send.dispatchEvent(sendPointerDown);
     expect(sendPointerDown.defaultPrevented).toBe(true);

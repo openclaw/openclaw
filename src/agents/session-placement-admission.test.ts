@@ -293,7 +293,7 @@ describe("local turn placement admission", () => {
             sessionKey: "agent:main:main",
             runId: "run-1",
           });
-          expect(params).toBe(activeParams);
+          expect(params).toEqual({ ...activeParams, abortSignal: expect.any(AbortSignal) });
           const result = await runLocal();
           events.push("release");
           return result;
