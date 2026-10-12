@@ -6,7 +6,8 @@ import {
   renderAnalyzedFormFixture,
   disposeConfigFormFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
-import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
+import type { JsonSchema } from "./config-form.shared.ts";
+import { analyzeConfigSchema } from "./config-form.ts";
 import baseStyles from "../styles/base.css?inline";
 
 function mountForm(

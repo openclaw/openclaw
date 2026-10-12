@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, afterAll, beforeAll, beforeEach, vi } from "vitest";
 import type { OpenRetainedKeyedStoreOptions } from "../plugin-sdk/plugin-state-runtime.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateDatabaseAsync,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
@@ -29,7 +31,7 @@ describe("plugin-state-store.retained", () => {
   const key = (id: number) => String(id).padStart(10, "0");
 
   afterEach(async () => {
-    await closePluginStateDatabaseAsync();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
   });
 
@@ -45,7 +47,7 @@ describe("plugin-state-store.retained", () => {
             createdAt: id,
           })),
         );
-        await closePluginStateDatabaseAsync();
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
 
         const retained = createPluginStateKeyedStore<number>(pluginId, retainedOptions);
@@ -60,7 +62,7 @@ describe("plugin-state-store.retained", () => {
           }),
         ).toEqual({ status: "applied" });
         expect(await retained.update(key(50_004), () => 50_004)).toBe(true);
-        await closePluginStateDatabaseAsync();
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
         const reopened = createPluginStateKeyedStore<number>(pluginId, retainedOptions);
         expect(await reopened.count()).toBe(50_005);
@@ -201,7 +203,7 @@ describe("plugin-state-store.retained", () => {
         const options = { namespace: "n".repeat(128), retention: "retained" as const };
         const retained = createPluginStateKeyedStore<number>(pluginId, options);
         await retained.register("last-byte", 128);
-        await closePluginStateDatabaseAsync();
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
         const reopened = createPluginStateKeyedStore<number>(pluginId, options);
         expect(await reopened.lookup("last-byte")).toBe(128);

@@ -1580,14 +1580,10 @@ handoff consumption and native service-control lock operations retain their
 existing synchronous contracts. Schemas, stored formats, retention, permissions,
 and published-driver update behavior are unchanged.
 
-Supervised restarts can preload the shared-state worker's code while accepted
-work drains. This optional preparation opens no database and grants no authority;
-normal work can reclaim its capacity. The broker binds it to the captured runtime
-source and the next successful close, then consumes it once through ordinary
-admission after native writers retire. Failed or stale preparations are retired,
-and unused preparation is joined before an in-process fallback or normal exit.
+The run loop retains the shared-state worker through server close, then publishes
+the supervisor handoff through that owner before final shared-state cleanup.
 The handoff still captures and checks the physical database and live request at
-use time, so warming does not move persistence ahead of shutdown settlement.
+use time. An in-process restart reuses the owner through ordinary admission.
 
 Conversation directory registration and outbound binding predicates use the existing
 agent writer. Registration retains the selected physical store across directory
@@ -3416,6 +3412,11 @@ contracts. No schema, retention, durability, or update migration is required.
 
 Embedded writer claims, live-model-switch consolidation, and pending-final delivery
 preparation, settlement, and cleanup explicitly select that worker patch path.
+After the reply dispatcher finishes delivery, terminal settlement and pending-final
+cleanup reduce the same entry in one worker transaction. Suppression uses the same
+combined operation. The lower-level delivery receipt still commits before queue
+acknowledgment; it does not clear recovery custody. Custom delivery paths retain
+their existing cleanup operation.
 Callback-based reducers prepare outside the transaction; the worker rereads the selected
 rows before applying the patch and publishes acknowledged results before releasing
 the existing writer queue. Uncertain writes never replay. Durable lifecycle start
@@ -3793,8 +3794,17 @@ an in-process write receipt changes. Sibling handles and workers share that rece
 blocked or failed checkpoints keep retrying when a reader may have released.
 Connections without a known write receipt continue checkpointing on every tick.
 Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
-Existing worker-local maintenance and synchronous offline/close checkpoints retain
-their owners; durability, schemas, retention, and update behavior are unchanged.
+The Gateway run loop retains the shared-state database cache, actor owner, and
+SQLite worker broker until the final lifecycle outcome is recorded. Orderly
+retirement then joins the writer's final checkpoint before closing the host
+handle. A delegated host handle neither repeats that checkpoint nor restores an
+inline checkpoint fallback when cancelling maintenance. Interrupted retirement
+relies on WAL recovery and never certifies a clean close from stale observations.
+After native close, a delegated host accepts a clean seal only when its canonical
+WAL is empty or absent; the existing lease owner refuses to seal with live siblings.
+A pinned WAL retains in-process validation but leaves restart validation unsealed.
+Synchronous offline checkpoints retain their owners; durability, schemas,
+retention, and update behavior are unchanged.
 
 Worker authority requests retain their unbounded live-owner wait unless the caller
 explicitly supplies a `deadlineMs` budget. Only cron's runtime mutation preparation
@@ -5005,6 +5015,14 @@ the write remain queued for the next flush. Incognito and maintenance scopes and
 already executing workers keep their native kernel. Event bytes, ordering,
 retention limits, schemas, and update behavior are unchanged.
 
+Successful embedded attempts defer their final diagnostic flush to the logical-turn
+lifecycle owner, which appends the accepted `session.ended` event to the same batch.
+Failed attempts and retry boundaries still flush diagnostic progress; replacing an
+attempt flushes its diagnostics without a terminal event. Final lifecycle completion
+joins those discarded-attempt flushes. A rolled-back batch remains retryable as a
+whole, using the existing recorder receipt and rollback handling. Transcript
+persistence remains a separate durable checkpoint.
+
 Disk-budget historical discovery reads reference, recent-history, and admitted-key
 protection in the existing maintenance read worker. It returns candidate IDs;
 the host captures live admission identities and rechecks their protection before
@@ -5248,6 +5266,13 @@ ownership while it is stopped. CLI history's released synchronous execution
 guard remains a separate compatibility contract.
 It must cover every supported writer before replacing live authority reads. See
 [retained final-authority guards](#retained-final-authority-guards).
+
+Workshop change notices read source generation metadata through the existing entry
+worker after resolving their delivery route. The existing ordered read keeps its
+writer admission through one generation comparison and synchronous undo-event enqueue,
+so reset sessions remain untouched. Durable delivery and transcript append
+retain their own effect-time generation checks. Delivery errors record a warning
+without rereading the generation solely to classify the log message.
 
 Raw and visible transcript deltas, watermarks, pre-reset Memory capture, and final context
 validation borrow an already-prepared agent executor when one exists for the

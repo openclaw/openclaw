@@ -34,6 +34,7 @@ import {
 import {
   cancelSqliteWalWriteAdmission,
   createSqliteWalMaintenanceScheduler,
+  isSqliteWalWorkerMaintained,
   type SqliteWalPeriodicRequest,
   type SqliteWalPeriodicResult,
 } from "./sqlite-wal-write-admission.js";
@@ -80,7 +81,7 @@ export type SqliteWalMaintenance = {
   inspectIdle?: () => "healthy" | "retire";
   /** Retire timer admission and join accepted maintenance before closing its database. */
   stop: () => Promise<void>;
-  /** Final checkpoint; synchronous exit cleanup cancels work without joining it. */
+  /** Native owners checkpoint; delegated handles leave the final checkpoint to worker close. */
   close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
 };
 
@@ -102,6 +103,12 @@ export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
 /** Restrict inspection connections without changing journal or persistence policy. */
 export function configureSqliteReadOnlyPragmas(db: DatabaseSync): void {
   db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
+}
+
+/** Private snapshots publish one standalone file even when their source used WAL. */
+export function configureSqliteSnapshotPragmas(db: DatabaseSync): void {
+  setSqliteBusyTimeout(db, 30_000);
+  db.exec("PRAGMA trusted_schema = OFF; PRAGMA journal_mode = DELETE;");
 }
 
 // auto_vacuum only takes effect when set before the first page is written.
@@ -480,7 +487,8 @@ export function configureSqliteWalMaintenance(
     },
     close: (closeOptions) => {
       void beginClose();
-      if (invalidated) {
+      if (invalidated || isSqliteWalWorkerMaintained(db)) {
+        // Worker retirement owns the explicit final checkpoint.
         return false;
       }
       // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on

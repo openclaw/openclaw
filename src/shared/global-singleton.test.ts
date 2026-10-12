@@ -107,6 +107,22 @@ describe("global singleton lifecycle resets", () => {
     }
   });
 
+  it("retains shared state for terminal persistence after other owners close", async () => {
+    const sharedKey = Symbol("global-singleton:shared-state");
+    const shared = resolveGlobalMap<string, string>(sharedKey, "shared-state");
+    const runtime = resolveGlobalMap<string, string>(TEST_MAP_KEY, "close-and-restart");
+    runtime.set("server", "running");
+    shared.set("boot", "incomplete");
+
+    await drainGlobalSingletonLifecycleState("close", { retainSharedState: true });
+    expect(runtime.size).toBe(0);
+    expect(shared.get("boot")).toBe("incomplete");
+    shared.set("boot", "complete");
+    await drainGlobalSingletonLifecycleState("shared-state");
+    expect(shared.size).toBe(0);
+    delete (globalThis as Record<PropertyKey, unknown>)[sharedKey];
+  });
+
   it("preserves close-only state across restart drains", async () => {
     const closeOnlyKey = Symbol("global-singleton:close-only");
     const state = resolveGlobalMap<string, number>(

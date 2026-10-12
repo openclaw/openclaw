@@ -368,7 +368,11 @@ export function waitForCodexAppServerClientExit(client: CodexAppServerClient): P
 /** Acquire the recorded owner atomically, or join its exit before a replacement writes. */
 export async function retainSharedCodexAppServerClientByInstanceId(
   clientId: string | undefined,
-  options?: { signal?: AbortSignal; createAbortError?: (signal: AbortSignal) => Error },
+  options?: {
+    signal?: AbortSignal;
+    createAbortError?: (signal: AbortSignal) => Error;
+    waitForExit?: boolean;
+  },
 ) {
   const id = clientId?.trim();
   if (!id) {
@@ -381,6 +385,11 @@ export async function retainSharedCodexAppServerClientByInstanceId(
     }
     const entry = state.entriesByClient.get(client);
     if (entry?.client !== client || entry.closeError || client.getCloseError()) {
+      // Stop must reach the parent while the transport owner finishes shutdown.
+      // Replacement writers keep joining physical exit before acquiring ownership.
+      if (options?.waitForExit === false && client.getCloseError()) {
+        return undefined;
+      }
       // Cancellation ends only this waiter; discovery still fences later writers.
       await racePromiseWithAbortSignal(
         waitForCodexAppServerClientExit(client),

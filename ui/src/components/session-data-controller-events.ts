@@ -126,7 +126,7 @@ export function sidebarSessionListQuery(
     agentId: ownerId && ownerId === selfId ? undefined : agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-    rowMode: "compact",
+    rowMode: "sidebar",
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;

@@ -218,7 +218,7 @@ suite.define(() => {
       includeLastMessage: true,
       includeUnknown: true,
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      rowMode: "compact",
+      rowMode: "sidebar",
       source: "sidebar",
     });
     expect

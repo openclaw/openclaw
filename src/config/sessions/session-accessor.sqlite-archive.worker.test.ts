@@ -414,8 +414,26 @@ describe("SQLite transcript archive worker", () => {
     );
   });
 
+  it("deletes empty lifecycle state without producing an archive", async () => {
+    const target = scope("empty-transcript");
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+    const result = await deletion(target.sessionKey);
+    expect(result).toMatchObject({ deleted: true, archivedTranscripts: [] });
+    expect(loadSessionEntry(target)).toBeUndefined();
+    const db = database();
+    expect(
+      executeSqliteQuerySync(
+        db.db,
+        getNodeSqliteKysely<DB>(db.db)
+          .selectFrom("session_windows")
+          .select("session_id")
+          .where("session_id", "=", target.sessionId),
+      ).rows,
+    ).toEqual([]);
+  });
+
   it.each(["empty", "nonempty"] as const)(
-    "rejects changes to a planned %s transcript before publishing an archive",
+    "preserves events appended after a planned %s transcript snapshot",
     async (initial) => {
       const target = scope("changed-before-worker-snapshot");
       const original = event(target.sessionId, "original transcript");
@@ -431,9 +449,16 @@ describe("SQLite transcript archive worker", () => {
       const appended = event("concurrent-event", "concurrent append");
       const events = initial === "empty" ? [appended] : [original, appended];
       await replaceTranscriptEvents(target, events);
-      await expect(materializeSessionStateDeletePlans([planned])).rejects.toThrow(
-        `SQLite session state changed before archive materialization for ${target.sessionId}`,
-      );
+      if (initial === "empty") {
+        const materialized = await materializeSessionStateDeletePlans([planned]);
+        expect(() => deletePlans(materialized, target.sessionKey)).toThrow(
+          `SQLite session state changed before deletion for ${target.sessionId}`,
+        );
+      } else {
+        await expect(materializeSessionStateDeletePlans([planned])).rejects.toThrow(
+          `SQLite session state changed before archive materialization for ${target.sessionId}`,
+        );
+      }
       await expect(loadTranscriptEvents(target)).resolves.toEqual(events);
       const directory = path.dirname(storePath);
       const names = fs.existsSync(directory) ? fs.readdirSync(directory) : [];

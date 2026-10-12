@@ -399,7 +399,7 @@ export async function persistCronJobMutation(params: {
     source.assertCurrent();
     if (
       params.agentId !== undefined &&
-      state.deps.isAgentAvailable?.(params.agentId, undefined, { deletionBlocked: false }) === false
+      state.deps.isAgentAvailable?.(params.agentId, { deletionBlocked: false }) === false
     ) {
       throw new Error(describeUnavailableCronAgent(params.agentId));
     }

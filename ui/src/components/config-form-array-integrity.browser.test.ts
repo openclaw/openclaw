@@ -1,7 +1,6 @@
 // Control UI tests cover array draft recovery and repeated-item constraints.
 import { describe, expect, it, vi } from "vitest";
 import { renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
-import type { ConfigFormCollectionDraft } from "./config-form-collection-draft.tsx";
 import type { JsonSchema } from "./config-form.shared.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
@@ -138,7 +137,7 @@ describe("config form array integrity", () => {
     });
 
     const draftHost = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "string-number array draft",
     );
     const addDraftValue = async (value: string) => {
@@ -200,7 +199,7 @@ describe("config form array integrity", () => {
       items: { type: "string" },
     });
     const draftHost = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "unique array draft",
     );
     await draftHost.updateComplete;
@@ -252,7 +251,7 @@ describe("config form array integrity", () => {
       onPatch,
     });
     const duplicateDraft = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "duplicate array draft",
     );
     await duplicateDraft.updateComplete;
@@ -282,7 +281,7 @@ describe("config form array integrity", () => {
       onPatch,
     });
     const composedDraft = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "composed item draft",
     );
     await composedDraft.updateComplete;
@@ -424,7 +423,7 @@ describe("config form array integrity", () => {
       onPatch,
     });
     const draftHost = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "nullable scalar collection draft",
     );
     expectElement(findAddButton(container), "nullable scalar array add").click();

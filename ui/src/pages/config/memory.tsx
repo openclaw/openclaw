@@ -471,7 +471,3 @@ export function Memory(props: MemoryViewProps) {
     </ShellLayoutBoundary>
   );
 }
-
-export function renderMemory(props: MemoryViewProps): JSX.Element {
-  return <Memory {...props} />;
-}
