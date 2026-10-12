@@ -161,6 +161,10 @@ async function main() {
     }),
   });
   const mentions = await readSessionLogMentions(stateDir);
+  const storePath = resolveStorePath(undefined, {
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
   const session = getSessionEntry({
     agentId: "main",
     sessionKey: MCP_CODE_MODE_SESSION_KEY,

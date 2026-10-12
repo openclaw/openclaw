@@ -583,7 +583,7 @@ suite.define(() => {
           });
 
         expect(
-          (await page.locator(".cron-list-hub-tabs wa-tab").allTextContents()).map((label) =>
+          (await page.locator(".cron-list-hub-tabs .hub-tab").allTextContents()).map((label) =>
             label.trim(),
           ),
         ).toEqual(["All", "Active", "Paused", "Run history"]);
@@ -708,14 +708,16 @@ suite.define(() => {
       expect(await page.locator(".page-subtitle").textContent()).toBe(
         "Messages, text-to-speech, and meeting capture settings.",
       );
-      expect(await page.locator("wa-tab-group.config-sections-hub-tabs").count()).toBe(1);
-      expect((await page.locator("wa-tab").allTextContents()).map((label) => label.trim())).toEqual(
-        ["Messages", "Voice"],
-      );
+      expect(await page.locator(".config-sections-hub-tabs").count()).toBe(1);
+      expect(
+        (await page.locator(".config-sections-hub-tabs .hub-tab").allTextContents()).map((label) =>
+          label.trim(),
+        ),
+      ).toEqual(["Messages", "Voice"]);
       expect(await page.locator(".settings-section__help-button").count()).toBe(0);
       const spacing = await page.evaluate(() => {
         const subtitle = document.querySelector<HTMLElement>(".page-subtitle");
-        const tabs = document.querySelector<HTMLElement>("wa-tab-group.config-sections-hub-tabs");
+        const tabs = document.querySelector<HTMLElement>(".config-sections-hub-tabs");
         const section = document.querySelector<HTMLElement>(".settings-section");
         if (!subtitle || !tabs || !section) {
           throw new Error("Communications layout did not render");
@@ -784,9 +786,7 @@ suite.define(() => {
           page.evaluate(() => {
             const content = document.querySelector<HTMLElement>("main.content");
             const lead = document.querySelector<HTMLElement>(".config-lead");
-            const tabs = document.querySelector<HTMLElement>(
-              "wa-tab-group.config-sections-hub-tabs",
-            );
+            const tabs = document.querySelector<HTMLElement>(".config-sections-hub-tabs");
             if (!content || !lead || !tabs) {
               return null;
             }

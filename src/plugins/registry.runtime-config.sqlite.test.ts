@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -21,6 +21,7 @@ describe("plugin registry SQLite session ownership", () => {
         agents: { entries: { researcher: {} } },
       };
       setRuntimeConfigSnapshot(config);
+      onTestFinished(clearRuntimeConfigSnapshot);
       const subagent = {
         complete: vi.fn(async () => ({ text: "completed" })),
         run: vi.fn(async () => ({ runId: "workboard-run" })),
@@ -101,13 +102,14 @@ describe("plugin registry SQLite session ownership", () => {
         expect(subagent.run).toHaveBeenCalledOnce();
       } finally {
         closeOpenClawAgentDatabasesForTest();
-        clearRuntimeConfigSnapshot();
       }
     });
   });
 
   it("keeps embedded incognito ID scans in the key's agent store", async () => {
     await withTempHome(async (home) => {
+      setRuntimeConfigSnapshot({});
+      onTestFinished(clearRuntimeConfigSnapshot);
       const sessionKey = "agent:researcher:dashboard:incognito-ownership-check";
       const sessionId = "incognito-session";
       const lockedKey = "agent:researcher:dashboard:incognito-locked-owner";

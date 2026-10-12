@@ -1443,6 +1443,11 @@ early commit frame. They remain recorded at COMMIT and install before the operat
 completes. Nonempty and unknown-coverage receipts still publish immediately after
 COMMIT.
 
+Register-if-absent uses one conditional insert to preserve a live key or replace an
+expired key, including expired keys outside the bounded cleanup batch. A rejected
+capacity check rolls back both the insert and its staged receipt. The same kernel
+serves worker operations and the deprecated synchronous compatibility adapter.
+
 The Gateway retains bounded plugin-state observation rows from these receipts.
 Repeated observations reuse the stored JSON image without a worker request;
 expiry still turns a row into absence, and callers receive freshly decoded values.

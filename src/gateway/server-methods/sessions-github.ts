@@ -249,61 +249,53 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             options.respond(false, undefined, publicationStateUnavailableError());
             return;
           }
-          let shared: SessionGitHubOptionsResult["shared"] = null;
-          let stale = false;
-          let sharedUnavailableReason: SessionGitHubOptionsResult["sharedUnavailableReason"];
-          try {
-            const identity = await prepareCurrentGitHubPublicationOptionsIdentity(
-              read.session.agentId,
-              () => deadline.signal.throwIfAborted(),
-            );
-            stale = identity.stale === true;
-            shared = {
-              source: identity.source,
-              accountId: identity.account.accountId,
-              login: identity.account.login,
-            };
-          } catch (error) {
-            deadline.signal.throwIfAborted();
-            sharedUnavailableReason =
-              error instanceof GitHubIdentityError ? error.reason : "unverified";
-          }
           const service = options.context.githubOAuthService?.personal;
           if (read.personal.kind === "eligible" && !service) {
             throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
           }
           const action = read.personal.kind === "eligible" ? read.personal.action : null;
-          let personal = action ? await service!.status(action) : null;
           const session = read.currentSession();
           const assertResponseCurrent = () => read.assertSessionUnchanged(session);
-          const pendingPersonal = action
-            ? await coordinator.personalPending(action, session)
-            : null;
-          assertResponseCurrent();
-          if (action && personal) {
-            personal = service!.revalidateStatus(action, personal);
-          }
-          const latestShared = await coordinator.latestShared(
-            session,
-            options.params.idempotencyKey,
-            (snapshot) =>
+          let sharedUnavailableReason: SessionGitHubOptionsResult["sharedUnavailableReason"];
+          // Independent account and receipt owners can read concurrently. The response
+          // still revalidates the same session and personal authority after all awaits.
+          const [identity, personalSnapshot, pendingPersonal, latestShared] = await Promise.all([
+            prepareCurrentGitHubPublicationOptionsIdentity(
+              read.session.agentId,
+              assertResponseCurrent,
+            ).catch((error: unknown) => {
+              sharedUnavailableReason =
+                error instanceof GitHubIdentityError ? error.reason : "unverified";
+              return null;
+            }),
+            action ? service!.status(action) : null,
+            action ? coordinator.personalPending(action, session) : null,
+            coordinator.latestShared(session, options.params.idempotencyKey, (snapshot) =>
               isSessionPublicationSuperseded(options, session, snapshot, assertResponseCurrent),
-          );
-          assertResponseCurrent();
-          if (action && personal) {
-            personal = service!.revalidateStatus(action, personal);
-          }
+            ),
+          ]);
+          let shared: SessionGitHubOptionsResult["shared"] = identity
+            ? {
+                source: identity.source,
+                accountId: identity.account.accountId,
+                login: identity.account.login,
+              }
+            : null;
           if (shared && read.sessionScoped) {
             if (!(await hasSupportedGitHubPublicationTarget(session, assertResponseCurrent))) {
               shared = null;
               sharedUnavailableReason = "unsupported_workspace";
             }
-            assertResponseCurrent();
           }
+          assertResponseCurrent();
+          const personal =
+            action && personalSnapshot
+              ? service!.revalidateStatus(action, personalSnapshot)
+              : personalSnapshot;
           options.respond(true, {
             personal,
             shared,
-            ...(stale || personal?.stale ? { stale: true } : {}),
+            ...(identity?.stale || personal?.stale ? { stale: true } : {}),
             ...(sharedUnavailableReason ? { sharedUnavailableReason } : {}),
             pendingPersonal,
             latestShared,
