@@ -29,17 +29,3 @@ export type SessionActorMemoryForkWrites = {
     output: SessionMessageCutResult;
   };
 };
-
-export type SessionActorMemoryForkQuery = {
-  [Key in keyof SessionActorMemoryForkReads]: {
-    type: Key;
-    input: SessionActorMemoryForkReads[Key]["input"];
-  };
-}[keyof SessionActorMemoryForkReads];
-
-export type SessionActorMemoryForkCommand = {
-  [Key in keyof SessionActorMemoryForkWrites]: {
-    type: Key;
-    input: SessionActorMemoryForkWrites[Key]["input"];
-  };
-}[keyof SessionActorMemoryForkWrites];

@@ -28,7 +28,6 @@ import {
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
-import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
 import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
@@ -70,7 +69,6 @@ it("keeps production incognito acquisition on its native owner without creating 
       { assertCurrent() {}, assertReadable() {} },
     );
     expect(actor).toBeUndefined();
-    expect(memorySessionActorOwners.read(database)).toBeUndefined();
     expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
     expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
       sessionId: "native-session",

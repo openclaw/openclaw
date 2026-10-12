@@ -1,7 +1,6 @@
 import { assertSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
-  captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
@@ -59,36 +58,26 @@ export function captureSessionActorMutationFacts(
   allowMissing: boolean,
   storePath?: string,
 ) {
-  const { actor, authority } = binding;
-  const sibling =
-    actor.target.sessionKey === canonicalKey
-      ? undefined
-      : captureSessionActorStorageOwner({
-          sessionActor: binding,
-          sessionKey: canonicalKey,
-          storePath,
-        });
-  const selected =
-    sibling ??
-    getSessionActorStorageBinding({ sessionActor: binding, sessionKey: canonicalKey, storePath });
-  const database = sibling ? sibling.owner?.identity : actor.target.database;
-  if ((database && database.kind !== "memory") || !selected) {
+  if (binding.actor.target.sessionKey !== canonicalKey) {
     throw new SessionMutationFactsUnavailableError();
   }
-  const { agentId, path } = selected;
+  const selected = getSessionActorStorageBinding({
+    sessionActor: binding,
+    sessionKey: canonicalKey,
+    storePath,
+  });
+  if (!selected) {
+    throw new SessionMutationFactsUnavailableError();
+  }
+  const { actor, authority, agentId, path } = selected;
   const location = { agentId, path };
-  const source = database && { ...location, databaseIdentity: database.incarnation };
+  const source = { ...location, databaseIdentity: actor.target.database.incarnation };
   const readCurrent = () => {
-    if (sibling) {
-      actor.assertReadable();
-      if (!sibling.owner) {
-        authority.assertCurrent();
-      }
-    }
-    const current = sibling
-      ? sibling.owner?.readSession(canonicalKey, authority)
-      : actor.snapshot(authority);
-    if (!current?.entry || !source) {
+    const current = actor.storage.readCurrent(
+      { type: "session.members.read", input: {} },
+      authority,
+    );
+    if (!current.entry) {
       if (!allowMissing) {
         throw new SessionMutationFactsUnavailableError();
       }
@@ -114,12 +103,8 @@ export function captureSessionActorMutationFacts(
     location,
     source,
     assertCurrent(this: void) {
-      if (sibling) {
-        readCurrent();
-      } else {
-        actor.assertReadable();
-        authority.assertCurrent();
-      }
+      actor.assertReadable();
+      authority.assertCurrent();
     },
     readCurrent,
   };

@@ -81,20 +81,7 @@ export type SessionActorStorageWrites = SessionActorMemoryConversationWrites &
   SessionActorMemoryMetadataWrites &
   SessionActorMemoryPendingWrites;
 
-export type SessionActorStorageQuery = {
-  [Key in keyof SessionActorStorageReads]: {
-    type: Key;
-    input: SessionActorStorageReads[Key]["input"];
-  };
-}[keyof SessionActorStorageReads];
-export type SessionActorStorageCommand = {
-  [Key in keyof SessionActorStorageWrites]: {
-    type: Key;
-    input: SessionActorStorageWrites[Key]["input"];
-  };
-}[keyof SessionActorStorageWrites];
-
-export type SessionActorStorageChange = {
+type SessionActorStorageChange = {
   sessionKey: string;
   before: SessionActorHotState | undefined;
   after: SessionActorHotState | undefined;
