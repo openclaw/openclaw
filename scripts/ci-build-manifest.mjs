@@ -1322,7 +1322,7 @@ const additionalChecks = [
   // Only dispatches execute this report; scheduled tips have no change range.
   ...(eventName === "workflow_dispatch"
     ? [
-        // Serial renders exceeded 20m on 2 CPUs/8GiB; the 32-class clears the 8-CPU/24-GiB parallel floor.
+        // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {
           check_name: "report-plugin-sdk-api-diff",
           group: "plugin-sdk-api-diff",
