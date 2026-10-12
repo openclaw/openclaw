@@ -19,6 +19,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -126,6 +127,7 @@ describe("accepted input worker custody", () => {
         agents: { entries: { "incognito-agent": {} } },
       };
       const client = roleClient("view", "incognito-custody");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env })).release };
       client.connect.scopes = ["operator.admin"];
       const context = createGatewayRequestContext(makeContextParams());
       context.getRuntimeConfig = () => cfg;

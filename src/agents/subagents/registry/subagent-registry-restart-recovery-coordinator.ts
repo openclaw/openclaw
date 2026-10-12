@@ -116,7 +116,6 @@ export function createInterruptedRecoveryCoordinator(params: {
         }
         return true;
       }
-      warnLegacySubagentAuthority(entry, params.warn);
       if (
         entry.execution.restartRecovery === undefined &&
         entry.terminalOwner !== "interrupted-recovery" &&
@@ -124,6 +123,7 @@ export function createInterruptedRecoveryCoordinator(params: {
       ) {
         return false;
       }
+      warnLegacySubagentAuthority(entry, params.warn);
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const gatewayRuntime = params.getGatewayRuntime();
       const isGatewayCurrent = () =>

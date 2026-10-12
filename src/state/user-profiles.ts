@@ -37,11 +37,7 @@ import {
 import { MAX_USER_PROFILE_DISPLAY_NAME_LENGTH, type UserProfile } from "./user-profiles.types.js";
 
 export { formatUserProfileAvatarEtag } from "./user-profiles-internal.js";
-export {
-  getUserProfileDisplay,
-  readUserProfileAliases,
-  hasMultipleSessionSharingIdentities,
-} from "./user-profile-list.js";
+export { getUserProfileDisplay, hasMultipleSessionSharingIdentities } from "./user-profile-list.js";
 export { listProfiles } from "./user-profile-reads.js";
 
 export { adoptTailscaleProfileAvatar } from "./user-profiles-avatar.js";

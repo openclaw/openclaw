@@ -97,13 +97,6 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       startedAtMs: now - 100,
       expiresAtMs: now + 1000,
     });
-    const peers = profiles.map((profile, index) => {
-      const { client, send } = createSessionRowEventPeer(profile, `row-parity-${index}`, now);
-      connection.clients.add(client);
-      connection.sessionMessageSubscribers.subscribe(client.connId, key);
-      connection.sessionMessageSubscribers.subscribe(client.connId, lineageKey);
-      return { client, send };
-    });
     subagentRuns.set("row-parity-child", {
       runId: "row-parity-child",
       childSessionKey: childKey,
@@ -123,6 +116,13 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       collectorCompletion: { status: "done" },
     });
     await initializeSessionReadContext(context);
+    const peers = profiles.map((profile, index) => {
+      const { client, send } = createSessionRowEventPeer(profile, `row-parity-${index}`, now);
+      connection.clients.add(client);
+      connection.sessionMessageSubscribers.subscribe(client.connId, key);
+      connection.sessionMessageSubscribers.subscribe(client.connId, lineageKey);
+      return { client, send };
+    });
     const projection = getSessionRowProjection(context)!;
     const detach = connection.attachSessionRowProjection(projection);
     try {

@@ -173,7 +173,6 @@ describe("session suggestion visibility and role ceilings", () => {
       const reader = ensureProfileForEmail("policy-suggestion-reader@example.test");
       const requestClient = client(reader.id, "Reader");
       requestClient.connect.scopes = ["operator.sessions.read"];
-      prepareGatewayRecipientProfile(requestClient);
       const policy = (others: "view" | "write"): OpenClawConfig => ({
         gateway: {
           roles: {
@@ -216,6 +215,7 @@ describe("session suggestion visibility and role ceilings", () => {
         getCommittedRuntimeConfig: () => committed,
       });
       await initializeSessionReadContext(requestContext);
+      prepareGatewayRecipientProfile(requestClient);
       for (const phase of ["tentative", "committed"] as const) {
         if (phase === "committed") {
           committed = runtime;

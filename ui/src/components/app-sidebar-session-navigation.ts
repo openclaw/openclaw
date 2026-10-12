@@ -557,7 +557,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   private agentResumeKey(agentId: string): string {
     const latest = resolveLatestSidebarAgentSession({
       agentId,
-      sessionData: this.sessionData,
+      result: this.selectedAgentSessionResult(agentId),
       context: this.context,
     });
     return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey: this.sessionMainKey() });
@@ -697,11 +697,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return rows;
   }
 
-  private selectedAgentSessionResult(): SessionsListResult | null {
+  private selectedAgentSessionResult(agentId = this.expandedAgentId()): SessionsListResult | null {
     if (this.groupedSessionSource) {
       return this.groupedSessionSource.result;
     }
-    const selected = this.expandedAgentId();
+    const selected = normalizeAgentId(agentId);
     return this.sessionData.sessionsAgentId === null ||
       selected === normalizeAgentId(this.sessionData.sessionsAgentId)
       ? this.sessionData.sessionsResult
@@ -738,11 +738,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   mainSessionRow(agentId?: string): GatewaySessionRow | null {
     const normalized = normalizeAgentId(agentId ?? this.expandedAgentId());
     const mainKey = this.selectedAgentMainSessionKey(normalized);
-    const rows =
-      this.groupedSessionSource?.result?.sessions ??
-      (normalized === normalizeAgentId(this.sessionData.sessionsAgentId ?? "")
-        ? (this.sessionData.sessionsResult?.sessions ?? [])
-        : (this.sessionData.sessionResultsByAgent[normalized]?.sessions ?? []));
+    const rows = this.selectedAgentSessionResult(normalized)?.sessions ?? [];
     const lineage = this.sessionData.activeSessionLineageRoot;
     return (
       (lineage ? [...rows, lineage] : rows).find((row) =>
@@ -788,7 +784,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   agentUnreadCount(agentId: string): number {
-    const rows = this.sessionData.sessionResultsByAgent[normalizeAgentId(agentId)]?.sessions ?? [];
-    return rows.filter((row) => row.unread === true && row.archived !== true).length;
+    const normalized = normalizeAgentId(agentId);
+    const rows = this.selectedAgentSessionResult(normalized)?.sessions ?? [];
+    return rows.filter(
+      (row) => row.unread && !row.archived && this.sessionNavigationAgentId(row) === normalized,
+    ).length;
   }
 }

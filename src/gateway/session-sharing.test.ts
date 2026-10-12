@@ -6,6 +6,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -115,6 +116,7 @@ describe("session sharing policy", () => {
       setRuntimeConfigSnapshot(cfg);
       const owner = roleClient("view", "narrow-owner");
       const member = roleClient("view", "narrow-member");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const ownerId = owner.authenticatedUserProfile?.profileId;
       const memberId = member.authenticatedUserProfile?.profileId;
       if (!ownerId || !memberId) {
@@ -205,6 +207,7 @@ describe("session sharing policy", () => {
       setRuntimeConfigSnapshot(cfg);
       const writer = roleClient("write", "foreign-agent-writer");
       const owner = ensureProfileForEmail("foreign-agent-owner@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:existing-maintainer-session";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
@@ -413,6 +416,7 @@ describe("session sharing policy", () => {
       setRuntimeConfigSnapshot(cfg);
       const writer = roleClient("write", "draft-writer");
       const owner = ensureProfileForEmail("draft-owner@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
 
       for (const visibility of ["draft", "incognito"] as const) {
         const sessionKey = `agent:main:dashboard:${visibility === "incognito" ? "incognito-" : ""}role-carveout`;
@@ -454,6 +458,7 @@ describe("session sharing policy", () => {
       const creator = roleClient("none", "cron-creator");
       const creatorId = creator.authenticatedUserProfile!.profileId;
       const restricted = roleClient("none", "restricted");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const restrictedId = restricted.authenticatedUserProfile!.profileId;
       const foreignKey = "agent:main:cron:job-1:run:run-1";
       const ownKey = "agent:main:team-own";
@@ -662,6 +667,9 @@ describe("session sharing policy", () => {
         const cfg = {};
         setRuntimeConfigSnapshot(cfg);
         const sessionKey = `agent:main:assignment-${visibility}`;
+        const cappedClient = roleClient("view", `assignment-${visibility}`);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        prepareGatewayRecipientProfile(cappedClient);
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
@@ -682,7 +690,7 @@ describe("session sharing policy", () => {
         expect(() => authorization.authorization?.assertCurrent()).not.toThrow();
 
         const capped = resolveSessionMutationAuthorization({
-          client: roleClient("view", `assignment-${visibility}`),
+          client: cappedClient,
           method: "sessions.assignOwner",
           requestParams: { key: sessionKey, owner: { type: "agent", id: "main" } },
           context: {

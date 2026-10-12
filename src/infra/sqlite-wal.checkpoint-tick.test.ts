@@ -22,7 +22,7 @@ describe("sqlite WAL checkpoint tick", () => {
     vi.useRealTimers();
   });
 
-  it("delegates checkpoints while worker maintenance is registered and restores the inline fallback", async () => {
+  it("keeps checkpoints delegated when worker maintenance is cancelled", async () => {
     vi.useFakeTimers();
     const sqlite = requireNodeSqlite();
     const dir = tempDirs.make("openclaw-sqlite-wal-worker-writer-");
@@ -61,10 +61,20 @@ describe("sqlite WAL checkpoint tick", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(requests).toEqual([512]);
 
-      // Without its worker the writer falls back to the bounded inline valve.
-      void cancelSqliteWalWriteAdmission(db);
-      expect(cancelled).toBe(1);
-      expect(autocheckpoint()).toBe(16 * 1024);
+      const prepare = vi.spyOn(db, "prepare");
+      const exec = vi.spyOn(db, "exec");
+      try {
+        await cancelSqliteWalWriteAdmission(db);
+        expect(cancelled).toBe(1);
+        await maintenance.stop();
+        expect(maintenance.close()).toBe(false);
+        expect(prepare).not.toHaveBeenCalled();
+        expect(exec).not.toHaveBeenCalled();
+      } finally {
+        prepare.mockRestore();
+        exec.mockRestore();
+      }
+      expect(autocheckpoint()).toBe(0);
     } finally {
       maintenance?.close();
       db.close();

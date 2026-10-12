@@ -397,7 +397,9 @@ export class SidebarAttentionStoreController implements StoreController {
         const agentId = agentScope.selectedId;
         const refresh = { generation, agentId, requested: true };
         const currentAuth = () =>
-          current() && this.sources.agentSelection.state.selectedId === agentId;
+          current() &&
+          this.modelAuthRefresh === refresh &&
+          this.sources.agentSelection.state.selectedId === agentId;
         this.modelAuthRefresh = refresh;
         void (async () => {
           try {

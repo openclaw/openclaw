@@ -496,6 +496,7 @@ describe("runGatewayLoop", () => {
                 : [],
             );
             expect(close).toHaveBeenCalledWith({
+              retainSharedState: true,
               reason: "gateway stopping",
               restartExpectedMs: null,
             });
@@ -634,6 +635,7 @@ describe("runGatewayLoop", () => {
       sigterm();
       await expect(exited).resolves.toBe(0);
       expect(closeThird).toHaveBeenCalledWith({
+        retainSharedState: true,
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
@@ -801,7 +803,10 @@ describe("runGatewayLoop", () => {
           outcome: "forced_stop",
           reason: "gateway.restart_startup_request_timeout",
         });
-        expect(close).toHaveBeenCalledExactlyOnceWith({ reason: "gateway stopping" });
+        expect(close).toHaveBeenCalledExactlyOnceWith({
+          retainSharedState: true,
+          reason: "gateway stopping",
+        });
         expect(start).toHaveBeenCalledTimes(1);
         expect(gatewayLog.error).toHaveBeenCalledWith(
           "startup restart request timed out before gateway returned a close handle; exiting for supervisor recovery",
@@ -1409,6 +1414,7 @@ describe("runGatewayLoop", () => {
         "failed to handle SIGTERM: Error: dynamic import failed",
       );
       expect(close).toHaveBeenCalledWith({
+        retainSharedState: true,
         reason: "gateway stopping",
         restartExpectedMs: null,
       });

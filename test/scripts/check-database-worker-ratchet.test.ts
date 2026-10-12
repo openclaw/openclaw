@@ -9,6 +9,23 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it("excludes the reviewed Vitest suite without exempting arbitrary suite-named runtime files", () => {
+  const root = tempDirs.make("openclaw-sqlite-suite-ratchet-");
+  const directory = path.join(root, "src/gateway");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "server.auth.default-token.suite.ts"),
+    'import { test } from "vitest"; test("profiles", () => executeSqliteQuerySync(query));',
+  );
+  fs.writeFileSync(
+    path.join(directory, "runtime.suite.ts"),
+    "export function readRuntime() { return executeSqliteQuerySync(query); }",
+  );
+  expect(inventory(root).map(({ file, tier }) => ({ file, tier }))).toEqual([
+    { file: "src/gateway/runtime.suite.ts", tier: "T1" },
+  ]);
+});
+
 it("does not exempt a kernel through an unregistered worker-named runtime wrapper", () => {
   const root = tempDirs.make("openclaw-sqlite-entry-ratchet-");
   const relative = "src/state/openclaw-state-db-maintenance.ts";
