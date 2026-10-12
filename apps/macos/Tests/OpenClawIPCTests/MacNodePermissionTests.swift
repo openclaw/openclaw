@@ -50,6 +50,20 @@ struct MacNodePermissionTests {
         }
     }
 
+    @Test func `stale grant recovery leaves a pending screen restart for the next action`() throws {
+        let first = try #require(PermissionManager.primaryRemediation([
+            (.screenRecording, .restartRequired), (.accessibility, .staleGrant), (.eventPosting, .notDetermined),
+        ]))
+        #expect(first.state == .staleGrant)
+        #expect(first.capabilities == [.accessibility])
+
+        let afterAccessibilityGrant = try #require(PermissionManager.primaryRemediation([
+            (.screenRecording, .restartRequired), (.eventPosting, .notDetermined),
+        ]))
+        #expect(afterAccessibilityGrant.state == .restartRequired)
+        #expect(afterAccessibilityGrant.capabilities == [.screenRecording])
+    }
+
     @Test func `wire error keeps permission details and does not suggest automatic retry`() throws {
         let error = try #require(PermissionManager.missingPermission([
             (.accessibility, .staleGrant), (.screenRecording, .denied), (.computerControl, .disabledInOpenClaw),

@@ -14,18 +14,27 @@ extension PermissionManager {
     static func missingPermission(
         _ states: [(Capability, OpenClawPermissionState)]) -> OpenClawNodeError?
     {
-        guard !states.isEmpty else { return nil }
-        let priority: [OpenClawPermissionState] = [
-            .disabledInOpenClaw, .staleGrant, .restartRequired, .denied, .notDetermined,
-        ]
-        // One card can contain several capabilities. Resolve consent before OS grants,
-        // then re-read each capability after the user acts rather than assume success.
-        let state = priority.first { candidate in states.contains { $0.1 == candidate } }!
+        guard let remediation = self.primaryRemediation(states) else { return nil }
         let capabilities = states.map(\.0.rawValue)
         return OpenClawNodeError(
             code: .permissionMissing,
             message: "PERMISSION_MISSING: \(capabilities.joined(separator: ", "))",
-            details: .init(capabilities: capabilities, state: state))
+            details: .init(capabilities: capabilities, state: remediation.state))
+    }
+
+    static func primaryRemediation(
+        _ states: [(Capability, OpenClawPermissionState)])
+        -> (capabilities: [Capability], state: OpenClawPermissionState)?
+    {
+        let priority: [OpenClawPermissionState] = [
+            .disabledInOpenClaw, .staleGrant, .restartRequired, .denied, .notDetermined,
+        ]
+        guard let state = priority.first(where: { candidate in states.contains { $0.1 == candidate } }) else {
+            return nil
+        }
+        // Repair one state per action. Opening Settings does not complete a grant,
+        // so lower-priority recovery must wait for a refreshed permission snapshot.
+        return (states.filter { $0.1 == state }.map(\.0), state)
     }
 
     @MainActor

@@ -91,10 +91,17 @@ extension DashboardWindowController {
         for capability in capabilities {
             guard isCurrent(), try await self.enableNodeCapability(capability, isCurrent: isCurrent) else { return }
         }
+        var missingStates: [(Capability, OpenClawPermissionState)] = []
         for capability in capabilities {
-            let missingState = await PermissionManager.missingState(capability)
+            if let state = await PermissionManager.missingState(capability) {
+                missingStates.append((capability, state))
+            }
             guard isCurrent() else { return }
-            switch missingState {
+        }
+        guard let remediation = PermissionManager.primaryRemediation(missingStates) else { return }
+        for capability in remediation.capabilities {
+            guard isCurrent() else { return }
+            switch remediation.state {
             case .restartRequired:
                 DebugActions.restartApp()
                 return
@@ -102,7 +109,7 @@ extension DashboardWindowController {
                 SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: capability))
             case .notDetermined:
                 _ = await PermissionManager.ensure([capability], interactive: true)
-            case .disabledInOpenClaw, nil:
+            case .disabledInOpenClaw:
                 break
             }
         }
