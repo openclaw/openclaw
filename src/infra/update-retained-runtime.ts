@@ -13,6 +13,7 @@ import {
   registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
+  resolveRetainedUpdateRuntimeParents,
 } from "./temp-artifact-cleanup.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
@@ -91,21 +92,16 @@ export async function withRetainedUpdateRuntime<T>(
           const packageOwner = installTarget
             ? (resolveNativePackageProjectRoot(installTarget, env) ?? installTarget.globalRoot)
             : undefined;
-          const boundaries = [
-            sourceRoot,
+          const mutationBoundaries = [
             ...mutations,
             ...(packageOwner
               ? [resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))]
               : []),
           ];
-          let parent = path.dirname(sourceRoot);
-          while (boundaries.some((entry) => isPathInside(entry, parent))) {
-            const ancestor = path.dirname(parent);
-            if (ancestor === parent) {
-              break;
-            }
-            parent = ancestor;
-          }
+          const boundaries = [sourceRoot, ...mutationBoundaries];
+          const parent = resolveRetainedUpdateRuntimeParents(sourceRoot, mutationBoundaries).at(
+            -1,
+          )!;
           const outsideMutation = (candidate: string) =>
             !boundaries.some((entry) => isPathInside(entry, candidate));
           // An unselected module install can copy its entire enclosing module

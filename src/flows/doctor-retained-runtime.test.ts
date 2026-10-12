@@ -8,6 +8,10 @@ import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
 import {
+  resolvePackageActivationAnchor,
+  resolvePackageActivationJournalPath,
+} from "../infra/package-update-activation-paths.js";
+import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
@@ -210,6 +214,28 @@ it("Doctor preserves a runtime still registered by its creator", async () => {
   } finally {
     release();
   }
+});
+
+it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {
+  const installed = path.join(parent, "prefix/lib/node_modules/openclaw");
+  fs.mkdirSync(path.dirname(installed), { recursive: true });
+  fs.renameSync(packageRoot, installed);
+  packageRoot = installed;
+  mocks.packageRoots.mockReturnValue([packageRoot]);
+  const abandoned = projection("Npm001", path.join(parent, "prefix/lib"));
+  const journal = resolvePackageActivationJournalPath(resolvePackageActivationAnchor(packageRoot));
+  fs.mkdirSync(path.dirname(journal), { mode: 0o700 });
+  fs.writeFileSync(journal, "activation recovery evidence", { mode: 0o600 });
+  const retainedJournal = projectedPath(abandoned, journal);
+  fs.mkdirSync(path.dirname(retainedJournal), { recursive: true });
+  fs.linkSync(journal, retainedJournal);
+  expect(fs.statSync(journal).nlink).toBe(2);
+  expect(await runDoctor(false)).toContain(`Runtime retained at ${abandoned}:`);
+  expect(fs.statSync(journal).nlink).toBe(2);
+  expect(await runDoctor(true)).toContain(`Removed abandoned updater runtime: ${abandoned}`);
+  expect(fs.existsSync(abandoned)).toBe(false);
+  expect(fs.statSync(journal).nlink).toBe(1);
+  expect(fs.readFileSync(journal, "utf8")).toBe("activation recovery evidence");
 });
 
 it.each([
