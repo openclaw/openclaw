@@ -12,6 +12,7 @@ import { registerContextEngineInRegistry } from "../../context-engine/registry.j
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
@@ -285,17 +286,21 @@ describe("runCliTurnCompactionLifecycle", () => {
       const pluginRoot = path.join(tmpDir, "settings-bundle");
       await fs.mkdir(pluginRoot);
       const settingsFile = path.join(pluginRoot, "settings.json");
-      const createSnapshot = () =>
-        createPluginMetadataSnapshotFixture({
-          plugins: [
-            {
-              id: "settings-bundle",
-              rootDir: pluginRoot,
-              format: "bundle",
-              settingsFiles: ["settings.json"],
-            },
-          ],
-        });
+      const createSnapshot = (cache: ReturnType<typeof createPluginCache>) =>
+        withPluginCache(cache, () =>
+          createPluginMetadataSnapshotFixture({
+            plugins: [
+              {
+                id: "settings-bundle",
+                rootDir: pluginRoot,
+                format: "bundle",
+                settingsFiles: ["settings.json"],
+              },
+            ],
+          }),
+        );
+      await using initialCache = createPluginCache();
+      await using replacementCache = createPluginCache();
       await fs.writeFile(settingsFile, JSON.stringify({ compaction: { reserveTokens: 20_000 } }));
       const scenario = await prepareCompactionScenario({
         tmpDir,
@@ -322,13 +327,13 @@ describe("runCliTurnCompactionLifecycle", () => {
               trustConfigIdentity: true,
             });
       try {
-        const initial = createSnapshot();
+        const initial = createSnapshot(initialCache);
         await run(initial);
         expect(scenario.compactCalls).toHaveLength(0);
         await fs.writeFile(settingsFile, JSON.stringify({ compaction: { reserveTokens: 32_000 } }));
         await run(initial);
         expect(scenario.compactCalls).toHaveLength(0);
-        await run(createSnapshot());
+        await run(createSnapshot(replacementCache));
         expect(scenario.compactCalls).toHaveLength(1);
         expect(scenario.compactCalls[0]?.currentTokenCount).toBe(100_000);
       } finally {

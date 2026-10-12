@@ -20,12 +20,20 @@ import { loadGatewayComputerStatus } from "./tools/computer-tool-gateway.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { listNodes } from "./tools/nodes-utils.js";
 
-vi.mock("../infra/device-pairing-store-readonly.js", () => ({
+vi.mock("../infra/device-pairing-store-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-pairing-store-readonly.js")>()),
   readDevicePairingNodeSnapshot: vi.fn(),
 }));
-vi.mock("./tools/nodes-utils.js", () => ({ listNodes: vi.fn() }));
-vi.mock("./tools/computer-tool-gateway.js", () => ({ loadGatewayComputerStatus: vi.fn() }));
-vi.mock("../gateway/desktop/computer-process.js", () => ({
+vi.mock("./tools/nodes-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tools/nodes-utils.js")>()),
+  listNodes: vi.fn(),
+}));
+vi.mock("./tools/computer-tool-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tools/computer-tool-gateway.js")>()),
+  loadGatewayComputerStatus: vi.fn(),
+}));
+vi.mock("../gateway/desktop/computer-process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/desktop/computer-process.js")>()),
   startComputerHostProcess: vi.fn(),
 }));
 
@@ -80,14 +88,14 @@ function connect(
     ...pairing,
     bindings: new Map([...pairing.bindings, [nodeId, { identity: "identity-a" }]]),
   };
-  registerNodeSession(
-    context.nodeRegistry,
-    makeClient(`connection-${nodeId}`, nodeId, [], {
-      caps: ["computer", "screen"],
-      commands: ["computer.act", "screen.snapshot"],
-      computerUse: capabilities(actions),
-    }),
-  );
+  const client = makeClient(`connection-${nodeId}`, nodeId, [], {
+    platform: "macos",
+    caps: ["computer", "screen"],
+    commands: ["computer.act", "screen.snapshot"],
+    computerUse: capabilities(actions),
+  });
+  client.connect.client.deviceFamily = "Mac";
+  registerNodeSession(context.nodeRegistry, client);
 }
 
 const load = () => loadPairedComputerUseAvailabilityForSurface({ computerAllowed: true });

@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
@@ -199,27 +200,30 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
     },
   );
 
-  it("refreshes bundle settings when the plugin snapshot changes or its lifecycle ends", async () => {
+  it("refreshes settings after plugin replacement and process lifecycle reset", async () => {
     await withSettingsWorkspace(async (params) => {
       const pluginRoot = path.join(params.cwd, "bundle");
       await fs.mkdir(pluginRoot);
       const pluginSettingsPath = path.join(pluginRoot, "settings.json");
-      const createSnapshot = () =>
-        createPluginMetadataSnapshotFixture({
-          plugins: [
-            {
-              id: "settings-bundle",
-              rootDir: pluginRoot,
-              format: "bundle",
-              enabledByDefault: true,
-              settingsFiles: ["settings.json"],
-            },
-          ],
-        });
+      const createSnapshot = (cache: ReturnType<typeof createPluginCache>) =>
+        withPluginCache(cache, () =>
+          createPluginMetadataSnapshotFixture({
+            plugins: [
+              {
+                id: "settings-bundle",
+                rootDir: pluginRoot,
+                format: "bundle",
+                settingsFiles: ["settings.json"],
+              },
+            ],
+          }),
+        );
+      await using initialCache = createPluginCache();
+      await using replacementCache = createPluginCache();
       const initial = {
         ...params,
         cfg: { plugins: { entries: { "settings-bundle": { enabled: true } } } },
-        pluginMetadataSnapshot: createSnapshot(),
+        pluginMetadataSnapshot: createSnapshot(initialCache),
       };
       await fs.writeFile(
         pluginSettingsPath,
@@ -233,19 +237,22 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
         pluginSettingsPath,
         JSON.stringify({ compaction: { keepRecentTokens: 35_000 } }),
       );
-      const replacement = { ...initial, pluginMetadataSnapshot: createSnapshot() };
+      const replacement = {
+        ...initial,
+        pluginMetadataSnapshot: createSnapshot(replacementCache),
+      };
       expect(
         createPreparedEmbeddedAgentSettingsManager(replacement).getCompactionKeepRecentTokens(),
       ).toBe(35_000);
 
       await fs.writeFile(
-        pluginSettingsPath,
-        JSON.stringify({ compaction: { keepRecentTokens: 45_000 } }),
+        path.join(params.agentDir, "settings.json"),
+        JSON.stringify({ shellCommandPrefix: "refreshed global prefix" }),
       );
       clearPluginMetadataLifecycleCaches();
-      expect(
-        createPreparedEmbeddedAgentSettingsManager(replacement).getCompactionKeepRecentTokens(),
-      ).toBe(45_000);
+      expect(createPreparedEmbeddedAgentSettingsManager(replacement).getShellCommandPrefix()).toBe(
+        "refreshed global prefix",
+      );
     });
   });
 
