@@ -9,11 +9,9 @@ import {
 const suite = createControlUiE2eSuite({ name: "command palette first open" });
 
 async function readPaletteBackdrop(page: import("playwright").Page) {
-  return await page.locator("openclaw-modal-dialog.cmd-palette-overlay").evaluate((modal) => {
-    const dialog = modal.querySelector("dialog");
-    if (!(dialog instanceof HTMLDialogElement)) {
-      throw new Error("Expected the command palette dialog");
-    }
+  const dialog = page.locator("openclaw-modal-dialog.cmd-palette-overlay > dialog.oc-modal-dialog");
+  await dialog.waitFor({ state: "attached" });
+  return await dialog.evaluate((dialog) => {
     const style = getComputedStyle(dialog, "::backdrop");
     const alphaMatch = style.backgroundColor.match(/\/\s*([\d.]+)\s*\)$/u);
     return {

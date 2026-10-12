@@ -88,12 +88,14 @@ if (
   Object.defineProperties(HTMLElement.prototype, {
     showPopover: {
       configurable: true,
+      writable: true,
       value(this: HTMLElement) {
         shown.add(this);
       },
     },
     hidePopover: {
       configurable: true,
+      writable: true,
       value(this: HTMLElement) {
         shown.delete(this);
       },

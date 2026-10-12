@@ -47,6 +47,7 @@ describe("openclaw-menu-surface", () => {
 
   it("keeps children rendered in-flow when the popover API is unavailable", () => {
     const surface = document.createElement("openclaw-menu-surface");
+    Object.defineProperty(surface, "showPopover", { value: undefined, configurable: true });
     const menu = document.createElement("div");
     menu.className = "menu";
     surface.append(menu);
