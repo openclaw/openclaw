@@ -823,8 +823,12 @@ The previous package tree remains available until activation or package restorat
 is verified. If activation fails before a working package is confirmed and rollback
 cannot be verified, finalization retains the backup and reports its location. Keep
 that backup and repair the installation before restarting, including for older
-targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
-config content since the activation Doctor pass, and compatible pre-existing shared and affected per-agent
+targets without migration continuation. Automatic rollback requires the retained
+package. Restart authorization requires either its pre-update verification or an
+exact package and configuration restoration followed by fresh native ownership
+verification of that restored installation. Foreign or unresolved service ownership
+still refuses restart. Rollback also requires unchanged config content since the
+activation Doctor pass and compatible pre-existing shared and affected per-agent
 SQLite `user_version` values, including databases restored by the pre-start recovery above. A database first created during activation or
 verification is schema-neutral only at the schema version supported by the new installation
 for that database kind; a missing pre-existing database or a new database at a foreign

@@ -536,11 +536,6 @@ export async function rollbackFailedUpdate(params: {
       originalVerdict?.kind === "owned" && originalVerdict.requiresInstallRootRefresh;
     const serviceRoot = restoresDifferentService ? originalVerdict.root : params.previousRoot;
     const serviceIdentity = restoresDifferentService ? before?.serviceIdentity : result.before;
-    if (!params.previousVerified || !serviceIdentity?.version) {
-      // Restoring retained bytes is safe after the schema fence. Starting the
-      // previous runtime additionally requires its pre-activation verification.
-      return failed("previous-version-unverified");
-    }
     if (
       restoresDifferentService &&
       !isDeepStrictEqual(await readPackageUpdateIdentity(serviceRoot), serviceIdentity)
@@ -579,8 +574,8 @@ export async function rollbackFailedUpdate(params: {
       assertCurrent,
     );
     assertCurrent();
-    // A failed candidate does not authorize its restart. The previous package's
-    // pre-activation verification authorizes restarting this schema-neutral restoration.
+    // A failed candidate does not authorize its restart. Exact package restoration
+    // plus fresh native ownership authorizes restarting this schema-neutral generation.
     const nodeRunner = before?.serviceNodeRunner ?? params.nodeRunner;
     const state = await readGatewayServiceStateForUpdate(
       resolveGatewayService(),
@@ -595,6 +590,11 @@ export async function rollbackFailedUpdate(params: {
     });
     if (verdict.kind === "owned") {
       verdict = { ...verdict, refreshDefinition: false, requiresInstallRootRefresh: false };
+    }
+    // Pre-activation readiness or fresh post-restoration ownership must authorize
+    // starting the exact restored package; neither may bypass native ownership.
+    if ((!params.previousVerified && verdict.kind !== "owned") || !serviceIdentity?.version) {
+      return failed("previous-version-unverified");
     }
     assertCurrent();
     stoppedForRollback = { ...restoredService, serviceUpdateVerdict: verdict };

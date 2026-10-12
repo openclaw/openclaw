@@ -64,9 +64,7 @@ import { completeUpdateCommandRun } from "./update-command-run.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const dirs = createTempDirTracker();
-let candidateRoot: string;
-let previousRoot: string;
-let serviceStateDir: string;
+let candidateRoot: string, previousRoot: string, serviceStateDir: string;
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
@@ -120,23 +118,26 @@ describe("verified package rollback", () => {
       path.join(candidateRoot, worker),
       `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
     );
-    mocks.serviceState.mockImplementation(async (_service, options) => ({
-      installed: true,
-      loadState: { status: "loaded" },
-      running: false,
-      runtime: { status: "stopped", systemd: { managerUid: 2001 } },
-      env: options?.env ?? {},
-      command: {
-        programArguments: [
-          process.execPath,
-          path.join(previousRoot, "dist", "index.js"),
-          "gateway",
-        ],
-      },
-    }));
+    const roots = [previousRoot, candidateRoot];
+    mocks.serviceState.mockImplementation(async (_service, options) => {
+      const fresh =
+        options?.env?.FIXTURE_FOREIGN_SERVICE && mocks.serviceState.mock.calls.length > 1;
+      const entry = path.join(roots[fresh ? 1 : 0]!, "dist", "index.js");
+      return {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        runtime: { status: "stopped", systemd: { managerUid: 2001 } },
+        env: options?.env ?? {},
+        command: { programArguments: [process.execPath, entry, "gateway"] },
+      };
+    });
     mocks.stop.mockImplementation(async ({ expectedService, updateRun }) => {
       const env = expectedService?.serviceEnv ?? updateRun?.env ?? {};
       const state = await readGatewayServiceState(resolveGatewayService(), { env });
+      const serviceUpdateVerdict = env.FIXTURE_FOREIGN_SERVICE
+        ? undefined
+        : await inspectManagedGatewayServiceBeforeUpdate({ state, root: previousRoot });
       return {
         stopped: true,
         stoppedAtMs: 100,
@@ -145,10 +146,7 @@ describe("verified package rollback", () => {
         running: state.running,
         serviceEnv: env,
         serviceManagerUid: 2001,
-        serviceUpdateVerdict: await inspectManagedGatewayServiceBeforeUpdate({
-          state,
-          root: previousRoot,
-        }),
+        serviceUpdateVerdict,
       };
     });
     mocks.restart.mockImplementation(async ({ onVerified }) => {
@@ -433,7 +431,8 @@ describe("verified package rollback", () => {
     { change: "agent", previousVerified: true, restored: false, service: "stopped" },
     { change: "during-stop", previousVerified: true, restored: false, service: "stopped" },
     { change: "unknown-runtime", previousVerified: true, restored: false, service: "stopped" },
-    { change: "none", previousVerified: false, restored: false, service: "stopped" },
+    { change: "none", previousVerified: false, restored: true, service: "stopped" },
+    { change: "none", previousVerified: false, restored: false, service: "foreign" },
     { change: "none", previousVerified: true, restored: false, service: "absent" },
     { change: "none", previousVerified: true, restored: false, service: "no-restart" },
   ])(
@@ -443,7 +442,7 @@ describe("verified package rollback", () => {
       if (includeAlias && process.platform === "win32") {
         context.skip();
       }
-      const stateDir = serviceStateDir;
+      const [stateDir, foreign] = [serviceStateDir, service === "foreign" ? "1" : ""];
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const { configPath, includePath, includeTarget, authored, originalRaw } =
         writeDoctorRollbackConfig(stateDir, change);
@@ -712,11 +711,11 @@ describe("verified package rollback", () => {
             service === "absent"
               ? undefined
               : {
-                  stopped: service === "stopped",
+                  stopped: service === "stopped" || service === "foreign",
                   inspected: true,
                   runtimeInspected: true,
                   running: true,
-                  serviceEnv: { OPENCLAW_STATE_DIR: stateDir },
+                  serviceEnv: { OPENCLAW_STATE_DIR: stateDir, FIXTURE_FOREIGN_SERVICE: foreign },
                   serviceNodeRunner: "/previous/node",
                   serviceUpdateVerdict: {
                     kind: "owned",
@@ -792,7 +791,7 @@ describe("verified package rollback", () => {
           : 0,
       );
       expect(mocks.restart).toHaveBeenCalledTimes(restored ? 1 : 0);
-      if (service !== "stopped") {
+      if (service !== "stopped" && service !== "foreign") {
         expect(mocks.stop).not.toHaveBeenCalled();
         expect(outcome.result).toMatchObject({
           root: previousRoot,
