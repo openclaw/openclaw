@@ -651,25 +651,9 @@ The workflow has three lanes:
 
 - `clawsweeper_item` for exact issue and pull request review requests;
 - `clawsweeper_comment` for explicit ClawSweeper commands in issue comments;
-- `github_activity` for activity not already covered by the ClawSweeper App webhook.
+- `github_activity` for general GitHub activity that the ClawSweeper agent may inspect.
 
 The `github_activity` lane forwards normalized metadata only: event type, action, actor, repository, item number, URL, title, state, and short excerpts for comments or reviews when present. It intentionally avoids forwarding the full webhook body. The receiving workflow in `openclaw/clawsweeper` is `.github/workflows/github-activity.yml`, which posts the normalized event to the OpenClaw Gateway hook for the ClawSweeper agent.
-
-After the ClawSweeper Worker is deployed with activity forwarding enabled and a
-real hook receipt is verified, set repository variable
-`CLAWSWEEPER_GITHUB_ACTIVITY_RELAY_DISABLED=1` to stop relaying issues, issue
-comments, and pull requests. The signed App webhook already delivers those event
-families directly to the agent using the shared normalizer and filters. Pushes,
-pull-request reviews, and review comments still use this workflow's relay because
-the App does not subscribe to them. Leave the variable unset to preserve the
-previous relay behavior; unset it again before disabling Worker forwarding.
-
-Worker activity delivery is best effort, with at most two 12-second HTTP
-attempts and one 1-second retry backoff after acknowledging the webhook. It does
-not provide durable retry or Actions-style concurrency coalescing. During the
-brief enable-and-verify cutover window, both paths may deliver the same event
-with different keys; verify the Worker path before disabling the relay rather
-than risking a silent delivery gap.
 
 Main pushes remain `github_activity` observations. They do not produce hosted per-commit reports or commit Check Runs.
 
