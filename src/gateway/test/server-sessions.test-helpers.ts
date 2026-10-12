@@ -34,12 +34,10 @@ const getSessionAccessorModule = createLazyRuntimeModule(
   () => import("../../config/sessions/session-accessor.js"),
 );
 
-const getCoreGatewayHandlersModule = createLazyRuntimeModule(
-  () => import("../server-methods/core-handlers.js"),
-);
+const getGatewayServerMethodsModule = createLazyRuntimeModule(() => import("../server-methods.js"));
 
 export async function getSessionsHandlers() {
-  return (await getCoreGatewayHandlersModule()).coreGatewayHandlers;
+  return (await getGatewayServerMethodsModule()).coreGatewayHandlers;
 }
 
 type TestTranscriptMessage = Record<string, unknown> & {

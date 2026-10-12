@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/index.js";
 import {
   awaitGateBeforeSettlement,
@@ -28,8 +28,15 @@ import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
 } from "../sessions/session-lifecycle-events.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import * as repositoryWorkspaces from "../state/session-repository-workspaces.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
@@ -71,9 +78,11 @@ afterEach(async () => {
   companions.clear();
   await disposeSessionReadContexts();
   vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
 });
-
-afterAll(closeStateDatabaseForTest);
 
 test.each(["sessions.reset", "sessions.delete"] as const)(
   "%s preserves the session generation until mandatory native cleanup succeeds",
