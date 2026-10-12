@@ -208,6 +208,9 @@ export function useSessionMenuDetails(
           role="separator"
         />
         <div slot={props.inline ? undefined : "submenu"} class="session-menu__communication">
+          <h3 class="session-menu__communication-heading">
+            {t("sessionsView.communication.title")}
+          </h3>
           <For each={["send", "receive"] as const}>
             {(direction) => {
               const label = () =>
