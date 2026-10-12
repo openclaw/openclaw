@@ -1,4 +1,7 @@
 import type { MatrixSnapshotStateRuntime } from "../crypto-state-store.js";
+import type { MatrixMessageWireDispatchGuards } from "./message-wire-dispatch.js";
+import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
+import { createMatrixGuardedFetch } from "./transport.js";
 
 type CryptoRuntime = Pick<typeof import("./crypto-runtime.js"), "persistCryptoBeforeKeyUpload">;
 
@@ -48,4 +51,40 @@ export async function persistMatrixKeyUploadIfNeeded(params: {
     authority: { assertCurrent },
   });
   assertCurrent();
+}
+
+export function createMatrixSdkCryptoTransport(
+  params: Omit<Parameters<typeof createMatrixGuardedFetch>[0], "beforeRequest"> & {
+    recoveryKeyStore: Pick<
+      MatrixRecoveryKeyStore,
+      "drainPendingPersistence" | "buildCryptoCallbacks"
+    >;
+    dispatchGuards: Pick<MatrixMessageWireDispatchGuards, "beforeRequest">;
+    captureUploadState: () => Omit<
+      Parameters<typeof persistMatrixKeyUploadIfNeeded>[0],
+      "resource" | "init" | "requestAuthority" | "requestSignal"
+    >;
+  },
+) {
+  const fetchFn = createMatrixGuardedFetch({
+    ...params,
+    beforeRequest: async (resource, init) => {
+      // Complete admitted key persistence before checking live wire authority.
+      await params.recoveryKeyStore.drainPendingPersistence();
+      await params.dispatchGuards.beforeRequest(resource, init);
+      await persistMatrixKeyUploadIfNeeded({
+        resource,
+        init,
+        ...params.captureUploadState(),
+        requestAuthority: params.captureRequestAuthority?.(),
+        requestSignal: params.captureRequestSignal?.(),
+      });
+    },
+  });
+  return {
+    fetchFn,
+    cryptoCallbacks: params.captureUploadState().encryptionEnabled
+      ? params.recoveryKeyStore.buildCryptoCallbacks()
+      : undefined,
+  };
 }

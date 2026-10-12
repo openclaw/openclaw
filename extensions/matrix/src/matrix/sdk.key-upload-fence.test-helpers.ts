@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
-import type { MatrixSnapshotStateRuntime } from "./crypto-state-store.js";
+import {
+  readMatrixIdbSnapshotJson,
+  type MatrixSnapshotStateRuntime,
+} from "./crypto-state-store.js";
 import { restoreIdbFromDisk } from "./sdk/idb-persistence.js";
 import {
   clearAllIndexedDbState,
@@ -62,20 +65,8 @@ export async function runKeyUploadFenceCase(params: {
   MatrixClient: MatrixClientConstructor;
   makeTempDir: () => string;
   getFetchFn: () => typeof fetch;
-  readSnapshot: (
-    snapshotPath: string,
-    stateRuntime: MatrixSnapshotStateRuntime,
-  ) => Promise<string | null>;
-  stubRuntimeFetch: (fetchImpl: typeof fetch) => void;
 }): Promise<void> {
-  const {
-    mode,
-    MatrixClient,
-    makeTempDir,
-    getFetchFn,
-    readSnapshot,
-    stubRuntimeFetch: installRuntimeFetch,
-  } = params;
+  const { mode, MatrixClient, makeTempDir, getFetchFn } = params;
   const baseUrl = `http://127.0.0.1:8008${mode === "durable-prefixed" ? "/matrix" : ""}`;
   const root = makeTempDir();
   const prefix = path.basename(root);
@@ -125,7 +116,7 @@ export async function runKeyUploadFenceCase(params: {
           }
         : stateRuntime;
     const fetchMock = vi.fn(async () => {
-      const snapshot = await readSnapshot(storageRoot, stateRuntime);
+      const snapshot = await readMatrixIdbSnapshotJson(storageRoot, stateRuntime);
       expect(snapshot).not.toBeNull();
       expect(JSON.parse(snapshot!)).toEqual([
         expect.objectContaining({
@@ -135,7 +126,7 @@ export async function runKeyUploadFenceCase(params: {
       ]);
       return new Response('{"one_time_key_counts":{"signed_curve25519":1}}');
     });
-    installRuntimeFetch(fetchMock as typeof fetch);
+    stubRuntimeFetch(fetchMock as typeof fetch);
     const client = new MatrixClient(baseUrl, "token", {
       encryption: true,
       idbSnapshotPath: path.join(storageRoot, "crypto-idb-snapshot.json"),
@@ -171,7 +162,7 @@ export async function runKeyUploadFenceCase(params: {
       releaseWrite.resolve();
       await rejection;
       expect(fetchMock).not.toHaveBeenCalled();
-      expect(await readSnapshot(storageRoot, stateRuntime)).toBeNull();
+      expect(await readMatrixIdbSnapshotJson(storageRoot, stateRuntime)).toBeNull();
       return;
     }
     if (
@@ -211,7 +202,7 @@ export async function runKeyUploadFenceCase(params: {
       await expect(upload).rejects.toThrow();
       expect(fetchMock).not.toHaveBeenCalled();
       if (mode === "stopped-client") {
-        expect(await readSnapshot(storageRoot, stateRuntime)).toBeNull();
+        expect(await readMatrixIdbSnapshotJson(storageRoot, stateRuntime)).toBeNull();
       }
     }
   } finally {
