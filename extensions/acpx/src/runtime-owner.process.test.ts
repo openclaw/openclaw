@@ -12,6 +12,7 @@ import {
   unregisterAcpRuntimeBackend,
   testing,
   readAcpSessionEntry,
+  readAcpSessionEntryAsync,
 } from "openclaw/plugin-sdk/acp-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -23,6 +24,137 @@ const script = fileURLToPath(
   new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
 );
 const fixtureRuns = new WeakMap<TestContext, Promise<void>>();
+
+it.for([true, false])(
+  "runs the first cold oneshot turn (load support: %s)",
+  async (loadSession, context) => {
+    const run = withOpenClawTestState({ label: "acpx-cold-oneshot-process" }, async (state) => {
+      const cfg = {
+        agents: { ownership: "explicit" as const, entries: { main: {}, work: {}, helper: {} } },
+        acp: { backend: "acpx" },
+      };
+      await state.writeConfig(cfg);
+      const peerDirectory = path.join(state.root, "peer");
+      await fs.mkdir(peerDirectory);
+      const store = createFileSessionStore({ stateDir: state.root });
+      const createRuntime = () =>
+        new AcpxRuntime({
+          cwd: state.root,
+          sessionStore: store,
+          agentRegistry: createAgentRegistry({
+            overrides: {
+              [harness]: [
+                process.execPath,
+                script,
+                peerDirectory,
+                ...(!loadSession ? ["--no-session-load"] : []),
+              ],
+            },
+          }),
+          permissionMode: "deny-all",
+          timeoutMs: 5_000,
+        });
+      let runtime = createRuntime();
+      registerAcpRuntimeBackend({ id: "acpx", runtime });
+      testing.resetAcpSessionManagerForTests();
+      let manager = getAcpSessionManager();
+      const target = { cfg, sessionKey: "agent:main:acp:cold-first-turn", agentId: "main" };
+      try {
+        const { handle } = await manager.initializeSession({
+          ...target,
+          agent: harness,
+          mode: "oneshot",
+        });
+        expect(handle.backendSessionId).toBeTruthy();
+        const peerPath = path.join(peerDirectory, `${handle.backendSessionId}.json`);
+        const readPeer = async () => JSON.parse(await fs.readFile(peerPath, "utf8"));
+        expect(await readPeer()).toMatchObject({ history: [] });
+        const before = await readAcpSessionEntryAsync(target);
+        expect(before?.acp?.identity).toMatchObject({
+          acpxRecordId: handle.acpxRecordId,
+        });
+        expect((await store.load(handle.acpxRecordId!))?.lastPromptAt).toBeUndefined();
+        await expect(
+          manager.closeSession({
+            ...target,
+            reason: "test-restart",
+            discardPersistentState: false,
+            clearMeta: false,
+          }),
+        ).resolves.toMatchObject({ runtimeClosed: true, metaCleared: false });
+        expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+        await runtime.shutdown();
+        testing.resetAcpSessionManagerForTests();
+        runtime = createRuntime();
+        registerAcpRuntimeBackend({ id: "acpx", runtime });
+        manager = getAcpSessionManager();
+        expect(await readPeer()).toMatchObject({ history: [] });
+        expect((await readAcpSessionEntryAsync(target))?.acp?.identity).toMatchObject({
+          acpxRecordId: handle.acpxRecordId,
+        });
+        expect((await store.load(handle.acpxRecordId!))?.lastPromptAt).toBeUndefined();
+        const text = "cold-oneshot-first-prompt";
+        const admission = await createAdmittedHostCapabilityTestFixture({
+          config: cfg,
+          runId: text,
+          agentId: target.agentId,
+          sessionId: "cold-oneshot-core-session",
+          sessionKey: target.sessionKey,
+          workspaceDir: state.workspaceDir,
+          abortSignal: new AbortController().signal,
+        });
+        const chunks: string[] = [];
+        try {
+          await manager.runTurn({
+            ...target,
+            admittedRunContext: admission.admittedRunContext,
+            provenance: "human",
+            text,
+            mode: "prompt",
+            requestId: text,
+            onEvent(event) {
+              if (event.type === "text_delta") {
+                chunks.push(event.text);
+              }
+            },
+          });
+        } finally {
+          admission.closeHost();
+          admission.closeAdmission();
+        }
+        const reply = JSON.parse(chunks.join(""));
+        expect(reply).toMatchObject({ history: [text] });
+        if (loadSession) {
+          expect(reply.sessionId).toBe(handle.backendSessionId);
+        } else {
+          expect(reply.sessionId).not.toBe(handle.backendSessionId);
+        }
+        expect((await fs.readdir(peerDirectory)).toSorted()).toEqual(
+          [...new Set([handle.backendSessionId, reply.sessionId])]
+            .map((id) => `${id}.json`)
+            .toSorted(),
+        );
+        expect(await readPeer()).toMatchObject({ history: loadSession ? [text] : [] });
+      } finally {
+        try {
+          await manager.closeSession({
+            ...target,
+            reason: "test-cleanup",
+            requireAcpSession: false,
+            discardPersistentState: true,
+            clearMeta: true,
+          });
+        } finally {
+          testing.resetAcpSessionManagerForTests();
+          unregisterAcpRuntimeBackend("acpx");
+          await runtime.shutdown();
+        }
+      }
+    });
+    fixtureRuns.set(context, run);
+    await run;
+  },
+);
 
 beforeAll(async () => {
   // Load the lazy host-test runtime before any case registers its ACP backend.
@@ -288,6 +420,22 @@ it("closes a completed oneshot without mixing its replacement record identity", 
         acpxRecordId: handle.acpxRecordId,
       });
       expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+      const replacement = await runtime.ensureSession({
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        agent: harness,
+        mode: "oneshot",
+        persistedHandle: handle,
+      });
+      try {
+        expect(replacement.backendSessionId).not.toBe(handle.backendSessionId);
+      } finally {
+        await runtime.close({
+          handle: replacement,
+          reason: "completed-oneshot-replacement",
+          discardPersistentState: true,
+        });
+      }
       await expect(
         manager.closeSession({
           ...target,
