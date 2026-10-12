@@ -140,8 +140,11 @@ export function createTelegramCallbackRouter({
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
+      // Typed callback actions reach the agent as text only; `/`-prefixed values stay data,
+      // never commands (commands use `action.type === "command"`).
       const callbackCommandText =
-        nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
+        nativeCallbackCommand ??
+        (opaqueCallbackData ? `callback_data: ${opaqueCallbackData}` : genericCallbackText);
       const hasReservedApprovalPrefix = hasTelegramApprovalCallbackPrefix(data);
       const hasReservedQuestionPrefix = hasTelegramQuestionCallbackPrefix(data);
       const typedApprovalCallback = parseTelegramApprovalCallbackData(data);
@@ -332,7 +335,9 @@ export function createTelegramCallbackRouter({
         await approvalRuntime.handleLegacy(legacyApprovalCallback);
         return;
       }
-      if (hasReservedOpaquePrefix) {
+      // Unclaimed typed callbacks with a valid checksum fall through to the agent as
+      // `callback_data: <value>`; only malformed payloads terminalize here.
+      if (hasReservedOpaquePrefix && !opaqueCallbackData) {
         await terminalizeUnavailableCallback();
         return;
       }

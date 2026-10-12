@@ -1634,7 +1634,7 @@ describe("createTelegramBot", () => {
     },
   );
 
-  it("terminalizes unowned opaque approval-shaped plugin callbacks", async () => {
+  it("passes unowned opaque approval-shaped plugin callbacks to the agent as text", async () => {
     mockTelegramConfig(makeExecApprovalTelegramConfig());
     const callbackHandler = await createCallbackHandler();
 
@@ -1647,14 +1647,11 @@ describe("createTelegramBot", () => {
     );
 
     expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 25, {
-      reply_markup: { inline_keyboard: [] },
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(mockMsgContextArg(replySpy, 0, 0, "replySpy call")).toMatchObject({
+      Body: expect.stringContaining("callback_data: /approve plugin:138e9b8c allow-once"),
     });
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      1234,
-      "This action is no longer available.",
-      undefined,
-    );
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-opaque-plugin-approve");
   });
 
