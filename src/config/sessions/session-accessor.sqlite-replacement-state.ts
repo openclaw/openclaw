@@ -40,6 +40,7 @@ import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sql
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import {
   captureSessionEntryPublicationSource,
+  discardSessionEntryPublicationSource,
   hasSessionEntryPublicationCapacity,
 } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
@@ -198,7 +199,7 @@ export function boundSessionEntryReplacementPublication(
   }
   delete publication.fullEntries;
   if (publication.source) {
-    delete publication.source.writeToken;
+    discardSessionEntryPublicationSource(publication.source);
   }
 }
 

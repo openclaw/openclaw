@@ -3,6 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/index.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 
@@ -178,7 +179,7 @@ export function scheduleGatewayRequestStart(
     });
     if (!active) {
       active = true;
-      void grantStarts();
+      void runWithMainThreadTask("gateway:rpc:queue", grantStarts);
     } else {
       notifyQueueChanged?.();
     }
