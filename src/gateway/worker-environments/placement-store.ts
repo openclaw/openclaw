@@ -13,6 +13,7 @@ import { readPublishedPlacementProjection } from "./placement-read-publication.j
 import { createPlacementReadStore } from "./placement-read-store.js";
 import {
   normalizeEpoch,
+  projectWorkerSessionTurnClaim,
   required,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
@@ -103,6 +104,20 @@ export function createWorkerSessionPlacementStore(
     validateTurnClaim(claim: WorkerSessionTurnClaim): boolean {
       context.admission.assertCurrent();
       return isPublishedPlacementTurnClaimCurrent(context.admission.identity, claim);
+    },
+    readWorkerTurnClaim(binding: {
+      sessionId: string;
+      environmentId: string;
+      ownerEpoch: number;
+    }): WorkerSessionTurnClaim | undefined {
+      context.admission.assertCurrent();
+      const record = readPlacementReplica(context.admission.identity, binding.sessionId)?.placement;
+      const claim = record ? projectWorkerSessionTurnClaim(record) : undefined;
+      return claim?.owner.environmentId === binding.environmentId &&
+        claim.owner.ownerEpoch === binding.ownerEpoch &&
+        isPublishedPlacementTurnClaimCurrent(context.admission.identity, claim)
+        ? claim
+        : undefined;
     },
     ...createPlacementSessionToolOperationOps({
       path,

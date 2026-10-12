@@ -182,7 +182,7 @@ describe("worker placement startup cleanup ownership", () => {
         workerEnvironmentSupport.testState.stateDb.db
           .prepare("UPDATE worker_session_placements SET environment_id = ? WHERE session_id = ?")
           .run(environmentId, failed.sessionId);
-        failed = placements.get(failed.sessionId);
+        failed = await placements.getAsync(failed.sessionId);
       } else {
         const starting = await seedStartingPlacement(placements, environmentId, "remote-exec");
         failed = await placements.fail({
@@ -196,7 +196,7 @@ describe("worker placement startup cleanup ownership", () => {
             "UPDATE worker_session_placements SET active_owner_epoch = 1 WHERE session_id = ?",
           )
           .run(failed.sessionId);
-        failed = placements.get(failed.sessionId);
+        failed = await placements.getAsync(failed.sessionId);
       }
       expect(failed).toMatchObject({
         state: "failed",

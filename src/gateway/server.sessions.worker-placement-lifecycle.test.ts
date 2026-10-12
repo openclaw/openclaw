@@ -487,7 +487,7 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
     storePath,
   });
   const retireSessionPlacement = vi.fn((retirement: WorkerSessionPlacementRetirement) =>
-    placementStore.retireSessionPlacement(retirement),
+    placementStore.retireSessionPlacementAsync(retirement),
   );
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
 

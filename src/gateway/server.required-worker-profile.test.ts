@@ -384,7 +384,7 @@ test.each(["channel", "incognito", "shared"] as const)(
           state: "failed",
           recoveryError: "Synthetic provider unavailable",
         });
-        placements.retireSessionPlacement({
+        await placements.retireSessionPlacementAsync({
           sessionId: identity.sessionId,
           expectedState: "failed",
           expectedGeneration: failed.generation,

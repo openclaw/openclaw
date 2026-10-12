@@ -160,16 +160,7 @@ export function createWorkerSessionPlacementGate(
         throw error;
       }
     },
-    readWorkerTurnClaim(binding) {
-      const record = store.get(binding.sessionId);
-      const claim = record ? projectWorkerSessionTurnClaim(record) : undefined;
-      return claim?.sessionId === binding.sessionId &&
-        claim.owner.environmentId === binding.environmentId &&
-        claim.owner.ownerEpoch === binding.ownerEpoch &&
-        store.validateTurnClaim(claim)
-        ? claim
-        : undefined;
-    },
+    readWorkerTurnClaim: (binding) => store.readWorkerTurnClaim(binding),
     getExecutionIdentityCapability: (claim) =>
       getWorkerTurnExecutionIdentityCapability(store, claim),
     validateWorkerTurn,
@@ -207,7 +198,7 @@ export function createWorkerSessionPlacementGate(
     },
 
     async prepareWorkspaceResultOwnerRevocation(binding, error, assertCurrent): Promise<void> {
-      const claim = claimForOwnerRevocation(store.get(binding.sessionId), binding);
+      const claim = claimForOwnerRevocation(await store.getAsync(binding.sessionId), binding);
       if (!claim) {
         return;
       }

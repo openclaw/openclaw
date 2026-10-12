@@ -157,10 +157,14 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     return;
   }
   const newerPlacement = (owner.placements.get(change.sessionId)?.sequence ?? -1) > sequence;
-  if (!newerPlacement && change.kind === "claim") {
-    if (change.indeterminate) {
-      owner.placements.set(change.sessionId, { placement: undefined, sequence });
-    } else if (change.retired) {
+  if (
+    !newerPlacement &&
+    change.indeterminate &&
+    (change.kind === "claim" || change.kind === "workspace-result")
+  ) {
+    owner.placements.delete(change.sessionId);
+  } else if (!newerPlacement && change.kind === "claim") {
+    if (change.retired) {
       owner.placements.set(change.sessionId, { placement: undefined, sequence });
     } else if (change.workspacePlacement) {
       owner.placements.set(change.sessionId, { placement: change.workspacePlacement, sequence });

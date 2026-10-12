@@ -465,14 +465,14 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     {
       context: {
         workerSessionPlacementService: {
-          getMany: (sessionIds: readonly string[]) => placements.getMany(sessionIds),
-          retireSessionPlacement: (
-            retirement: Parameters<typeof placements.retireSessionPlacement>[0],
+          getManyAsync: (sessionIds: readonly string[]) => placements.getManyAsync(sessionIds),
+          retireSessionPlacementAsync: async (
+            retirement: Parameters<typeof placements.retireSessionPlacementAsync>[0],
           ) => {
             expect(loadSessionEntry(SESSION_KEY).entry).toBeUndefined();
             expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
             events.push("placement:retire");
-            placements.retireSessionPlacement(retirement);
+            await placements.retireSessionPlacementAsync(retirement);
           },
         },
       },

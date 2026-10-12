@@ -129,10 +129,10 @@ function createMaintenanceRuntime(params: {
       workspaceResultInstanceId: () => "gateway-test",
       get: (sessionId: string) =>
         params.placements.find((placement) => placement.sessionId === sessionId),
-      list: () => params.placements,
-      listForReconcile: (sessionKey?: string) =>
+      listAsync: async () => params.placements,
+      listForReconcileAsync: async (sessionKey?: string) =>
         params.preservationStore
-          ? params.preservationStore.listForReconcile(sessionKey)
+          ? await params.preservationStore.listForReconcileAsync(sessionKey)
           : params.placements.filter(
               (placement) =>
                 placement.state !== "local" &&
@@ -329,7 +329,7 @@ describe("worker placement session maintenance ownership", () => {
                 claim = await store.claimTurn(localTurn);
               }
               if (publication !== "worker dispatch") {
-                expect(store.listForReconcile()).toEqual([]);
+                expect(await store.listForReconcileAsync()).toEqual([]);
               }
               return prepared;
             } catch (error) {
