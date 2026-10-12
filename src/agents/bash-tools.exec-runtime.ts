@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
@@ -38,7 +39,10 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "./agent-tool-source-execution-guard.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
@@ -460,7 +464,7 @@ export async function runExecProcess({
     requestSignal && initialStartupSignal
       ? AbortSignal.any([requestSignal, initialStartupSignal])
       : (requestSignal ?? initialStartupSignal);
-  let assertSourceActive: (() => void) | undefined =
+  let assertSourceActive: SessionSourceAssertion | undefined =
     captureAgentToolSourceExecutionGuard(startupSignal);
   let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
@@ -732,42 +736,43 @@ export async function runExecProcess({
       target: diagnosticTarget,
     });
   const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
-  const spawn = async (input: SpawnInput) => {
-    const assertSourceCurrent = assertSourceActive;
-    const assertOperatorCurrent = operatorAuthority?.assertCurrent;
-    const assertRuntimeCurrent = assertSandboxCurrent;
-    const assertHostPolicyCurrent = assertPolicyCurrent;
-    const assertCurrent = () => {
-      assertSourceCurrent?.();
-      assertOperatorCurrent?.();
-      assertRuntimeCurrent?.();
-    };
-    // Source authority covers construction; approval policy ends at native launch.
-    assertCurrent();
-    assertHostPolicyCurrent?.();
-    const grant = opts.secretEgressBindings
-      ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
-      : undefined;
-    secretEgressGrant = grant;
-    try {
-      return await withoutGatewayToolCallerIdentity(() =>
-        supervisor.spawn({
-          ...input,
-          ...(grant ? { env: { ...input.env, ...grant.env } } : {}),
-          onCancel: () => {
-            beginSandboxTermination();
-            grant?.revoke();
-          },
-          assertCurrent,
-          beforeSpawn: assertHostPolicyCurrent,
-          initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
-        }),
-      );
-    } catch (error) {
-      grant?.revoke();
-      throw error;
-    }
-  };
+  const spawn = (input: SpawnInput) =>
+    runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {
+      const assertSourceCurrent = assertSourceActive;
+      const assertOperatorCurrent = operatorAuthority?.assertCurrent;
+      const assertRuntimeCurrent = assertSandboxCurrent;
+      const assertHostPolicyCurrent = assertPolicyCurrent;
+      const assertCurrent = () => {
+        assertSourceCurrent?.();
+        assertOperatorCurrent?.();
+        assertRuntimeCurrent?.();
+      };
+      // Source authority covers construction; approval policy ends at native launch.
+      assertCurrent();
+      assertHostPolicyCurrent?.();
+      const grant = opts.secretEgressBindings
+        ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
+        : undefined;
+      secretEgressGrant = grant;
+      try {
+        return await withoutGatewayToolCallerIdentity(() =>
+          supervisor.spawn({
+            ...input,
+            ...(grant ? { env: { ...input.env, ...grant.env } } : {}),
+            onCancel: () => {
+              beginSandboxTermination();
+              grant?.revoke();
+            },
+            assertCurrent,
+            beforeSpawn: assertHostPolicyCurrent,
+            initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+          }),
+        );
+      } catch (error) {
+        grant?.revoke();
+        throw error;
+      }
+    });
 
   try {
     assertSourceActive?.();

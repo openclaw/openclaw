@@ -26,7 +26,10 @@ import {
 } from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { clampNumber } from "../utils.js";
-import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "./agent-tool-source-execution-guard.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
@@ -640,35 +643,44 @@ async function appendMemoryFlushContent(params: {
   content: string;
   sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
   signal?: AbortSignal;
-  assertCurrent: () => void;
+  assertCurrent: ReturnType<typeof captureAgentToolSourceExecutionGuard>;
 }) {
   if (!params.sandbox) {
     const root = await fsRoot(params.root);
-    params.assertCurrent();
-    await root.append(params.relativePath, params.content, {
-      mkdir: true,
-      prependNewlineIfNeeded: true,
-      assertBeforeMutation: params.assertCurrent,
+    await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
+      params.assertCurrent();
+      await root.append(params.relativePath, params.content, {
+        mkdir: true,
+        prependNewlineIfNeeded: true,
+        assertBeforeMutation: params.assertCurrent,
+      });
     });
     return;
   }
 
-  const existing = await readOptionalUtf8File({
-    absolutePath: params.absolutePath,
-    relativePath: params.relativePath,
-    sandbox: params.sandbox,
-    signal: params.signal,
+  const existing = await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
+    const content = await readOptionalUtf8File({
+      absolutePath: params.absolutePath,
+      relativePath: params.relativePath,
+      sandbox: params.sandbox,
+      signal: params.signal,
+    });
+    params.assertCurrent();
+    return content;
   });
   const separator =
     existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
   const next = `${existing}${separator}${params.content}`;
-  params.assertCurrent();
-  await params.sandbox.bridge.writeFile({
-    filePath: params.relativePath,
-    cwd: params.sandbox.root,
-    data: next,
-    mkdir: true,
-    signal: params.signal,
+  const sandbox = params.sandbox;
+  await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
+    params.assertCurrent();
+    await sandbox.bridge.writeFile({
+      filePath: params.relativePath,
+      cwd: sandbox.root,
+      data: next,
+      mkdir: true,
+      signal: params.signal,
+    });
   });
 }
 
@@ -713,11 +725,15 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
-      const contentBefore = await readOptionalUtf8File({
-        absolutePath: allowedAbsolutePath,
-        relativePath: options.relativePath,
-        sandbox: options.sandbox,
-        signal,
+      const contentBefore = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+        const previousContent = await readOptionalUtf8File({
+          absolutePath: allowedAbsolutePath,
+          relativePath: options.relativePath,
+          sandbox: options.sandbox,
+          signal,
+        });
+        assertCurrent();
+        return previousContent;
       });
       assertNewMemoryFlushContent(contentBefore, content);
       const separator =
@@ -745,7 +761,6 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
       } else {
         await commit();
       }
-      assertCurrent();
       // This wrapper inherits the write tool's output schema, so report only
       // the authoritative `changed`; deriving `created` before append is racy.
       return {
@@ -1320,10 +1335,12 @@ async function writeWorkspaceFile(
   const relative = toRelativeWorkspacePath(root, absolutePath);
   const rootHandle = await getRoot();
   // Absolute admitted paths preserve literal "~" workspace directories.
-  await rootHandle.write(path.resolve(rootHandle.rootReal, relative), content, {
-    mkdir: true,
-    mutationSymlinks: "follow-parents-within-root",
-    assertBeforeMutation: assertCurrent,
+  await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+    await rootHandle.write(path.resolve(rootHandle.rootReal, relative), content, {
+      mkdir: true,
+      mutationSymlinks: "follow-parents-within-root",
+      assertBeforeMutation: assertCurrent,
+    });
   });
 }
 
@@ -1343,8 +1360,11 @@ function createHostMutationOperations(
       {
         mkdir: async (dir: string) => {
           const resolved = resolveHostPath(dir);
-          captureAgentToolSourceExecutionGuard(options?.abortSignal)();
-          await fs.mkdir(resolved, { recursive: true });
+          const assertCurrent = captureAgentToolSourceExecutionGuard(options?.abortSignal);
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+            await fs.mkdir(resolved, { recursive: true });
+          });
         },
         writeFile: (filePath: string, content: string) =>
           writeHostFile(filePath, content, options?.abortSignal),
@@ -1379,8 +1399,10 @@ function createHostMutationOperations(
         if (ancestor && ancestor !== resolved.rootCanonicalPath) {
           const ancestorRoot = await fsRoot(ancestor);
           // mkdir requires a relative path; the prefix preserves literal tilde names.
-          await ancestorRoot.mkdir(`./${path.relative(ancestor, resolved.rootCanonicalPath)}`, {
-            assertBeforeMutation: assertCurrent,
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            await ancestorRoot.mkdir(`./${path.relative(ancestor, resolved.rootCanonicalPath)}`, {
+              assertBeforeMutation: assertCurrent,
+            });
           });
         }
         const rootHandle = await getRoot();
@@ -1389,16 +1411,17 @@ function createHostMutationOperations(
           resolved.canonicalPath,
           { allowRoot: true },
         );
-        assertCurrent();
         const mutationOptions = {
           mutationSymlinks: "reject" as const,
           assertBeforeMutation: assertCurrent,
         };
-        if (canonicalRelative) {
-          await rootHandle.mkdir(`./${canonicalRelative}`, mutationOptions);
-        } else {
-          await rootHandle.ensureRoot(mutationOptions);
-        }
+        await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+          if (canonicalRelative) {
+            await rootHandle.mkdir(`./${canonicalRelative}`, mutationOptions);
+          } else {
+            await rootHandle.ensureRoot(mutationOptions);
+          }
+        });
       },
       writeFile: (absolutePath: string, content: string) =>
         writeWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),

@@ -892,6 +892,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/backup-run-records.test.ts",
   "test/skill-usage.codex.integration.test.ts",
   "src/agents/agent-harness-completion-delivery.test.ts",
+  "src/agents/agent-harness-completion-ownership.test.ts",
   "src/agents/agent-harness-native-custody.test.ts",
   "src/agents/openclaw-tools.subagents.scope.test.ts",
   "src/agents/tools/media-generate-background-retention.test.ts",

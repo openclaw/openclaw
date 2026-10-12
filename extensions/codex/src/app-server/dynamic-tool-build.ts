@@ -178,7 +178,6 @@ export async function buildDynamicTools(
       runtimeSessionKey: input.sandboxSessionKey,
       sandbox: input.sandbox,
     }));
-  preparedExecution.assertCurrent();
   const nativeExecutionPolicy = preparedExecution.policy;
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,
@@ -494,7 +493,6 @@ export async function buildDynamicTools(
       },
     );
   }
-  preparedExecution.assertCurrent();
   return exposedTools;
 }
 export function shouldEnableCodexAppServerNativeToolSurface(

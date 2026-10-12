@@ -292,7 +292,7 @@ async function prepareHistoryRead(
           (database) => {
             assertCapturedSessionEntryReadSource(request.source, database);
             return runWithSessionTranscriptReadFence(request.admission, () =>
-              readHarnessCompletionSourceInDatabase(database, request.claim),
+              readHarnessCompletionSourceInDatabase(database, request.claim, request.mode),
             );
           },
           { ...request.database, env: request.env },

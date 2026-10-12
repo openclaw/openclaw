@@ -349,7 +349,8 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "session-entry-current") {
-        const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");
+        const { readSessionEntryCurrentFacts } =
+          await import("./session-entry-current-admission.worker.js");
         return readSessionEntryCurrentFacts(request);
       }
       if (request.kind === "session-row-backfill") {
