@@ -23,6 +23,10 @@ Gateway and account changes still refresh hidden Dashboard windows. Saved web
 drafts recover within the same Gateway address and authenticated account; they
 are not copied to a different Gateway, account, or recreated SSH tunnel address.
 
+Paste in the Dashboard and the full chat window converts clipboard images that
+WebKit cannot paste, such as HDR screenshots that macOS copies as HEIC, to PNG,
+as Chrome does. If the clipboard also holds text, only the text is pasted.
+
 The native chat features below connect to the Gateway and default to the primary
 session for the selected agent (`main`, or `global` when `session.scope` is
 `global`). Quick Chat remains a native floating composer in either experience.

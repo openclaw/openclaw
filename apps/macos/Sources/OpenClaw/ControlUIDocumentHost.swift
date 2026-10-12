@@ -72,6 +72,7 @@ final class ControlUIDocumentHost {
         self.webView.underPageBackgroundColor = .windowBackgroundColor
         self.webView.allowsBackForwardNavigationGestures = true
         nativeAuthHandler.owner = self
+        self.installImagePasteDelivery()
         self.registerWindowChromeHandler()
         self.installWindowChromeScript()
         self.installNativeAuthScript()
