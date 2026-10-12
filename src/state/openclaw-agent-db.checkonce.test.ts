@@ -196,7 +196,11 @@ it("reuses closed-writer ownership for read-only admission until tracked schema 
     using writer = openNodeSqliteDatabase(owner.path);
     writer.exec("DROP TABLE session_canonical_validation_pending");
     expect(() => openOpenClawAgentDatabaseReadOnly(options)).toThrow(
-      /canonical validation schema is missing or drifted/iu,
+      expect.objectContaining({
+        name: "SessionMetadataUnavailableError",
+        reason: "table-missing",
+        missingTables: ["session_canonical_validation_pending"],
+      }),
     );
   });
 });
