@@ -117,7 +117,8 @@ describe("isolated meeting browser audio transport", () => {
 
   it("runs long-lived browser capture under the session continuation and releases it on stop", async () => {
     vi.useFakeTimers();
-    const run = vi.fn(<T>(handler: () => T) => handler());
+    const run = vi.fn();
+    run.mockImplementation(<T>(handler: () => T) => handler());
     const release = vi.fn();
     const fixture = setup({ captureContinuation: async () => ({ run, release }) });
     const transport = await fixture.create();
