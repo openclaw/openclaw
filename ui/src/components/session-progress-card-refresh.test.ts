@@ -2,10 +2,13 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubScrollObservers } from "../test-helpers/scroll-observers.test-support.ts";
 import {
   renderSessionProgressCard,
   type SessionProgressCardRefreshAction,
 } from "./session-progress-card.ts";
+
+beforeEach(stubScrollObservers);
 
 const containers: HTMLElement[] = [];
 function createContainer() {

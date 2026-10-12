@@ -62,7 +62,9 @@ function measurementClock() {
       frames.clear();
       pending.forEach((callback) => callback(0));
       for (const observer of observers) {
-        if (observer.targets.has(document.documentElement)) observer.callback([], observer);
+        if (observer.targets.has(document.documentElement)) {
+          observer.callback([], observer);
+        }
       }
     },
     resize(target: Element) {

@@ -1,17 +1,25 @@
-import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { nothing, render } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { buildChatApiAttachments } from "../pages/chat/attachment-api.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-store.ts";
 import { renderAttachmentPreview } from "../pages/chat/components/chat-attachments.ts";
+import { stubScrollObservers } from "../test-helpers/scroll-observers.test-support.ts";
 import type { ChatAttachment } from "./chat/chat-types.ts";
 import { mcpAppMessageInput } from "./mcp-app-message.ts";
 
+beforeEach(stubScrollObservers);
+
 const context = { gateway: { snapshot: { hello: null } } as ApplicationGateway };
 let attachments: ChatAttachment[] = [];
+const containers: HTMLElement[] = [];
 afterEach(() => {
   releaseChatAttachmentPayloads(attachments);
   attachments = [];
+  for (const container of containers.splice(0)) {
+    render(nothing, container);
+    container.remove();
+  }
   document.body.replaceChildren();
 });
 
@@ -43,6 +51,7 @@ describe("app message content handoff", () => {
       "Selected part dimensions: 12 × 8 mm",
     );
     const container = document.createElement("div");
+    containers.push(container);
     document.body.append(container);
     const onAttachmentsChange = vi.fn();
     render(renderAttachmentPreview({ attachments, onAttachmentsChange }), container);

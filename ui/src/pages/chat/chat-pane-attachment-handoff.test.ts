@@ -9,6 +9,7 @@ import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { stubScrollObservers } from "../../test-helpers/scroll-observers.test-support.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
@@ -51,6 +52,8 @@ import {
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
 import { singlePaneLayout } from "./split-layout.ts";
+
+beforeEach(stubScrollObservers);
 
 function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
   return registerChatAttachmentPayload({

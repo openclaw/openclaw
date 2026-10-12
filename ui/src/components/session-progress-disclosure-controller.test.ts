@@ -4,9 +4,12 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { publishTranscriptScroll } from "../pages/chat/components/chat-transcript-scroll-events.ts";
+import { stubScrollObservers } from "../test-helpers/scroll-observers.test-support.ts";
 import { observeTranscript } from "./session-progress-card.test-support.ts";
 import { renderSessionProgressCard } from "./session-progress-card.ts";
 import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-controller.ts";
+
+beforeEach(stubScrollObservers);
 
 const containers: HTMLDivElement[] = [];
 function createContainer() {

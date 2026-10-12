@@ -8,10 +8,13 @@ vi.mock("./markdown.ts", async () => {
   const actual = await vi.importActual<typeof import("./markdown.ts")>("./markdown.ts");
   return { ...actual, toSanitizedMarkdownHtml: vi.fn(actual.toSanitizedMarkdownHtml) };
 });
+import { stubScrollObservers } from "../test-helpers/scroll-observers.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { observeTranscript } from "./session-progress-card.test-support.ts";
 import { renderSessionProgressCard } from "./session-progress-card.ts";
 import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-controller.ts";
+
+beforeEach(stubScrollObservers);
 
 const containers: HTMLDivElement[] = [];
 function createContainer() {

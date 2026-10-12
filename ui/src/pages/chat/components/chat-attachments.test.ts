@@ -5,6 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { stubScrollObservers } from "../../../test-helpers/scroll-observers.test-support.ts";
 import * as payloads from "../attachment-payload-store.ts";
 import {
   chatAttachmentBatchBytes,
@@ -17,6 +18,8 @@ import {
   handleChatAttachmentPaste,
   renderAttachmentPreview,
 } from "./chat-attachments.ts";
+
+beforeEach(stubScrollObservers);
 
 it("memoizes each advertised policy and derives the default decoded frame budget", () => {
   const policy = {

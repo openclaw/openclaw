@@ -26,12 +26,16 @@ function layoutFrame() {
   unseen.clear();
   vi.advanceTimersToNextFrame();
   for (const [observer, { callback, targets }] of observers) {
-    if (targets.has(document.documentElement)) callback([], observer);
+    if (targets.has(document.documentElement)) {
+      callback([], observer);
+    }
   }
 }
 function resize(element: Element) {
   for (const [observer, { callback, targets }] of observers) {
-    if (targets.has(element)) callback([{ target: element } as ResizeObserverEntry], observer);
+    if (targets.has(element)) {
+      callback([{ target: element } as ResizeObserverEntry], observer);
+    }
   }
 }
 const observe = vi.fn();
