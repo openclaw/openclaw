@@ -94,8 +94,10 @@ ownership; ordinary readers do not poll for foreign commits.
 
 Transcript readers retain bounded hot/cold facts under the existing session write
 receipts. Archive, restore, session deletion, and native writes invalidate those
-facts; an unknown receipt falls back to the durable marker. Consecutive read pages
-reuse the fact, while an already-open snapshot keeps its own local result.
+facts; an unknown receipt falls back to the durable marker. Each new transcript
+read snapshot selects the indexed cold marker before consuming transcript rows.
+Repeated reads inside that snapshot reuse its local fact; a committed-write receipt
+captured before the snapshot cannot replace that initial marker read.
 Participant projections carry an autocommit read into the metadata CAS owner's
 unchanged immediate write transaction. Ordinary readers establish their own native
 snapshot. Concurrent participant updates remain independent of metadata CAS. These

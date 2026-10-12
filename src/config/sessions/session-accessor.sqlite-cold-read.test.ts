@@ -267,6 +267,29 @@ async function withRace(
   });
 }
 
+it("detects an archive committed before a warm incremental read begins", async () => {
+  await withRace("warm-read-before-begin", async (race) => {
+    const read = () =>
+      loadTranscriptEventRowsAfterSeqInDatabase(race.database, race.scope.sessionId, -1);
+    const original = read();
+    expect(original.length).toBeGreaterThan(0);
+    const nativeExec = race.database.db.exec.bind(race.database.db);
+    const exec = vi.spyOn(race.database.db, "exec").mockImplementation((sql) => {
+      if (sql === "BEGIN") {
+        race.commitArchive();
+      }
+      return nativeExec(sql);
+    });
+    try {
+      expect.soft(read).toThrow(/cold storage/);
+      expect(race.committed()).toBe(true);
+    } finally {
+      exec.mockRestore();
+    }
+    await expect(readRestoredSessionTranscript(race.scope, read)).resolves.toEqual(original);
+  });
+});
+
 it("joins a caller's hot read snapshot without a savepoint and observes the next foreign archive", async () => {
   await withRace("nested-hot-read-snapshot", async (race) => {
     const read = () =>
