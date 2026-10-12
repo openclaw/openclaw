@@ -86,12 +86,15 @@ it("makes routed CLI recalls available to dreaming in the requested agent worksp
     // Read through the same durable store as a later dreaming sweep.
     await configureMemoryCoreDreamingStateForTests();
     const thresholds = { minScore: 0, minRecallCount: 3, minUniqueQueries: 3 };
-    expect(await rankShortTermPromotionCandidates({ workspaceDir, ...thresholds })).toEqual([
+    const ranked = await rankShortTermPromotionCandidates({ workspaceDir, ...thresholds });
+    expect(ranked.candidates).toEqual([
       expect.objectContaining({ path: hit.path, recallCount: 3, uniqueQueries: 3 }),
     ]);
-    expect(
-      await rankShortTermPromotionCandidates({ workspaceDir: otherWorkspace, ...thresholds }),
-    ).toEqual([]);
+    const other = await rankShortTermPromotionCandidates({
+      workspaceDir: otherWorkspace,
+      ...thresholds,
+    });
+    expect(other.candidates).toEqual([]);
   } finally {
     await disposePluginRegistryInstances(registry.registry);
   }

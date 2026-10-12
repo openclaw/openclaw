@@ -451,9 +451,29 @@ openclaw memory promote [--agent <id>] [--limit <n>] [--min-score <n>] \
 The CLI and scheduled dreaming sweep share the deep-phase defaults below.
 Explicit CLI flags override them for a one-off manual run.
 
+Ranking drops entries at fixed gates, in this order: `path`, `origin`,
+`contamination`, `already promoted`, `no signal`, `signal threshold`,
+`query threshold`, `age threshold`, `score threshold`. Every run prints the
+agent, workspace, and recall store it read, plus how many entries each gate
+excluded (`Excluded N of M: ...`). Each entry is counted once, under the first
+gate that dropped it. When excluded entries outnumber candidates, the output
+explains the top two reasons and names an entry to pass to `promote-explain`.
+The `path`, `origin`, and `contamination` gates are safeguards; lowering
+threshold flags never gets past them.
+
+`query threshold` counts distinct `memory_search` queries that returned the
+entry. Daily-note and session ingestion don't record queries, so an entry with
+only ingestion signal stays at zero until interactive searches find it.
+
 Entries with `untrusted` or `system` provenance are excluded before ranking, so
-they do not occupy preview limits or appear in `promote-explain`. Promotion still
-rechecks current provenance before writing.
+they do not occupy preview limits. Promotion still rechecks current provenance
+before writing. The preview also tags candidates from a daily file whose
+provenance record is `untrusted`; `--apply` rejects those.
+
+With `--json`, the output adds `agentId`, the effective `thresholds` (with an
+`overridden` list of flags passed), and `exclusions` (`considered`, `excluded`,
+`byReason` with up to three sample keys per reason, and `quarantinedAtApply`).
+With `--apply`, `apply.rejectionsByReason` counts every apply-time rejection.
 
 Ranking signals: recall frequency, retrieval relevance, query diversity,
 temporal recency, cross-day consolidation, and derived concept richness, drawn
@@ -464,7 +484,8 @@ since ranking are respected instead of promoting from a stale snapshot.
 
 ## `memory promote-explain`
 
-Explain one promotion candidate's score breakdown.
+Explain one promotion candidate's score breakdown, or, for an entry ranking
+excluded, the gate that dropped it and the values that gate compared.
 
 ```bash
 openclaw memory promote-explain <selector> [--agent <id>] [--include-promoted] [--json]

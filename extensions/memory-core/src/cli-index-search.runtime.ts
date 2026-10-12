@@ -4,23 +4,15 @@ import {
   formatErrorMessage,
   setVerbose,
   shortenHomeInString,
-  shortenHomePath,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import {
-  resolveMemoryDreamingWorkspace,
-  resolveMemoryDeepDreamingConfig,
-} from "openclaw/plugin-sdk/memory-core-host-status";
-import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
   emitMemoryCoreSidecarNotice,
-  formatAuditCounts,
   formatExtraPaths,
   formatMemoryIndexOutcome,
   resolveMemoryAgent,
-  resolveMemoryPluginConfig,
   scanMemoryManagerSources,
   syncMemoryWithProgress,
   withMemoryCommand,
@@ -29,23 +21,13 @@ import { renderMemorySearch } from "./cli-search-output.js";
 import type {
   MemoryCommandOptions,
   MemoryForgetCommandOptions,
-  MemoryPromoteCommandOptions,
-  MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { searchMemoryForCli } from "./memory-search-operation.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
-import {
-  applyShortTermPromotions,
-  auditShortTermPromotionArtifacts,
-  rankShortTermPromotionCandidates,
-  resolveShortTermRecallLockPath,
-  resolveShortTermRecallStorePath,
-} from "./short-term-promotion.js";
-const { accent, heading, info, muted, success, warn } = theme;
+const { heading, info, muted, warn } = theme;
 function formatSourceLabel(source: string, workspaceDir: string): string {
   if (source === "memory") {
     return shortenHomeInString(
@@ -239,263 +221,4 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
   } catch (error) {
     throw new Error(`Memory forget failed: ${formatErrorMessage(error)}`, { cause: error });
   }
-}
-
-function matchesPromotionSelector(
-  candidate: {
-    key: string;
-    path: string;
-    snippet: string;
-  },
-  selector: string,
-): boolean {
-  const trimmed = selector.trim().toLowerCase();
-  if (!trimmed) {
-    return false;
-  }
-  return (
-    candidate.key.toLowerCase().includes(trimmed) ||
-    candidate.path.toLowerCase().includes(trimmed) ||
-    candidate.snippet.toLowerCase().includes(trimmed)
-  );
-}
-async function runMemoryPromotion(
-  opts: MemoryPromoteCommandOptions,
-  hostOptions: MemoryCoreRuntimeHost | undefined,
-  selector?: string,
-) {
-  const explain = selector !== undefined;
-  const command = explain ? "promote-explain" : "promote";
-  await withMemoryCommand({
-    commandName: `memory ${command}`,
-    options: opts,
-    purpose: "status",
-    ...hostOptions,
-    run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
-      const workspaceDir = status.workspaceDir?.trim();
-      const dreaming = resolveMemoryDeepDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
-        cfg,
-      });
-      if (!workspaceDir) {
-        throw new Error(`Memory ${command} requires a resolvable workspace directory.`);
-      }
-      let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
-      try {
-        const gatherAllForApply = !explain && Boolean(opts.apply);
-        const unrestricted = explain || gatherAllForApply;
-        candidates = await rankShortTermPromotionCandidates({
-          workspaceDir,
-          limit: unrestricted ? undefined : opts.limit,
-          minScore: unrestricted ? 0 : (opts.minScore ?? dreaming.minScore),
-          minRecallCount: unrestricted ? 0 : (opts.minRecallCount ?? dreaming.minRecallCount),
-          minUniqueQueries: unrestricted ? 0 : (opts.minUniqueQueries ?? dreaming.minUniqueQueries),
-          recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
-          maxAgeDays: gatherAllForApply ? undefined : dreaming.maxAgeDays,
-          includePromoted: Boolean(opts.includePromoted),
-        });
-      } catch (err) {
-        throw new Error(
-          `${explain ? "Memory promote-explain" : "Memory promote ranking"} failed: ${formatErrorMessage(err)}`,
-          {
-            cause: err,
-          },
-        );
-      }
-      if (selector !== undefined) {
-        const candidate = candidates.find((entry) => matchesPromotionSelector(entry, selector));
-        if (!candidate) {
-          throw new Error(`No promotion candidate matched "${selector}".`);
-        }
-        const thresholds = {
-          minScore: dreaming.minScore,
-          minRecallCount: dreaming.minRecallCount,
-          minUniqueQueries: dreaming.minUniqueQueries,
-          maxAgeDays: dreaming.maxAgeDays ?? null,
-        };
-        if (opts.json) {
-          defaultRuntime.writeJson({
-            workspaceDir,
-            thresholds,
-            candidate,
-            passes: {
-              score: candidate.score >= thresholds.minScore,
-              // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
-              recallCount: candidate.signalCount >= thresholds.minRecallCount,
-              uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
-              maxAge:
-                thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
-            },
-          });
-          return;
-        }
-        const lines = [
-          `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
-          accent(candidate.key),
-          muted(
-            `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
-          ),
-          candidate.snippet,
-          muted(
-            `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
-          ),
-          muted(
-            `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
-          ),
-          muted(
-            `thresholds: minScore=${thresholds.minScore} minRecallCount=${thresholds.minRecallCount} minUniqueQueries=${thresholds.minUniqueQueries} maxAgeDays=${thresholds.maxAgeDays ?? "none"}`,
-          ),
-        ];
-        if (candidate.conceptTags.length > 0) {
-          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
-        }
-        defaultRuntime.log(lines.join("\n"));
-        return;
-      }
-      let applyResult: Awaited<ReturnType<typeof applyShortTermPromotions>> | undefined;
-      if (opts.apply) {
-        try {
-          const workspaceAgentIds = resolveMemoryDreamingWorkspace(cfg, workspaceDir)?.agentIds ?? [
-            agentId,
-          ];
-          applyResult = await applyShortTermPromotions({
-            agentId,
-            workspaceAgentIds,
-            workspaceDir,
-            candidates,
-            limit: opts.limit,
-            minScore: opts.minScore ?? dreaming.minScore,
-            minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
-            minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
-            maxAgeDays: dreaming.maxAgeDays,
-            maxPromotedSnippetTokens: dreaming.maxPromotedSnippetTokens,
-            maxPriorEntryLossFraction: dreaming.maxPriorEntryLossFraction,
-            memoryFileMaxChars: resolveMemoryPromotionFileMaxChars({
-              cfg,
-              agentIds: workspaceAgentIds,
-            }),
-            timezone: dreaming.timezone,
-          });
-        } catch (err) {
-          throw new Error(`Memory promote apply failed: ${formatErrorMessage(err)}`, {
-            cause: err,
-          });
-        }
-      }
-      const outputLimit = resolveNonNegativeIntegerOption(opts.limit, candidates.length);
-      const rejectedCandidates = applyResult
-        ? applyResult.rejectedCandidates.slice(
-            0,
-            Math.max(0, outputLimit - applyResult.appliedCandidates.length),
-          )
-        : [];
-      const outputCandidateKeys = applyResult
-        ? new Set([
-            ...applyResult.appliedCandidates.map((candidate) => candidate.key),
-            ...rejectedCandidates.map((rejection) => rejection.candidate.key),
-          ])
-        : undefined;
-      const outputCandidates = outputCandidateKeys
-        ? candidates.filter((candidate) => outputCandidateKeys.has(candidate.key))
-        : candidates;
-      const storePath = resolveShortTermRecallStorePath(workspaceDir);
-      const lockPath = resolveShortTermRecallLockPath(workspaceDir);
-      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-      if (opts.json) {
-        defaultRuntime.writeJson({
-          workspaceDir,
-          storePath,
-          lockPath,
-          audit,
-          candidates: outputCandidates,
-          apply: applyResult
-            ? {
-                applied: applyResult.applied,
-                appended: applyResult.appended,
-                reconciledExisting: applyResult.reconciledExisting,
-                memoryPath: applyResult.memoryPath,
-                appliedCandidates: applyResult.appliedCandidates,
-                rejectedCandidates,
-              }
-            : undefined,
-        });
-        return;
-      }
-      if (candidates.length === 0) {
-        defaultRuntime.log("No short-term recall candidates.");
-        defaultRuntime.log(`Recall store: ${shortenHomePath(storePath)}`);
-        if (audit.issues.length > 0) {
-          for (const issue of audit.issues) {
-            defaultRuntime.log(issue.message);
-          }
-        }
-        return;
-      }
-      const lines: string[] = [];
-      lines.push(`${heading("Short-Term Promotion Candidates")} ${muted(`(${agentId})`)}`);
-      lines.push(`${muted("Recall store:")} ${shortenHomePath(storePath)}`);
-      lines.push(muted(`Store health: ${formatAuditCounts(audit)}`));
-      for (const candidate of outputCandidates) {
-        lines.push(
-          `${success(candidate.score.toFixed(3))} ${accent(`${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
-        );
-        lines.push(
-          muted(
-            `signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
-          ),
-        );
-        if (candidate.conceptTags.length > 0) {
-          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
-        }
-        if (candidate.snippet) {
-          lines.push(muted(candidate.snippet));
-        }
-        lines.push("");
-      }
-      if (audit.issues.length > 0) {
-        lines.push(warn("Audit issues:"));
-        for (const issue of audit.issues) {
-          lines.push((issue.severity === "error" ? warn : muted)(issue.message));
-        }
-        lines.push("");
-      }
-      if (applyResult) {
-        for (const rejection of rejectedCandidates) {
-          const candidate = rejection.candidate;
-          const source = `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`;
-          lines.push(warn(`Skipped ${source}: ${rejection.reason}.`));
-        }
-        if (applyResult.applied > 0) {
-          lines.push(
-            success(
-              `Processed ${applyResult.applied} candidate(s) for ${shortenHomePath(applyResult.memoryPath)}.`,
-            ),
-          );
-          lines.push(
-            muted(
-              `appended=${applyResult.appended} reconciledExisting=${applyResult.reconciledExisting}`,
-            ),
-          );
-        } else if (rejectedCandidates.length === 0) {
-          lines.push(warn("No candidates met apply criteria."));
-        }
-      }
-      defaultRuntime.log(lines.join("\n").trim());
-    },
-  });
-}
-export async function runMemoryPromote(
-  opts: MemoryPromoteCommandOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
-) {
-  await runMemoryPromotion(opts, hostOptions);
-}
-
-export async function runMemoryPromoteExplain(
-  selector: string,
-  opts: MemoryPromoteExplainOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
-) {
-  await runMemoryPromotion(opts, hostOptions, selector);
 }

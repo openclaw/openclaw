@@ -34,8 +34,12 @@ import {
 } from "./memory-session-tombstones.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
 import { readPhaseSignalStore, readShortTermStore } from "./short-term-promotion-store.js";
-import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
+import type {
+  RankShortTermPromotionOptions,
+  ShortTermLockEntry,
+} from "./short-term-promotion-types.js";
 import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
+import { rankShortTermPromotionCandidates } from "./short-term-promotion.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
@@ -103,6 +107,19 @@ export function applyShortTermPromotionsForTests(
   params: Omit<Parameters<typeof applyShortTermPromotions>[0], "agentId">,
 ) {
   return applyShortTermPromotions({ ...params, agentId: MEMORY_CORE_TEST_AGENT_ID });
+}
+
+/** Ranks with every count and score threshold at zero and returns only the candidates. */
+export async function rankAllShortTermCandidatesForTests(
+  workspaceDir: string,
+  options: Omit<
+    RankShortTermPromotionOptions,
+    "workspaceDir" | "minScore" | "minRecallCount" | "minUniqueQueries"
+  > = {},
+) {
+  const thresholds = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };
+  return (await rankShortTermPromotionCandidates({ ...options, workspaceDir, ...thresholds }))
+    .candidates;
 }
 
 export async function configureMemoryCoreDreamingStateForTests(

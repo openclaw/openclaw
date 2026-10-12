@@ -12,10 +12,10 @@ import {
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
+import type { PromotionCandidate } from "./short-term-promotion-types.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
-  type PromotionCandidate,
 } from "./short-term-promotion.js";
 import {
   applyShortTermPromotionsForTests as applyShortTermPromotions,
@@ -101,7 +101,7 @@ async function recordConsolidationRecall(workspaceDir: string) {
     minRecallCount: 0,
     minUniqueQueries: 0,
     nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-  });
+  }).then((ranking) => ranking.candidates);
 }
 
 const logger = { info: vi.fn(), warn: vi.fn() };
@@ -618,7 +618,7 @@ describe("memory consolidation", () => {
       results: [{ ...recallResult, provenance: candidate("agent").provenance }],
       nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
     });
-    const candidates = await rankShortTermPromotionCandidates({
+    const { candidates } = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
       minRecallCount: 0,
@@ -696,7 +696,7 @@ describe("memory consolidation", () => {
       results: [recallResult],
       nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
     });
-    const candidates = await rankShortTermPromotionCandidates({
+    const { candidates } = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
       minRecallCount: 0,

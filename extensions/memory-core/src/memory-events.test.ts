@@ -43,7 +43,7 @@ describe("memory host event journal integration", () => {
       nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
     });
 
-    const candidates = await rankShortTermPromotionCandidates({
+    const { candidates } = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
       minRecallCount: 0,
@@ -132,7 +132,7 @@ describe("memory host event journal integration", () => {
       nowMs: Date.UTC(2026, 5, 13, 9, 0, 0),
     });
 
-    const candidates = await rankShortTermPromotionCandidates({
+    const { candidates } = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
       minRecallCount: 0,

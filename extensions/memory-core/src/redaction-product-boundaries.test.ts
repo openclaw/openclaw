@@ -15,7 +15,8 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 }));
 
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
-import { applyShortTermPromotions, type PromotionCandidate } from "./short-term-promotion.js";
+import type { PromotionCandidate } from "./short-term-promotion-types.js";
+import { applyShortTermPromotions } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();

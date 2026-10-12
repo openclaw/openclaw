@@ -1345,7 +1345,7 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["promote"]);
 
-    expect(log).toHaveBeenCalledWith("No short-term recall candidates.");
+    expectLogged(log, "No short-term recall candidates.");
     expect(process.exitCode).toBe(0);
   });
 
