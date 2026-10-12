@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { setReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import {
+  readPendingToolMediaReply,
+  restorePendingToolMediaReply,
+} from "../../embedded-agent-subscribe.handlers.messages.replies.js";
+import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -397,12 +401,32 @@ describe("resolveSettledTurnFinalizationRequest", () => {
     },
   );
 
-  // The shipped producer that can hand the classifier a content-less payload: a tool asks
-  // for voice delivery but returns no media, so the tool-media projection appends a payload
-  // whose only non-text values are delivery booleans (#169501). A payload with nothing to
-  // deliver must not consume the settled-tool continuation.
-  it("keeps the continuation when the tool-media projection appends a payload without media", () => {
-    const projected = mergeAttemptToolMediaPayloads({ payloads: [], toolAudioAsVoice: true });
+  // The voice flag can exist with no media on the delivery-failure recovery path: a rejected
+  // outbound reply restores its voice intent, and `restorePendingToolMediaReply` records the
+  // flag without requiring restored media, so `readPendingToolMediaReply` returns the flag
+  // alone. The attempt forwards exactly those fields into the tool-media projection, which
+  // then appends a payload whose only non-text values are delivery booleans. That payload has
+  // nothing to deliver and must not consume the settled-tool continuation (#169501).
+  it("keeps the continuation after a delivery-failed voice reply restores without media", () => {
+    const pendingToolMediaUrls: string[] = [];
+    const state = {
+      pendingToolMediaUrls,
+      pendingToolMediaTrustByUrl: new Map<string, boolean>(),
+      pendingToolAudioAsVoice: false,
+      pendingToolMediaDeliveryFailed: false,
+    };
+    restorePendingToolMediaReply(state, { audioAsVoice: true });
+    const restored = readPendingToolMediaReply(state);
+    expect(restored?.mediaUrls).toBeUndefined();
+    expect(restored?.attachments).toBeUndefined();
+    expect(restored?.audioAsVoice).toBe(true);
+
+    const projected = mergeAttemptToolMediaPayloads({
+      payloads: [],
+      toolMediaUrls: restored?.mediaUrls,
+      toolAudioAsVoice: restored?.audioAsVoice,
+      toolTrustedLocalMedia: restored?.trustedLocalMedia,
+    });
     expect(projected).toHaveLength(1);
     expect(projected?.[0]?.text).toBeUndefined();
     expect(projected?.[0]?.mediaUrls ?? []).toEqual([]);
