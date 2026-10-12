@@ -428,8 +428,10 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     if (processSettlement) {
       params.onDoctorStep?.(processSettlement);
     }
-    // Doctors that predate section tracing keep their previous step set.
-    if (doctorStep && sectionTiming.annotate(doctorStep).diagnostics) {
+    // Missing reports must replace earlier selector facts, including from older Doctors.
+    if (doctorStep) {
+      sectionTiming.annotate(doctorStep);
+      doctorStep.deferredInspectionCheckIds = doctorResult?.deferredInspectionCheckIds ?? null;
       params.onDoctorStep?.(doctorStep);
     }
     if (params.databaseBackup) {

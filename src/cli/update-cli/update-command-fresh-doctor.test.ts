@@ -311,7 +311,10 @@ describe("post-plugin update readiness", () => {
         if (outcome === "advisory") {
           await writeUpdatePostInstallDoctorResult({
             resultPath: options.env![UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]!,
-            result: createDeferredConfiguredPluginRepairDoctorResult(["Plugin repair deferred"]),
+            result: {
+              ...createDeferredConfiguredPluginRepairDoctorResult(["Plugin repair deferred"]),
+              deferredInspectionCheckIds: ["core/doctor/new-target-inspection"],
+            },
           });
         }
         if (outcome !== "success") {
@@ -348,6 +351,8 @@ describe("post-plugin update readiness", () => {
       expect(onDoctorStep).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           name: `${phase} doctor`,
+          deferredInspectionCheckIds:
+            outcome === "advisory" ? ["core/doctor/new-target-inspection"] : null,
           exitCode:
             outcome === "success"
               ? 0

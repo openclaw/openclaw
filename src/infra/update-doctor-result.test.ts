@@ -33,6 +33,7 @@ describe("post-install doctor result IPC", () => {
       ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
       configHash: "b".repeat(64),
       warnings: ["plugin/example: version probe timed out"],
+      deferredInspectionCheckIds: ["core/doctor/new-target-inspection", "target:Inspection_Check"],
     },
   ])("round-trips $status results and consumes the file", async (result) => {
     const resultPath = createUpdatePostInstallDoctorResultPath();
@@ -79,6 +80,29 @@ describe("post-install doctor result IPC", () => {
       "y".repeat(500),
     ]);
   });
+
+  it.each(
+    [
+      "missing-array",
+      [" "],
+      Array.from({ length: 129 }, () => "core/doctor/example"),
+      [`core/doctor/${"x".repeat(256)}`],
+    ].map((ids) => ({ ids })),
+  )(
+    "keeps malformed selector evidence unknown without changing Doctor status ($ids)",
+    async ({ ids }) => {
+      const resultPath = createUpdatePostInstallDoctorResultPath();
+      resultPaths.push(resultPath);
+      await fs.writeFile(
+        resultPath,
+        JSON.stringify({ status: "ok", deferredInspectionCheckIds: ids }),
+      );
+      const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+      expect(result?.status).toBe("ok");
+      expect(result?.deferredInspectionCheckIds).toBeUndefined();
+      await expect(fs.access(resultPath)).rejects.toThrow();
+    },
+  );
 
   it("keeps committed migration notes and the first refusal scoped to one Doctor run", async () => {
     const refusal = {
