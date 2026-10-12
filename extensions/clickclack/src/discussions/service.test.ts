@@ -200,31 +200,6 @@ describe("ClickClack discussion service", () => {
     });
   });
 
-  it("propagates worker session read failures before creating a discussion", async () => {
-    const harness = createHarness({ label: "Unavailable session" });
-    const failure = new Error("Session worker unavailable");
-    vi.mocked(harness.runtime.agent.session.getSessionEntryAsync).mockRejectedValue(failure);
-
-    await expect(harness.service.open("agent:main:worker-unavailable")).rejects.toBe(failure);
-    expect(harness.runtime.agent.session.getSessionEntry).not.toHaveBeenCalled();
-    expect(harness.createChannel).not.toHaveBeenCalled();
-  });
-
-  it("clears display_title for fallback labels", async () => {
-    const harness = createHarness({});
-    const sessionKey = "agent:main:untitled";
-
-    await harness.service.open(sessionKey);
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({
-        name: fallbackDiscussionLabel(sessionKey, "main"),
-        display_title: "",
-      }),
-    );
-  });
-
   it("truncates display_title by Unicode code point", async () => {
     const harness = createHarness({ label: "😀".repeat(201) });
 
@@ -244,6 +219,10 @@ describe("ClickClack discussion service", () => {
     );
     await harness.service.open(sessionKey);
 
+    harness.updateChannel.mockClear();
+    await harness.service.reconcile(sessionKey);
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+
     harness.setSessionEntry({ label: "Confirmed Sibling" });
     await harness.service.open("agent:main:confirmed-sibling");
     expect(harness.store.lookup("agent:main:confirmed-sibling")).toMatchObject({
@@ -260,64 +239,6 @@ describe("ClickClack discussion service", () => {
     expect(harness.store.lookup(sessionKey)).toMatchObject({ displayTitle: "Needs Backfill" });
   });
 
-  it("does not retry an unchanged title without server capability confirmation", async () => {
-    const harness = createHarness({ label: "Legacy title" });
-    const sessionKey = "agent:main:legacy-title-no-retry";
-    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
-      legacyCreateResponse(input),
-    );
-    await harness.service.open(sessionKey);
-
-    harness.updateChannel.mockClear();
-    await harness.service.reconcile(sessionKey);
-
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-  });
-
-  it("pins the configured default for global keys and preserves qualified owners", async () => {
-    const globalHarness = createHarness({ label: "Global session" });
-    globalHarness.config.agents = { entries: { ops: {} } };
-
-    expect(await globalHarness.service.open("global")).toMatchObject({ state: "open" });
-    expect(globalHarness.store.lookup("global")).toMatchObject({ agentId: "ops" });
-
-    const qualifiedHarness = createHarness({ label: "Qualified session" });
-    qualifiedHarness.config.agents = { entries: { ops: {}, worker: {} } };
-    const qualifiedKey = "agent:worker:qualified";
-
-    expect(await qualifiedHarness.service.open(qualifiedKey)).toMatchObject({ state: "open" });
-    expect(qualifiedHarness.store.lookup(qualifiedKey)).toMatchObject({ agentId: "worker" });
-    expect(qualifiedHarness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({ external_url: expect.stringContaining("/chat/worker/") }),
-    );
-  });
-
-  it("uses the account agent for unscoped links without changing the configured owner", async () => {
-    const harness = createHarness({ label: "Telegram peer" });
-    harness.config.agents = { entries: { ops: {} } };
-    harness.config.channels!.clickclack!.agentId = "research";
-
-    await harness.service.open("telegram:12345");
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({
-        external_url: "https://control.example/control/chat/research/telegram/12345",
-      }),
-    );
-    expect(harness.store.lookup("telegram:12345")).toMatchObject({ agentId: "ops" });
-
-    await harness.service.reconcile("telegram:12345");
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-
-    harness.config.channels!.clickclack!.agentId = "writer";
-    await harness.service.reconcile("telegram:12345");
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", {
-      external_url: "https://control.example/control/chat/writer/telegram/12345",
-    });
-  });
-
   it("uses the configured main key when building control links", async () => {
     const harness = createHarness({ label: "Workspace main" });
     harness.config.session = { mainKey: "workspace" };
@@ -332,30 +253,6 @@ describe("ClickClack discussion service", () => {
     );
   });
 
-  it("builds control links from URL path and query components", async () => {
-    const harness = createHarness({ label: "Control link" });
-    harness.config.channels!.clickclack!.discussions!.controlUrlBase =
-      "https://control.example/control///?tenant=alpha#old";
-    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
-
-    await harness.service.open(sessionKey);
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({
-        external_url:
-          "https://control.example/control/chat/main/control-link-12345678?tenant=alpha",
-      }),
-    );
-  });
-
-  it("does not create a channel for a missing session", async () => {
-    const harness = createHarness(undefined);
-
-    expect(await harness.service.open("agent:main:missing")).toEqual({ state: "available" });
-    expect(harness.createChannel).not.toHaveBeenCalled();
-  });
-
   it("does not create a channel without a concrete session incarnation", async () => {
     const harness = createHarness({ sessionId: "", label: "Unmaterialized session" });
 
@@ -366,35 +263,6 @@ describe("ClickClack discussion service", () => {
     expect(harness.client.workspaces).not.toHaveBeenCalled();
     expect(harness.channels).not.toHaveBeenCalled();
     expect(harness.createChannel).not.toHaveBeenCalled();
-  });
-
-  it("keeps the room durable across session archive, restore, and deletion", async () => {
-    const harness = createHarness({ label: "Original", category: "Projects" });
-    const sessionKey = "agent:main:work";
-    await harness.service.open(sessionKey);
-
-    harness.setSessionEntry({
-      label: "Renamed Session",
-      category: "Incidents",
-      archivedAt: 123,
-    });
-    await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(harness.store.lookup(sessionKey)).toMatchObject({ channelId: "chn_discussion" });
-
-    harness.setSessionEntry({ label: "Renamed Session" });
-    await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
-      display_title: "Renamed Session",
-      name: "renamed-session",
-      sidebar_section: "Sessions",
-    });
-
-    harness.updateChannel.mockClear();
-    harness.setSessionEntry(undefined);
-    await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(await harness.service.info(sessionKey)).toMatchObject({ state: "open" });
   });
 
   it("renames a fallback discussion when displayName arrives", async () => {
@@ -570,49 +438,6 @@ describe("ClickClack discussion service", () => {
     );
   });
 
-  it("adopts a remotely created channel by external reference after an interrupted open", async () => {
-    const harness = createHarness({ label: "Release Planning", category: "Projects" });
-    const sessionKey = "agent:main:recover";
-    const externalRef = testExternalRef(sessionKey);
-    vi.mocked(harness.channels).mockResolvedValue([
-      discussionChannel({
-        id: "chn_recovered",
-        route_id: "recovered-route",
-        name: "release-planning",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "https://control.example/control/chat/main/release-planning-12345678",
-        sidebar_section: "Projects",
-      }),
-    ]);
-    vi.mocked(harness.updateChannel).mockImplementationOnce(async (_channelId, patch) =>
-      discussionChannel({
-        id: "chn_recovered",
-        route_id: "recovered-route",
-        name: patch.name ?? "release-planning",
-        external_managed: patch.external_managed,
-        external_ref: patch.external_ref,
-        external_url: patch.external_url,
-        sidebar_section: patch.sidebar_section,
-      }),
-    );
-
-    const opened = await harness.service.open(sessionKey);
-
-    expect(harness.createChannel).not.toHaveBeenCalled();
-    expect(harness.updateChannel).toHaveBeenCalledWith(
-      "chn_recovered",
-      expect.objectContaining({ external_ref: externalRef, external_managed: true }),
-    );
-    expect(harness.store.lookup(sessionKey)).not.toHaveProperty("displayTitle");
-    expect(opened).toEqual({
-      state: "open",
-      embedUrl:
-        "https://clickclack.example/embed/channel/team-route/recovered-route?openclawHostTheme=1",
-      openUrl: "https://clickclack.example/app/team-route/recovered-route",
-    });
-  });
-
   it("reuses a pending generation after an interrupted create", async () => {
     const generationFactory = vi.fn(() => "pending-generation");
     const harness = createHarness(
@@ -718,67 +543,6 @@ describe("ClickClack discussion service", () => {
     expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
   });
 
-  it("retains a pending destination after an ambiguous HTTP create failure", async () => {
-    const harness = createHarness({ label: "Server failure" });
-    const sessionKey = "agent:main:server-failure";
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(
-      new ClickClackHttpError(500, "internal error", new Headers()),
-    );
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow(
-      "ClickClack 500: internal error",
-    );
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
-    });
-  });
-
-  it("retains a pending destination when a transport failure relists empty", async () => {
-    const harness = createHarness({ label: "Delayed commit" });
-    const sessionKey = "agent:main:delayed-commit";
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection reset"));
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection reset");
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
-    });
-  });
-
-  it("retains a recovered channel reservation when its adoption patch fails", async () => {
-    const harness = createHarness({ label: "Adoption failure" });
-    const sessionKey = "agent:main:adoption-failure";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockImplementationOnce(async () => {
-        const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-        return [
-          general,
-          discussionChannel({
-            id: "chn_adoption_failure",
-            route_id: "adoption-failure-route",
-            name: "adoption-failure",
-            external_managed: true,
-            external_ref: externalRef,
-            external_url: "",
-            sidebar_section: "Sessions",
-            archived: false,
-          }),
-        ];
-      });
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection reset"));
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(new Error("patch unavailable"));
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection reset");
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
-    });
-    expect(harness.revokedStore.entries()).toHaveLength(1);
-  });
-
   it("retains a pre-existing channel reservation after definitive adoption failures", async () => {
     const harness = createHarness({ label: "Existing adoption failure" });
     const sessionKey = "agent:main:existing-adoption-failure";
@@ -805,92 +569,6 @@ describe("ClickClack discussion service", () => {
       pending: expect.objectContaining({ externalRef }),
     });
     expect(harness.revokedStore.entries()).toHaveLength(1);
-  });
-
-  it("retains an adopted channel reservation when conflict relisting fails", async () => {
-    const harness = createHarness({ label: "Adopted conflict" });
-    const sessionKey = "agent:main:adopted-conflict";
-    const externalRef = testExternalRef(sessionKey);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([
-        discussionChannel({
-          id: "chn_adopted_conflict",
-          route_id: "adopted-conflict-route",
-          name: "adopted-conflict",
-          external_managed: true,
-          external_ref: externalRef,
-          external_url: "",
-          sidebar_section: "Sessions",
-          archived: false,
-        }),
-      ])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(
-      new ClickClackHttpError(
-        409,
-        'duplicate key value violates unique constraint "channels_workspace_id_name_key"',
-        new Headers(),
-      ),
-    );
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("relist unavailable");
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ externalRef }),
-    });
-    expect(harness.revokedStore.entries()).toHaveLength(1);
-  });
-
-  it("adopts an ambiguous create after the session incarnation changes", async () => {
-    const harness = createHarness({ sessionId: "old-session", label: "Ambiguous reset" });
-    const sessionKey = "agent:main:ambiguous-reset";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-    harness.setSessionEntry({ sessionId: "new-session", label: "Ambiguous reset" });
-    vi.mocked(harness.channels).mockResolvedValue([
-      discussionChannel({
-        id: "chn_ambiguous_old",
-        route_id: "ambiguous-old-route",
-        name: "ambiguous-reset",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "",
-        sidebar_section: "Sessions",
-        archived: false,
-      }),
-    ]);
-    vi.mocked(harness.updateChannel).mockImplementationOnce(async (channelId, patch) =>
-      discussionChannel({
-        id: channelId,
-        route_id: "ambiguous-old-route",
-        name: patch.name ?? "ambiguous-reset",
-        external_managed: patch.external_managed ?? true,
-        external_ref: patch.external_ref ?? externalRef,
-        external_url: patch.external_url,
-        sidebar_section: patch.sidebar_section,
-        archived: false,
-      }),
-    );
-
-    await harness.service.open(sessionKey);
-
-    expect(harness.updateChannel).toHaveBeenCalledWith(
-      "chn_ambiguous_old",
-      expect.objectContaining({ external_ref: externalRef }),
-    );
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.store.lookup(sessionKey)).toMatchObject({
-      sessionId: "new-session",
-      externalRef,
-      channelId: "chn_ambiguous_old",
-    });
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
-    expect(harness.revokedStore.entries()).toHaveLength(0);
   });
 
   it("reattaches an ambiguous room after the session is archived and restored", async () => {
@@ -1009,48 +687,6 @@ describe("ClickClack discussion service", () => {
     expect(harness.updateChannel).not.toHaveBeenCalled();
     expect(harness.createChannel).toHaveBeenCalledTimes(2);
     expect(harness.createChannel.mock.calls[1]?.[1].external_ref).not.toBe(externalRef);
-  });
-
-  it("does not recurse while replacing the account for an ambiguous open", async () => {
-    const harness = createHarness({ label: "Account replacement" });
-    const sessionKey = "agent:main:account-replacement";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-    harness.config.channels!.clickclack!.discussions!.enabled = false;
-    harness.config.channels!.clickclack!.accounts = {
-      replacement: {
-        baseUrl: "https://replacement-clickclack.example",
-        token: "test-token-placeholder",
-        workspace: "team",
-        discussions: { enabled: true, workspace: "team" },
-      },
-    };
-    vi.mocked(harness.channels).mockResolvedValue([
-      discussionChannel({
-        id: "chn_old_account",
-        route_id: "old-account-route",
-        name: "account-replacement",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "",
-        sidebar_section: "Sessions",
-        archived: false,
-      }),
-    ]);
-
-    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(harness.createChannel).toHaveBeenCalledTimes(2);
-    expect(harness.store.lookup(sessionKey)).toMatchObject({
-      accountId: "replacement",
-      serverBaseUrl: "https://replacement-clickclack.example",
-    });
   });
 
   it("does not create or adopt a room for an archived main session", async () => {

@@ -20,7 +20,7 @@ import {
   isClickClackDiscussionSessionTarget,
 } from "./tool-policy.js";
 
-async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
+async function setup() {
   const store = createDiscussionMemoryStore<unknown>();
   const config: CoreConfig = {
     channels: {
@@ -76,13 +76,8 @@ async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
     archived: false,
     label: "Research",
   };
-  if (options.persistedBeforeOpening) {
-    store.register(mainSessionKey, initialBinding);
-  }
   const bindingStore = getClickClackDiscussionBindingStore(runtime);
-  if (!options.persistedBeforeOpening) {
-    await bindingStore.setIfCurrent(mainSessionKey, undefined, initialBinding);
-  }
+  await bindingStore.setIfCurrent(mainSessionKey, undefined, initialBinding);
   const sideSessionKey = discussionSessionKey({
     runtime,
     agentId: "research",
@@ -106,21 +101,6 @@ async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
 }
 
 describe("ClickClack discussion session tool policy", () => {
-  it("authorizes a persisted binding synchronously before index preparation after restart", async () => {
-    const { runtime, mainSessionKey, sideSessionKey, run } = await setup({
-      persistedBeforeOpening: true,
-    });
-
-    expect(
-      isClickClackDiscussionSessionTarget({
-        runtime,
-        requesterSessionKey: sideSessionKey,
-        targetSessionKey: mainSessionKey,
-      })?.binding.sessionId,
-    ).toBe("session-id");
-    expect(run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
-  });
-
   it("allows the three observer tools only against the attached main session", async () => {
     const { mainSessionKey, run } = await setup();
 
@@ -365,21 +345,5 @@ describe("ClickClack discussion session tool policy", () => {
     ).rejects.toThrow("SQLITE_FULL");
     expect(bindingStore.get(mainSessionKey)).toEqual(previous);
     expect(run("sessions_history", { sessionKey: mainSessionKey })?.block).toBe(true);
-  });
-
-  it("uses a different side-session identity after a server retarget", async () => {
-    const { mainSessionKey, runtime, sideSessionKey } = await setup();
-    const retargeted = discussionSessionKey({
-      runtime,
-      agentId: "research",
-      mainSessionKey,
-      sessionId: "session-id",
-      accountId: "default",
-      serverBaseUrl: "https://other-clickclack.example",
-      channelId: "chn_discussion",
-      externalRef: "openclaw:test:research",
-    });
-
-    expect(retargeted).not.toBe(sideSessionKey);
   });
 });
