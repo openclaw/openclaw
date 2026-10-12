@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
@@ -47,6 +48,7 @@ import {
   sessionEntryCommitGuardOptions,
 } from "../config/sessions/session-source-authority.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { readTranscriptStatsAsync as readAccessorTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
@@ -255,14 +257,28 @@ export const loadTranscriptEventsSync: (params: {
   storePath?: string;
 }) => SessionStoreTranscriptEvent[] = loadAccessorTranscriptEventsSync;
 
-/** Reads transcript freshness and byte size without materializing event rows. */
-export const readTranscriptStatsSync: (params: {
+/** @deprecated Use readTranscriptStatsAsync; removed in the next Plugin SDK major. */
+export function readTranscriptStatsSync(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}) => { eventCount: number; maxSeq: number; sizeBytes: number } = readAccessorTranscriptStatsSync;
+}): { eventCount: number; maxSeq: number; sizeBytes: number } {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-store",
+      method: "readTranscriptStatsSync",
+      replacement: "readTranscriptStatsAsync",
+    });
+  }
+  return readAccessorTranscriptStatsSync(params);
+}
+
+/** Reads transcript statistics through the existing session worker. */
+export const readTranscriptStatsAsync: (
+  params: Parameters<typeof readTranscriptStatsSync>[0],
+) => Promise<ReturnType<typeof readTranscriptStatsSync>> = readAccessorTranscriptStatsAsync;
 
 /** Resolves the persisted session key for one SQLite transcript identity. */
 export { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";

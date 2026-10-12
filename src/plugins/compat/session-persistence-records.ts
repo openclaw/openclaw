@@ -1,4 +1,5 @@
 import { REPLY_TOOL_AUTHORITY_COMPAT_RECORD } from "./reply-tool-authority-record.js";
+import { TRANSCRIPT_STATS_COMPAT_RECORD } from "./transcript-stats-record.js";
 import type { PluginCompatRecord } from "./types.js";
 
 const DEPRECATED_SESSION_COMPAT = {
@@ -12,6 +13,7 @@ const DEPRECATED_SESSION_COMPAT = {
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
+  TRANSCRIPT_STATS_COMPAT_RECORD,
   {
     code: "session-store-sync-listing",
     ...DEPRECATED_SESSION_COMPAT,

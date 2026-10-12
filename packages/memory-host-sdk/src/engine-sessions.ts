@@ -6,6 +6,7 @@ export {
   listSessionTranscriptCorpusEntriesForAgent,
   matchesSessionEntryPrefixHash,
   parseCanonicalSessionSyncTargetFromPath,
+  readTranscriptStatsBatchReadOnlyAsync,
   readTranscriptStatsBatchReadOnlySync,
   sessionPathForFile,
   sessionPathForSessionIdentity,

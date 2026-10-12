@@ -1,5 +1,6 @@
 // Session/runtime facade for memory transcript helpers.
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
 import {
@@ -14,11 +15,13 @@ import {
   withIncognitoSessionBinding,
 } from "../../../../src/config/sessions/session-incognito-binding.js";
 import { captureSessionTranscriptStorageEnvironment } from "../../../../src/config/sessions/transcript-target-binding.js";
+import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecation.js";
 import { IncognitoSessionSyncAccessError } from "../../../../src/state/incognito-session-error.js";
 
 export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
 export { readTranscriptExportSnapshotReadOnlySync };
 export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
+export { readTranscriptStatsBatchReadOnlyAsync } from "../../../../src/config/sessions/session-transcript-stats-batch.js";
 export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-cold-storage-state.js";
 export {
   listSessionEntriesCore,
@@ -42,14 +45,22 @@ export function assertBoundIncognitoMemorySyncAccess(
   }
 }
 
+/** @deprecated Use readTranscriptStatsBatchReadOnlyAsync; removed in the next Plugin SDK major. */
 export function readTranscriptStatsBatchReadOnlySync(
   scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
 ) {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "session-store",
+      method: "readTranscriptStatsBatchReadOnlySync",
+      replacement: "readTranscriptStatsBatchReadOnlyAsync",
+    });
+  }
   for (const scope of scopes) {
     assertBoundIncognitoMemorySyncAccess(
       scope,
       "readTranscriptStatsBatchReadOnlySync",
-      "buildSessionEntry",
+      "readTranscriptStatsBatchReadOnlyAsync",
     );
   }
   return readAccessorTranscriptStatsBatchReadOnlySync(scopes);

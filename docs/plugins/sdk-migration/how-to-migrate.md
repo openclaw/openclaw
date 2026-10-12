@@ -582,6 +582,21 @@ The synchronous `listSessionEntries` API is deprecated until the next Plugin SDK
 major. Its existing arguments and complete-entry behavior remain available for
 compatibility, with a one-time deprecation warning on legacy use.
 
+## Await transcript statistics
+
+Use `await readTranscriptStatsAsync(scope)` from
+`openclaw/plugin-sdk/session-store-runtime` for one transcript, or
+`await readTranscriptStatsBatchReadOnlyAsync(scopes)` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` for a batch. Durable reads
+run through the existing session worker. Batch results retain input order and
+duplicate IDs, return zero counts for missing transcripts in existing stores,
+and return `null` for unavailable stores without creating them.
+
+`readTranscriptStatsSync` and `readTranscriptStatsBatchReadOnlySync` retain their
+released signatures until the next Plugin SDK major. Legacy calls on the main
+thread emit a shared session-store deprecation warning; kernels already running
+inside database workers can keep their synchronous reads without a warning.
+
 ## Prepare session entry changes
 
 Use `prepareSessionEntryPatch` or `applySessionEntryPatch` from

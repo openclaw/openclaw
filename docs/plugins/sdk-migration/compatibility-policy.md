@@ -537,9 +537,14 @@ The synchronous `loadMemorySessionMetadata` and
 `loadMemorySessionMetadataAsync` and `loadMemorySessionMetadataBatchAsync`
 instead; bundled ingestion resolves each store batch in the existing history
 worker. The synchronous helpers retain their signatures until the next Plugin
-SDK major. Like the other inventory readers, their deprecation is documented
-without a runtime warning. `statSessionEntrySync`, batch transcript stats, and
-synchronous archive and selector readers retain their existing native/offline contracts. Explicitly
+SDK major. Main-thread calls emit one shared Memory session deprecation warning
+per plugin. Batch transcript statistics now offer
+`readTranscriptStatsBatchReadOnlyAsync`; `session-store-runtime` offers
+`readTranscriptStatsAsync` for individual transcripts. Their synchronous
+predecessors retain their signatures until the next Plugin SDK major and warn
+on main-thread use. Worker-local statistics kernels remain synchronous.
+`statSessionEntrySync` and synchronous archive and selector readers retain their
+existing native/offline contracts. Explicitly
 bound actor calls refuse synchronous database access with
 `IncognitoSessionSyncAccessError`: await `resolveMemorySessionTargetsAsync`,
 `loadArchivedSessionsAsync`, or `buildSessionEntry` as named by the error.
