@@ -6,89 +6,18 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
-import {
-  deliveryContextFromSession,
-  sessionDeliveryOrigin,
-  sessionDeliveryRoute,
-} from "../../utils/delivery-context.read.js";
-import {
-  deliveryContextFromChannelRoute,
-  deliveryContextKey,
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-  normalizeSessionDeliveryState,
-} from "../../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
-import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
+} from "../../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
+import { resolveGroupSessionKey } from "./group.js";
+import {
+  mergeSessionOrigin,
+  projectSessionMetaPatch,
+  type PreparedSessionMetaPatch,
+} from "./metadata-projection.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
-
-function hasExternalOriginChange(
-  existing: SessionOrigin | undefined,
-  next: SessionOrigin | undefined,
-): boolean {
-  const nextProvider = next?.provider;
-  return (
-    nextProvider != null &&
-    nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(nextProvider) &&
-    (!existing ||
-      (existing.provider != null && nextProvider !== existing.provider) ||
-      (existing.surface != null && next?.surface != null && next.surface !== existing.surface) ||
-      (existing.accountId != null &&
-        next?.accountId != null &&
-        next.accountId !== existing.accountId))
-  );
-}
-
-const mergeSessionOrigin = (
-  existing: SessionOrigin | undefined,
-  next: SessionOrigin | undefined,
-): SessionOrigin | undefined => {
-  if (!existing && !next) {
-    return undefined;
-  }
-  const merged: SessionOrigin = existing ? { ...existing } : {};
-  // A provider/surface/account change is a fresh channel identity (e.g. a dmScope:"main" session
-  // moving Slack -> Telegram, or between Slack accounts). Channel-keyed fields belong to the prior
-  // channel; drop them so an inbound that omits them does not keep reactions, native threading, and
-  // status reads pointed at the previous channel.
-  if (existing != null && hasExternalOriginChange(existing, next)) {
-    delete merged.nativeChannelId;
-    delete merged.nativeDirectUserId;
-    delete merged.avatar;
-    delete merged.accountId;
-    delete merged.threadId;
-  }
-  const mergeField = <K extends keyof SessionOrigin>(field: K, value: SessionOrigin[K]) => {
-    if (value) {
-      merged[field] = value;
-    }
-  };
-  for (const field of [
-    "label",
-    "provider",
-    "surface",
-    "chatType",
-    "from",
-    "to",
-    "nativeChannelId",
-    "nativeDirectUserId",
-    "avatar",
-    "accountId",
-  ] as const) {
-    mergeField(field, next?.[field]);
-  }
-  if (next?.threadId != null && next.threadId !== "") {
-    merged.threadId = next.threadId;
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
-};
 
 export function deriveSessionOrigin(
   ctx: MsgContext,
@@ -116,12 +45,10 @@ export function deriveSessionOrigin(
   });
 }
 
-function deriveGroupSessionPatch(params: {
+function prepareGroupSessionPatch(params: {
   ctx: MsgContext;
-  sessionKey: string;
-  existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
-}): Partial<SessionEntry> | null {
+}) {
   const resolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
   if (!resolution?.channel) {
     return null;
@@ -148,41 +75,7 @@ function deriveGroupSessionPatch(params: {
       : undefined);
   const nextSubject = nextGroupChannel ? undefined : subject;
 
-  const patch: Partial<SessionEntry> = {
-    chatType: resolution.chatType ?? "group",
-    groupId: resolution.id,
-  };
-  if (nextSubject) {
-    patch.subject = nextSubject;
-    // These fields are alternate presentations of the same chat. Clear the stale channel title
-    // when ingress now owns a human subject, or an old opaque route id will keep winning in UI.
-    patch.groupChannel = undefined;
-  }
-  if (nextGroupChannel) {
-    patch.groupChannel = nextGroupChannel;
-    patch.subject = undefined;
-  }
-  if (space) {
-    patch.space = space;
-  }
-  if (topicName) {
-    patch.topicName = topicName;
-  }
-
-  const displayName = buildGroupDisplayName({
-    provider: channel,
-    subject: nextSubject ?? (nextGroupChannel ? undefined : params.existing?.subject),
-    topicName: topicName ?? params.existing?.topicName,
-    groupChannel: nextGroupChannel ?? (nextSubject ? undefined : params.existing?.groupChannel),
-    space: space ?? params.existing?.space,
-    id: resolution.id,
-    key: params.sessionKey,
-  });
-  if (displayName) {
-    patch.displayName = displayName;
-  }
-
-  return patch;
+  return { resolution, nextSubject, nextGroupChannel, topicName, space };
 }
 
 export function deriveSessionMetaPatch(params: {
@@ -193,167 +86,29 @@ export function deriveSessionMetaPatch(params: {
   preserveExistingDeliveryRoute?: boolean;
   skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
-  const groupPatch = deriveGroupSessionPatch(params);
-  const origin = deriveSessionOrigin(params.ctx, {
-    skipSystemEventOrigin: params.skipSystemEventOrigin,
+  return projectSessionMetaPatch({
+    ...params,
+    prepared: prepareSessionMetaPatch(params),
   });
-  if (!groupPatch && !origin) {
-    return null;
-  }
+}
 
-  const existingOrigin = sessionDeliveryOrigin(params.existing);
-  const nextProvider = origin?.provider;
-  const nextOwnsExternalRoute = Boolean(
-    nextProvider &&
-    nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(nextProvider),
-  );
+/** Resolve plugin-owned ingress facts once, before handing pure metadata to the writer. */
+export function prepareSessionMetaPatch(params: {
+  ctx: MsgContext;
+  groupResolution?: GroupKeyResolution | null;
+  skipSystemEventOrigin?: boolean;
+}): PreparedSessionMetaPatch {
   const sourceChannel = normalizeMessageChannel(
     params.ctx.Provider ?? params.ctx.Surface ?? params.ctx.OriginatingChannel,
   );
-  const internalTurn =
-    params.ctx.InternalTurnSource !== undefined ||
-    sourceChannel === INTERNAL_MESSAGE_CHANNEL ||
-    (sourceChannel != null && isInternalNonDeliveryChannel(sourceChannel));
-  if (existingOrigin && internalTurn) {
-    const existingContext = normalizeDeliveryContext({
-      channel: existingOrigin.provider,
-      to: existingOrigin.to,
-      accountId: existingOrigin.accountId,
-      threadId: existingOrigin.threadId,
-    });
-    const nextContext = mergeDeliveryContext(
-      {
-        channel: nextProvider,
-        to: origin?.to,
-        accountId: origin?.accountId,
-        threadId: origin?.threadId,
-      },
-      existingContext,
-    );
-    // Internal callers describe their own direct turn, not the bound channel conversation.
-    // Preserve that identity unless the caller supplies a different external delivery route.
-    if (
-      !nextOwnsExternalRoute ||
-      (existingContext && deliveryContextKey(nextContext) === deliveryContextKey(existingContext))
-    ) {
-      return null;
-    }
-  }
-
-  const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
-  const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
-  if (mergedOrigin) {
-    if (!patch.chatType && mergedOrigin.chatType) {
-      patch.chatType = mergedOrigin.chatType;
-    }
-    const existingRoute = sessionDeliveryRoute(params.existing);
-    const existingRouteAccountId =
-      existingRoute?.accountId ?? deliveryContextFromSession(params.existing)?.accountId;
-    const freshRouteOwnsNextProvider =
-      params.preserveExistingDeliveryRoute === true &&
-      nextProvider != null &&
-      existingRoute?.channel === nextProvider &&
-      (origin?.accountId == null || existingRouteAccountId === origin.accountId);
-    const deliveryIdentityChanged =
-      Boolean(nextProvider) &&
-      !freshRouteOwnsNextProvider &&
-      hasExternalOriginChange(existingOrigin, origin);
-    patch.delivery = normalizeSessionDeliveryState({
-      route: deliveryIdentityChanged ? undefined : sessionDeliveryRoute(params.existing),
-      context: deliveryIdentityChanged
-        ? {
-            channel: mergedOrigin.provider,
-            to: mergedOrigin.to,
-            accountId: mergedOrigin.accountId,
-            threadId: mergedOrigin.threadId,
-          }
-        : deliveryContextFromSession(params.existing),
-      origin: mergedOrigin,
-    });
-  }
-
-  return Object.keys(patch).length > 0 ? patch : null;
-}
-
-function withoutThread<T extends { threadId?: string | number }>(identity?: T): T | undefined {
-  if (!identity || identity.threadId == null) {
-    return identity;
-  }
-  const next: T = { ...identity };
-  delete next.threadId;
-  return next;
-}
-
-/**
- * Derives the last-route/delivery patch for an inbound routing update. Route
- * updates must not refresh activity timestamps; idle/daily reset evaluation
- * relies on updatedAt from actual session turns (#49515). Shared by the file
- * store and the SQLite accessor so both backends apply one routing policy.
- */
-export function deriveLastRoutePatch(params: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-  route?: ChannelRouteRef;
-  deliveryContext?: DeliveryContext;
-  ctx?: MsgContext;
-  groupResolution?: GroupKeyResolution | null;
-  existing: SessionEntry | undefined;
-  sessionKey: string;
-}): Partial<SessionEntry> {
-  const { channel, to, accountId, threadId, ctx, existing } = params;
-  const explicitContext = normalizeDeliveryContext(params.deliveryContext);
-  const inlineContext = normalizeDeliveryContext({
-    channel,
-    to,
-    accountId,
-    threadId,
-  });
-  const routeContext = deliveryContextFromChannelRoute(params.route);
-  const mergedInput = mergeDeliveryContext(
-    routeContext,
-    mergeDeliveryContext(explicitContext, inlineContext),
-  );
-  const explicitDeliveryContext = params.deliveryContext;
-  const explicitThreadFromDeliveryContext =
-    explicitDeliveryContext != null && Object.hasOwn(explicitDeliveryContext, "threadId")
-      ? explicitDeliveryContext.threadId
-      : undefined;
-  const explicitThreadValue =
-    explicitThreadFromDeliveryContext ??
-    (threadId != null && threadId !== "" ? threadId : undefined);
-  const explicitRouteProvided = Boolean(
-    routeContext?.channel ||
-    routeContext?.to ||
-    explicitContext?.channel ||
-    explicitContext?.to ||
-    inlineContext?.channel ||
-    inlineContext?.to,
-  );
-  const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
-  const fallbackContext = clearThreadFromFallback
-    ? withoutThread(deliveryContextFromSession(existing))
-    : deliveryContextFromSession(existing);
-  const existingOrigin = sessionDeliveryOrigin(existing);
-  // Explicit thread absence owns both fallbacks, so origin cannot restore a stale thread.
-  const fallbackOrigin = clearThreadFromFallback ? withoutThread(existingOrigin) : existingOrigin;
-  const delivery = normalizeSessionDeliveryState({
-    route: params.route,
-    context: mergeDeliveryContext(mergedInput, fallbackContext),
-    origin: fallbackOrigin,
-  });
-  const nextEntry = existing ? { ...existing, delivery } : ({ delivery } as SessionEntry);
-  const metaPatch = ctx
-    ? deriveSessionMetaPatch({
-        ctx,
-        sessionKey: params.sessionKey,
-        existing: nextEntry,
-        groupResolution: params.groupResolution,
-        preserveExistingDeliveryRoute: routeContext != null,
-      })
-    : null;
-  const basePatch: Partial<SessionEntry> = { delivery };
-  return metaPatch ? { ...basePatch, ...metaPatch } : basePatch;
+  return {
+    group: prepareGroupSessionPatch(params),
+    origin: deriveSessionOrigin(params.ctx, {
+      skipSystemEventOrigin: params.skipSystemEventOrigin,
+    }),
+    internalTurn:
+      params.ctx.InternalTurnSource !== undefined ||
+      sourceChannel === INTERNAL_MESSAGE_CHANNEL ||
+      (sourceChannel != null && isInternalNonDeliveryChannel(sourceChannel)),
+  };
 }

@@ -60,7 +60,7 @@
   "devDependencies": {
     "@solidjs/compiler": "2.0.0-rc.14",
     "@solidjs/testing-library": "1.0.0-beta.3",
-    "@solidjs/vite-plugin": "3.0.0-next.47",
+    "@solidjs/vite-plugin": "3.0.0-next.49",
     "@types/markdown-it": "14.2.0",
     "@vitest/browser": "5.0.1",
     "@vitest/browser-playwright": "5.0.1",

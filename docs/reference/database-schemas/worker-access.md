@@ -18,6 +18,15 @@ Physical integrity admission remains valid independently of canonical readiness.
 The schema 25 migration seeds every existing node before admission; see
 [canonical writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
 
+Inbound session metadata and last-route changes use closed entry operations. The
+Gateway prepares plugin-owned group and origin facts once; the writer merges
+those facts with its current entry, preserving concurrent metadata, routing
+fallbacks, creation provenance, and activity timestamps without a detached
+callback comparison. Skill snapshot persistence uses the same fixed-field path.
+Generic callbacks retain their prepare-and-compare contract, and source and
+conversation authority still apply at the mutation boundary. These operations
+change no schemas, stored formats, retention, or update behavior.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -873,6 +882,19 @@ paths do not allocate them or add worker requests. Partial entry or
 transcript receipts cannot certify complete pending-input and model-context
 facts. Native, SDK, recovery, and maintenance writers keep their existing
 publication and final-authority guards during this incremental cutover.
+
+Closed entry patches reuse an already resident actor when the session and
+lifecycle stay unchanged. The entry writer supplies its complete row and window
+postimages; the actor keeps the untouched pending inputs and transcript facts,
+then publishes its full hot state through the same commit receipt. A rollback
+preserves the stored preimage; conservative receipt invalidation can require a
+reload. Missing residency, replacement lifecycles, and unknown writes still
+require hydration. Oversized optional actor postimages are
+shed with full-entry enrichment under the existing publication limit.
+Bounded context reads inside the actor transaction also derive logical parents
+from its active positions and identities and reuse its projection, reset, and
+prefix facts; standalone reads retain their SQL lookups. Hydration does not
+repeat a revision check inside this synchronous owner.
 
 Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
 and ordered-cohort reads reuse complete actor state or its entry-only projection;
@@ -3583,7 +3605,11 @@ Cold bootstrap retains its existing owner. Schemas, stored formats, and update
 behavior are unchanged.
 
 Memory dreaming and backfill retain the selected physical corpus file across
-filesystem discovery in the existing history reader. Their final ingestion-policy
+filesystem discovery in the existing history reader. Read scopes that explicitly
+capture a physical source recheck its retained identity after asynchronous
+preparation and before disclosure or writable admission. Deleted or replaced files
+are refused without repeating schema or integrity validation; ordinary admission
+lookups continue to reuse their retained facts. Their final ingestion-policy
 decision remains a synchronous, bounded batch of exact source metadata after the
 existing corpus and tombstone preparation. Forgotten sources and disabled policies
 require no metadata read. Raw synchronous SDK writers do not
@@ -5586,6 +5612,13 @@ still read their logical agent namespaces. Recorded quarantine remains authorita
 Canonical validation receipts share that same physical admission; their certifying
 and offline repair writers publish committed replacements. Ordinary session writes
 do not expire the receipt, and rollback cannot publish an uncommitted one.
+
+Lifecycle mutations return the resulting entry count from their committed
+inserts and removals. Finalization subtracts only acknowledged retention removals;
+it does not query the count again after archive publication. A later lifecycle
+operation reads its own starting count, so unrelated writes after the earlier
+commit belong to that later operation. Doctor callbacks that can change arbitrary
+rows still count inside their transaction.
 
 Warm maintenance reads use the current age hint and one count statement without
 an explicit transaction. Capacity pressure still requests full planning, whose

@@ -78,7 +78,7 @@ describe("shared control ownership", () => {
       "components/dock-layout-controller.ts",
       "components/dock-layout-solid.ts",
       "pages/chat/chat-page-pane-render.ts",
-      "pages/chat/components/chat-resizable-divider.ts",
+      "pages/chat/components/chat-sidebar-region.runtime.ts",
     ]);
   });
 });

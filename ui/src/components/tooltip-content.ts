@@ -16,16 +16,19 @@ function isElementNode(node: Node): node is Element {
   return node.nodeType === Node.ELEMENT_NODE;
 }
 
-function collectTooltipText(element: Element, forAccessibleName: boolean): string {
+function collectTooltipText(element: Element, checkOpacity: boolean, root = true): string {
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   if (
     element.hasAttribute("hidden") ||
-    (forAccessibleName && element.getAttribute("aria-hidden") === "true") ||
+    (!checkOpacity && element.getAttribute("aria-hidden") === "true") ||
+    (checkOpacity && !root && style?.opacity === "0") ||
     style?.display === "none" ||
     style?.contentVisibility === "hidden"
   ) {
     return "";
   }
+  // Opacity counts only below the trigger. A fading trigger or ancestor (a menu
+  // entering) hides the text and the trigger together, so the hint still repeats it.
   const rendersOwnText =
     style?.visibility !== "hidden" &&
     style?.visibility !== "collapse" &&
@@ -35,7 +38,7 @@ function collectTooltipText(element: Element, forAccessibleName: boolean): strin
   return [...element.childNodes]
     .map((node) => {
       if (isElementNode(node)) {
-        return collectTooltipText(node, forAccessibleName);
+        return collectTooltipText(node, checkOpacity, false);
       }
       return node.nodeType === Node.TEXT_NODE && rendersOwnText ? (node.textContent ?? "") : "";
     })
@@ -45,7 +48,7 @@ function collectTooltipText(element: Element, forAccessibleName: boolean): strin
 export function collectTooltipNameText(element: Element): string {
   // Transparent entry animations do not hide text from accessibility APIs.
   // Replacing that name with a title would persist after the animation ends.
-  return collectTooltipText(element, true);
+  return collectTooltipText(element, false);
 }
 
 function hasTooltipOverflow(element: Element) {
@@ -58,8 +61,7 @@ function hasTooltipOverflow(element: Element) {
 
 export function isTooltipTextRedundant(content: string, trigger: Element) {
   const tooltipText = normalizeTooltipText(content);
-  // An entrance fade does not make an existing control label need a duplicate tooltip.
-  const triggerText = normalizeTooltipText(collectTooltipText(trigger, false));
+  const triggerText = normalizeTooltipText(collectTooltipText(trigger, true));
   if (!tooltipText || !triggerText.includes(tooltipText)) {
     return false;
   }

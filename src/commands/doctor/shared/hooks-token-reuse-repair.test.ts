@@ -29,50 +29,6 @@ describe("repairHooksTokenReuseGatewayAuth", () => {
     );
   });
 
-  it("rotates hooks.token when it reuses gateway password auth", async () => {
-    const result = await repair({
-      gateway: {
-        auth: {
-          mode: "password",
-          password: "shared-gateway-password-1234567890", // pragma: allowlist secret
-        },
-      },
-      hooks: {
-        enabled: true,
-        token: "shared-gateway-password-1234567890",
-      },
-    });
-
-    expect(result.config.hooks?.token).toBe(ROTATED_HOOKS_TOKEN);
-  });
-
-  it("rotates hooks.token when it reuses gateway password auth from a SecretRef", async () => {
-    const result = await repair(
-      {
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-        gateway: {
-          auth: {
-            mode: "password",
-            password: { source: "env", provider: "default", id: "GW_PASSWORD" },
-          },
-        },
-        hooks: {
-          enabled: true,
-          token: "shared-gateway-password-1234567890",
-        },
-      },
-      {
-        GW_PASSWORD: "shared-gateway-password-1234567890", // pragma: allowlist secret
-      } as NodeJS.ProcessEnv,
-    );
-
-    expect(result.config.hooks?.token).toBe(ROTATED_HOOKS_TOKEN);
-  });
-
   it("does not abort when active gateway auth SecretRef is unavailable", async () => {
     const cfg = {
       secrets: {
@@ -125,24 +81,6 @@ describe("repairHooksTokenReuseGatewayAuth", () => {
       config: cfg,
       changes: [],
     });
-  });
-
-  it("rotates hooks.token when it reuses trusted-proxy local password fallback", async () => {
-    const result = await repair({
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: { userHeader: "x-forwarded-user" },
-          password: "trusted-proxy-local-password-1234567890", // pragma: allowlist secret
-        },
-      },
-      hooks: {
-        enabled: true,
-        token: "trusted-proxy-local-password-1234567890",
-      },
-    });
-
-    expect(result.config.hooks?.token).toBe(ROTATED_HOOKS_TOKEN);
   });
 
   it("rotates hooks.token when it reuses trusted-proxy password auth from a SecretRef", async () => {

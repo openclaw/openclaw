@@ -30,7 +30,7 @@ import {
   dropPreSessionStartAnnouncePairs,
   isPreSessionStartAssistantMessage,
 } from "./chat-display-projection.history.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryRecoveryContext,

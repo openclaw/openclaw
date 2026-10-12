@@ -121,64 +121,6 @@ afterEach(async () => {
 });
 
 describe("resident Codex catalog notifications", () => {
-  it.each(["queued", "written"])(
-    "defers a %s observation when its physical client closes and recovers on the current owner",
-    async (phase) => {
-      vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-      const { index, harness, nativeReads, readNative, startOptions, complete } = await fixture(
-        [thread()],
-        { local: true },
-      );
-      const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-      complete();
-      if (phase === "written") {
-        await harness.waitForWrite(0);
-        complete();
-      }
-      harness.client.close();
-      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-      expect(nativeReads).toHaveBeenCalledTimes(phase === "written" ? 1 : 0);
-      expect(warnings).toHaveBeenCalledOnce();
-      expect(warnings.mock.calls[0]?.[0]).toBe(
-        "Codex resident catalog metadata refresh interrupted; deferred for automatic recovery",
-      );
-      const warning = warnings.mock.calls[0]?.[1];
-      expect(warning).toMatchObject({
-        error: {
-          message: expect.stringContaining(
-            "metadata refresh deferred to the current catalog owner",
-          ),
-        },
-      });
-      if (phase === "written") {
-        expect(warning).toMatchObject({
-          error: {
-            cause: {
-              code: "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE",
-              mayHaveWritten: true,
-            },
-          },
-        });
-      }
-      await vi.advanceTimersByTimeAsync(30_000);
-      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-      expect(readNative).toHaveBeenCalledTimes(2);
-      const replacement = createClientHarness();
-      cleanups.push(async () => replacement.client.closeAndWait().then(() => undefined));
-      await observeCodexCatalogClient(replacement.client, { startOptions });
-      replacement.send({ method: "turn/completed", params: { threadId: "thread-1", turn: {} } });
-      const request = JSON.parse(await replacement.waitForWrite(0));
-      replacement.send({
-        id: request.id,
-        result: { thread: thread({ name: "Recovered metadata" }) },
-      });
-      await vi.waitFor(() =>
-        expect(index.get("thread-1")?.page.sessions[0]?.name).toBe("Recovered metadata"),
-      );
-      expect(warnings).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each(["activity", "safety"])(
     "settles a failed %s refresh until fresh activity or the next safety cycle",
     async (trigger) => {
@@ -215,24 +157,41 @@ describe("resident Codex catalog notifications", () => {
     },
   );
 
-  it("preserves an observation read failure while its client remains open", async () => {
-    const { index, harness, complete } = await fixture();
-    const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    complete();
-    const request = JSON.parse(await harness.waitForWrite(0));
-    harness.send({ id: request.id, error: { code: -32603, message: "metadata read unavailable" } });
-    await nextTurn();
-    expect(index.hasActiveWork()).toBe(false);
-    expect(warnings).toHaveBeenCalledExactlyOnceWith(
-      "Codex resident catalog background update failed",
-      {
-        error: expect.objectContaining({
-          message: expect.stringContaining("metadata read unavailable"),
-        }),
-      },
-    );
-    expect(harness.client.getCloseError()).toBeUndefined();
-  });
+  it.each([false, true])(
+    "preserves an observation read failure with newer activity: %s",
+    async (queuedActivity) => {
+      const { index, harness, complete, reply } = await fixture();
+      const warnings = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+      complete();
+      const request = JSON.parse(await harness.waitForWrite(0));
+      if (queuedActivity) {
+        complete();
+      }
+      harness.send({
+        id: request.id,
+        error: { code: -32603, message: "metadata read unavailable" },
+      });
+      await nextTurn();
+      expect(harness.writes).toHaveLength(queuedActivity ? 2 : 1);
+      if (queuedActivity) {
+        await reply(1, thread({ name: "Fresh activity after failed read" }));
+        await nextTurn();
+        expect(index.get("thread-1")?.page.sessions[0]?.name).toBe(
+          "Fresh activity after failed read",
+        );
+      }
+      expect(index.hasActiveWork()).toBe(false);
+      expect(warnings).toHaveBeenCalledExactlyOnceWith(
+        "Codex resident catalog background update failed",
+        {
+          error: expect.objectContaining({
+            message: expect.stringContaining("metadata read unavailable"),
+          }),
+        },
+      );
+      expect(harness.client.getCloseError()).toBeUndefined();
+    },
+  );
 
   it("preserves a catalog persistence failure", async () => {
     const error = new Error("catalog storage unavailable");

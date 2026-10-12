@@ -11,7 +11,7 @@ import {
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
-import "./chat-sidebar-region.runtime.ts";
+import "./chat-sidebar-region.runtime.tsx";
 
 const shells: HTMLElement[] = [];
 const firstTab: PanelHostedTab = {
@@ -247,7 +247,7 @@ describe("chat sidebar hosted tabs", () => {
       "favicon-ready.example",
       expect.any(AbortSignal),
     );
-    region.requestUpdate();
+    region.layout = { ...region.layout };
     await region.updateComplete;
     expect(fetchFavicon).toHaveBeenCalledOnce();
   });

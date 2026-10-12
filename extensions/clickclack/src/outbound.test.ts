@@ -157,7 +157,7 @@ describe("sendClickClackText routing", () => {
         to: "channel:general",
         text: "⚠️ 🛠️ `search repos (agent)` failed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "not_sent" });
 
     expect(createClientOptions).not.toHaveBeenCalled();
     expect(createChannelMessage).not.toHaveBeenCalled();

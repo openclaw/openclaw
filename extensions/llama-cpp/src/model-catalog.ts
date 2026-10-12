@@ -188,10 +188,10 @@ type LlamaCppRecommendation =
       requiredDiskBytes: number;
     };
 
-export function resolveLlamaCppModelCandidates(
+export function resolveLlamaCppMemoryBudget(
   hardware: LlamaCppHardware,
   backend: "cpu" | "metal" | "cuda",
-): { recipes: readonly LlamaCppModelRecipe[]; memoryBudgetBytes: number } {
+): number {
   // Leave host headroom even on an idle machine. Available memory also limits upgrades
   // on busy hosts; unified memory must not be added to system RAM a second time.
   const systemBudget = Math.min(
@@ -212,7 +212,14 @@ export function resolveLlamaCppModelCandidates(
       : 0;
   // Require one device to hold the model; summing cards would assume a topology and
   // tensor-split configuration that setup has not measured or configured.
-  const memoryBudgetBytes = backend === "cuda" ? Math.min(systemBudget, gpuBudget) : systemBudget;
+  return Math.max(0, backend === "cuda" ? Math.min(systemBudget, gpuBudget) : systemBudget);
+}
+
+export function resolveLlamaCppModelCandidates(
+  hardware: LlamaCppHardware,
+  backend: "cpu" | "metal" | "cuda",
+): { recipes: readonly LlamaCppModelRecipe[]; memoryBudgetBytes: number } {
+  const memoryBudgetBytes = resolveLlamaCppMemoryBudget(hardware, backend);
   const candidates = LLAMA_CPP_MODEL_RECIPES.filter(
     (recipe) =>
       (!recipe.requiresAcceleration || backend !== "cpu") &&
@@ -222,11 +229,13 @@ export function resolveLlamaCppModelCandidates(
   return { recipes: candidates, memoryBudgetBytes };
 }
 
-export function recommendLlamaCppModel(
+export function resolveLlamaCppDiskBudget(
   hardware: LlamaCppHardware,
   backend: "cpu" | "metal" | "cuda",
-  cached: { modelIds?: ReadonlySet<string>; embedding?: boolean; runtime?: boolean } = {},
-): LlamaCppRecommendation {
+  runtimeCached = false,
+):
+  | { kind: "available"; modelDiskBudget: number; runtimeDiskBytes: number }
+  | { kind: "unavailable"; reason: string } {
   if (
     hardware.availableDiskBytes === undefined ||
     hardware.availableRuntimeDiskBytes === undefined
@@ -237,13 +246,9 @@ export function recommendLlamaCppModel(
         "Cannot measure free space in the model cache or runtime directory. Check their permissions and retry setup.",
     };
   }
-  const { recipes: candidates, memoryBudgetBytes } = resolveLlamaCppModelCandidates(
-    hardware,
-    backend,
-  );
   // A custom model cache may be on another volume. Charge each destination only
   // for its own artifacts; shared volumes must fit both allocations together.
-  const runtimeDiskBytes = cached.runtime ? 0 : (backend === "cuda" ? 3 : 2) * GIB;
+  const runtimeDiskBytes = runtimeCached ? 0 : (backend === "cuda" ? 3 : 2) * GIB;
   if (!hardware.sharedDisk && hardware.availableRuntimeDiskBytes < runtimeDiskBytes) {
     return {
       kind: "unavailable",
@@ -254,6 +259,23 @@ export function recommendLlamaCppModel(
   const modelDiskBudget = hardware.sharedDisk
     ? Math.min(hardware.availableDiskBytes, hardware.availableRuntimeDiskBytes) - runtimeDiskBytes
     : hardware.availableDiskBytes;
+  return { kind: "available", modelDiskBudget, runtimeDiskBytes };
+}
+
+export function recommendLlamaCppModel(
+  hardware: LlamaCppHardware,
+  backend: "cpu" | "metal" | "cuda",
+  cached: { modelIds?: ReadonlySet<string>; embedding?: boolean; runtime?: boolean } = {},
+): LlamaCppRecommendation {
+  const disk = resolveLlamaCppDiskBudget(hardware, backend, cached.runtime);
+  if (disk.kind === "unavailable") {
+    return disk;
+  }
+  const { modelDiskBudget, runtimeDiskBytes } = disk;
+  const { recipes: candidates, memoryBudgetBytes } = resolveLlamaCppModelCandidates(
+    hardware,
+    backend,
+  );
   for (const recipe of candidates) {
     // The archive, extracted runtime and interrupted downloads need working space too.
     const modelDiskBytes =

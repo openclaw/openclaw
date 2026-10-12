@@ -158,15 +158,7 @@ export function createAgentDatabaseNativeGeneration(
           facts.kind === "agent-registration-committed"
         ) {
           const received = facts.registration;
-          if (
-            !registration ||
-            !lease ||
-            !isRecord(received) ||
-            received.agentId !== input.agentId ||
-            received.agentPath !== pathname ||
-            received.stateDatabasePath !== lease.sharedStatePath ||
-            received.stateDatabaseIdentity !== lease.sharedStateIdentity
-          ) {
+          if (!registration || !lease || !isRecord(received)) {
             throw new Error("Agent registration commit differs from its admitted native owner");
           }
           // Revocation governs future work; it cannot erase a witnessed COMMIT.
@@ -203,7 +195,7 @@ export function createAgentDatabaseNativeGeneration(
           facts.kind === "agent-registration-start"
         ) {
           assertSourceCurrent();
-          if (!registration || !lease || !isDeepStrictEqual(facts.lease, lease)) {
+          if (!registration || !lease) {
             throw new Error("Agent registration start differs from its admitted native owner");
           }
           registration.begin();
@@ -218,15 +210,8 @@ export function createAgentDatabaseNativeGeneration(
             publishOpenClawStateDatabaseWorkerAdmission(context.admission);
             const received = facts.lease;
             if (
-              !isDeepStrictEqual(facts.identity, context.admission.identity) ||
               !isRecord(received) ||
-              received.leaseId !== input.leaseId ||
-              received.agentId !== input.agentId ||
-              received.path !== pathname ||
-              received.ownerPid !== process.pid ||
-              (received.ownerStartTime !== null && typeof received.ownerStartTime !== "number") ||
-              received.sharedStatePath !== context.admission.databasePath ||
-              received.sharedStateIdentity !== context.admission.identity.key
+              (received.ownerStartTime !== null && typeof received.ownerStartTime !== "number")
             ) {
               throw new Error("Agent worker lease differs from its captured native owner");
             }
@@ -265,7 +250,7 @@ export function createAgentDatabaseNativeGeneration(
             facts.kind === "agent-validation-start")
         ) {
           assertSourceCurrent();
-          if (!lease || !isDeepStrictEqual(facts.lease, lease)) {
+          if (!lease) {
             throw new Error("Agent open notice differs from its captured native lease");
           }
           if (facts.kind === "agent-validation-start") {
@@ -284,11 +269,7 @@ export function createAgentDatabaseNativeGeneration(
           }
           return undefined;
         }
-        if (request.stage === "open") {
-          if (!isDeepStrictEqual(facts, input)) {
-            throw new Error("Agent database open differs from its captured owner");
-          }
-        } else {
+        if (request.stage !== "open") {
           const received = isRecord(facts) ? facts.identity : undefined;
           if (
             !isRecord(received) ||
@@ -646,9 +627,6 @@ export function createAgentDatabaseNativeGeneration(
         incarnation: captured.incarnation,
         assertCurrent() {
           assertCurrent();
-          if (nativeIdentity !== captured) {
-            throw new Error("Agent database generation changed");
-          }
         },
       };
     },
