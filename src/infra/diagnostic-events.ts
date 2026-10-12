@@ -54,6 +54,7 @@ import {
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 import {
+  hasActiveDiagnosticTracePropagation,
   hasDiagnosticTracePropagationConsumer,
   prepareDiagnosticTracePropagation,
   resetDiagnosticTracePropagationForTest,
@@ -1061,6 +1062,14 @@ function dispatchDiagnosticEvent(
 
   state.dispatchDepth += 1;
   try {
+    // Delivery re-applies the tracing gate: a queued skill.used event can
+    // outlive the exporter-owned tracing consumer that admitted its
+    // fingerprint, so the private field drops here — the last point every
+    // listener payload is formed — while tracing is inactive. Skill
+    // accounting is never gated: the event and its skill identity dispatch.
+    if (enriched.type === "skill.used" && !hasActiveDiagnosticTracePropagation()) {
+      delete (enriched as { skillFingerprint?: string }).skillFingerprint;
+    }
     const eventForListener = createDiagnosticValueForListeners(enriched);
     let metadataForListener: DiagnosticEventMetadata | undefined;
     if (!options.trustedListenersOnly) {
