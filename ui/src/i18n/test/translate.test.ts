@@ -1,5 +1,8 @@
 // @vitest-environment node
 
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -14,6 +17,15 @@ const shippedLocales = new Map(
       async (locale) => [locale, await loadLazyLocaleTranslation(locale)] as const,
     ),
   ),
+);
+// Source-only locale contributions register before the post-merge
+// control-ui-locale-refresh workflow commits their translation memory, so
+// their catalogs intentionally bootstrap from English copy (#131015). Only
+// locales with committed memory are held to the localized-bundle invariants
+// below; the exemption retires itself once `<locale>.tm.jsonl` lands.
+const i18nAssetsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../.i18n");
+const memoryBackedLocales = new Map(
+  [...shippedLocales].filter(([locale]) => existsSync(join(i18nAssetsDir, `${locale}.tm.jsonl`))),
 );
 let translateImportCase = 0;
 
@@ -168,7 +180,7 @@ describe("i18n", () => {
   it("keeps login failure guidance localized in shipped locale bundles", () => {
     const checkedKeys = flatten(registerLoginEnglish.catalog.login.failure, "login.failure");
     expect(checkedKeys.length).toBeGreaterThan(0);
-    for (const [locale, value] of shippedLocales) {
+    for (const [locale, value] of memoryBackedLocales) {
       for (const key of checkedKeys) {
         expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
           readTranslationString(registerLoginEnglish.catalog, key),
@@ -182,7 +194,7 @@ describe("i18n", () => {
       (key) => key.startsWith("devices.pairing.") && key !== "devices.pairing.title",
     );
 
-    for (const [locale, value] of shippedLocales) {
+    for (const [locale, value] of memoryBackedLocales) {
       for (const key of checkedKeys) {
         expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
           readTranslationString(en, key),
@@ -194,7 +206,7 @@ describe("i18n", () => {
   it("keeps the chat composer attachment action localized in shipped locale bundles", () => {
     const key = "chat.composer.addAttachment";
 
-    for (const [locale, value] of shippedLocales) {
+    for (const [locale, value] of memoryBackedLocales) {
       expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
         readTranslationString(en, key),
       );
