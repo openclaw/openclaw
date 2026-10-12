@@ -106,7 +106,6 @@ export async function publishSessionStateArchives(
               assertOwnerCurrent();
               const prepared = await runSqliteSessionReclamation({
                 assertCommitAllowed: assertOwnerCurrent,
-                forceInProcess,
                 plan: {
                   kind: "archive-publish-prepare",
                   databaseOptions,
@@ -139,7 +138,6 @@ export async function publishSessionStateArchives(
               assertOwnerCurrent();
               const recorded = await runSqliteSessionReclamation({
                 assertCommitAllowed: assertOwnerCurrent,
-                forceInProcess,
                 plan: {
                   kind: "archive-publish-record",
                   databaseOptions,
