@@ -37,4 +37,20 @@ struct DashboardBrowserDownloadTests {
         #expect(try Data(contentsOf: file) == downloaded)
         #expect(!FileManager.default.fileExists(atPath: destination.stagingFile.path))
     }
+
+    @Test func `a file created during transfer is not approved for overwrite`() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-browser-download-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("document.docx")
+        let destination = try DashboardBrowserDownloadDestination(destination: file)
+        defer { destination.discard() }
+        try Data("downloaded attachment".utf8).write(to: destination.stagingFile)
+        let concurrentFile = Data("created by another writer".utf8)
+        try concurrentFile.write(to: file)
+
+        #expect(throws: (any Error).self) { try destination.commit() }
+        #expect(try Data(contentsOf: file) == concurrentFile)
+    }
 }

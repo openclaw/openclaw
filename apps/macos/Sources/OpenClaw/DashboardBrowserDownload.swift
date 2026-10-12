@@ -8,9 +8,11 @@ struct DashboardBrowserDownloadDestination {
     let destination: URL
     let stagingDirectory: URL
     let stagingFile: URL
+    private let replacesExistingFile: Bool
 
     init(destination: URL) throws {
         self.destination = destination
+        self.replacesExistingFile = FileManager.default.fileExists(atPath: destination.path)
         self.stagingDirectory = try FileManager.default.url(
             for: .itemReplacementDirectory,
             in: .userDomainMask,
@@ -21,7 +23,7 @@ struct DashboardBrowserDownloadDestination {
 
     func commit() throws {
         let files = FileManager.default
-        if files.fileExists(atPath: self.destination.path) {
+        if self.replacesExistingFile {
             _ = try files.replaceItemAt(
                 self.destination,
                 withItemAt: self.stagingFile,
@@ -41,14 +43,39 @@ struct DashboardBrowserDownloadDestination {
 final class DashboardBrowserDownload: NSObject, WKDownloadDelegate {
     private weak var window: NSWindow?
     private let isCurrent: @MainActor () -> Bool
+    private let authenticate: (@MainActor (
+        URLAuthenticationChallenge,
+        @escaping @MainActor @Sendable
+        (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) -> Void)?
     private var activeDownload: WKDownload?
     private var panel: NSSavePanel?
     private var destination: DashboardBrowserDownloadDestination?
     private var continuation: CheckedContinuation<Bool, any Error>?
 
-    init(window: NSWindow, isCurrent: @escaping @MainActor () -> Bool) {
+    init(
+        window: NSWindow,
+        authenticate: (@MainActor (
+            URLAuthenticationChallenge,
+            @escaping @MainActor @Sendable
+            (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) -> Void)? = nil,
+        isCurrent: @escaping @MainActor () -> Bool)
+    {
         self.window = window
+        self.authenticate = authenticate
         self.isCurrent = isCurrent
+    }
+
+    /// Adopt WebKit's original attachment request rather than fetching a second ticket.
+    func start(adopting download: WKDownload) async throws -> Bool {
+        guard AppLaunchRuntimePlan.current.allowsActivation, self.isCurrent() else {
+            download.cancel { _ in }
+            throw DashboardBrowserError.unavailable
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            self.activeDownload = download
+            download.delegate = self
+        }
     }
 
     /// Returns true for cancellation, false only after the completed file is saved.
@@ -140,16 +167,40 @@ final class DashboardBrowserDownload: NSObject, WKDownloadDelegate {
         self.finish(.failure(error))
     }
 
+    func download(
+        _: WKDownload,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @MainActor @Sendable
+        (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        guard self.continuation != nil, self.isCurrent() else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        if let authenticate {
+            authenticate(challenge, completionHandler)
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+
     private func finish(_ result: Result<Bool, any Error>) {
         guard let continuation else { return }
         self.continuation = nil
-        self.activeDownload?.delegate = nil
-        self.activeDownload?.cancel { _ in }
+        let download = self.activeDownload
+        download?.delegate = nil
         self.activeDownload = nil
         self.panel?.cancel(nil)
         self.panel = nil
-        self.destination?.discard()
+        let destination = self.destination
         self.destination = nil
+        // WebKit can still be writing after cancellation. Release staging only
+        // after it has stopped, including when the originating document retires.
+        if let download {
+            download.cancel { _ in destination?.discard() }
+        } else {
+            destination?.discard()
+        }
         continuation.resume(with: result)
     }
 }

@@ -10,6 +10,28 @@ enum DashboardBrowserResponseAction: Equatable {
 }
 
 extension ControlUIDocumentHost {
+    static func shouldAllowAttachmentDownload(
+        to url: URL?,
+        sourceURL: URL?,
+        sourceIsMainFrame: Bool,
+        dashboardURL: URL) -> Bool
+    {
+        guard sourceIsMainFrame, self.isTrustedLinkSource(sourceURL, dashboardURL: dashboardURL),
+              let url, url.user == nil, url.password == nil else { return false }
+        return self.isHTTPURL(url) || ["blob", "data"].contains(url.scheme?.lowercased() ?? "")
+    }
+
+    static func shouldDownloadAttachmentResponse(_ response: URLResponse, canShowMIMEType: Bool) -> Bool {
+        guard let url = response.url,
+              self.isHTTPURL(url) || ["blob", "data"].contains(url.scheme?.lowercased() ?? "")
+        else { return false }
+        if !canShowMIMEType { return true }
+        guard let response = response as? HTTPURLResponse,
+              let disposition = response.value(forHTTPHeaderField: "Content-Disposition") else { return false }
+        return disposition.split(separator: ";", maxSplits: 1).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "attachment"
+    }
+
     static func appPath(fromDocumentPath path: String, baseURL: URL) -> String? {
         guard DashboardRouteMap.isValidSameAppPath(path) else { return nil }
         let mount = self.allowedPath(for: baseURL)
