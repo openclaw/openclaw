@@ -1,7 +1,7 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { createMemo, createSignal } from "solid-js";
 import { expect, vi } from "vitest";
-import { buildUsageOverview, mergeUsageOverviews } from "../../../../src/shared/usage-overview.js";
+import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
@@ -166,20 +166,14 @@ export async function createPage(
       return result;
     }
     const filters = params as UsageOverviewOptions | undefined;
-    const slice = buildUsageOverview({
-      sessions: usage.sessions.map(({ usage: _usage, contextWeight: _context, ...session }) => ({
-        ...session,
-        agentId: session.agentId ?? "main",
-        instances: [{ sessionFile: "fixture" }],
-      })),
-      summaries: usage.sessions.map((session) => session.usage),
+    const projected = buildUsageOverview({
+      rows: usage.sessions,
       options: filters ?? {},
       dayBucket:
         requestParams.mode === "specific" && typeof requestParams.timeZone === "string"
           ? { mode: "time-zone", timeZone: requestParams.timeZone }
           : { mode: "utc-offset", utcOffsetMinutes: 0 },
     });
-    const projected = mergeUsageOverviews([slice], filters ?? {});
     const hasFilters = Boolean(
       filters?.query ||
       filters?.selectedDays?.length ||

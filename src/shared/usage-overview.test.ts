@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary, UsageDailyBucket } from "../infra/session-cost-usage.types.js";
-import { buildUsageOverview, mergeUsageOverviews } from "./usage-overview.js";
+import { buildUsageOverview } from "./usage-overview.js";
 import { filterSessionsByQuery } from "./usage-query.js";
 import type { UsageOverviewOptions } from "./usage-types.js";
 
@@ -312,8 +312,13 @@ describe("overview family and multi-agent accounting", () => {
   it("merges family instances and all agents before selecting the page", () => {
     const options = { offset: 1, limit: 1, sort: "recent" as const };
     const dayBucket = { mode: "utc-offset" as const, utcOffsetMinutes: 0 };
-    const slices = sources().map((source) => buildUsageOverview({ ...source, options, dayBucket }));
-    const result = mergeUsageOverviews(slices, options);
+    const inputs = sources();
+    const result = buildUsageOverview({
+      sessions: inputs.flatMap((source) => source.sessions),
+      summaries: inputs.flatMap((source) => source.summaries),
+      options,
+      dayBucket,
+    });
     expect(result.sessions.map((session) => session.key)).toEqual(["family"]);
     expect(result.sessions[0]?.usage?.totalTokens).toBe(30);
     expect(result.totals).toMatchObject({
@@ -354,10 +359,12 @@ describe("overview family and multi-agent accounting", () => {
     later.summaries[0]!.activityDates = ["2026-02-03"];
     later.summaries[0]!.dailyBreakdown![0]!.date = "2026-02-03";
     later.summaries[0]!.dailyMessageCounts![0]!.date = "2026-02-03";
-    const result = mergeUsageOverviews(
-      inputs.map((source) => buildUsageOverview({ ...source, options, dayBucket })),
+    const result = buildUsageOverview({
+      sessions: inputs.flatMap((source) => source.sessions),
+      summaries: inputs.flatMap((source) => source.summaries),
       options,
-    );
+      dayBucket,
+    });
     expect(result.sessions).toEqual([]);
     expect(result.overview).toMatchObject({
       total: 0,
@@ -394,10 +401,13 @@ describe("overview family and multi-agent accounting", () => {
       limit: 1,
     };
     const dayBucket = { mode: "utc-offset" as const, utcOffsetMinutes: 0 };
-    const result = mergeUsageOverviews(
-      sources().map((source) => buildUsageOverview({ ...source, options, dayBucket })),
+    const inputs = sources();
+    const result = buildUsageOverview({
+      sessions: inputs.flatMap((source) => source.sessions),
+      summaries: inputs.flatMap((source) => source.summaries),
       options,
-    );
+      dayBucket,
+    });
     expect(result.sessions.map((session) => session.key)).toEqual(["second"]);
     expect(result.overview.tableSessionCount).toBe(2);
     expect(result.totals.totalTokens).toBe(60);

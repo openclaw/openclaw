@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveUsageCostWorkerDayBucket } from "../../infra/session-cost-usage-worker-runtime.js";
 import {
   loadSessionCostOverviewFromCache,
   type UsageDailyBucket,
-  type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
-import { mergeUsageOverviews } from "../../shared/usage-overview.js";
+import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { UsageOverviewSession, UsageOverviewOptions } from "../../shared/usage-types.js";
-import { mergeUsageCacheStatus, runUsageAgentTasks } from "./usage-session-loading.js";
+import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 
 export async function loadUsageOverview(params: {
   sessions: UsageOverviewSession[];
@@ -18,23 +18,25 @@ export async function loadUsageOverview(params: {
   dayBucket?: UsageDailyBucket;
   projection?: "overview";
 }) {
-  const byAgent = new Map<string, UsageOverviewSession[]>();
-  for (const session of params.sessions) {
-    const agentId = session.agentId;
-    const sessions = byAgent.get(agentId) ?? [];
-    sessions.push(session);
-    byAgent.set(agentId, sessions);
+  const agentId = params.sessions[0]?.agentId;
+  if (agentId && params.sessions.every((session) => session.agentId === agentId)) {
+    return loadSessionCostOverviewFromCache({ ...params, agentId });
   }
-  const slices = await runUsageAgentTasks(
-    [...byAgent].map(
-      ([agentId, sessions]) =>
-        () =>
-          loadSessionCostOverviewFromCache({ ...params, sessions, agentId }),
-    ),
-  );
-  let cacheStatus: UsageCacheStatus | undefined;
-  for (const slice of slices) {
-    cacheStatus = mergeUsageCacheStatus(cacheStatus, slice.cacheStatus);
-  }
-  return { ...mergeUsageOverviews(slices, params.options), cacheStatus };
+  // Cross-agent addition must follow global session order; adding agent subtotals changes floats.
+  const { summaries, cacheStatus } = await loadUsageSessionSummaries({
+    ...params,
+    entries: params.sessions,
+  });
+  return {
+    ...buildUsageOverview({
+      rows: params.sessions.map(({ instances: _instances, ...row }, index) => {
+        const usage = summaries[index] ?? null;
+        return Object.assign(row, { usage }, usage ? {} : { computing: true });
+      }),
+      options: params.options,
+      dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
+      compact: params.projection === "overview",
+    }),
+    cacheStatus,
+  };
 }

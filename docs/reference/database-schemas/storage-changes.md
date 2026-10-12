@@ -2548,8 +2548,10 @@ process-local, nonpersistent cache and create no date partitions.
 Committed transcript publications schedule advancement through the existing
 usage worker queue. Startup and topology changes backfill in bounded batches.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
-through the same owner. SQL and aggregation run in workers. Reports reuse
-completed results only while their transcript, usage, session metadata,
+through the same owner. SQL and single-agent aggregation run in workers.
+Cross-agent reports fold worker summaries in global session order on the Gateway
+to preserve floating-point addition. Reports reuse completed results only while
+their transcript, usage, session metadata,
 visibility, profile, and configuration revisions remain current.
 
 Transcripts remain authoritative; the projection changes neither retention nor

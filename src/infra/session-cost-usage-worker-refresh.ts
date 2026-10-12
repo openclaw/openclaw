@@ -21,6 +21,28 @@ import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js"
 import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
+/** Reuse resolved model prices across the bounded pages of one worker operation. */
+export function createUsageCostWorkerPriceResolver(
+  resolveMissing: (
+    pairs: Array<{ provider?: string; model?: string }>,
+  ) => Promise<Array<ModelCostConfig | undefined>>,
+) {
+  const prices = new Map<string, ModelCostConfig | undefined>();
+  return async (pairs: Array<{ provider?: string; model?: string }>) => {
+    const missing = new Map(
+      pairs
+        .filter((pair) => !prices.has(JSON.stringify(pair)))
+        .map((pair) => [JSON.stringify(pair), pair]),
+    );
+    if (missing.size > 0) {
+      const keys = [...missing.keys()];
+      const costs = await resolveMissing([...missing.values()]);
+      keys.forEach((key, index) => prices.set(key, costs[index]));
+    }
+    return pairs.map((pair) => prices.get(JSON.stringify(pair)));
+  };
+}
+
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 
 async function readJsonlAnchorHash(filePath: string, offset: number): Promise<string | undefined> {

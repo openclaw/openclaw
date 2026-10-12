@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
-import { buildUsageOverview, mergeUsageOverviews } from "../../../../src/shared/usage-overview.js";
+import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { UsageFilterOptions } from "./query.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
@@ -179,13 +179,8 @@ export function projectUsageData(
   sessions: UsageSessionEntry[],
   filters: Partial<UsageProps["filters"]> = {},
 ): Pick<UsageProps["data"], "sessions" | "totals" | "aggregates" | "overview" | "costDaily"> {
-  const slice = buildUsageOverview({
-    sessions: sessions.map(({ usage: _usage, contextWeight: _context, ...session }) => ({
-      ...session,
-      agentId: session.agentId ?? "main",
-      instances: [{ sessionFile: "fixture" }],
-    })),
-    summaries: sessions.map((session) => session.usage),
+  const result = buildUsageOverview({
+    rows: sessions,
     options: {
       query: filters.query,
       selectedDays: filters.selectedDays,
@@ -194,7 +189,6 @@ export function projectUsageData(
     },
     dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
   });
-  const result = mergeUsageOverviews([slice], {});
   return { ...result, costDaily: result.aggregates.costDaily ?? [] };
 }
 

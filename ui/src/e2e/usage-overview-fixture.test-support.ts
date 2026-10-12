@@ -2,13 +2,21 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import type { SessionsUsageParams } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionCostSummary } from "../../../src/infra/session-cost-usage.types.js";
-import { buildUsageOverview, mergeUsageOverviews } from "../../../src/shared/usage-overview.js";
+import { buildUsageOverview } from "../../../src/shared/usage-overview.js";
 import type { SessionUsageEntry, SessionsUsageResult } from "../../../src/shared/usage-types.js";
 import type {
   ControlUiMockGateway,
   MockGatewayControls,
+  MockGatewayWindow,
 } from "../test-helpers/control-ui-e2e-contract.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+
+declare global {
+  interface Window {
+    /** Installed by exposeFunction before the mock Gateway receives requests. */
+    openclawUsageOverviewFixture: (params: unknown, timeZone: string) => Promise<unknown>;
+  }
+}
 
 /** Exercise server-owned filtering without copying that policy into the browser fixture. */
 export async function installUsageOverviewGateway(
@@ -54,7 +62,7 @@ export async function installUsageOverviewGateway(
       };
     });
     const options = { ...params, limit: 50 };
-    const slice = buildUsageOverview({
+    const projected = buildUsageOverview({
       sessions: response.sessions.map(({ usage: _usage, ...session }: SessionUsageEntry) => ({
         ...session,
         agentId: session.agentId ?? "main",
@@ -67,7 +75,6 @@ export async function installUsageOverviewGateway(
           ? { mode: "utc-offset", utcOffsetMinutes: 0 }
           : { mode: "time-zone", timeZone: params.timeZone ?? browserTimeZone },
     });
-    const projected = mergeUsageOverviews([slice], options);
     const hasPopulationFilter = Boolean(
       params.query?.trim() ||
       params.selectedDays?.length ||
@@ -86,11 +93,7 @@ export async function installUsageOverviewGateway(
       project(selectResponse(params), params, browserTimeZone),
   );
   await page.addInitScript(() => {
-    type FixtureWindow = Window & {
-      openclawControlUiE2eGateway?: ControlUiMockGateway;
-      openclawUsageOverviewFixture: (params: unknown, timeZone: string) => Promise<unknown>;
-    };
-    const owner = window as FixtureWindow;
+    const owner: MockGatewayWindow = window;
     const attach = (gateway: ControlUiMockGateway) =>
       gateway.setRequestHandler("sessions.usage", ({ params, respond }) => {
         void owner

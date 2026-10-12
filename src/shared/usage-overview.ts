@@ -1,7 +1,6 @@
 import { createSessionCostSummaryAccumulator } from "../infra/session-cost-usage-rollup.js";
 import {
   addCostUsageTotals,
-  cloneCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../infra/session-cost-usage-totals.js";
 import type {
@@ -13,7 +12,6 @@ import { createUsageAggregateAccumulator } from "./usage-aggregates.js";
 import { filterSessionsByQuery } from "./usage-query.js";
 import type {
   SessionUsageEntry,
-  SessionsUsageAggregates,
   SessionsUsageOverview,
   UsageOverviewOptions,
   UsageOverviewSession,
@@ -247,40 +245,46 @@ function compactSession(session: SessionUsageEntry, days: ReadonlySet<string>): 
   return { ...session, usage };
 }
 
-export function buildUsageOverview(params: {
-  sessions: UsageOverviewSession[];
-  summaries: Array<SessionCostSummary | null>;
-  options: UsageOverviewOptions;
-  dayBucket: UsageDailyBucket;
-  compact?: boolean;
-}): UsageOverviewSlice {
+export function buildUsageOverview(
+  params: (
+    | { sessions: UsageOverviewSession[]; summaries: Array<SessionCostSummary | null> }
+    | { rows: SessionUsageEntry[] }
+  ) & {
+    options: UsageOverviewOptions;
+    dayBucket: UsageDailyBucket;
+    compact?: boolean;
+  },
+): UsageOverviewSlice {
   const { options } = params;
   const calendar = createCalendar(params.dayBucket);
   let index = 0;
-  const sessions = params.sessions.map(({ instances, ...entry }): SessionUsageEntry => {
-    if (instances.length === 1) {
-      const usage = params.summaries[index++] ?? null;
-      return { ...entry, usage, ...(!usage ? { computing: true } : {}) };
-    }
-    const accumulator = createSessionCostSummaryAccumulator({
-      sessionId: entry.sessionId,
-      sessionFile: instances[0]?.sessionFile,
-    });
-    let present = false;
-    for (const [offset] of instances.entries()) {
-      const summary = params.summaries[index + offset];
-      if (summary) {
-        accumulator.add(summary);
-        present = true;
-      }
-    }
-    index += instances.length;
-    return {
-      ...entry,
-      usage: present ? accumulator.finish() : null,
-      ...(!present ? { computing: true } : {}),
-    };
-  });
+  const sessions =
+    "rows" in params
+      ? params.rows
+      : params.sessions.map(({ instances, ...entry }): SessionUsageEntry => {
+          if (instances.length === 1) {
+            const usage = params.summaries[index++] ?? null;
+            return { ...entry, usage, ...(!usage ? { computing: true } : {}) };
+          }
+          const accumulator = createSessionCostSummaryAccumulator({
+            sessionId: entry.sessionId,
+            sessionFile: instances[0]?.sessionFile,
+          });
+          let present = false;
+          for (const [offset] of instances.entries()) {
+            const summary = params.summaries[index + offset];
+            if (summary) {
+              accumulator.add(summary);
+              present = true;
+            }
+          }
+          index += instances.length;
+          return {
+            ...entry,
+            usage: present ? accumulator.finish() : null,
+            ...(!present ? { computing: true } : {}),
+          };
+        });
   const filters = {
     agent: new Set<string>(),
     channel: new Set<string>(),
@@ -460,166 +464,10 @@ export function buildUsageOverview(params: {
   return {
     sessions: roster
       .toSorted(compareUsageOverviewSessions(options))
-      .slice(0, (options.offset ?? 0) + (options.limit ?? PAGE_SIZE))
+      .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? PAGE_SIZE))
       .map((session) => (params.compact === false ? session : compactSession(session, days))),
     totals,
     aggregates,
     overview,
-  };
-}
-
-function mergeTotals<T extends CostUsageTotals>(values: T[], key: (value: T) => string): T[] {
-  const merged = new Map<string, T>();
-  for (const value of values) {
-    const identity = key(value);
-    const existing = merged.get(identity);
-    if (existing) {
-      addCostUsageTotals(existing, value);
-    } else {
-      merged.set(identity, {
-        ...value,
-        ...cloneCostUsageTotals(value),
-      });
-    }
-  }
-  return [...merged.values()];
-}
-
-/** Per-agent work stays in workers; only bounded rows and report dimensions cross to the Gateway. */
-export function mergeUsageOverviews(
-  slices: UsageOverviewSlice[],
-  options: UsageOverviewOptions,
-): UsageOverviewSlice {
-  if (slices.length === 1) {
-    const slice = slices[0]!;
-    return {
-      ...slice,
-      sessions: slice.sessions.slice(
-        options.offset ?? 0,
-        (options.offset ?? 0) + (options.limit ?? PAGE_SIZE),
-      ),
-    };
-  }
-  const empty = buildUsageOverview({
-    sessions: [],
-    summaries: [],
-    options,
-    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-  });
-  const accumulator = createUsageAggregateAccumulator();
-  const daily = new Map<string, SessionsUsageAggregates["daily"][number]>();
-  for (const slice of slices) {
-    addCostUsageTotals(empty.totals, slice.totals);
-    const aggregate = slice.aggregates;
-    accumulator.add({
-      usage: {
-        ...slice.totals,
-        messageCounts: aggregate.messages,
-        toolUsage: aggregate.tools,
-        modelUsage: aggregate.byModel,
-        dailyLatency: aggregate.dailyLatency,
-        dailyModelUsage: aggregate.modelDaily,
-        latency: aggregate.latency,
-        durationMs: aggregate.longestSessionDurationMs,
-      },
-    });
-    for (const day of aggregate.daily) {
-      const previous = daily.get(day.date);
-      if (previous) {
-        for (const field of ["tokens", "cost", "messages", "toolCalls", "errors"] as const) {
-          previous[field] += day[field];
-        }
-      } else {
-        daily.set(day.date, { ...day });
-      }
-    }
-    for (const name of [
-      "total",
-      "unfilteredSessionCount",
-      "selectedSessionCount",
-      "selectedRowCount",
-      "tableSessionCount",
-      "durationMs",
-      "durationCount",
-    ] as const) {
-      empty.overview[name] += slice.overview[name];
-    }
-    for (const name of ["tokens", "cost", "errors"] as const) {
-      empty.overview.tableTotals[name] += slice.overview.tableTotals[name];
-    }
-    empty.overview.hasTimelineData ||= slice.overview.hasTimelineData;
-    for (const name of ["hourTokens", "weekdayTokens", "hourlyMessages", "hourlyErrors"] as const) {
-      for (const [index, value] of slice.overview[name].entries()) {
-        empty.overview[name][index]! += value;
-      }
-    }
-    for (const name of ["agent", "channel", "provider", "model", "tool"] as const) {
-      empty.overview.filterOptions[name].push(...slice.overview.filterOptions[name]);
-    }
-  }
-  const aggregates = accumulator.finish();
-  aggregates.daily = [...daily.values()].toSorted((a, b) => a.date.localeCompare(b.date));
-  aggregates.costDaily = mergeTotals(
-    slices.flatMap((slice) => slice.aggregates.costDaily ?? []),
-    (day) => day.date,
-  ).toSorted((a, b) => a.date.localeCompare(b.date));
-  aggregates.sessionCount = slices.reduce(
-    (sum, slice) => sum + (slice.aggregates.sessionCount ?? 0),
-    0,
-  );
-  aggregates.byAgent = mergeTotals(
-    slices.flatMap((slice) =>
-      slice.aggregates.byAgent.map((group) => ({ ...group.totals, agentId: group.agentId })),
-    ),
-    (group) => group.agentId,
-  )
-    .map(({ agentId, ...totals }) => ({ agentId, totals }))
-    .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost);
-  aggregates.byChannel = mergeTotals(
-    slices.flatMap((slice) =>
-      slice.aggregates.byChannel.map((group) => ({ ...group.totals, channel: group.channel })),
-    ),
-    (group) => group.channel,
-  )
-    .map(({ channel, ...totals }) => ({ channel, totals }))
-    .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost);
-  const creators = new Map<string, NonNullable<SessionsUsageAggregates["byCreator"]>[number]>();
-  for (const creator of slices.flatMap((slice) => slice.aggregates.byCreator ?? [])) {
-    const previous = creators.get(creator.key);
-    if (!previous) {
-      creators.set(creator.key, {
-        ...creator,
-        totals: cloneCostUsageTotals(creator.totals),
-        daily: [...creator.daily],
-        sessionActivity: [...creator.sessionActivity],
-      });
-      continue;
-    }
-    addCostUsageTotals(previous.totals, creator.totals);
-    previous.sessionCount += creator.sessionCount;
-    previous.daily = mergeTotals([...previous.daily, ...creator.daily], (day) => day.date).toSorted(
-      (a, b) => a.date.localeCompare(b.date),
-    );
-    previous.sessionActivity.push(...creator.sessionActivity);
-  }
-  aggregates.byCreator = [...creators.values()].toSorted(
-    (a, b) =>
-      b.totals.totalCost - a.totals.totalCost ||
-      b.totals.totalTokens - a.totals.totalTokens ||
-      a.key.localeCompare(b.key),
-  );
-  for (const name of ["agent", "channel", "provider", "model", "tool"] as const) {
-    empty.overview.filterOptions[name] = [
-      ...new Set(empty.overview.filterOptions[name]),
-    ].toSorted();
-  }
-  empty.overview.queryWarnings = slices[0]?.overview.queryWarnings ?? empty.overview.queryWarnings;
-  return {
-    ...empty,
-    sessions: slices
-      .flatMap((slice) => slice.sessions)
-      .toSorted(compareUsageOverviewSessions(options))
-      .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? PAGE_SIZE)),
-    aggregates,
   };
 }

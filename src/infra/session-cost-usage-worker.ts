@@ -1,4 +1,3 @@
-import type { ModelCostConfig } from "@openclaw/llm-core";
 import {
   collectErrorGraphCandidates,
   toErrorObject,
@@ -55,7 +54,10 @@ import {
   USAGE_COST_ROLLUP_VERSION,
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
-import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
+import {
+  createUsageCostWorkerPriceResolver,
+  scanUsageCostRollupInWorker,
+} from "./session-cost-usage-worker-refresh.js";
 import { readUsageCostReportEntry } from "./session-cost-usage-worker-report.js";
 import type {
   UsageCostWorkerDatabase,
@@ -212,17 +214,18 @@ export async function executeUsageCostWorker(
   }
 
   // Resolve keys before reading metadata; report bodies stay in their read snapshot.
-  const selectedFiles =
+  const requestedPaths =
     operation.kind === "sessions"
-      ? await resolveUsageCostTranscriptFiles(
-          operation.sessions.map((session) => session.sessionFile),
-          access,
-        )
-      : [];
-  const selectedPaths =
-    operation.kind === "sessions"
-      ? selectedFiles.flatMap((file) => (file ? [file.filePath] : []))
-      : undefined;
+      ? operation.sessions.map((session) => session.sessionFile)
+      : operation.kind === "refresh"
+        ? operation.sessionFiles
+        : undefined;
+  const selectedFiles = requestedPaths
+    ? await resolveUsageCostTranscriptFiles(requestedPaths, access)
+    : [];
+  const selectedPaths = requestedPaths
+    ? selectedFiles.flatMap((file) => (file ? [file.filePath] : []))
+    : undefined;
   const memoryCache = isIncognitoOpenClawAgentSqlitePath(location.databasePath, {
     agentId: location.agentId,
     env,
@@ -285,20 +288,7 @@ export async function executeUsageCostWorker(
         return result.found ? result.value : [];
       }),
     );
-  const prices = new Map<string, ModelCostConfig | undefined>();
-  const resolveCosts = async (pairs: Array<{ provider?: string; model?: string }>) => {
-    const missing = new Map(
-      pairs
-        .filter((pair) => !prices.has(JSON.stringify(pair)))
-        .map((pair) => [JSON.stringify(pair), pair]),
-    );
-    if (missing.size > 0) {
-      const keys = [...missing.keys()];
-      const costs = await host("pricing", [...missing.values()]);
-      keys.forEach((key, index) => prices.set(key, costs[index]));
-    }
-    return pairs.map((pair) => prices.get(JSON.stringify(pair)));
-  };
+  const resolveCosts = createUsageCostWorkerPriceResolver((pairs) => host("pricing", pairs));
   let readId = 0;
   const readRows = async (
     marker: SqliteSessionFileMarker,
@@ -547,17 +537,12 @@ export async function executeUsageCostWorker(
   const rows = await readMetadata();
   const byPath = new Map(rows.map((row) => [row.key, row]));
 
-  const discovered = await inventory(operation.sessionsDir);
-  const requestedFiles = (
-    await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
-  ).filter((file) => file !== undefined);
+  const requestedFiles = selectedFiles.filter((file) => file !== undefined);
   if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
     throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
   }
-  const filesByPath = new Map(discovered.map((file) => [file.filePath, file]));
-  for (const file of requestedFiles) {
-    filesByPath.set(file.filePath, file);
-  }
+  const files = operation.sessionFiles ? requestedFiles : await inventory(operation.sessionsDir);
+  const filesByPath = new Map(files.map((file) => [file.filePath, file]));
   let pruned = false;
   for (const row of rows) {
     if (filesByPath.has(row.key)) {
@@ -570,15 +555,11 @@ export async function executeUsageCostWorker(
     ]);
   }
   await host("prune", {});
-  const requestedPaths = new Set(requestedFiles.map((file) => file.filePath));
+  const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const stale = [];
   for (const file of filesByPath.values()) {
-    if (
-      requestedPaths.size > 0
-        ? !requestedPaths.has(file.filePath)
-        : operation.startMs !== undefined && file.mtimeMs < operation.startMs
-    ) {
+    if (minMtimeMs !== undefined && file.mtimeMs < minMtimeMs) {
       continue;
     }
     const row = byPath.get(file.filePath);
@@ -653,17 +634,18 @@ export async function executeUsageCostWorker(
       previous !== undefined && envelope?.projection?.canonicalNumbers === true,
       memoryCache,
     );
+    const replacePartitions = previous === undefined || !envelope?.projection;
     const previousPartitions = new Map(
       priorPartitions.map((partition) => [partition.date, partition.valueJson]),
     );
     const changedPartitions = partitions.filter(
-      (partition) => previousPartitions.get(partition.date) !== partition.valueJson,
+      (partition) =>
+        replacePartitions || previousPartitions.get(partition.date) !== partition.valueJson,
     );
     const dates = new Set(partitions.map((partition) => partition.date));
     const removedDates = envelope?.projection?.dates.filter((date) => !dates.has(date)) ?? [];
     const value = new TextEncoder().encode(valueJson);
-    const rawPrevious = byPath.get(file.filePath)?.valueJson;
-    const previousValue = rawPrevious === undefined ? null : new TextEncoder().encode(rawPrevious);
+    const previousValue = row ? new TextEncoder().encode(row.valueJson) : null;
     const written = await host(
       "write",
       {
@@ -676,7 +658,7 @@ export async function executeUsageCostWorker(
           ? {
               partitions: changedPartitions,
               removedDates,
-              replacePartitions: previous === undefined || !envelope?.projection,
+              replacePartitions,
             }
           : {}),
       },
@@ -692,8 +674,17 @@ export async function executeUsageCostWorker(
     }
     changed = true;
   }
-  const remainingFiles = maxFiles ? stale.slice(maxFiles).map(({ file }) => file.sourcePath) : [];
-  return { kind: "refresh", changed, ...(remainingFiles.length ? { remainingFiles } : {}) };
+  if (!maxFiles || stale.length <= maxFiles) {
+    return { kind: "refresh", changed };
+  }
+  return {
+    kind: "refresh",
+    changed,
+    remainingFiles: stale.slice(maxFiles).map(({ file }) => ({
+      sessionFile: file.sourcePath,
+      rollupId: file.filePath,
+    })),
+  };
 }
 
 export function usageCostWorkerFailure(

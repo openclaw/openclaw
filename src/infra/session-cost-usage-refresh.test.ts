@@ -6,6 +6,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import { requestCostUsageCacheRefresh } from "./session-cost-usage-cache-runtime.js";
 import {
   loadCostUsageSummaryFromCache,
   loadSessionCostSummariesFromCache,
@@ -143,6 +144,60 @@ describe("session cost usage refresh", () => {
       }
     });
   }
+
+  it("bounds pending backfill batches and preserves queued rebuilds across a busy retry", async () => {
+    await withRefreshFixture(async ({ agentId, sessionFiles }) => {
+      const scope = new AsyncWorkScope();
+      const storePath = path.dirname(sessionFiles[0]);
+      const pending = Array.from({ length: 121 }, (_, index) =>
+        path.join(storePath, `${index}.jsonl`),
+      );
+      const late = path.join(storePath, "late.jsonl");
+      const rollupIds = pending.map((file, index) =>
+        index === 80 ? `${file}.materialized` : file,
+      );
+      const rebuild = { key: rollupIds[80]!, valueJson: "{}", updatedAt: 1 };
+      const refresh = vi.mocked(refreshCostUsageCacheForAgent);
+      let partialCalls = 0;
+      refresh.mockImplementation(async (params) => {
+        if (!params.sessionFiles) {
+          params.onRemaining?.(
+            pending.map((sessionFile, index) => ({ sessionFile, rollupId: rollupIds[index]! })),
+          );
+        } else if (++partialCalls === 1) {
+          requestCostUsageCacheRefresh({
+            agentId,
+            storePath,
+            sessionFiles: [late],
+          });
+          return "busy";
+        }
+        return "refreshed";
+      });
+      try {
+        await scope.track(async () =>
+          requestCostUsageCacheRefresh({ agentId, storePath, rebuildRows: [rebuild] }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refresh).toHaveBeenCalledTimes(2);
+        expect(refresh.mock.calls[0]?.[0].rebuildRows).toEqual([rebuild]);
+        expect(refresh.mock.calls[1]?.[0].sessionFiles).toEqual(pending.slice(0, 50));
+        await vi.advanceTimersByTimeAsync(50);
+        const accepted = refresh.mock.calls.slice(2).map(([params]) => params);
+        expect(accepted.map((params) => params.sessionFiles?.length)).toEqual([50, 50, 22]);
+        expect(accepted.flatMap((params) => params.sessionFiles ?? [])).toEqual([
+          ...pending.map((file, index) => (index === 80 ? rollupIds[index]! : file)),
+          late,
+        ]);
+        expect(accepted.map((params) => params.rebuildRows)).toEqual([[], [rebuild], []]);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        scope.beginClose();
+        await vi.advanceTimersByTimeAsync(50);
+        await scope.drain();
+      }
+    });
+  });
 
   it.each(["refreshed", "busy"] as const)(
     "keeps scope drain pending until its running refresh returns %s without leaving a retry",

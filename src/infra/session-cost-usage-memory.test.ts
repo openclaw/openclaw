@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import {
@@ -150,6 +153,104 @@ describe("actor memory usage", () => {
       cacheStatus: { staleFiles: 0 },
     });
     expect(await refresh()).toEqual({ kind: "refresh", changed: false });
+    expect(
+      await runSessionActorUsage(
+        binding,
+        {
+          kind: "sessions",
+          projection: "overview",
+          pricingFingerprint: "fixture",
+          sessions: [{ sessionFile }],
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+          overview: {
+            sessions: [
+              {
+                key: sessionKey,
+                sessionId,
+                agentId: "main",
+                updatedAt: 1,
+                instances: [{ sessionId, sessionFile }],
+              },
+            ],
+            options: { limit: 50 },
+          },
+        },
+        () => undefined,
+      ),
+    ).toMatchObject({
+      kind: "overview",
+      result: { totals: { input: 12, output: 4 }, overview: { total: 1 } },
+      cacheStatus: { staleFiles: 0 },
+    });
+  });
+
+  it("reports remaining memory backfill work and completes a bounded next batch", async () => {
+    const { owner, binding, sessionFile } = await fixture();
+    for (let index = 1; index <= 50; index++) {
+      const actor = await owner.acquire(
+        { database: owner.identity, sessionKey: `${sessionKey}-${index}` },
+        { assertCurrent() {}, assertReadable() {} },
+      );
+      expect(
+        await actor.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: { sessionId: `extra-${index}`, updatedAt: index + 1 },
+              cwd: "/synthetic",
+            },
+          },
+          authority,
+        ),
+      ).toMatchObject({ kind: "committed" });
+    }
+    const request = { kind: "refresh" as const, pricingFingerprint: "fixture", maxFiles: 50 };
+    const first = await runSessionActorUsage(binding, request, () => undefined);
+    expect(first).toMatchObject({ kind: "refresh", changed: true });
+    if (first.kind !== "refresh") {
+      throw new Error("Expected memory backfill result");
+    }
+    expect(first.remainingFiles).toHaveLength(1);
+    const read = vi.spyOn(binding.actor.storage!, "read");
+    const remaining = first.remainingFiles!.map((file) => file.sessionFile);
+    expect(
+      await runSessionActorUsage(binding, { ...request, sessionFiles: remaining }, () => undefined),
+    ).toEqual({ kind: "refresh", changed: true });
+    expect(read).toHaveBeenCalledWith(
+      {
+        type: "session.usage.snapshot",
+        input: {
+          includeEvents: true,
+          includeRollupBodies: false,
+          sessionIds: first.remainingFiles!.map(
+            (file) => parseSqliteSessionFileMarker(file.rollupId)!.sessionId,
+          ),
+        },
+      },
+      authority,
+    );
+    const files = [
+      sessionFile,
+      ...Array.from({ length: 50 }, (_, index) =>
+        formatSqliteSessionFileMarker({
+          agentId: "main",
+          storePath: binding.path,
+          sessionId: `extra-${index + 1}`,
+        }),
+      ),
+    ];
+    expect(
+      await runSessionActorUsage(
+        binding,
+        {
+          kind: "sessions",
+          pricingFingerprint: "fixture",
+          sessions: files.map((file) => ({ sessionFile: file })),
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        },
+        () => undefined,
+      ),
+    ).toMatchObject({ kind: "sessions", cacheStatus: { cachedFiles: 51, staleFiles: 0 } });
   });
 
   it("keeps captured corpus and usage bytes detached while later writes update new reads", async () => {

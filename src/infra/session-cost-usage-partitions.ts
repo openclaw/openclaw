@@ -27,7 +27,7 @@ export function usageCostPartitionKey(sessionFile: string, date: string): string
   return `${sessionFile}\0${date}`;
 }
 
-export function encodeUsageCostPartition(
+function encodeUsageCostPartition(
   date: string,
   rollup: SessionUsageRollupData,
 ): UsageCostPartition & { blob: Uint8Array<ArrayBuffer> } {

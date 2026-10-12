@@ -210,8 +210,8 @@ export class UsageDetailsController {
     );
   }
 
-  load(sessionKey: string, refreshAll = true): void {
-    void this.session.load(sessionKey, refreshAll);
+  load(sessionKey: string, refreshAll = true, refreshSummary = false): void {
+    void this.session.load(sessionKey, refreshAll || refreshSummary);
     void this.timeSeries.load(sessionKey, refreshAll);
     void this.sessionLogs.load(sessionKey, refreshAll);
   }

@@ -223,12 +223,21 @@ describe("UsagePage detail identity", () => {
       const snapshot = cacheSnapshot("fresh");
       const points = usagePoints(new Date().setHours(12, 0, 0, 0), 3);
       let label = "Original summary";
+      let revision = snapshot.result.updatedAt;
+      let tokens = 100;
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.usage") {
           return {
             ...snapshot.result,
+            updatedAt: revision,
             sessions: [
-              { key: "global", agentId: "main", sessionId, label, usage: snapshot.result.totals },
+              {
+                key: "global",
+                agentId: "main",
+                sessionId,
+                label,
+                usage: { ...snapshot.result.totals, input: tokens, totalTokens: tokens },
+              },
             ],
           };
         }
@@ -257,6 +266,8 @@ describe("UsagePage detail identity", () => {
       const timeSeries = page.details.timeSeries.data;
       const logs = page.details.sessionLogs.data;
       label = "Refreshed summary";
+      tokens = 350;
+      revision += 1;
       if (refresh === "manual") {
         refreshButton(page).click();
       } else {
@@ -268,11 +279,22 @@ describe("UsagePage detail identity", () => {
       await vi.waitFor(() => expect(page.details.timeSeries.loading).toBe(false));
       await page.updateComplete;
       expect(page.querySelector(".session-bar-selection")?.textContent).toContain(label);
+      await vi.waitFor(() =>
+        expect(page.querySelector(".session-detail-stats")?.textContent).toContain("350"),
+      );
+      expect(page.details.session.data?.usage?.totalTokens).toBe(350);
       expect(page.usageSelectedSessions).toEqual(["global"]);
       expect(page.details.timeSeries.data).toEqual(timeSeries);
       expect(page.details.sessionLogs.data).toEqual(logs);
       expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
       expect(page.querySelector(".timeseries-summary__range")?.textContent).toBe(range);
+      const summaryReads = request.mock.calls.filter(
+        ([method]) => method === "sessions.usage",
+      ).length;
+      await page.loadUsage();
+      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(
+        summaryReads + 1,
+      );
       for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
         expect(
           request.mock.calls.filter(([name]) => name === method),

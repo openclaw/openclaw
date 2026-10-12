@@ -24,9 +24,10 @@ import {
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
+import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import type { SessionsUsageResult, UsageOverviewSession } from "../../shared/usage-types.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -37,6 +38,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { RespondFn } from "./types.js";
+import { loadUsageOverview } from "./usage-overview.js";
 import * as usageSessionSelection from "./usage-session-selection.js";
 import { usageHandlers } from "./usage.js";
 
@@ -105,6 +107,75 @@ function contextReport(generatedAt: number, ordinal = 0): SessionSystemPromptRep
     tools: { listChars: ordinal, schemaChars: 0, entries: [] },
   };
 }
+
+it("preserves global session addition order across agents before overview pagination", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const startMs = Date.UTC(2026, 8, 18);
+    const sessions: UsageOverviewSession[] = [];
+    for (const [index, cost] of [0.2, 0.1, 0.3].entries()) {
+      const agentId = index === 1 ? "opus" : "main";
+      const sessionId = `ordered-${index}`;
+      const sessionFile = state.path(`${sessionId}.jsonl`);
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "message",
+          id: sessionId,
+          parentId: null,
+          message: {
+            role: "assistant",
+            timestamp: startMs,
+            provider: "fixture",
+            model: "same-model",
+            usage: {
+              input: 1,
+              totalTokens: 1,
+              cost: { total: cost, input: cost, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+        })}\n`,
+      );
+      sessions.push({
+        key: sessionId,
+        agentId,
+        channel: "same-channel",
+        creatorKey: "same-creator",
+        updatedAt: 30 - index * 10,
+        instances: [{ sessionId, sessionFile }],
+      });
+    }
+    for (const agentId of ["main", "opus"]) {
+      await refreshCostUsageCacheForAgent({
+        config,
+        agentId,
+        sessionFiles: sessions
+          .filter((session) => session.agentId === agentId)
+          .flatMap((session) => session.instances.map((instance) => instance.sessionFile)),
+      });
+    }
+    const result = await loadUsageOverview({
+      sessions,
+      config,
+      startMs,
+      endMs: startMs + 86_400_000 - 1,
+      options: { offset: 1 },
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      projection: "overview",
+    });
+    expect(result.cacheStatus?.status).toBe("fresh");
+    const expectedCost = 0.6000000000000001;
+    expect(result.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byModel[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byChannel[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byCreator?.[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.costDaily?.[0]?.totalCost).toBe(expectedCost);
+    expect(result.aggregates.daily[0]?.cost).toBe(expectedCost);
+    expect(result.overview.tableTotals.cost).toBe(expectedCost);
+    expect(result.sessions.map((session) => session.key)).toEqual(["ordered-1", "ordered-2"]);
+    expect(result.overview).toMatchObject({ total: 3, offset: 1, limit: 50 });
+  });
+});
 
 it("keeps same-key overview context reports with their selected agent", async () => {
   await withUsageState(async (state) => {

@@ -30,6 +30,7 @@ import type {
 } from "./session-cost-usage.types.js";
 
 const USAGE_COST_REFRESH_RETRY_MIN_MS = 50;
+const USAGE_COST_REFRESH_BATCH_SIZE = 50;
 const USAGE_COST_REFRESH_RETRY_MAX_MS = 5_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
@@ -332,6 +333,7 @@ function mergeUsageCostRefreshRequest(
   state.storePath = params.storePath;
   for (const row of params.rebuildRows ?? []) {
     state.pendingRebuildRows.set(row.key, row);
+    state.pendingSessionFiles.add(row.key);
   }
   if (!params.sessionFiles) {
     state.fullRefreshRequested = true;
@@ -379,22 +381,40 @@ async function runQueuedUsageCostRefresh(
         while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const fullRefreshRequested = state.fullRefreshRequested;
           partialBatch = !fullRefreshRequested;
-          const sessionFiles = fullRefreshRequested ? [] : [...state.pendingSessionFiles];
-          const rebuildRows = [...state.pendingRebuildRows.values()];
-          state.pendingRebuildRows.clear();
-          // Full discovery supersedes queued locators, including deleted instances.
-          state.pendingSessionFiles.clear();
+          const sessionFiles: string[] = [];
+          if (fullRefreshRequested) {
+            // Full discovery supersedes queued locators, including deleted instances.
+            state.pendingSessionFiles.clear();
+          } else {
+            for (const file of state.pendingSessionFiles) {
+              sessionFiles.push(file);
+              state.pendingSessionFiles.delete(file);
+              if (sessionFiles.length === USAGE_COST_REFRESH_BATCH_SIZE) {
+                break;
+              }
+            }
+          }
+          const rebuildRows = fullRefreshRequested
+            ? [...state.pendingRebuildRows.values()]
+            : sessionFiles.flatMap((file) => {
+                const row = state.pendingRebuildRows.get(file);
+                return row ? [row] : [];
+              });
           state.fullRefreshRequested = false;
+          const remainingRollupIds = new Set<string>();
           const result = await refreshCostUsageCacheForAgent({
             config: state.config,
             agentId: state.agentId,
             databasePath: state.databasePath,
             storePath: state.storePath,
             sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
-            maxFiles: 50,
+            maxFiles: USAGE_COST_REFRESH_BATCH_SIZE,
             onRemaining: (files) => {
-              for (const file of files) {
-                state.pendingSessionFiles.add(file);
+              for (const { sessionFile, rollupId } of files) {
+                remainingRollupIds.add(rollupId);
+                state.pendingSessionFiles.add(
+                  state.pendingRebuildRows.has(rollupId) ? rollupId : sessionFile,
+                );
               }
             },
             rebuildRows,
@@ -406,22 +426,20 @@ async function runQueuedUsageCostRefresh(
             return;
           }
           if (result === "busy") {
-            for (const row of rebuildRows) {
-              if (!state.pendingRebuildRows.has(row.key)) {
-                state.pendingRebuildRows.set(row.key, row);
-              }
-            }
             if (fullRefreshRequested) {
               state.fullRefreshRequested = true;
             } else {
-              for (const sessionFile of sessionFiles) {
-                state.pendingSessionFiles.add(sessionFile);
-              }
+              state.pendingSessionFiles = new Set([...sessionFiles, ...state.pendingSessionFiles]);
             }
             retryDelayMs = busyRetryDelayMs;
             // Contention among many per-agent refreshes must degrade to polling, not a 20Hz spin.
             busyRetryDelayMs = Math.min(busyRetryDelayMs * 2, USAGE_COST_REFRESH_RETRY_MAX_MS);
             break;
+          }
+          for (const row of rebuildRows) {
+            if (!remainingRollupIds.has(row.key) && state.pendingRebuildRows.get(row.key) === row) {
+              state.pendingRebuildRows.delete(row.key);
+            }
           }
           busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
         }

@@ -9,6 +9,7 @@ import {
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
+import type { UsageCostPendingFile } from "./session-cost-usage-worker.types.js";
 
 export async function refreshCostUsageCacheForAgent(params: {
   config?: OpenClawConfig;
@@ -17,7 +18,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   agentDir?: string;
   databasePath?: string;
   maxFiles?: number;
-  onRemaining?: (sessionFiles: string[]) => void;
+  onRemaining?: (files: UsageCostPendingFile[]) => void;
   sessionsDir?: string;
   storePath?: string;
   sessionFiles?: string[];

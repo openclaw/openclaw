@@ -156,7 +156,7 @@ export type UsageOverviewSession = Omit<SessionUsageEntry, "usage" | "contextWei
   instances: Array<{ sessionId?: string; sessionFile: string }>;
 };
 
-/** Worker-local aggregation result; candidates are bounded by offset plus one page. */
+/** Aggregated report with one final, bounded comparison page. */
 export type UsageOverviewSlice = Pick<SessionsUsageResult, "sessions" | "totals" | "aggregates"> & {
   overview: SessionsUsageOverview;
 };

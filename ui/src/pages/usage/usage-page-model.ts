@@ -145,23 +145,23 @@ export class UsagePageModel {
       const snapshot = value.snapshot;
       const current = this.isCurrentQuery(value.query);
       if (current && snapshot.ok) {
+        const result = snapshot.value.result;
+        const refreshSummary = this.usageSnapshot?.result?.updatedAt !== result.updatedAt;
         this.usageSnapshot = {
           query: value.query,
-          result: snapshot.value.result,
+          result,
           costSummary: snapshot.value.costSummary,
         };
         this.usageError = null;
         const sessionKey =
           this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
         if (sessionKey) {
-          const selectedRow = snapshot.value.result.sessions.find(
-            (session) => session.key === sessionKey,
-          );
+          const selectedRow = result.sessions.find((session) => session.key === sessionKey);
           if (selectedRow) {
             this.selectedSession = selectedRow;
           }
           // Manual intent belongs to this request's selection, never a later poll or selection.
-          this.details.load(sessionKey, value.refreshSessionKey === sessionKey);
+          this.details.load(sessionKey, value.refreshSessionKey === sessionKey, refreshSummary);
         }
       } else if (current && !snapshot.ok) {
         this.applyUsageError(snapshot.error.cause);

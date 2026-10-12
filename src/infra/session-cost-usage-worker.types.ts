@@ -88,6 +88,8 @@ export type UsageCostWorkerInput = {
   transcriptFiles?: string[];
 };
 
+export type UsageCostPendingFile = { sessionFile: string; rollupId: string };
+
 export type UsageCostWorkerResult =
   | {
       kind: "inventory";
@@ -108,7 +110,7 @@ export type UsageCostWorkerResult =
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
     }
-  | { kind: "refresh"; changed: boolean; remainingFiles?: string[] };
+  | { kind: "refresh"; changed: boolean; remainingFiles?: UsageCostPendingFile[] };
 
 export type UsageCostWorkerFailure = {
   message: string;

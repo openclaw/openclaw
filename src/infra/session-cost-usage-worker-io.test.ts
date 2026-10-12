@@ -26,6 +26,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import {
+  decodeUsageCostPartition,
+  USAGE_COST_PARTITION_SCOPE,
+} from "./session-cost-usage-partitions.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import {
   discoverAllSessions,
@@ -531,6 +535,18 @@ if (!isMainThread) {
       ).toBe(true);
 
       await probe.clear();
+      await refreshCostUsageCacheForAgent({
+        agentId: "main",
+        sessionFiles: [sessions[0]!.sessionFile],
+      });
+      expect(
+        (await probe.read()).flatMap((entry) => (entry.kind === "cache-row" ? [entry.key] : [])),
+      ).toEqual([sessions[0]!.sessionFile]);
+      expect(
+        readSessionCostUsageRollupRows("main").some((row) => row.key.endsWith("unrequested.jsonl")),
+      ).toBe(true);
+
+      await probe.clear();
       const result = await loadSessionCostSummariesFromCache({
         sessions,
         agentId: "main",
@@ -606,5 +622,71 @@ it("keeps model addition order when integer timestamp totals hide fractional mod
     expect(overview.summaries[0]?.modelUsage).toEqual(canonical.summaries[0]?.modelUsage);
     const model = overview.summaries[0]?.modelUsage?.find((entry) => entry.model === "model-0");
     expect(model?.totals.totalCost).toBe(0.6000000000000001);
+  });
+});
+
+it("replaces every date partition after missing cached data forces a full rebuild", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-missing-partition";
+    const sessionFile = state.path("usage-missing-partition.jsonl");
+    const record = (day: number) =>
+      JSON.stringify({
+        type: "message",
+        timestamp: new Date(Date.UTC(2026, 8, day)).toISOString(),
+        message: {
+          role: "assistant",
+          model: "fixture",
+          provider: "test",
+          usage: { input: 10, output: 0, totalTokens: 10, cost: { total: 1 } },
+        },
+      }) + "\n";
+    await fs.writeFile(sessionFile, record(18) + record(19));
+    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    runOpenClawAgentWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            "DELETE FROM cache_entries WHERE (scope, key) IN (SELECT scope, key FROM cache_entries WHERE scope = ? ORDER BY key LIMIT 1)",
+          )
+          .run(USAGE_COST_PARTITION_SCOPE),
+      { agentId },
+    );
+    await fs.appendFile(sessionFile, record(20));
+    await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    const stored = runOpenClawAgentWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare("SELECT key, value_json, blob FROM cache_entries WHERE scope = ? ORDER BY key")
+          .all(USAGE_COST_PARTITION_SCOPE),
+      { agentId },
+    );
+    expect(stored.map((row) => String(row.key).slice(-10))).toEqual([
+      "2026-09-18",
+      "2026-09-19",
+      "2026-09-20",
+    ]);
+    expect(
+      stored.map((row) => {
+        if (typeof row.value_json !== "string" || !(row.blob instanceof Uint8Array)) {
+          throw new Error("Expected partition bytes");
+        }
+        const partition = decodeUsageCostPartition(row.value_json, row.blob);
+        return Object.values(partition!.buckets).reduce(
+          (sum, bucket) => sum + bucket.totals.totalTokens,
+          0,
+        );
+      }),
+    ).toEqual([10, 10, 10]);
+    expect(
+      await loadSessionCostSummariesFromCache({
+        agentId,
+        sessions: [{ sessionFile }],
+        projection: "overview",
+        requestRefresh: false,
+        startMs: Date.UTC(2026, 8, 18),
+        endMs: Date.UTC(2026, 8, 21) - 1,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      }),
+    ).toMatchObject({ summaries: [{ totalTokens: 30 }], cacheStatus: { status: "fresh" } });
   });
 });
