@@ -112,7 +112,7 @@ type CodexPromptSnapshotApi = {
     promptText?: string;
     developerInstructionAdditions?: string;
     personaInstructions?: string;
-  }) => {
+  }) => Promise<{
     developerInstructions: string;
     parentLocalInstructions: string | null;
     threadStartParams: Record<string, unknown>;
@@ -122,7 +122,7 @@ type CodexPromptSnapshotApi = {
       additionalContext?: Record<string, { kind: "application" | "untrusted"; value: string }>;
       collaborationMode?: { settings?: { developer_instructions?: string | null } };
     };
-  };
+  }>;
   createCodexDynamicToolSpecsForPromptSnapshot: (params: {
     tools: AnyAgentTool[];
     pluginConfig?: {
@@ -724,7 +724,7 @@ function selectedTurnStartParams(value: Record<string, unknown>): Record<string,
 
 function renderModelBoundPromptLayers(params: {
   scenario: PromptScenario;
-  codexSnapshot: ReturnType<CodexPromptSnapshotApi["buildCodexHarnessPromptSnapshot"]>;
+  codexSnapshot: Awaited<ReturnType<CodexPromptSnapshotApi["buildCodexHarnessPromptSnapshot"]>>;
   dynamicToolsJson: string;
 }): string[] {
   const codexModelInstructions = readFixture(CODEX_MODEL_PROMPT_FIXTURE_PATH);
@@ -908,10 +908,10 @@ function prependCodexOpenClawRuntimeContext(prompt: string): string {
   return [buildCodexOpenClawRuntimeContext(), "", "Current user request:", prompt].join("\n");
 }
 
-function renderScenarioSnapshot(
+async function renderScenarioSnapshot(
   codexApi: CodexPromptSnapshotApi,
   scenario: PromptScenario,
-): string {
+): Promise<string> {
   const attempt = createAttempt({
     scenario,
     sessionKey: scenario.ctx.SessionKey ?? `agent:main:${scenario.id}`,
@@ -921,7 +921,7 @@ function renderScenarioSnapshot(
   if (attempt.startedAtMs === undefined) {
     throw new Error("Codex prompt snapshot attempt requires a fixed start time");
   }
-  const codexSnapshot = withFixedDateNow(attempt.startedAtMs, () =>
+  const codexSnapshot = await withFixedDateNow(attempt.startedAtMs, () =>
     codexApi.buildCodexHarnessPromptSnapshot({
       attempt,
       cwd: WORKSPACE_DIR,
@@ -1001,13 +1001,12 @@ function renderScenarioSnapshot(
   ].join("\n");
 }
 
-function withFixedDateNow<T>(nowMs: number, build: () => T): T {
-  // Snapshot generation is synchronous here. Restore the process clock so this fixture cannot
-  // leak its pinned calendar date into later scenarios or checks.
+async function withFixedDateNow<T>(nowMs: number, build: () => Promise<T>): Promise<T> {
+  // Scenarios run serially so their pinned clock stays active through asynchronous preparation.
   const readNow = Date.now;
   Date.now = () => nowMs;
   try {
-    return build();
+    return await build();
   } finally {
     Date.now = readNow;
   }
@@ -1086,15 +1085,19 @@ export async function createHappyPathPromptSnapshotFiles(): Promise<PromptSnapsh
   return withStateDirEnv("openclaw-prompt-snapshot-", async () => {
     const codexApi = await loadCodexPromptSnapshotApi();
     const scenarios = await createScenarios(codexApi);
+    const renderedScenarios: PromptSnapshotFile[] = [];
+    for (const scenario of scenarios) {
+      renderedScenarios.push({
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
+        content: await renderScenarioSnapshot(codexApi, scenario),
+      });
+    }
     const files = [
       {
         path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
         content: renderReadme(scenarios),
       },
-      ...scenarios.map((scenario) => ({
-        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
-        content: renderScenarioSnapshot(codexApi, scenario),
-      })),
+      ...renderedScenarios,
       ...scenarios.map((scenario) => ({
         path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
         content: stableJson(scenario.dynamicTools),

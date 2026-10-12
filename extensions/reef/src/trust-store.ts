@@ -21,13 +21,10 @@ import {
   readReefOutboundDelivery,
 } from "./trust-store-delivery.js";
 import {
-  REEF_TRUST_STORE_MAX_ENTRIES,
-  REEF_TRUST_STORE_NAMESPACE,
-  REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
-  REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
-  REEF_OUTBOUND_DELIVERY_TTL_MS,
+  REEF_TRUST_STORE_OPTIONS,
+  REEF_DELIVERY_STORE_OPTIONS,
   MESSAGE_ID_PATTERN,
-  ReefPeerStateSchema,
+  listReefPeerTrust,
   createReefPairingApproval,
   parseReefPairingApproval,
   type ReefRequestSettlement,
@@ -54,18 +51,8 @@ const operationHandler = {
 
 function openStores(openStore: PluginRuntime["state"]["openKeyedStore"]) {
   return {
-    peers: openStore<ReefPeerStateSnapshot>({
-      namespace: REEF_TRUST_STORE_NAMESPACE,
-      maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    }),
-    // Both the envelope and its receipt may spend 30 days queued at the relay.
-    deliveries: openStore<ReefOutboundDelivery>({
-      namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
-      maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-      defaultTtlMs: REEF_OUTBOUND_DELIVERY_TTL_MS,
-    }),
+    peers: openStore<ReefPeerStateSnapshot>(REEF_TRUST_STORE_OPTIONS),
+    deliveries: openStore<ReefOutboundDelivery>(REEF_DELIVERY_STORE_OPTIONS),
   };
 }
 
@@ -152,16 +139,7 @@ class WorkerReefTrustStore {
   // Released ChannelPlugin policy and account-description adapters are synchronous.
   listCurrent() {
     this.operationState.assertCurrent();
-    return this.currentPeers
-      .entries()
-      .filter((entry) => entry.key.startsWith(this.#prefix))
-      .flatMap((entry) => {
-        const state = ReefPeerStateSchema.parse(entry.value);
-        return state.trust
-          ? [{ peer: requirePeer(entry.key.slice(this.#prefix.length)), trust: state.trust }]
-          : [];
-      })
-      .toSorted((left, right) => (left.peer < right.peer ? -1 : left.peer > right.peer ? 1 : 0));
+    return listReefPeerTrust(this.currentPeers.entries(), this.#prefix);
   }
 
   async list() {
@@ -415,10 +393,7 @@ export function openReefTrustStore(
   if (!stores.peers.createOperation) {
     return new LegacyReefTrustStore(runtime, config, assertCurrent);
   }
-  const currentPeers = runtime.state.openSyncKeyedStore<ReefPeerStateSnapshot>({
-    namespace: REEF_TRUST_STORE_NAMESPACE,
-    maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-  });
+  const currentPeers =
+    runtime.state.openSyncKeyedStore<ReefPeerStateSnapshot>(REEF_TRUST_STORE_OPTIONS);
   return new WorkerReefTrustStore(stores, config, currentPeers, assertCurrent);
 }

@@ -197,6 +197,21 @@ function codexHarnessLane(name: string, envPrefix: string) {
   });
 }
 
+function upgradeSurvivorLane(
+  name: string,
+  command: string,
+  timeoutMs: number,
+  upgradeSurvivorScenario = "base",
+) {
+  return npmLane(name, {
+    command,
+    stateScenario: "upgrade-survivor",
+    timeoutMs,
+    upgradeSurvivorScenario,
+    weight: 3,
+  });
+}
+
 const bundledPluginInstallUninstallLanes = Array.from(
   { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
   (_, index) =>
@@ -279,13 +294,7 @@ export const mainLanes: DockerE2eLane[] = [
       timeoutMs: LIVE_CLI_TIMEOUT_MS,
     }),
   ),
-  liveLane("openwebui", {
-    e2eImageKind: "functional",
-    provider: "openai",
-    resources: ["service"],
-    timeoutMs: OPENWEBUI_TIMEOUT_MS,
-    weight: 5,
-  }),
+  openWebUILane(),
   serviceLane("onboard", {
     stateScenario: "empty",
   }),
@@ -397,20 +406,8 @@ export const mainLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     timeoutMs: 10 * 60 * 1000,
   }),
-  npmLane("upgrade-survivor", {
-    command: upgradeSurvivorCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 20 * 60 * 1000,
-    upgradeSurvivorScenario: "base",
-    weight: 3,
-  }),
-  npmLane("published-upgrade-survivor", {
-    command: publishedUpgradeSurvivorCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 2580 * 1000,
-    upgradeSurvivorScenario: "base",
-    weight: 3,
-  }),
+  upgradeSurvivorLane("upgrade-survivor", upgradeSurvivorCommand, 20 * 60 * 1000),
+  upgradeSurvivorLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, 2580 * 1000),
   // Explicit Docker/release regression; the per-PR cell still runs only one real update.
   lane("published-driver-lifecycle", {
     command: "pnpm test:docker:published-driver-lifecycle",
@@ -423,36 +420,22 @@ export const mainLanes: DockerE2eLane[] = [
     "published-driver-update", // Outlives the script's 1125 s envelope; hosted after #162858: p50 521 s, max 659 s.
     { resources: ["service"], stateScenario: "empty", timeoutMs: 20 * 60 * 1000 },
   ),
-  npmLane("dreaming-cron-doctor", {
-    command: dreamingCronDoctorCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    upgradeSurvivorScenario: "dreaming-cron-doctor",
-    weight: 3,
-  }),
-  npmLane("root-managed-vps-upgrade", {
-    command: rootManagedVpsUpgradeCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    upgradeSurvivorScenario: "base",
-    weight: 3,
-  }),
-  npmLane("update-restart-auth", {
-    command: updateRestartAuthCommand,
-    stateScenario: "upgrade-survivor",
-    // 3420s inner + 300s host-side margin.
-    timeoutMs: 3720 * 1000,
-    upgradeSurvivorScenario: "base",
-    weight: 3,
-  }),
+  upgradeSurvivorLane(
+    "dreaming-cron-doctor",
+    dreamingCronDoctorCommand,
+    25 * 60 * 1000,
+    "dreaming-cron-doctor",
+  ),
+  upgradeSurvivorLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, 25 * 60 * 1000),
+  // 3420s inner + 300s host-side margin.
+  upgradeSurvivorLane("update-restart-auth", updateRestartAuthCommand, 3720 * 1000),
   ...updateFirstHopCompatLanes,
-  npmLane("update-migration", {
-    command: updateMigrationCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 30 * 60 * 1000,
-    upgradeSurvivorScenario: "plugin-deps-cleanup",
-    weight: 3,
-  }),
+  upgradeSurvivorLane(
+    "update-migration",
+    updateMigrationCommand,
+    30 * 60 * 1000,
+    "plugin-deps-cleanup",
+  ),
   lane("plugins", {
     resources: ["npm", "service"],
     stateScenario: "empty",
@@ -756,9 +739,9 @@ export function normalizeReleaseProfile(raw: string | null | undefined): DockerE
   );
 }
 
-function openWebUILane() {
+function openWebUILane(command?: string) {
   return liveLane("openwebui", {
-    command: RELEASE_OPENWEBUI_COMMAND,
+    command,
     e2eImageKind: "functional",
     provider: "openai",
     resources: ["service"],
@@ -789,7 +772,7 @@ export function releasePathChunkLanes(
     return [];
   }
   if (chunk === "openwebui") {
-    return options.includeOpenWebUI ? [openWebUILane()] : [];
+    return options.includeOpenWebUI ? [openWebUILane(RELEASE_OPENWEBUI_COMMAND)] : [];
   }
   if (
     (chunk !== "plugins-runtime-core" &&
@@ -799,7 +782,7 @@ export function releasePathChunkLanes(
   ) {
     return base;
   }
-  return [...base, openWebUILane()];
+  return [...base, openWebUILane(RELEASE_OPENWEBUI_COMMAND)];
 }
 
 export function allReleasePathLanes(

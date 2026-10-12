@@ -16,8 +16,8 @@ import {
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
-import * as placementDispatchStore from "./worker-environments/placement-dispatch-store.js";
 import * as placementDispatch from "./worker-environments/placement-dispatch.js";
+import * as placementLifecycleStore from "./worker-environments/placement-lifecycle-store.js";
 import * as workerEnvironmentService from "./worker-environments/service.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -203,17 +203,22 @@ test("required placement survives disconnect but stops setup when committed call
   let hold:
     | { committed: Deferred; resume: Promise<void>; afterAcknowledgment: boolean }
     | undefined;
-  const startDispatch = placementDispatchStore.startWorkerPlacementDispatch;
-  vi.spyOn(placementDispatchStore, "startWorkerPlacementDispatch").mockImplementation(
-    async (...args) => {
-      const placement = await startDispatch(...args);
-      const current = hold;
-      if (current && !current.afterAcknowledgment && placement.state === "requested") {
-        hold = undefined;
-        current.committed.resolve();
-        await current.resume;
-      }
-      return placement;
+  const createLifecycle = placementLifecycleStore.createPlacementLifecycleWorkerOps;
+  vi.spyOn(placementLifecycleStore, "createPlacementLifecycleWorkerOps").mockImplementation(
+    (options) => {
+      const lifecycle = createLifecycle(options);
+      const startDispatch = lifecycle.startDispatch.bind(lifecycle);
+      lifecycle.startDispatch = async (...args) => {
+        const placement = await startDispatch(...args);
+        const current = hold;
+        if (current && !current.afterAcknowledgment && placement.state === "requested") {
+          hold = undefined;
+          current.committed.resolve();
+          await current.resume;
+        }
+        return placement;
+      };
+      return lifecycle;
     },
   );
   // The requested acknowledgment and the failed dispatch's final transition each publish once.

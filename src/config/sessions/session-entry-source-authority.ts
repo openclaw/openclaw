@@ -4,6 +4,7 @@ import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identi
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import type { IncognitoSessionFacts } from "./session-incognito-facts.types.js";
@@ -94,6 +95,20 @@ export function captureSessionEntryMetadataRead(scope: {
   storePath?: string;
   env?: NodeJS.ProcessEnv;
 }) {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return {
+      assertCurrent() {
+        memory.authority.assertCurrent();
+        memory.actor.assertReadable();
+      },
+      // Memory predicates are checked by the host authority, never a database worker.
+      source: undefined,
+      readCurrent(): SessionEntrySourceMetadata | undefined {
+        return memory.actor.snapshot(memory.authority)?.entry;
+      },
+    };
+  }
   const binding = captureIncognitoSessionSource(scope);
   if (!binding) {
     return undefined;

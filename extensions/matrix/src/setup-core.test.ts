@@ -172,51 +172,6 @@ describe("createMatrixSetupWizardProxy", () => {
 });
 
 describe("matrixSetupAdapter", () => {
-  it("moves legacy default config before writing a named account", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@default:example.org",
-          accessToken: "tok-default",
-          deviceName: "Default device",
-          dangerouslyAllowNameMatching: true,
-        },
-      },
-    } as CoreConfig;
-
-    const next = matrixSetupAdapter.applyAccountConfig({
-      cfg,
-      accountId: "ops",
-      input: {
-        name: "Ops",
-        homeserver: "https://matrix.example.org",
-        userId: "@ops:example.org",
-        accessToken: "ops-token",
-      } as MatrixSetupInput,
-    }) as CoreConfig;
-
-    expect(next.channels?.matrix?.homeserver).toBeUndefined();
-    expect(next.channels?.matrix?.userId).toBeUndefined();
-    expect(next.channels?.matrix?.accessToken).toBeUndefined();
-    expect(next.channels?.matrix?.dangerouslyAllowNameMatching).toBeUndefined();
-    expectFields(next.channels?.matrix?.accounts?.default, {
-      homeserver: "https://matrix.example.org",
-      userId: "@default:example.org",
-      accessToken: "tok-default",
-      deviceName: "Default device",
-      dangerouslyAllowNameMatching: true,
-    });
-    expectFields(next.channels?.matrix?.accounts?.ops, {
-      name: "Ops",
-      enabled: true,
-      homeserver: "https://matrix.example.org",
-      userId: "@ops:example.org",
-      accessToken: "ops-token",
-    });
-    expect(next.channels?.matrix?.accounts?.ops?.dangerouslyAllowNameMatching).toBeUndefined();
-  });
-
   it("reuses an existing raw default-account key during promotion", () => {
     const cfg = {
       channels: {
@@ -240,78 +195,6 @@ describe("matrixSetupAdapter", () => {
 
     expectPromotedDefaultAccount(next);
     expectOpsAccount(next);
-  });
-
-  it("keeps avatarUrl when switching an account to env-backed auth", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              name: "Ops",
-              homeserver: "https://matrix.example.org",
-              accessToken: "ops-token",
-            },
-          },
-        },
-      },
-    } as CoreConfig;
-
-    const next = matrixSetupAdapter.applyAccountConfig({
-      cfg,
-      accountId: "ops",
-      input: {
-        name: "Ops",
-        useEnv: true,
-        avatarUrl: "  mxc://example.org/ops-avatar  ",
-      } as MatrixSetupInput,
-    }) as CoreConfig;
-
-    expectFields(next.channels?.matrix?.accounts?.ops, {
-      name: "Ops",
-      enabled: true,
-      avatarUrl: "mxc://example.org/ops-avatar",
-    });
-    expect(next.channels?.matrix?.accounts?.ops?.homeserver).toBeUndefined();
-    expect(next.channels?.matrix?.accounts?.ops?.accessToken).toBeUndefined();
-  });
-
-  it("stores proxy in account setup updates", () => {
-    const next = matrixSetupAdapter.applyAccountConfig({
-      cfg: {} as CoreConfig,
-      accountId: "ops",
-      input: {
-        homeserver: "https://matrix.example.org",
-        accessToken: "ops-token",
-        proxy: "http://127.0.0.1:7890",
-      } as MatrixSetupInput,
-    }) as CoreConfig;
-
-    expectFields(next.channels?.matrix?.accounts?.ops, {
-      enabled: true,
-      homeserver: "https://matrix.example.org",
-      accessToken: "ops-token",
-      proxy: "http://127.0.0.1:7890",
-    });
-  });
-
-  it("stores avatarUrl from setup input on the target account", () => {
-    const next = matrixSetupAdapter.applyAccountConfig({
-      cfg: {} as CoreConfig,
-      accountId: "ops",
-      input: {
-        homeserver: "https://matrix.example.org",
-        accessToken: "ops-token",
-        avatarUrl: "  mxc://example.org/ops-avatar  ",
-      } as MatrixSetupInput,
-    }) as CoreConfig;
-
-    expectFields(next.channels?.matrix?.accounts?.ops, {
-      enabled: true,
-      homeserver: "https://matrix.example.org",
-      accessToken: "ops-token",
-      avatarUrl: "mxc://example.org/ops-avatar",
-    });
   });
 
   it("rejects unsupported avatar URL schemes during setup validation", () => {

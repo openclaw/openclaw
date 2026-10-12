@@ -18,15 +18,25 @@ function unwrap(expression: ts.Expression): ts.Expression {
   return node;
 }
 
+function* bindingIdentifiers(name: ts.BindingName): Iterable<ts.Identifier> {
+  if (ts.isIdentifier(name)) {
+    yield name;
+  } else {
+    for (const entry of name.elements) {
+      if (ts.isBindingElement(entry) && entry.name !== undefined) {
+        yield* bindingIdentifiers(entry.name);
+      }
+    }
+  }
+}
+
 function containsBinding(name: ts.BindingName, expected: string): boolean {
-  return ts.isIdentifier(name)
-    ? name.text === expected
-    : name.elements.some(
-        (entry) =>
-          ts.isBindingElement(entry) &&
-          entry.name !== undefined &&
-          containsBinding(entry.name, expected),
-      );
+  for (const identifier of bindingIdentifiers(name)) {
+    if (identifier.text === expected) {
+      return true;
+    }
+  }
+  return false;
 }
 
 const functionVariables = new WeakMap<ts.Node, Map<string, ts.VariableDeclaration>>();
@@ -37,17 +47,6 @@ function varBindings(scope: ts.Node) {
     return cached;
   }
   const declarations = new Map<string, ts.VariableDeclaration>();
-  const add = (name: ts.BindingName, declaration: ts.VariableDeclaration) => {
-    if (ts.isIdentifier(name)) {
-      declarations.set(name.text, declaration);
-    } else {
-      for (const element of name.elements) {
-        if (ts.isBindingElement(element) && element.name) {
-          add(element.name, declaration);
-        }
-      }
-    }
-  };
   const visit = (node: ts.Node) => {
     if (
       ts.isFunctionLikeDeclaration(node) ||
@@ -58,7 +57,9 @@ function varBindings(scope: ts.Node) {
     }
     if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.BlockScoped) === 0) {
       for (const declaration of node.declarations) {
-        add(declaration.name, declaration);
+        for (const identifier of bindingIdentifiers(declaration.name)) {
+          declarations.set(identifier.text, declaration);
+        }
       }
     }
     node.forEachChild(visit);
@@ -179,14 +180,8 @@ function collectBindingWrites(source: ts.SourceFile) {
     }
   };
   const recordBinding = (name: ts.BindingName, write: ts.Node) => {
-    if (ts.isIdentifier(name)) {
-      record(name, write);
-    } else {
-      for (const element of name.elements) {
-        if (ts.isBindingElement(element) && element.name) {
-          recordBinding(element.name, write);
-        }
-      }
+    for (const identifier of bindingIdentifiers(name)) {
+      record(identifier, write);
     }
   };
   const visit = (node: ts.Node) => {

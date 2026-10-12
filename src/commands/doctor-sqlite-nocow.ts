@@ -200,7 +200,7 @@ function assertNoOpenFiles(paths: readonly string[]) {
   }
   if (inspectionError) {
     throw new Error(
-      `fuser could not establish that all handles are closed: ${inspectionError}; ensure fuser is installed and can inspect processes using this store`,
+      `fuser could not establish that all handles are closed: ${inspectionError}; check that fuser is installed and can inspect processes using this store`,
     );
   }
 }

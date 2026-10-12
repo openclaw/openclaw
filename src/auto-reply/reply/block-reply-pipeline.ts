@@ -110,7 +110,6 @@ export function createBlockReplyPipeline(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
-  let didLogTimeout = false;
 
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
     seenKeys.has(payloadKey) || sentKeys.has(payloadKey) || pendingKeys.has(payloadKey);
@@ -220,12 +219,9 @@ export function createBlockReplyPipeline(params: {
       .catch((err: unknown) => {
         if (timeoutSignal?.aborted) {
           aborted = true;
-          if (!didLogTimeout) {
-            didLogTimeout = true;
-            logVerbose(
-              `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
-            );
-          }
+          logVerbose(
+            `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
+          );
           return;
         }
         attempt.outcome = resolveReplyDispatchErrorOutcome(err);

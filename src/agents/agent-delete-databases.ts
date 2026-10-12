@@ -9,10 +9,7 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertNoAgentDatabaseLeasesAsync } from "../state/agent-deletion-journal.js";
 import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";
-import {
-  invalidateRegisteredAgentDatabasesMemo,
-  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-} from "../state/openclaw-agent-db-registry-listing.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -50,7 +47,6 @@ export type AgentDeleteDatabasePlan = {
 };
 
 export async function retireAgentDeleteRuntime(
-  cfg: OpenClawConfig,
   deletion: AgentDeletionOperation,
   agentDirs: readonly string[],
 ): Promise<void> {
@@ -58,9 +54,6 @@ export async function retireAgentDeleteRuntime(
   const { retirePreparedModelRuntimeAgent } = await import("./prepared-model-runtime.js");
   await deletion.assertCurrentAsync();
   await retirePreparedModelRuntimeAgent({ agentId, agentDirs });
-  const { closeActiveMemorySearchManagerCore } = await import("../plugins/memory-runtime.js");
-  await deletion.assertCurrentAsync();
-  await closeActiveMemorySearchManagerCore({ cfg, agentId });
   await deletion.assertCurrentAsync();
 }
 
@@ -82,10 +75,10 @@ export async function finishAgentDeleteDatabases(params: {
 
 /** Destructive planning includes every registered owner, regardless of runtime schema readiness. */
 export async function readAgentDeleteDatabaseRegistry(options: OpenClawStateDatabaseOptions = {}) {
-  invalidateRegisteredAgentDatabasesMemo(options);
   const read = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
     ...options,
     includeIncompatibleSchemaVersions: true,
+    fresh: true,
   }).read();
   read.assertCurrent();
   if (read.result.status !== "available") {

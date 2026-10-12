@@ -300,7 +300,7 @@ export async function runGatewayLoop(params: {
             continue;
           }
           gatewayLog.error(
-            `failed to reacquire gateway lock for in-process restart: ${String(err)}`,
+            `failed to reacquire gateway lock for in-process restart: ${formatErrorMessage(err)}`,
           );
           finishLoop(1);
           return;

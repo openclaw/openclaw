@@ -7,7 +7,6 @@ import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycl
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { beginCronReceiptAuthorityClose } from "../cron/store/receipt-authority-owner.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { commitPresence, upsertPresence } from "../infra/system-presence.js";
 import { stopGatewayDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -49,6 +48,7 @@ import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { refreshGatewayHealthSnapshot } from "./server/health-state.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import { prepareTalkConnectionClose } from "./talk/session-registry.js";
+import { withAgentTerminalOpenAdmission } from "./terminal/open-admission.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -120,8 +120,6 @@ export async function prepareGatewayLifecycle(params: {
     onRunnerStateChanged: (nodeId, change) => {
       if (change.availabilityChanged) {
         workerPlacementRuntime?.runnerAvailability.markChanged(nodeId);
-      }
-      if (change.inventoryChanged || change.availabilityChanged) {
         void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
       }
     },
@@ -214,6 +212,7 @@ export async function prepareGatewayLifecycle(params: {
     await import("./terminal/session-manager.js");
   const { createTerminalSessionTransport } = await import("./terminal/gateway-transport.js");
   const terminalSessions = new TerminalSessionManager({
+    withOpenAdmission: withAgentTerminalOpenAdmission,
     ...createTerminalSessionTransport(broadcastToConnIds, getBufferedAmount),
     detachGraceMs:
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
@@ -390,9 +389,6 @@ export async function prepareGatewayLifecycle(params: {
     worktreeRunEnd.beginClose();
     sandboxRegistry.beginClose();
     talkClose.beginClose();
-    if (prelude) {
-      beginCronReceiptAuthorityClose();
-    }
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     runtime.scheduler.beginClose();

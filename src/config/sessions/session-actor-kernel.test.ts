@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -17,6 +19,7 @@ import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-t
 import { applySessionActorAppend } from "./session-actor-append.worker.js";
 import type { SessionActorAppend, SessionActorTarget } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import * as hydration from "./session-actor-hydration.worker.js";
 import {
   hydrateSessionActorState,
   projectSessionActorHotState,
@@ -25,6 +28,7 @@ import {
   cloneSessionActorStoredState,
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
+import { withActor } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import { applySessionTurn } from "./session-turn.worker.js";
@@ -35,6 +39,72 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 }));
 // mock-isolation: Keep background disk-budget eviction out of the fixture's transaction proof.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
+
+it.each([
+  { kind: "unrelated", writes: 1 },
+  { kind: "related", writes: 1 },
+  { kind: "unscoped", writes: 1 },
+  { kind: "unrelated", writes: 2 },
+  { kind: "related", writes: 2 },
+  { kind: "unscoped", writes: 2 },
+] as const)("bounds hydration recovery after $writes $kind writes", async ({ kind, writes }) => {
+  await withActor((f) => {
+    const otherKey = "agent:main:hydration-sibling";
+    const write = (key: string, label: string) =>
+      withSqliteDatabaseWriteScope(f.database.db, [key], () =>
+        runSqliteImmediateTransactionSync(f.database.db, () =>
+          writeSessionEntry(f.database, key, {
+            ...(key === f.target.sessionKey ? f.nativeEntry()! : { sessionId: "sibling" }),
+            updatedAt: 2,
+            label,
+          }),
+        ),
+      );
+    write(otherKey, "sibling");
+    f.read();
+    write(f.target.sessionKey, "before hydration");
+    const hydrate = hydration.hydrateSessionActorState;
+    let injected = 0;
+    const observer = vi
+      .spyOn(hydration, "hydrateSessionActorState")
+      .mockImplementation((...args) => {
+        const snapshot = hydrate(...args);
+        if (injected++ < writes) {
+          if (kind === "unscoped") {
+            runSqliteImmediateTransactionSync(f.database.db, () => {
+              f.database.db
+                .prepare(
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?",
+                )
+                .run("after hydration", f.target.sessionKey);
+            });
+          } else {
+            write(
+              kind === "related" ? f.target.sessionKey : otherKey,
+              `after hydration ${injected}`,
+            );
+          }
+        }
+        return snapshot;
+      });
+    try {
+      if (writes === 2) {
+        expect(() => f.read()).toThrow("Session actor changed while hydrating");
+      } else {
+        expect(f.read().entry?.label).toBe(
+          kind === "unrelated"
+            ? "before hydration"
+            : kind === "related"
+              ? "after hydration 1"
+              : "after hydration",
+        );
+      }
+      expect(observer).toHaveBeenCalledTimes(2);
+    } finally {
+      observer.mockRestore();
+    }
+  });
+});
 
 it("hydrates once and commits, rejects, and rolls back against the exact actor preimage", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -122,6 +192,7 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
       expect(state.hot.transcript.idempotency).toEqual([
         { key: "first-user", eventId: "user", rawSeq: 1 },
       ]);
+      expect(state.hot.completionKeys).toEqual([]);
       counter.counts.reads = 0;
       reads.length = 0;
       const working = cloneSessionActorStoredState(state);
@@ -232,13 +303,35 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
     expect(readSessionPendingInputByKey(database, scope, pending.idempotencyKey)?.input_id).toBe(
       "accepted-input",
     );
+    const completed = cloneSessionActorStoredState(state);
+    runOpenClawAgentWriteTransaction(
+      (db) =>
+        withSessionActorTransactionState(db, completed, () => {
+          mutatePendingInput(
+            {
+              ...pending,
+              kind: "complete",
+              outcome: buildAgentRunTerminalOutcome({ status: "ok" }),
+            },
+            {
+              admit() {},
+              writeTransaction: (_label, _owner, run) => run(db),
+            },
+            () => {},
+          );
+        }),
+      options,
+    );
+    const completedPostimage = projectSessionActorHotState(completed);
+    expect(completedPostimage.pendingInputs).toEqual([]);
+    expect(completedPostimage.completionKeys).toEqual([pending.idempotencyKey]);
     const rehydrated = hydrateSessionActorState(
       database,
       target,
       state.hot.version,
       state.hot.writeToken,
     );
-    expect(projectSessionActorHotState(rehydrated)).toEqual(committed);
+    expect(projectSessionActorHotState(rehydrated)).toEqual(completedPostimage);
   });
 });
 
@@ -352,8 +445,15 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
         initialWriterRunId: "first-run",
       },
     };
-    const retainedReads = trackSqliteStatementExecutions(database.db, ["entry"], (query) =>
-      query.toLowerCase().includes('from "session_nodes"') ? "entry" : null,
+    const retainedReads = trackSqliteStatementExecutions(
+      database.db,
+      ["entry", "newer"],
+      (query) =>
+        query.toLowerCase().includes('from "session_nodes"')
+          ? "entry"
+          : query.includes('"serialized_bytes"') && query.includes('"identity"."seq" >')
+            ? "newer"
+            : null,
     );
     const committed = (() => {
       try {
@@ -369,6 +469,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
       }
     })();
     expect(retainedReads.counts.entry).toBe(0);
+    expect(retainedReads.counts.newer).toBe(0);
     expect(committed.kind).toBe("metadata");
     if (committed.kind !== "metadata") {
       throw new Error("Expected prepared metadata append");
@@ -487,5 +588,58 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
         hydrateSessionActorState(database, target, state.hot.version, state.hot.writeToken),
       ),
     ).toEqual(projectSessionActorHotState(state));
+    rejectFresh = false;
+    runOpenClawAgentWriteTransaction(
+      (db) =>
+        withSessionActorTransactionState(db, state, () =>
+          applySessionActorAppend(
+            {
+              kind: "metadata",
+              input: {
+                ...append.input,
+                event: {
+                  type: "message",
+                  id: "newer-user",
+                  parentId: "prepared-assistant",
+                  timestamp: "2026-01-01T00:00:04.000Z",
+                },
+                message: {
+                  ...append.input.message!,
+                  messageJson: JSON.stringify({ role: "user", content: "a different turn" }),
+                  validateTurn: false,
+                },
+              },
+            },
+            state,
+            context,
+          ),
+        ),
+      options,
+    );
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        (db) =>
+          withSessionActorTransactionState(db, state, () =>
+            applySessionActorAppend(
+              {
+                kind: "metadata",
+                input: {
+                  ...append.input,
+                  event: {
+                    type: "message",
+                    id: "stale-assistant",
+                    parentId: "prepared-assistant",
+                    timestamp: "2026-01-01T00:00:05.000Z",
+                  },
+                },
+              },
+              state,
+              context,
+            ),
+          ),
+        options,
+      ),
+    ).toThrow("changed");
+    expect(f.events().at(-1)).toMatchObject({ id: "newer-user" });
   });
 });

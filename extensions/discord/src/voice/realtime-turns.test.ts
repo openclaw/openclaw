@@ -16,6 +16,8 @@ defineDiscordVoiceTests(
     resolveVoiceIngressWithParticipantsMock,
     controlRealtimeVoiceAgentRunMock,
     realtimeSessionMock,
+    createRealtimeSessionMock,
+    createRealtimeVoiceBridgeSessionMock,
     configureVoiceStateGateway,
     createClient,
     createManager,
@@ -38,18 +40,27 @@ defineDiscordVoiceTests(
     expectUserMessageIncludes,
     expectUserMessageNotIncludes,
   }) => {
-    it("flushes captured PCM while leaving trailing silence to the provider's input clock", async () => {
+    it("flushes captured PCM for warm and connecting speakers without dropping first audio", async () => {
       realtimeSessionMock.bridge.pacesInputAudio = true;
       const { entry, manager } = await createJoinedAgentProxyFixture();
+      const connecting = createDeferred<void>();
+      const nextSession = createRealtimeSessionMock();
+      nextSession.bridge.pacesInputAudio = true;
+      nextSession.connect.mockReturnValueOnce(connecting.promise);
+      createRealtimeVoiceBridgeSessionMock.mockReturnValueOnce(nextSession);
       try {
-        const turn = beginSpeakerTurn(entry);
-        expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
-        turn.close();
-        const audio = Buffer.concat(
-          realtimeSessionMock.sendAudio.mock.calls.map(([chunk]) => chunk),
-        );
-        expect(audio).toEqual(Buffer.alloc(960));
+        for (const [userId, session] of [
+          ["u-owner", realtimeSessionMock],
+          ["u-guest", nextSession],
+        ] as const) {
+          const turn = beginSpeakerTurn(entry, { userId });
+          expect(session.sendAudio).toHaveBeenCalled();
+          turn.close();
+          const audio = Buffer.concat(session.sendAudio.mock.calls.map(([chunk]) => chunk));
+          expect(audio).toEqual(Buffer.alloc(960));
+        }
       } finally {
+        connecting.resolve();
         await manager.destroy();
       }
     });

@@ -37,6 +37,7 @@ const {
   mintReplyMessageActionTurnCapability,
 } = await import("./agent-runner-utils.js");
 const {
+  resolveCurrentPromptReaction,
   resolveMessageActionTurnAuthorization,
   resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -99,7 +100,10 @@ describe("agent-runner-utils", () => {
         sessionCtx: { Provider: "webchat" },
         opts: {
           runId: source.runId,
-          dashboardReadAdmission: { ...source, assertCurrent: vi.fn() },
+          dashboardReadAdmission: {
+            ...source,
+            assertCurrent: vi.fn(),
+          },
         },
         isHeartbeat: false,
       };
@@ -116,6 +120,11 @@ describe("agent-runner-utils", () => {
       try {
         const authority = resolveMessageActionTurnAuthorization(lookup);
         expect(authority?.assertDashboardReadCurrent).toBeTypeOf("function");
+        expect(resolveCurrentPromptReaction(lookup)).toBeUndefined();
+        expect(authority).not.toHaveProperty("currentPromptReaction");
+        expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
+          "currentPromptReaction",
+        );
         authority?.assertDashboardReadCurrent?.();
         expect(turn.opts?.dashboardReadAdmission?.assertCurrent).toHaveBeenCalled();
         expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
@@ -166,6 +175,7 @@ describe("agent-runner-utils", () => {
           toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
         });
         expect(authority?.assertDashboardReadCurrent).toBeUndefined();
+        expect(resolveCurrentPromptReaction({ ...source, token })).toBeUndefined();
         expect(turn.opts?.dashboardReadAdmission?.assertCurrent).not.toHaveBeenCalled();
       } finally {
         revokeMessageActionTurnCapability(token);

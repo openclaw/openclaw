@@ -674,12 +674,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   gap: 14px;
 }
 
-.login-gate__form .field label {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 500;
-}
-
 .login-gate__form .field input[aria-invalid="true"] {
   border-color: var(--login-gate-tone, var(--danger));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--login-gate-tone, var(--danger)) 14%, transparent);
@@ -966,12 +960,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   font-size: 13px;
   line-height: 1.5;
   color: var(--text);
-}
-
-.gateway-switch__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 @media (max-width: 560px) {
@@ -1758,6 +1746,7 @@ openclaw-session-progress-hovercard-provider {
   gap: 6px;
 }
 
+.login-gate__form .field label,
 .field span {
   color: var(--muted);
   font-size: 13px;
@@ -1956,7 +1945,9 @@ select.input {
   column-gap: 10px;
 }
 
-.config-form .field.checkbox input[type="checkbox"] {
+.config-form .field.checkbox input[type="checkbox"],
+.exec-approval-skip input[type="checkbox"],
+.data-table-checkbox-col input[type="checkbox"] {
   margin: 0;
   width: 16px;
   height: 16px;
@@ -2073,44 +2064,42 @@ select.input {
   stroke-width: 1.8;
 }
 
-.callout.danger {
-  border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
+.callout.danger,
+.callout.warn {
+  border-color: color-mix(in srgb, var(--callout-tone) 34%, var(--border));
   background: linear-gradient(
     135deg,
-    color-mix(in srgb, var(--danger) 14%, var(--bg-elevated)) 0%,
-    color-mix(in srgb, var(--danger) 8%, var(--bg-elevated)) 100%
+    color-mix(in srgb, var(--callout-tone) 14%, var(--bg-elevated)) 0%,
+    color-mix(in srgb, var(--callout-tone) 8%, var(--bg-elevated)) 100%
   );
-  color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
+  color: color-mix(in srgb, var(--callout-tone) 82%, var(--text-strong));
+}
+
+.callout.info,
+.callout.success {
+  border-color: color-mix(in srgb, var(--callout-tone) 25%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--callout-tone) 8%, transparent) 0%,
+    color-mix(in srgb, var(--callout-tone) 4%, transparent) 100%
+  );
+  color: var(--callout-tone);
+}
+
+.callout.danger {
+  --callout-tone: var(--danger);
 }
 
 .callout.warn {
-  border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--warn) 14%, var(--bg-elevated)) 0%,
-    color-mix(in srgb, var(--warn) 8%, var(--bg-elevated)) 100%
-  );
-  color: color-mix(in srgb, var(--warn) 82%, var(--text-strong));
+  --callout-tone: var(--warn);
 }
 
 .callout.info {
-  border-color: color-mix(in srgb, var(--info) 25%, transparent);
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--info) 8%, transparent) 0%,
-    color-mix(in srgb, var(--info) 4%, transparent) 100%
-  );
-  color: var(--info);
+  --callout-tone: var(--info);
 }
 
 .callout.success {
-  border-color: color-mix(in srgb, var(--ok) 25%, transparent);
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--ok) 8%, transparent) 0%,
-    color-mix(in srgb, var(--ok) 4%, transparent) 100%
-  );
-  color: var(--ok);
+  --callout-tone: var(--ok);
 }
 
 /* Pending routes reserve the content layout without exposing transient panel text. */
@@ -2596,6 +2585,7 @@ select.input {
   font-weight: 500;
 }
 
+.gateway-switch__actions,
 .chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -2804,9 +2794,6 @@ td.data-table-key-col {
 }
 
 .data-table-checkbox-col input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  margin: 0;
   vertical-align: middle;
 }
 
@@ -3061,12 +3048,6 @@ td.data-table-key-col {
   column-gap: 10px;
   font-size: 13px;
   cursor: var(--cursor-action);
-}
-
-.exec-approval-skip input[type="checkbox"] {
-  margin: 0;
-  width: 16px;
-  height: 16px;
 }
 
 .exec-approval-actions {
@@ -3500,7 +3481,8 @@ td.data-table-key-col {
   white-space: nowrap;
 }
 
-.agent-select__footer-icon {
+.agent-select__footer-icon,
+.provider-brand-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5688,13 +5670,6 @@ td.data-table-key-col {
   width: 100%;
   border: none;
   background: var(--card);
-}
-
-.provider-brand-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
 }
 
 .provider-brand-icon:not(.provider-brand-icon--fallback) {

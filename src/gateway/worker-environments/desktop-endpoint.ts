@@ -76,16 +76,15 @@ export function normalizeWorkerDesktopEndpoint(value: unknown): WorkerDesktopEnd
     if (app.args !== undefined && !isWorkerDesktopArgs(app.args)) {
       throw new Error("Worker environment desktop app args must be bounded strings");
     }
+    const requiredKeys =
+      app.id === "terminal" ? ["id", "executablePath"] : ["id", "executablePath", "cdpPort"];
+    if (!hasExactOwnKeys(app, requiredKeys, ["args"])) {
+      throw new Error(`Worker environment ${app.id} desktop app contains unknown fields`);
+    }
     let normalized: WorkerDesktopApp;
     if (app.id === "terminal") {
-      if (!hasExactOwnKeys(app, ["id", "executablePath"], ["args"])) {
-        throw new Error("Worker environment terminal desktop app contains unknown fields");
-      }
       normalized = { id: "terminal", executablePath: app.executablePath };
     } else {
-      if (!hasExactOwnKeys(app, ["id", "executablePath", "cdpPort"], ["args"])) {
-        throw new Error("Worker environment browser desktop app contains unknown fields");
-      }
       if (
         typeof app.cdpPort !== "number" ||
         !Number.isSafeInteger(app.cdpPort) ||

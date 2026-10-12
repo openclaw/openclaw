@@ -72,7 +72,7 @@ type PendingSupervisionMaterializationParams = Omit<
   normalizeBindingModelProvider: (
     authProfileId: string | undefined,
     modelProvider: string | undefined,
-  ) => string | undefined;
+  ) => Promise<string | undefined>;
   bindingPatch: Partial<Omit<CodexAppServerThreadBinding, "threadId" | "pendingSupervisionBranch">>;
 };
 
@@ -242,7 +242,7 @@ export async function materializePendingSupervisionBranch(
     }
 
     const nativeAttempt = { ...params.attempt, modelId: nativeModel };
-    const startParams = buildThreadStartParams(nativeAttempt, {
+    const startParams = await buildThreadStartParams(nativeAttempt, {
       ...params,
       model: nativeModel,
       modelProvider: nativeModelProvider,
@@ -313,7 +313,7 @@ export async function materializePendingSupervisionBranch(
     }
 
     const historyCoveredThrough = new Date().toISOString();
-    const bindingModelProvider = params.normalizeBindingModelProvider(
+    const bindingModelProvider = await params.normalizeBindingModelProvider(
       params.attempt.authProfileId,
       nativeModelProvider,
     );

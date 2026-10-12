@@ -1,4 +1,4 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { chatItemGroups } from "./chat-agent-run-grouping.ts";
@@ -20,7 +20,6 @@ it.each(["tool", "item"] as const)(
   async (source) => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
-    vi.stubGlobal("window", globalThis);
     const history = activeHistory("active-run");
     const original = {
       role: "user",

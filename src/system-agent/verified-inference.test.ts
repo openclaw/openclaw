@@ -10,6 +10,7 @@ import {
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
 import { resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl } from "./setup-inference.js";
 import {
@@ -36,7 +37,7 @@ import {
 
 const pluginRegistryState = vi.hoisted(() => ({
   providerOwnerIds: ["provider-owner"],
-  records: [] as Array<Record<string, unknown>>,
+  records: [] as Array<ReturnType<typeof pluginRecord>>,
 }));
 const harnessRuntimeArtifactState = vi.hoisted(() => ({
   id: "codex-app-server",
@@ -81,7 +82,9 @@ vi.mock("../agents/harness/registry.js", async (importOriginal) => ({
 
 vi.mock("../plugins/plugin-registry-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-registry-snapshot.js")>()),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: pluginRegistryState.records }) as never),
+  loadPluginRegistrySnapshot: vi.fn(() =>
+    createInstalledPluginIndex({ plugins: pluginRegistryState.records }),
+  ),
 }));
 
 const profile = {

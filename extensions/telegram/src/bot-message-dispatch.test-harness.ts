@@ -64,7 +64,7 @@ const buildModelsProviderDataHoisted = vi.hoisted(() =>
     modelCatalog: [],
   })),
 );
-const listSkillCommandsForAgentsHoisted = vi.hoisted(() => vi.fn(() => []));
+const prepareSkillCommandsForAgentsHoisted = vi.hoisted(() => vi.fn(async () => []));
 const createChannelMessageReplyPipelineHoisted = vi.hoisted(() =>
   vi.fn(() => ({
     responsePrefix: undefined,
@@ -123,7 +123,7 @@ const readChannelAllowFromStore = readChannelAllowFromStoreHoisted;
 const upsertChannelPairingRequest = upsertChannelPairingRequestHoisted;
 const enqueueSystemEvent = enqueueSystemEventHoisted;
 const buildModelsProviderData = buildModelsProviderDataHoisted;
-const listSkillCommandsForAgents = listSkillCommandsForAgentsHoisted;
+const prepareSkillCommandsForAgents = prepareSkillCommandsForAgentsHoisted;
 const createChannelMessageReplyPipeline = createChannelMessageReplyPipelineHoisted;
 const wasSentByBot = wasSentByBotHoisted;
 export const appendAssistantMirrorMessageByIdentity = appendAssistantMirrorMessageByIdentityHoisted;
@@ -274,9 +274,10 @@ vi.mock("./send.js", async () => ({
   reactMessageTelegram: reactMessageTelegramHoisted,
 }));
 
+// mock-isolation: Keep session database startup outside the command fixture.
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel: generateTopicLabelHoisted,
-  getSessionEntry: getSessionEntryHoisted,
+  getSessionEntryAsync: async (...args: unknown[]) => getSessionEntryHoisted(...args),
   getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsHoisted,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode: resolveChunkModeHoisted,
@@ -301,7 +302,7 @@ export let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").d
 export const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
-  getSessionEntry: getSessionEntry as TelegramBotDeps["getSessionEntry"],
+  getSessionEntryAsync: async (params) => getSessionEntry(params),
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -310,8 +311,8 @@ export const telegramDepsForTest: TelegramBotDeps = {
   dispatchReplyWithBufferedBlockDispatcher:
     dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
-  listSkillCommandsForAgents:
-    listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
+  prepareSkillCommandsForAgents:
+    prepareSkillCommandsForAgents as TelegramBotDeps["prepareSkillCommandsForAgents"],
   createChannelMessageReplyPipeline:
     createChannelMessageReplyPipeline as TelegramBotDeps["createChannelMessageReplyPipeline"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
@@ -380,7 +381,7 @@ async function resetTelegramDispatchTestState() {
     created: true,
   });
   enqueueSystemEvent.mockReset().mockResolvedValue(undefined);
-  listSkillCommandsForAgents.mockReset().mockReturnValue([]);
+  prepareSkillCommandsForAgents.mockReset().mockResolvedValue([]);
   createChannelMessageReplyPipeline.mockReturnValue({
     responsePrefix: undefined,
     responsePrefixContextProvider: () => ({ identityName: undefined }),

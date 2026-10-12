@@ -67,8 +67,6 @@ vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
 vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
-    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
-      authProfilesStoreMock.profiles[profileId],
     getRuntimeAuthProfileStoreSnapshot: readAuthProfileStoreForTest,
   };
 });
@@ -81,7 +79,11 @@ vi.mock("../../agents/auth-profiles/source-check.js", async (importOriginal) => 
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   return {
     ensureAuthProfileStore: readAuthProfileStoreForTest,
+    ensureAuthProfileStoreAsync: async () => readAuthProfileStoreForTest(),
+    findPersistedAuthProfileCredentialAsync: async ({ profileId }: { profileId: string }) =>
+      authProfilesStoreMock.profiles[profileId],
     ensureAuthProfileStoreWithoutExternalProfiles: readAuthProfileStoreForTest,
+    ensureAuthProfileStoreWithoutExternalProfilesAsync: async () => readAuthProfileStoreForTest(),
     ensureAuthProfileStoreForLocalUpdate: readAuthProfileStoreForTest,
     loadAuthProfileStore: readAuthProfileStoreForTest,
     loadAuthProfileStoreForRuntime: readAuthProfileStoreForTest,

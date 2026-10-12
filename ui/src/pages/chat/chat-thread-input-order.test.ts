@@ -172,41 +172,78 @@ describe("transcript input order", () => {
     ]);
   });
 
-  it.each([true, false])(
-    "keeps the live tail after accepted steers and before a later turn (original=%s)",
-    (includeOriginal) => {
+  it.each([
+    { includeOriginal: true, showReasoning: false },
+    { includeOriginal: false, showReasoning: false },
+    { includeOriginal: true, showReasoning: true },
+    { includeOriginal: false, showReasoning: true },
+  ])(
+    "keeps the live tail after accepted steers and before a later turn (original=$includeOriginal, reasoning=$showReasoning)",
+    ({ includeOriginal, showReasoning }) => {
       const original = {
         role: "user",
         content: "Original",
+        timestamp: 1_000,
         __openclaw: { idempotencyKey: "run:user", seq: 1 },
       };
       const messages = [
         ...(includeOriginal ? [original] : []),
-        { role: "assistant", content: "Before", __openclaw: { runId: "run", seq: 2 } },
+        {
+          role: "assistant",
+          content: "Before",
+          timestamp: 1_050,
+          __openclaw: { runId: "run", seq: 2 },
+        },
         {
           role: "user",
           content: "Steer one",
+          timestamp: 1_200,
           __openclaw: { idempotencyKey: "steer-one:user", steerTargetRunId: "run", seq: 3 },
         },
-        { role: "assistant", content: "After", __openclaw: { runId: "run", seq: 4 } },
+        {
+          role: "assistant",
+          content: "After",
+          timestamp: 1_300,
+          __openclaw: { runId: "run", seq: 4 },
+        },
         {
           role: "user",
           content: "Steer two",
+          timestamp: 1_400,
           __openclaw: { idempotencyKey: "steer-two:user", steerTargetRunId: "run", seq: 5 },
         },
-        { role: "user", content: "Next turn", __openclaw: { idempotencyKey: "next:user", seq: 6 } },
+        {
+          role: "user",
+          content: "Next turn",
+          timestamp: 2_000,
+          __openclaw: { idempotencyKey: "next:user", seq: 6 },
+        },
       ];
-      expect(
-        visibleRows({ messages, runId: "run", stream: "Live continuation", streamStartedAt: 1 }),
-      ).toEqual([
-        ...(includeOriginal ? ["Original"] : []),
-        "Before",
-        "Steer one",
-        "After",
-        "Steer two",
-        "Live continuation",
-        "Next turn",
-      ]);
+      const input = createInput({
+        messages,
+        runId: "run",
+        streamStartedAt: 1_100,
+        showReasoning,
+        reasoning: showReasoning
+          ? {
+              runId: "run",
+              items: [
+                { itemId: "thinking", text: "Working through the request.", startedAt: 1_100 },
+              ],
+            }
+          : null,
+      });
+      for (const stream of ["Live continuation", "Live continuation grows"]) {
+        expect(visibleRows({ ...input, stream }, buildCachedChatItems)).toEqual([
+          ...(includeOriginal ? ["Original"] : []),
+          "Before",
+          "Steer one",
+          "After",
+          "Steer two",
+          stream,
+          "Next turn",
+        ]);
+      }
     },
   );
 

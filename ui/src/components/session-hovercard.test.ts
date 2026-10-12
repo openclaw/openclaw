@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../src/gateway/control-ui-contract.js";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { renderSessionHovercard } from "./session-hovercard.ts";
+import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
 
 function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSession {
   return {
@@ -50,11 +52,45 @@ function progressCard(): ProgressCard {
   };
 }
 
-function renderCard(
-  input: Parameters<typeof renderSessionHovercard>[0],
-  container = document.createElement("div"),
-) {
-  render(renderSessionHovercard(input), container);
+const updateCards = new WeakMap<HTMLElement, (input: SessionHovercardInput) => void>();
+
+function renderCard(input: SessionHovercardInput, container = document.createElement("div")) {
+  const update = updateCards.get(container);
+  if (update) {
+    update(input);
+  } else {
+    mountSolid(
+      () => {
+        const [current, setCurrent] = createSignal(input);
+        updateCards.set(container, (next) => setCurrent(next));
+        return createComponent(SessionHovercard, {
+          get row() {
+            return current().row;
+          },
+          get selfUserId() {
+            return current().selfUserId;
+          },
+          get avatarAuth() {
+            return current().avatarAuth;
+          },
+          get personActivity() {
+            return current().personActivity;
+          },
+          get automationLink() {
+            return current().automationLink;
+          },
+          get pullRequests() {
+            return current().pullRequests;
+          },
+          get progressCard() {
+            return current().progressCard;
+          },
+        });
+      },
+      { container },
+    );
+  }
+  flush();
   return container;
 }
 
@@ -69,7 +105,7 @@ function attributionSummary(container: ParentNode): string {
     .trim();
 }
 
-describe("renderSessionHovercard", () => {
+describe("session hovercard", () => {
   it.each([undefined, "Validation worker"])(
     "shows the full failure above the notepad (child: %s)",
     (childLabel) => {
@@ -338,6 +374,26 @@ describe("renderSessionHovercard", () => {
           ).toBe("AB");
         });
         expect(avatar?.querySelector("img.channel-avatar")).toBeNull();
+        renderCard(
+          {
+            row: row({
+              channelAvatarUrl,
+              createdActor: {
+                type: "human",
+                id: "charlie",
+                identity: { type: "profile", id: "charlie" },
+                label: "Charlie Delta",
+              },
+            }),
+            avatarAuth: { authTokens, authReady },
+          },
+          container,
+        );
+        await avatar?.updateComplete;
+        expect(container.querySelector("openclaw-channel-avatar")).toBe(avatar);
+        expect(
+          avatar?.querySelector(".session-hovercard__creator-avatar-fallback")?.textContent,
+        ).toBe("CD");
       }
     },
   );
@@ -791,6 +847,60 @@ describe("renderSessionHovercard", () => {
       expect(navigate).toHaveBeenLastCalledWith("lee", "Lee");
     },
   );
+
+  it("retains an open participant menu and focused attribution while progress and PR facts refresh", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const input: SessionHovercardInput = {
+      row: row({
+        participants: [{ identity: { type: "profile", id: "mira" }, label: "Mira" }],
+        participantCount: 1,
+      }),
+      personActivity: { basePath: "", navigate: vi.fn() },
+      progressCard: progressCard(),
+    };
+    renderCard(input, container);
+    const tooltip = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-tooltip.session-hovercard__participants-tooltip",
+    )!;
+    await tooltip.updateComplete;
+    const trigger = tooltip.querySelector<HTMLButtonElement>(
+      ".session-hovercard__attribution-others",
+    )!;
+    const pointer = new MouseEvent("pointerdown", { bubbles: true });
+    Object.defineProperty(pointer, "pointerType", { value: "touch" });
+    trigger.dispatchEvent(pointer);
+    trigger.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+    trigger.click();
+    expect(tooltip.hasAttribute("open")).toBe(true);
+    const name = container.querySelector<HTMLAnchorElement>(
+      ".session-hovercard__attribution-name",
+    )!;
+    const markdown = container.querySelector(".session-progress-card__markdown")!;
+    trigger.focus();
+
+    renderCard(
+      {
+        ...input,
+        row: { ...input.row!, label: "Refreshed session" },
+        progressCard: { ...progressCard(), markdown: "**Updated** release notes." },
+        pullRequests: snapshot({ status: "unavailable" }),
+      },
+      container,
+    );
+    await tooltip.updateComplete;
+    expect(container.querySelector(".session-hovercard__participants-tooltip")).toBe(tooltip);
+    expect(tooltip.querySelector(".session-hovercard__attribution-others")).toBe(trigger);
+    expect(tooltip.hasAttribute("open")).toBe(true);
+    expect(container.querySelector(".session-hovercard__attribution-name")).toBe(name);
+    expect(document.activeElement).toBe(trigger);
+    expect(container.querySelector(".session-progress-card__markdown")).toBe(markdown);
+    expect(markdown.textContent).toContain("Updated release notes.");
+    expect(container.querySelector(".session-hovercard__title")?.textContent).toBe(
+      "Refreshed session",
+    );
+    renderCard({}, container);
+    expect(container.childElementCount).toBe(0);
+  });
 
   it("renders nothing when no session facts are known", () => {
     const container = renderCard({});

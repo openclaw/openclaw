@@ -71,11 +71,19 @@ identity checks. Agent pickers and the agent directory wait for a live roster;
 stored agent lists cannot establish the current role’s discovery permissions. Short
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.
+Unique display-name links use the same cached route resolution, including the
+`/dashboard` namespace. Missing or ambiguous names still wait for the Gateway.
 
 Exact conversation links also wait for the scoped cached roster before presenting
 their header. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets keep one loading surface while their board metadata and document
 arrive. Widget requests still require the current Gateway connection.
+
+Loading more sessions keeps the sidebar's warm-reload snapshot usable. The
+routing roster retains its first page; the sidebar separately keeps its visible
+rows, pinned destinations, and selected view for display while connecting. The
+Pages view saves and restores its dashboard catalog without waiting for the
+inactive Sessions roster.
 
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 their bounded cache limits. Clearing site data removes local recovery data.

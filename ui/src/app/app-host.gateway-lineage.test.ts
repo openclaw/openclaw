@@ -18,6 +18,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import {
+  createComposerContainer,
   createComposerProps,
   resetComposerFixture,
 } from "../pages/chat/chat-composer.test-support.ts";
@@ -25,7 +26,7 @@ import { admitQueuedMessageForSession } from "../pages/chat/chat-outbox-admissio
 import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
-import { renderChatComposer } from "../pages/chat/components/chat-composer.ts";
+import { renderChatComposer } from "../pages/chat/components/chat-composer.tsx";
 import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
 import {
   activeQueuedMessageEdit,
@@ -262,7 +263,7 @@ describe("Control UI Gateway target lineage", () => {
       const originalShell = shellContainer.querySelector("openclaw-app-shell");
       expect(originalShell).not.toBeNull();
       const releaseShell = gateway.subscribe(drawShell);
-      const composer = document.createElement("div");
+      const composer = createComposerContainer();
       try {
         expect(
           admitQueuedMessageForSession(state, captureChatOutboxAdmission(state, sessionKey), {

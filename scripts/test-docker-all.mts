@@ -479,29 +479,16 @@ export function githubWorkflowRerunCommand(
   if (allowUnreleasedChangelog) {
     fields.push("-f", "allow_unreleased_changelog=true");
   }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
-    );
-  }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
-    );
-  }
-  if (env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_scenarios=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
-    );
-  }
-  if (bareImage) {
-    fields.push("-f", `docker_e2e_bare_image=${shellQuote(bareImage)}`);
-  }
-  if (functionalImage) {
-    fields.push("-f", `docker_e2e_functional_image=${shellQuote(functionalImage)}`);
+  for (const [name, value] of [
+    ["published_upgrade_survivor_baseline", env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
+    ["published_upgrade_survivor_baselines", env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS],
+    ["published_upgrade_survivor_scenarios", env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS],
+    ["docker_e2e_bare_image", bareImage],
+    ["docker_e2e_functional_image", functionalImage],
+  ]) {
+    if (value) {
+      fields.push("-f", `${name}=${shellQuote(value)}`);
+    }
   }
   if (bareImage || functionalImage) {
     fields.push("-f", "shared_image_policy=existing-only");

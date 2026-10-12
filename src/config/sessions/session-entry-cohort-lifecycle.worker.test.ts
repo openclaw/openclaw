@@ -77,6 +77,9 @@ function holdCohortReply() {
       const execution = capture(...args);
       return {
         ...execution,
+        get fileIdentity() {
+          return execution.fileIdentity;
+        },
         async runExisting<T>(
           source: AgentDatabaseRequestExecutionSource,
           operation: (worker: AgentDatabaseExecutionScope) => Promise<T>,

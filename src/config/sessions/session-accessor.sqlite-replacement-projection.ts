@@ -46,6 +46,8 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
   SessionEntryReplacement,
 } from "./session-accessor.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import {
   captureIncognitoSessionOperation,
   publishIncognitoSessionEntry,
@@ -110,6 +112,79 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     storePath: params.storePath,
     env: params.env,
   };
+  const memory = getSessionActorStorageBinding({ ...target, sessionKey: undefined });
+  if (memory) {
+    const snapshots = await memory.actor.storage.read(
+      {
+        type: "session.entries.read",
+        input: {
+          sessionKeys: params.sessionKeys,
+          includeSessionWindowOwner: params.includeSessionWindowOwner,
+          includeLabelOwners: params.includeLabelOwners,
+        },
+      },
+      memory.authority,
+    );
+    const prepared = new Map(snapshots.map(({ sessionKey, entry }) => [sessionKey, entry]));
+    const updated = await params.update(structuredClone(snapshots));
+    const replacements = normalize(updated.replacements).flatMap((replacement) => {
+      if (replacement.previousSessionKeys?.some((key) => key !== replacement.sessionKey)) {
+        throw new Error("Memory session replacement cannot retain legacy aliases");
+      }
+      const transcript =
+        params.preparedTranscript?.sessionKey === replacement.sessionKey
+          ? params.preparedTranscript.events
+          : undefined;
+      return [
+        {
+          sessionKey: replacement.sessionKey,
+          expected: prepared.get(replacement.sessionKey),
+          entry: replacement.entry,
+          label:
+            params.labelClaim?.sessionKey === replacement.sessionKey
+              ? params.labelClaim.label
+              : undefined,
+          owner:
+            params.ownerAssignment?.sessionKey === replacement.sessionKey
+              ? params.ownerAssignment.owner
+              : undefined,
+          transcriptEvents: transcript,
+        },
+      ];
+    });
+    const commit = async (assertSourceCurrent?: () => void) => {
+      readSessionActorStorageResult(
+        await memory.actor.storage.mutate(
+          { type: "session.entry.replacements", input: { replacements } },
+          {
+            ...memory.authority,
+            assertCurrent() {
+              memory.authority.assertCurrent();
+              params.assertCommitAllowed?.();
+              assertSourceCurrent?.();
+            },
+          },
+          { committed: () => params.onLifecycleCommitted?.(false) },
+        ),
+      );
+      if (params.afterCommitted) {
+        const handle = await memory.actor.storage.acquire(memory.actor.target.sessionKey);
+        try {
+          await params.afterCommitted(updated.result, {
+            env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") },
+            assertCurrent() {
+              handle.assertCurrent();
+              memory.authority.assertCurrent();
+            },
+          });
+        } finally {
+          await handle.release();
+        }
+      }
+      return updated.result;
+    };
+    return params.withCommit ? params.withCommit(commit) : commit();
+  }
   const incognito = retainedIncognito ?? captureIncognitoSessionOperation(target);
   const env = cloneEnvWithPlatformSemantics(
     params.env ??
@@ -341,7 +416,6 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               labelClaim: params.labelClaim,
               preparedTranscript: params.preparedTranscript,
               maintenance,
-              maintenanceRunBasis: preparedPreservation?.subagentRunBasis,
             };
             if (incognito) {
               const actor = incognito.actor;

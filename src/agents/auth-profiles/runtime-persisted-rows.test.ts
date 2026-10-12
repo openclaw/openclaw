@@ -33,7 +33,7 @@ it("shares immutable persisted rows across cache hits", async () => {
     cacheable: true,
   };
   const read = vi.fn(async () => rows);
-  const cache = createRuntimeAuthProfileRowsCache(() => ({ rows: "1", selection: "1" }));
+  const cache = createRuntimeAuthProfileRowsCache(() => "1");
   const resolve = () => cache.prepare(databasePath, { read, assertCurrent: () => {} }).read();
   const first = await resolve();
   expect(await resolve()).toBe(first);
@@ -64,7 +64,7 @@ it("invalidates credential rows on writer-worker receipts without runtime freshn
   `);
   admitSqliteSchema(database);
   const broker = new SqliteWorkerBroker();
-  const cache = createRuntimeAuthProfileRowsCache(() => ({ rows: "1", selection: "1" }));
+  const cache = createRuntimeAuthProfileRowsCache(() => "1");
   const read = vi.fn(async () => readAuthProfileRows(database, databasePath, "agent"));
   const resolve = () => cache.prepare(databasePath, { read, assertCurrent() {} }).read();
   const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
@@ -80,6 +80,9 @@ it("invalidates credential rows on writer-worker receipts without runtime freshn
     const first = await resolve();
     expect(await resolve()).toBe(first);
     expect(read).toHaveBeenCalledTimes(1);
+    expect(
+      observation.queries.filter((sql) => /auth_profile_(store|state)/u.test(sql)),
+    ).toHaveLength(1);
     const write = () =>
       store!.execute({
         type: "writeRows",
@@ -109,4 +112,45 @@ it("invalidates credential rows on writer-worker receipts without runtime freshn
     observation.restore();
     await broker.close();
   }
+});
+
+it("reads shared credentials and health together after an in-process write", () => {
+  const databasePath = path.join(tempDirs.make("shared-auth-rows-"), "state.sqlite");
+  using database = openNodeSqliteDatabase(databasePath);
+  database.exec(`
+    CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT);
+    INSERT INTO config_machine_state VALUES ('authProfiles.store', '{"version":1,"profiles":{}}');
+    INSERT INTO config_machine_state VALUES ('authProfiles.state', '{"lastGood":{}}');
+  `);
+  admitSqliteSchema(database);
+  readAuthProfileRows(database, databasePath, "shared-state");
+  database.exec(`
+    UPDATE config_machine_state SET value_json='{"lastGood":{"example":"example:key"}}'
+    WHERE state_key='authProfiles.state';
+  `);
+  const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+  try {
+    expect(readAuthProfileRows(database, databasePath, "shared-state")).toMatchObject({
+      store: { status: "readable", raw: { version: 1, profiles: {} } },
+      state: { status: "readable", raw: { lastGood: { example: "example:key" } } },
+    });
+    expect(observation.queries).toHaveLength(1);
+  } finally {
+    observation.restore();
+  }
+});
+
+it("keeps an independently absent credential row when the legacy health table is malformed", () => {
+  const databasePath = path.join(tempDirs.make("legacy-auth-rows-"), "auth.sqlite");
+  using database = openNodeSqliteDatabase(databasePath);
+  database.exec(`
+    CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT);
+    CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY);
+  `);
+  admitSqliteSchema(database);
+  expect(readAuthProfileRows(database, databasePath, "agent")).toEqual({
+    store: { status: "missing", reason: "row" },
+    state: { status: "unreadable" },
+    cacheable: false,
+  });
 });

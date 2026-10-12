@@ -20,7 +20,7 @@ import {
 const gatewayTestHoisted = getGatewayTestHoistedState();
 
 function createEmbeddedRunMockExports() {
-  return {
+  const runtime = {
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedRunMock.compactEmbeddedAgentSession(...args),
     isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
@@ -50,6 +50,27 @@ function createEmbeddedRunMockExports() {
       }
       return ended;
     },
+  };
+  return {
+    ...runtime,
+    captureEmbeddedRunDrainTarget: (
+      sessionId: string,
+      owner: Parameters<
+        typeof import("../agents/embedded-agent-runner/runs.js").captureEmbeddedRunDrainTarget
+      >[1],
+    ) =>
+      embeddedRunMock.activeIds.has(sessionId)
+        ? {
+            sessionId,
+            agentId: owner.agentId,
+            sessionKey: undefined,
+            isActive: () => runtime.isEmbeddedAgentRunActive(sessionId),
+            abort: () => runtime.abortEmbeddedAgentRun(sessionId),
+            waitForEnd: (timeoutMs: number | null) =>
+              runtime.waitForEmbeddedAgentRunEnd(sessionId, timeoutMs),
+            release: () => {},
+          }
+        : undefined,
   };
 }
 
