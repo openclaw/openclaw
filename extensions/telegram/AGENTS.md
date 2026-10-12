@@ -81,11 +81,12 @@
   share one limiter owned by `account-throttler.ts`. The limiter mirrors
   grammY `apiThrottler()` defaults (upstream does not expose its Bottleneck
   instances for disposal). Retirement runs in the Gateway process: the
-  account `stopAccount` hook releases the throttler once its token is no
-  longer configured (token rotation or removal), disconnecting limiters only
-  after queued sends settle; a token still configured (unchanged reloads,
-  manual stops) keeps its limiter. The CLI lifecycle hooks release in the
-  mutating process as well.
+  account lifecycle hooks (config change, removal, `stopAccount`) release the
+  throttler once its token is no longer configured, settling queued group
+  sends and not-yet-dispatched chat actions before disconnecting limiters
+  while in-flight requests finish; a token still configured (unchanged
+  reloads, manual stops) keeps its limiter. The CLI lifecycle hooks release
+  in the mutating process as well.
 - Do not silently retry failed topic sends without topic metadata. A
   wrong-surface success is worse than a loud Telegram error.
 - DM topics and forum topics are distinct. `direct_messages_topic_id` and

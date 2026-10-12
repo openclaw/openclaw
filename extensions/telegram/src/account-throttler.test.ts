@@ -662,6 +662,112 @@ describe("releaseAccountThrottler", () => {
     }
   });
 
+  it("settles a pacing action and never dispatches it when the account is retired", async () => {
+    vi.useFakeTimers();
+    try {
+      let sent = 0;
+      const api = new Api("123:pacing-retire", {
+        fetch: asTelegramClientFetch(async () => {
+          sent++;
+          return new Response(JSON.stringify({ ok: true, result: true }));
+        }),
+      });
+      api.config.use(getOrCreateAccountThrottler("pacing-retire").transformer);
+      const first = api.sendChatAction(-100123, "typing", { message_thread_id: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      await first;
+      expect(sent).toBe(1);
+      const second = api.sendChatAction(-100123, "typing", { message_thread_id: 2 });
+      const secondRejection = expect(second).rejects.toThrow(/released/i);
+      // The successor is sleeping out its one-second pacing window when the
+      // token is retired: it must settle now and never reach the dispatch.
+      await vi.advanceTimersByTimeAsync(100);
+      const releasing = releaseAccountThrottler("pacing-retire");
+      await vi.advanceTimersByTimeAsync(0);
+      await secondRejection;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(sent).toBe(1);
+      await releasing;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles actions queued behind a running predecessor when the account is retired", async () => {
+    vi.useFakeTimers();
+    const held = deferred<Response>();
+    try {
+      let sent = 0;
+      const api = new Api("123:queued-retire", {
+        fetch: asTelegramClientFetch(async () => {
+          sent++;
+          if (sent === 1) {
+            return held.promise;
+          }
+          return new Response(JSON.stringify({ ok: true, result: true }));
+        }),
+      });
+      api.config.use(getOrCreateAccountThrottler("queued-retire").transformer);
+      const first = api.sendChatAction(-100123, "typing", { message_thread_id: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent).toBe(1);
+      const second = api.sendChatAction(-100123, "typing", { message_thread_id: 2 });
+      const secondRejection = expect(second).rejects.toThrow(/released/i);
+      // Retire while the predecessor's dispatch is in flight: the queued
+      // successor settles immediately, the in-flight I/O completes.
+      const releasing = releaseAccountThrottler("queued-retire");
+      await vi.advanceTimersByTimeAsync(0);
+      await secondRejection;
+      held.resolve(new Response(JSON.stringify({ ok: true, result: true })));
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+      await releasing;
+      expect(sent).toBe(1);
+    } finally {
+      held.resolve(new Response(JSON.stringify({ ok: true, result: true })));
+      vi.useRealTimers();
+    }
+  });
+
+  it("never dispatches an action whose authorization backoff outlives retirement", async () => {
+    vi.useFakeTimers();
+    try {
+      let sent = 0;
+      const api = new Api("123:backoff-retire", {
+        fetch: asTelegramClientFetch(async () => {
+          sent++;
+          return new Response(
+            JSON.stringify(
+              sent === 1
+                ? { ok: false, error_code: 401, description: "Unauthorized" }
+                : { ok: true, result: true },
+            ),
+          );
+        }),
+      });
+      api.config.use(getOrCreateAccountThrottler("backoff-retire").transformer);
+      const first = api.sendChatAction(-100123, "typing", { message_thread_id: 1 });
+      const failed = expect(first).rejects.toThrow("Unauthorized");
+      await vi.advanceTimersByTimeAsync(0);
+      await failed;
+      expect(sent).toBe(1);
+      const second = api.sendChatAction(-100123, "typing", { message_thread_id: 2 });
+      const secondRejection = expect(second).rejects.toThrow(/released/i);
+      // The successor clears pacing, then parks in the 401 authorization
+      // backoff; retiring the token during that backoff must stop the final
+      // dispatch from ever reaching the Bot API.
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(sent).toBe(1);
+      const releasing = releaseAccountThrottler("backoff-retire");
+      await vi.advanceTimersByTimeAsync(1_500);
+      await secondRejection;
+      expect(sent).toBe(1);
+      await releasing;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps releasing other tokens independent", async () => {
     const disposeA = vi.fn(async () => {});
     const disposeB = vi.fn(async () => {});
