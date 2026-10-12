@@ -1,6 +1,5 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { finalizeSessionMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-transaction.js";
 import {
   collectReclamationChangedSessionKeys,
@@ -28,7 +27,6 @@ export function finalizeSessionMaintenance(
     database: OpenClawAgentDatabase,
     wrapReceipt: (receipt: SessionEntryPatchReceipt) => Receipt,
   ): Receipt => {
-    assertSessionSubagentRunsCurrent(plan, context.options.env ?? process.env);
     const result = finalizeSessionMaintenanceInDatabase(database, plan);
     const changedKeys = collectReclamationChangedSessionKeys(plan, result);
     const removedEntries = collectReclamationDeletionEntries(plan, result);
@@ -56,7 +54,6 @@ export function finalizeSessionMaintenance(
       candidate,
       wrapReceipt,
     );
-    assertSessionSubagentRunsCurrent(plan, context.options.env ?? process.env);
     return receipt;
   };
   return input.nativeBindings

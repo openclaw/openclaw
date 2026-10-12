@@ -26,10 +26,6 @@ import {
   pluginStateWorkerOperations,
 } from "../plugin-state/plugin-state-worker-contract.js";
 import {
-  readPluginMetadataStateRowSync,
-  readPluginMetadataStateRowsSync,
-} from "../plugins/installed-plugin-index-row.js";
-import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
 } from "./openclaw-state-db-cache.js";
@@ -315,7 +311,6 @@ function createSharedStateWorkerBackend(
         });
       }
       if (
-        commandType === "plugins.metadata.read" ||
         commandType === "database.inspectIdle" ||
         commandType === "database.walMaintenance" ||
         commandType === "stateLease.acquire" ||
@@ -425,24 +420,6 @@ function createSharedStateWorkerBackend(
         command.type === "stateLease.release"
       ) {
         return executeOpenClawStateLeaseCommand(command, open());
-      }
-      if (command.type === "plugins.metadata.read") {
-        const options = {
-          path: context.databasePath,
-          env: getSqliteWorkerStateContext().environment,
-        };
-        if ("stateKeys" in command.input) {
-          return readPluginMetadataStateRowsSync(
-            command.input.stateKeys,
-            options,
-            command.input.artifactPreservingReadOnly,
-          );
-        }
-        return readPluginMetadataStateRowSync(
-          command.input.selector,
-          options,
-          command.input.artifactPreservingReadOnly,
-        );
       }
       if (command.type === "database.walMaintenance") {
         const database = open();

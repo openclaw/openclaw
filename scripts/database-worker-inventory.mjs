@@ -230,6 +230,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/io.health-state.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["patchConfigHealthEntryInDatabase"],
+        evidence:
+          "Only openclaw-state-worker-runtime.ts calls this conditional patch through the shared-state worker. Native config compatibility reads and writes remain T1.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-lifecycle-state.ts",
     [
       {
@@ -861,9 +872,10 @@ const reviewedOperations = new Map([
           "upsertCronJobRow",
           "deleteCronJobRowInDatabase",
           "revokeCronJobStandingGrants",
+          "readMaximumRetainedGrantDefinitionGeneration",
         ],
         evidence:
-          "Cron worker kernels or Doctor legacy-repair.ts:395 transactionHooks / store-repair.ts:178 / doctor-heartbeat-task-migration.ts:261,308; the native current-job reader was deleted; standing-generation reads stay T1",
+          "Cron worker kernels or Doctor legacy-repair.ts:395 transactionHooks / store-repair.ts:178 / doctor-heartbeat-task-migration.ts:261,308. Retained grant generations are read by worker upsert or resolveCronJobGrantDefinitionGenerationFloor for commands/doctor/cron/store-repair.ts only.",
       },
       {
         tier: "W",
@@ -1294,9 +1306,10 @@ const reviewedOperations = new Map([
           "readSubagentRunRow",
           "readSubagentSessionListRows",
           "readSubagentRegistryRows",
+          "loadSubagentRunsForSessionsInDatabase",
         ],
         evidence:
-          "Exact rows serve completion admission workers. Session-list and child reads serve openclaw-state-read.worker.ts. Registry rows serve store.worker.ts maintenance/versioned/session reads or completion-mutation.kernel.ts through completion-admission.worker.ts; maintenance no longer opens a host reader. Descendant-basis comparisons retain their native deletion boundary and T1 classification.",
+          "Exact rows serve completion admission workers. Session-list and child reads serve openclaw-state-read.worker.ts. Registry rows serve store.worker.ts maintenance/versioned/session reads or completion-mutation.kernel.ts through completion-admission.worker.ts. Descendant selection is called only by store.worker.ts; the native digest comparison has been removed.",
       },
     ],
   ],
@@ -2257,9 +2270,8 @@ const reviewedOperations = new Map([
       {
         tier: "T3",
         operations: ["loadSqliteTrajectoryRuntimeEventRowsSync"],
-        binding: "countRow",
         evidence:
-          "Only CLI export supplies maxEventCount: src/cli/program/register.status-health-sessions.ts:431 → commands/export-trajectory.ts:158 → trajectory/command-export.ts:80 → trajectory/export.ts:415,420. Keep polling/payload expressions T1.",
+          "Native row reads are CLI-only: commands/sessions-tail.ts tail/follow and trajectory export. Other callers are session-history-read-operation.worker.ts and session-incognito-side-data.worker.ts. The runtime-testing SDK exports the async loader, not this native row reader. Native append and retention remain T1.",
       },
     ],
   ],

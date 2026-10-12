@@ -195,12 +195,12 @@ async function retainExistingReader(context: OpenClawStateWorkerContext) {
       context,
       (scope) =>
         scope.execute({
-          type: "plugins.metadata.read",
-          input: { selector: "installed-index", artifactPreservingReadOnly: true },
+          type: "claws.install-schema-versions",
+          input: { artifactPreservingReadOnly: true },
         }),
       { existingOnly: true },
     ),
-  ).resolves.toBeUndefined();
+  ).resolves.toEqual([]);
   const store = await getOpenClawStateWorkerOwner().open(context, { existingOnly: true });
   expect(store).toBeDefined();
   return store!;

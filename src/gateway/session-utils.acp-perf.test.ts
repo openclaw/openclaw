@@ -6,9 +6,7 @@ import {
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import * as acpSessionMeta from "../acp/runtime/session-meta-readonly.js";
-import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -111,29 +109,6 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       sessionId: markerEntry.sessionId,
       meta: markerMeta,
     });
-    const perRowState = readAcpSessionMetaForEntry({ sessionKey: stateKey, entry: stateEntry });
-    const perRowMissing = readAcpSessionMetaForEntry({
-      sessionKey: missingKey,
-      entry: missingEntry,
-    });
-    expect(
-      readAcpSessionMetaBatch({
-        entries: [
-          { sessionKey: stateKey, entry: stateEntry },
-          { sessionKey: stateKey, entry: staleAliasEntry },
-          { sessionKey: missingKey, entry: missingEntry },
-          { sessionKey: markerKey, entry: markerEntry },
-          { sessionKey: missingKey, entry: stateEntry },
-        ],
-      }),
-    ).toEqual(
-      new Map<SessionEntry, ReturnType<typeof readAcpSessionMetaForEntry>>([
-        [markerEntry, markerMeta],
-        [stateEntry, perRowState],
-        [staleAliasEntry, undefined],
-        [missingEntry, perRowMissing],
-      ]),
-    );
 
     const database = openOpenClawStateDatabase();
     let projection: SessionRowProjection | undefined;
@@ -213,11 +188,33 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
           updatedAt: index,
         } satisfies SessionEntry,
       }));
-      const chunkedBatch = readAcpSessionMetaBatch({ entries: aboveBatchChunkSize });
-      expect(chunkedBatch.size).toBe(aboveBatchChunkSize.length);
-      expect(chunkedBatch.get(aboveBatchChunkSize[0]!.entry)).toBeUndefined();
-      expect(chunkedBatch.get(aboveBatchChunkSize.at(-1)!.entry)).toBeUndefined();
-      expect(acpSelects.counts.metadata).toBe(2);
+      const chunkSql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        const chunkedBatch = await stateWorker.read({
+          context: { environment: { OPENCLAW_STATE_DIR: stateDir } },
+          databasePath: database.path,
+          location: database.path,
+          checkFreshAdmission: false,
+          command: {
+            type: "acpSessions.metadata",
+            entries: aboveBatchChunkSize.map(({ sessionKey, entry }) => ({
+              keys: [key(sessionKey)],
+              entry,
+            })),
+          },
+        });
+        if (!chunkedBatch.ok || chunkedBatch.type !== "acpSessions.metadata") {
+          throw new Error("ACP worker chunked metadata read failed");
+        }
+        expect(chunkedBatch.rows).toHaveLength(aboveBatchChunkSize.length);
+        expect(chunkedBatch.rows.every((row) => row === null)).toBe(true);
+        expect(
+          chunkSql.queries.filter((query) => /^select\b.*\bacp_sessions\b/is.test(query)),
+        ).toHaveLength(2);
+      } finally {
+        chunkSql.restore();
+        closeRetainedOpenClawStateReadConnections();
+      }
 
       const runtimeEntries = Object.fromEntries(
         aboveBatchChunkSize

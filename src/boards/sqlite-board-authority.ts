@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   acceptSessionSourceValidation,
-  captureExternalSessionCommitGuard,
   prepareSessionSourceAuthority,
   type SessionSourceAssertion,
   type SessionSourceValidation,
@@ -25,7 +24,8 @@ export async function prepareBoardSourceAuthority(
   assertion: SessionSourceAssertion | undefined,
   identity: DatabasePathIdentity,
 ) {
-  const source = await prepareSessionSourceAuthority(captureExternalSessionCommitGuard(assertion));
+  // Board callbacks are internal live-authority checks, executed by worker admission.
+  const source = await prepareSessionSourceAuthority(assertion);
   return {
     ...source,
     nativeSource:

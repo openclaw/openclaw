@@ -55,11 +55,10 @@ export function hasUnsettledCronDescendants(sessionKey: string): Promise<boolean
   );
 }
 
-/** Retain live parent policy alongside the worker's durable deletion comparison. */
+/** Retain live parent policy alongside the worker-selected descendants. */
 export async function prepareCronDescendantDeletion(sessionKeys: readonly string[]) {
   const prepared = await prepareSubagentRunsSnapshotForSessions(subagentRuns, sessionKeys);
   return {
-    basis: prepared.basis,
     dispose: () => prepared.dispose(),
     hasUnsettled(sessionKey: string) {
       const current = prepared.consume((runs) =>

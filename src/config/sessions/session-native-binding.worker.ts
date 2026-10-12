@@ -17,7 +17,6 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
 import { collectLifecycleIdentityChanges } from "./session-accessor.sqlite-identity.js";
 import {
   collectReclamationChangedSessionKeys,
@@ -115,7 +114,6 @@ export function deleteSessionWithNativeBindings(
         (stage, facts) => {
           context.admit(stage, facts);
           if (stage === "commit") {
-            assertSessionSubagentRunsCurrent(input.plan, input.plan.databaseOptions.env);
           }
         },
         candidate,

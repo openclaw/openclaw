@@ -4,10 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
-import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
-import { loadSubagentRunsForSessionsInDatabase } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
@@ -261,96 +257,6 @@ it("restores the exact removed Codex row after A fails", async () => {
         typeof originalLease.expiresAt === "number" &&
         restoredLease.expiresAt >= originalLease.expiresAt,
     ).toBe(true);
-  });
-});
-
-it("rechecks a changed durable descendant basis after the final A grant and compensates S", async () => {
-  await withNativeBindingFixture("codex", async (fixture) => {
-    const before = fixture.readEntry();
-    const history = loadTranscriptEventsSync(fixture.scope);
-    const source = readDatabasePathIdentitySync(fixture.shared.path);
-    const descendantRunBasis: SubagentRunsDurableBasis = {
-      databasePath: fixture.shared.path,
-      databaseIdentity: source.key,
-      databaseBirthtime: source.birthtime,
-      sessionKeys: [fixture.scope.sessionKey],
-      liveTopology: [],
-      digest: loadSubagentRunsForSessionsInDatabase(fixture.shared, [fixture.scope.sessionKey], [])
-        .digest,
-    };
-    let removed: Record<string, unknown> | undefined;
-    let restored: Record<string, unknown> | undefined;
-    let grantReached = false;
-    observeNativeGrants((request, facts) => {
-      if (facts.kind === "native-binding-ready") {
-        removed = fixture.readBinding();
-      }
-      if (request.stage !== "commit" || facts.kind !== "session-native-binding") {
-        return;
-      }
-      grantReached = true;
-      expect(fixture.readBinding()).toBeUndefined();
-      const child = {
-        runId: "late-native-descendant",
-        requesterSessionKey: fixture.scope.sessionKey,
-        childSessionKey: "agent:main:subagent:late-native-descendant",
-        requesterDisplayKey: "synthetic-parent",
-        task: "Synthetic descendant admitted before deletion commit",
-        cleanup: "keep",
-        createdAt: 1,
-        completion: { required: false },
-        delivery: { status: "not_required" },
-        execution: { status: "running", startedAt: 1 },
-      } satisfies SubagentRunRecord;
-      fixture.shared.db
-        .prepare(
-          "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run(
-          child.runId,
-          child.childSessionKey,
-          child.requesterSessionKey,
-          child.createdAt,
-          JSON.stringify(child),
-        );
-      expect(
-        loadSubagentRunsForSessionsInDatabase(
-          fixture.shared,
-          [fixture.scope.sessionKey],
-          [],
-        ).runs.has(child.runId),
-      ).toBe(true);
-    });
-    delivery.afterExecution = () => {
-      restored = fixture.readBinding();
-    };
-    const published = vi.fn();
-    const unsubscribe = onSessionIdentityMutation((change) => {
-      if (
-        change.kind === "delete" &&
-        change.previous.sessionKeys.includes(fixture.scope.sessionKey)
-      ) {
-        published();
-      }
-    });
-    try {
-      await expect(fixture.remove({ descendantRunBasis })).rejects.toThrow(
-        "Session subagent facts changed before commit",
-      );
-      expect(grantReached).toBe(true);
-      expect(fixture.readEntry()).toEqual(before);
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(history);
-      expect(restored).toEqual({
-        ...removed,
-        lease: {
-          token: isRecord(removed?.lease) ? removed.lease.token : undefined,
-          expiresAt: expect.any(Number),
-        },
-      });
-      expect(published).not.toHaveBeenCalled();
-    } finally {
-      unsubscribe();
-    }
   });
 });
 

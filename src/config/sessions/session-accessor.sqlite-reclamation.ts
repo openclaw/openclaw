@@ -348,7 +348,6 @@ function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOp
 export function prepareReclamationDeleteParams({
   commitGuard: _commitGuard,
   env: _env,
-  descendantRunBasis: _descendantRunBasis,
   ...params
 }: DeleteSessionEntryLifecycleParams): ReclamationDeleteParams {
   return params;

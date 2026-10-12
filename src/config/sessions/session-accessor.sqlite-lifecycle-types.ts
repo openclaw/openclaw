@@ -1,4 +1,3 @@
-import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
@@ -46,7 +45,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 /** Transportable planning facts; live guards and native identity remain with their owners. */
 type SessionDeletionPlanningParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "expectedDatabaseIdentity" | "descendantRunBasis"
+  "commitGuard" | "env" | "expectedDatabaseIdentity"
 >;
 
 export type SessionEntryDeletionPlanInput = {
@@ -132,8 +131,6 @@ export type ProjectedLifecycleCommitInput = {
 };
 
 export type SessionEntryLifecycleMutationParams = {
-  /** Internal durable comparison paired with the caller's live descendant guard. */
-  descendantRunBasis?: SubagentRunsDurableBasis;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   storePath: string;
@@ -180,7 +177,7 @@ export type SqliteSessionReclamationCallbacks = {
 
 export type ReclamationDeleteParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "descendantRunBasis"
+  "commitGuard" | "env"
 >;
 
 /** Internal scope: a historical request cannot authorize whole-entry reclamation. */
@@ -203,7 +200,6 @@ export type SessionMaintenanceLiveProtection = Pick<
 >;
 
 type SessionReclamationPlanBase = {
-  descendantRunBasis?: SubagentRunsDurableBasis;
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
