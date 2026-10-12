@@ -58,11 +58,9 @@ export function invalidateIncognitoSessionActorTokens(
 export function createIncognitoSessionActorFactory(params: {
   options: OpenClawAgentDatabaseOptions & { path: string };
   identity: AgentDatabaseIncognitoIdentity;
-  assertOutsideGrant(this: void): void;
   assertBorrowed(this: void): void;
   assertReferenceCurrent(this: void): void;
   assertRetainedCurrent(this: void): void;
-  withGrant<T>(this: void, operation: () => T): T;
   retain<T>(this: void, operation: () => Promise<T>): Promise<T>;
   run<T>(
     this: void,
@@ -79,11 +77,9 @@ export function createIncognitoSessionActorFactory(params: {
   const {
     options,
     identity,
-    assertOutsideGrant,
     assertBorrowed,
     assertReferenceCurrent,
     assertRetainedCurrent,
-    withGrant,
     retain,
     run,
     writeTokens,
@@ -94,7 +90,6 @@ export function createIncognitoSessionActorFactory(params: {
   } = params;
   return {
     async acquire(requestedTarget, requestedLifetime) {
-      assertOutsideGrant();
       assertBorrowed();
       requestedLifetime.assertAdmission?.();
       requestedLifetime.assertCurrent();
@@ -183,40 +178,39 @@ export function createIncognitoSessionActorFactory(params: {
                 }),
               (retained) => {
                 const native: SqliteWorkerOperationAdmission = createSqliteWorkerOperationAdmission(
-                  (request, grant) =>
-                    withGrant(() => {
-                      assertActorCurrent();
+                  (request, grant) => {
+                    assertActorCurrent();
+                    if (
+                      !isRecord(request.facts) ||
+                      !isDeepStrictEqual(request.facts.identity, identity)
+                    ) {
+                      throw new Error("Incognito actor command changed its admitted owner");
+                    }
+                    const facts =
+                      request.stage === "prepare" ? request.facts : request.facts.publication;
+                    authorize({ ...request, facts }, { admission: native, retained }, grant);
+                    if (
+                      request.stage === "commit" &&
+                      isRecord(facts) &&
+                      facts.kind === "session-actor-admission" &&
+                      facts.final === true
+                    ) {
+                      // Legacy live claims remain usable by this command's final grant;
+                      // fence their projection before the native commit can be observed.
+                      sessionFacts.invalidate(sessionKey);
                       if (
-                        !isRecord(request.facts) ||
-                        !isDeepStrictEqual(request.facts.identity, identity)
+                        isRecord(facts.snapshot) &&
+                        typeof facts.snapshot.writeToken === "string" &&
+                        Array.isArray(facts.snapshot.dependencySessionIds) &&
+                        facts.snapshot.dependencySessionIds.every((id) => typeof id === "string")
                       ) {
-                        throw new Error("Incognito actor command changed its admitted owner");
+                        writeTokens.set(sessionKey, {
+                          writeToken: facts.snapshot.writeToken,
+                          dependencySessionIds: facts.snapshot.dependencySessionIds,
+                        });
                       }
-                      const facts =
-                        request.stage === "prepare" ? request.facts : request.facts.publication;
-                      authorize({ ...request, facts }, { admission: native, retained }, grant);
-                      if (
-                        request.stage === "commit" &&
-                        isRecord(facts) &&
-                        facts.kind === "session-actor-admission" &&
-                        facts.final === true
-                      ) {
-                        // Legacy live claims remain usable by this command's final grant;
-                        // fence their projection before the native commit can be observed.
-                        sessionFacts.invalidate(sessionKey);
-                        if (
-                          isRecord(facts.snapshot) &&
-                          typeof facts.snapshot.writeToken === "string" &&
-                          Array.isArray(facts.snapshot.dependencySessionIds) &&
-                          facts.snapshot.dependencySessionIds.every((id) => typeof id === "string")
-                        ) {
-                          writeTokens.set(sessionKey, {
-                            writeToken: facts.snapshot.writeToken,
-                            dependencySessionIds: facts.snapshot.dependencySessionIds,
-                          });
-                        }
-                      }
-                    }),
+                    }
+                  },
                 );
                 return { nativeLocations: [], admission: native };
               },

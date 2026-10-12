@@ -13,6 +13,7 @@ import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-cont
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { createMainThreadStallMonitor } from "../../infra/main-thread-stall.js";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
+import { createStallFlightRecorder } from "../../logging/diagnostic-stall-flight-recorder.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
@@ -174,6 +175,7 @@ export function createGatewayEventLoopHealthMonitor(
   const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
   const readEventLoopUtilization =
     deps.eventLoopUtilization ?? performance.eventLoopUtilization.bind(performance);
+  const flightRecorder = createStallFlightRecorder((message) => log.warn(message), nowMs);
   const stalls = createMainThreadStallMonitor(nowMs);
   let unattributedDelayMs = 0;
   let histogram: RecordableHistogram | null = null;
@@ -286,6 +288,11 @@ export function createGatewayEventLoopHealthMonitor(
 
     const now = nowMs();
     const attributed = stalls.drain();
+    let longestStallMs = attributed.stalls.length === 0 ? unattributedDelayMs : 0;
+    for (const stall of attributed.stalls) {
+      longestStallMs = Math.max(longestStallMs, stall.elapsedMs);
+    }
+    const profile = flightRecorder.sample(longestStallMs);
     if (unattributedDelayMs > 0 && attributed.stalls.length === 0) {
       log.warn(`main-thread stall: elapsedMs=${Math.round(unattributedDelayMs)} task=unattributed`);
     }
@@ -299,6 +306,10 @@ export function createGatewayEventLoopHealthMonitor(
       log.warn(
         `main-thread stall: elapsedMs=${Math.round(stall.elapsedMs)} task=${JSON.stringify(stall.task.slice(0, 160))} taskMs=${Math.round(stall.taskMs)}`,
       );
+    }
+    // Several callbacks can finish before this sample; the trailing profile is batch evidence.
+    if (profile) {
+      log.warn(`main-thread stall profile: ${profile}`);
     }
     // A window reset must not erase the pending sample's monotonic anchor.
     // Native interval histograms reset that anchor before an overdue callback runs.
@@ -424,6 +435,7 @@ export function createGatewayEventLoopHealthMonitor(
     },
     reset,
     stop: () => {
+      flightRecorder.stop();
       stalls.stop();
       samplingJob?.cancel();
       histogram = null;

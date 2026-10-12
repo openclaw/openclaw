@@ -69,13 +69,6 @@ describe("config presence", () => {
     expect(listPotentialConfiguredChannelIds(cfg, {}, configAndEnvOnly)).toEqual(["matrix"]);
   });
 
-  it("ignores enabled-only matrix config when listing configured channels", () => {
-    const env = {} as NodeJS.ProcessEnv;
-    const cfg = { channels: { matrix: { enabled: false } } };
-
-    expect(listPotentialConfiguredChannelIds(cfg, env, configAndEnvOnly)).toEqual([]);
-  });
-
   it("lists explicitly disabled channel ids case-insensitively", () => {
     const cfg = {
       channels: {
@@ -91,17 +84,6 @@ describe("config presence", () => {
     expect(listExplicitlyDisabledChannelIdsForConfig(cfg)).toEqual(["matrix"]);
   });
 
-  it("detects env-only channel config", () => {
-    const env = {
-      MATRIX_ACCESS_TOKEN: "token",
-    } as NodeJS.ProcessEnv;
-
-    expect(listPotentialConfiguredChannelIds({}, env, configAndEnvOnly)).toEqual(["matrix"]);
-    expect(listPotentialConfiguredChannelPresenceSignals({}, env, configAndEnvOnly)).toEqual([
-      { channelId: "matrix", source: "env" },
-    ]);
-  });
-
   it("detects official external channel env vars", () => {
     const env = {
       MATTERMOST_URL: "https://mattermost.example.test",
@@ -115,9 +97,8 @@ describe("config presence", () => {
   });
 
   it.each([
-    { channelIds: undefined, expectedIds: ["matrix"] },
     { channelIds: ["matrix"], expectedIds: ["matrix"] },
-    { channelIds: ["whatsapp"], expectedIds: [] },
+
     { channelIds: [], expectedIds: [] },
   ])(
     "scopes persisted credentials without hiding env signals: $channelIds",

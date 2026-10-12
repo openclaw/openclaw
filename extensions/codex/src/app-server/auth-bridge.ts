@@ -9,11 +9,11 @@ import {
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
-  ensureAuthProfileStore,
-  findPersistedAuthProfileCredential,
+  ensureAuthProfileStoreAsync,
+  findPersistedAuthProfileCredentialAsync,
   refreshOAuthCredentialForRuntime,
   resolveApiKeyForProfile,
-  resolvePersistedAuthProfileOwnerAgentDir,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
   type AuthProfileCredential,
   type AuthProfileStore,
   type OAuthCredential,
@@ -130,7 +130,7 @@ export async function bridgeCodexAppServerStartOptions(
   if (params.authProfileId === null) {
     return scopeStartOptions();
   }
-  const store = resolveCodexAppServerAuthProfileStore({
+  const store = await resolveCodexAppServerAuthProfileStore({
     agentDir: params.agentDir,
     authProfileId: params.authProfileId,
     authProfileStore: params.authProfileStore,
@@ -185,9 +185,9 @@ function assertNoUnimportedAgentCodexAuthFile(params: {
   );
 }
 
-function resolveCodexAppServerAuthProfile(params: CodexAppServerAuthProfileLookup) {
+async function resolveCodexAppServerAuthProfile(params: CodexAppServerAuthProfileLookup) {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-  const store = resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
+  const store = await resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
   const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
   if (!profileId) {
     return undefined;
@@ -203,7 +203,7 @@ function resolveCodexAppServerAuthProfile(params: CodexAppServerAuthProfileLooku
 export async function resolveCodexAppServerPreparedAuthProfileSnapshot(
   params: CodexAppServerAuthProfileLookup,
 ): Promise<CodexAppServerPreparedAuthProfileSnapshot | undefined> {
-  const profile = resolveCodexAppServerAuthProfile(params);
+  const profile = await resolveCodexAppServerAuthProfile(params);
   if (!profile) {
     return undefined;
   }
@@ -326,7 +326,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
       formatCodexAuthProfileUnavailableMessage(authProfileId),
     );
   }
-  const nativeAuthProfile = isCodexAppServerNativeAuthProfile({
+  const nativeAuthProfile = await isCodexAppServerNativeAuthProfile({
     authProfileId,
     authProfileStore: params.authProfileStore,
     agentDir: params.agentDir,
@@ -369,7 +369,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
 export async function resolveCodexAppServerAuthAccountCacheKey(
   params: CodexAppServerAuthProfileLookup,
 ): Promise<string | undefined> {
-  const profile = resolveCodexAppServerAuthProfile(params);
+  const profile = await resolveCodexAppServerAuthProfile(params);
   if (!profile) {
     return undefined;
   }
@@ -656,7 +656,7 @@ export async function applyCodexAppServerAuthProfile(params: {
         : await resolveCodexAppServerAuthProfileLoginParamsInternal({
             agentDir,
             authProfileId: params.authProfileId ?? undefined,
-            authProfileStore: resolveCodexAppServerAuthProfileStore({
+            authProfileStore: await resolveCodexAppServerAuthProfileStore({
               ...params,
               agentDir,
               authProfileId: params.authProfileId ?? undefined,
@@ -754,7 +754,7 @@ export async function refreshCodexAppServerAuthTokens(
     throw codexWorkspaceChangedError("before");
   }
   if (previousAccountId) {
-    const store = resolveCodexAppServerAuthProfileStore(params);
+    const store = await resolveCodexAppServerAuthProfileStore(params);
     const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
     const credential = profileId ? store.profiles[profileId] : undefined;
     const selectedAccountId = credential
@@ -797,7 +797,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(
     forceOAuthRefresh?: boolean;
   },
 ): Promise<CodexLoginAccountParams | undefined> {
-  const store = resolveCodexAppServerAuthProfileStore(params);
+  const store = await resolveCodexAppServerAuthProfileStore(params);
   const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
   if (!profileId) {
     return undefined;
@@ -823,7 +823,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(
       cfg: params.config,
       store: preferStoreCredential
         ? store
-        : ensureAuthProfileStore(params.agentDir, {
+        : await ensureAuthProfileStoreAsync(params.agentDir, {
             allowKeychainPrompt: false,
             profileId,
             config: params.config,
@@ -888,11 +888,11 @@ async function resolveOAuthCredentialForCodexAppServer(
     config?: AuthProfileOrderConfig;
   },
 ): Promise<OAuthCredential> {
-  const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+  const ownerAgentDir = await resolvePersistedAuthProfileOwnerAgentDirAsync({
     agentDir: params.agentDir,
     profileId,
   });
-  const persistedCredential = findPersistedAuthProfileCredential({
+  const persistedCredential = await findPersistedAuthProfileCredentialAsync({
     agentDir: ownerAgentDir,
     profileId,
   });
@@ -916,7 +916,7 @@ async function resolveOAuthCredentialForCodexAppServer(
   }
   const store = useScopedCredential
     ? params.store
-    : resolveCodexAppServerAuthProfileStore({
+    : await resolveCodexAppServerAuthProfileStore({
         agentDir: ownerAgentDir,
         authProfileId: profileId,
         config: params.config,
@@ -1079,7 +1079,12 @@ async function resolveScopedOAuthCredential(params: {
         `Codex app-server auth profile "${params.profileId}" could not refresh. Sign in again with OpenClaw, then retry.`,
       );
     }
-    assertCodexOAuthRefreshWorkspace(params.profileId, refreshed, params.expectedAccountId);
+    // Shared refresh ownership follows the credential; each waiter checks its requested workspace below.
+    assertCodexOAuthRefreshWorkspace(
+      params.profileId,
+      refreshed,
+      resolveOpenAICodexAuthIdentity(credential).accountId?.trim(),
+    );
     if (!isDeepStrictEqual(params.store.profiles[params.profileId], credential)) {
       throw new Error(
         `Codex app-server auth profile "${params.profileId}" changed while refreshing. Retry with the newly selected OpenAI profile.`,
@@ -1090,7 +1095,9 @@ async function resolveScopedOAuthCredential(params: {
   })();
   storeRefreshes.set(params.profileId, refresh);
   try {
-    return await refresh;
+    const refreshed = await refresh;
+    assertCodexOAuthRefreshWorkspace(params.profileId, refreshed, params.expectedAccountId);
+    return refreshed;
   } finally {
     // Scoped stores are process-local; serialize their rotating refresh token
     // and release the queue entry with the refresh that owns it.
@@ -1126,7 +1133,7 @@ function isCodexAppServerAuthProvider(provider: string): boolean {
 }
 
 function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {
-  store: ReturnType<typeof ensureAuthProfileStore>;
+  store: Awaited<ReturnType<typeof ensureAuthProfileStoreAsync>>;
   authProfileId?: string;
 }): boolean {
   const profileId = params.authProfileId?.trim();

@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import * as uuid from "../../lib/uuid.ts";
 import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -108,19 +109,20 @@ describe("custodian page nudges", () => {
         },
       }),
     );
-    await initialReply.promise;
-    await page.updateComplete;
-    const answer = page.querySelector<HTMLButtonElement>('[data-option-value="Pause"]')!;
+    const answer = await waitForSolid(() => {
+      const button = page.querySelector<HTMLButtonElement>('[data-option-value="Pause"]');
+      expect(button).not.toBeNull();
+      return button!;
+    });
     answer.focus();
     expect(document.activeElement).toBe(answer);
 
     emitGatewayEvent({ event: "health", payload: { channels: {} } });
-    await page.updateComplete;
-
-    expect(document.activeElement).toBe(answer);
+    await waitForSolid(() => expect(document.activeElement).toBe(answer));
     answer.click();
-    await page.updateComplete;
-    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ message: "pause" });
+    await waitForSolid(() =>
+      expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ message: "pause" }),
+    );
   });
 
   it("shows a channel-error nudge but ignores routine events", async () => {

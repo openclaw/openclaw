@@ -34,6 +34,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import {
   withIncognitoProjection,
   captureIncognitoProjectionBinding,
@@ -112,6 +113,9 @@ export async function reconcileSessionTranscriptIndexes(
   params: SessionTranscriptReconcileParams,
   incognito?: IncognitoProjectionBinding,
 ): Promise<SessionTranscriptReconcileResult> {
+  if (getSessionActorStorageBinding({ ...params, storePath: params.path })) {
+    return { reconciledSessions: 0 };
+  }
   const prepared = prepareReconcileParams(params, incognito);
   const run = async () => {
     const execution =
@@ -459,6 +463,9 @@ export function startSessionTranscriptIndexReconcile(
   input: SessionTranscriptReconcileParams,
   incognito?: IncognitoProjectionBinding,
 ): void {
+  if (getSessionActorStorageBinding({ ...input, storePath: input.path })) {
+    return;
+  }
   startPreparedSessionTranscriptIndexReconcile(prepareReconcileParams(input, incognito));
 }
 
@@ -548,6 +555,9 @@ export function isSessionTranscriptIndexReconcileRunning(
   params: OpenClawAgentDatabaseOptions,
   incognito?: IncognitoProjectionBinding,
 ): boolean {
+  if (getSessionActorStorageBinding({ ...params, storePath: params.path })) {
+    return false;
+  }
   return runningReconciles.has(reconcileKey(params, incognito));
 }
 
@@ -556,6 +566,9 @@ export async function waitForSessionTranscriptIndexReconcile(
   params: OpenClawAgentDatabaseOptions,
   incognito?: IncognitoProjectionBinding,
 ): Promise<void> {
+  if (getSessionActorStorageBinding({ ...params, storePath: params.path })) {
+    return;
+  }
   await runningReconciles.get(reconcileKey(params, incognito))?.promise;
 }
 
@@ -581,6 +594,10 @@ export async function waitForSessionTranscriptProjection(
   abortSignal?: AbortSignal,
   incognito?: IncognitoProjectionBinding,
 ): Promise<void> {
+  if (getSessionActorStorageBinding(scope)) {
+    abortSignal?.throwIfAborted();
+    return;
+  }
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = prepareReconcileParams(toDatabaseOptions(resolved), incognito);
   const wait = () =>

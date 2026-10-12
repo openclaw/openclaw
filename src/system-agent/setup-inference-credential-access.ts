@@ -11,6 +11,7 @@ import {
 } from "../agents/auth-profiles/setup-access.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
 } from "../agents/auth-profiles/store-runtime.js";
 import {
@@ -44,7 +45,7 @@ export async function withPreparedSetupCredentialAccess(
   const access = { profileId, agentDir: ctx.agentDir, signal: params.signal };
   return await withSetupCredentialAccess(access, async () => {
     const credentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-    const store = loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir);
+    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir);
     const credential = store.profiles[profileId];
     const refInput =
       credential?.type === "api_key"

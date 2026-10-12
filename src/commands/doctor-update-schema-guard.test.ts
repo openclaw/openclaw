@@ -355,8 +355,9 @@ it("revalidates the update owner after integrity work before committing an agent
         active = false;
       }
     });
-    await withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
-      const result = await Promise.allSettled([
+    let result: PromiseSettledResult<void>[] = [];
+    const settled = withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
+      result = await Promise.allSettled([
         maintenance.run(() =>
           withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
             migrateOpenClawAgentDatabaseForMaintenance(
@@ -366,13 +367,16 @@ it("revalidates the update owner after integrity work before committing an agent
           ),
         ),
       ]);
-      const outcome = expectDefined(result[0], "migration outcome");
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status !== "rejected") {
-        throw new Error("Expected retired owner refusal");
-      }
-      expect(collectNestedErrorCandidates(outcome.reason)).toContain(retired);
     });
+    await expect(settled).rejects.toSatisfy((error: unknown) =>
+      collectNestedErrorCandidates(error).includes(retired),
+    );
+    const outcome = expectDefined(result[0], "migration outcome");
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status !== "rejected") {
+      throw new Error("Expected retired owner refusal");
+    }
+    expect(collectNestedErrorCandidates(outcome.reason)).toContain(retired);
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });

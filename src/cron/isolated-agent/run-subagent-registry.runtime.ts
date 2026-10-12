@@ -60,7 +60,6 @@ export async function prepareCronDescendantDeletion(sessionKeys: readonly string
   const prepared = await prepareSubagentRunsSnapshotForSessions(subagentRuns, sessionKeys);
   return {
     basis: prepared.basis,
-    dispose: () => prepared.dispose(),
     hasUnsettled(sessionKey: string) {
       const current = prepared.consume((runs) =>
         hasDescendantRunAwaitingSettleFromRuns(new Map(runs), sessionKey),

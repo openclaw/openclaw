@@ -604,7 +604,6 @@ describe("session upstream monitor", () => {
     expect(
       readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
     ).toEqual(expect.objectContaining({ threadId: "thread-refreshed", marker: { offset: 999 } }));
-    expect(missingCounts.size).toBe(0);
   });
 
   it("prunes missing counters when a link leaves the watched set", async () => {

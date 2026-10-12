@@ -136,6 +136,10 @@ function ensureReplicaSubscription(): void {
         source.identity === database.physicalIdentity &&
         prepared.source.writeToken === readSqliteDatabaseWriteTokenForPath(database.nativeLocation)
       ) {
+        if (prepared.actorPostimage) {
+          retainSnapshot(cell, prepared.actorPostimage, prepared.source.incarnation);
+          continue;
+        }
         const dependencySessionIds = [prepared.fullEntry.sessionId];
         const writeToken = readSqliteDatabaseScopedWriteTokenForPath(database.nativeLocation, [
           ...collectSessionEntryLookupKeys(sessionKey),
@@ -191,6 +195,24 @@ function discard(cell: ReplicaCell): void {
   cell.entry = undefined;
   cell.predicateColumns = undefined;
   cell.bytes = 0;
+}
+
+function retainSnapshot(
+  cell: ReplicaCell,
+  state: SessionActorHotState,
+  generation: string | undefined,
+): void {
+  const detached = freezeJsonSnapshot(structuredClone(state));
+  discard(cell);
+  cell.snapshot = detached;
+  cell.predicateColumns = detached.entry
+    ? deriveSessionPredicateColumns(JSON.stringify(detached.entry))
+    : undefined;
+  cell.generation = generation;
+  cell.bytes = JSON.stringify(detached).length * 2;
+  pool.snapshots += 1;
+  pool.bytes += cell.bytes;
+  touch(cell);
 }
 
 function forgetUnused(cell: ReplicaCell): void {
@@ -454,21 +476,11 @@ export function createSessionActorReplica(
     state: SessionActorHotState,
     expectedGeneration: string | undefined,
   ): boolean => {
-    const detached = freezeJsonSnapshot(structuredClone(state));
-    if (!accepts(detached, expectedGeneration)) {
+    if (!accepts(state, expectedGeneration)) {
       discard(owned);
       return false;
     }
-    discard(owned);
-    owned.snapshot = detached;
-    owned.predicateColumns = detached.entry
-      ? deriveSessionPredicateColumns(JSON.stringify(detached.entry))
-      : undefined;
-    owned.generation = expectedGeneration;
-    owned.bytes = JSON.stringify(detached).length * 2;
-    pool.snapshots += 1;
-    pool.bytes += owned.bytes;
-    touch(owned);
+    retainSnapshot(owned, state, expectedGeneration);
     return owned.snapshot !== undefined;
   };
   const begin = () => {

@@ -58,7 +58,9 @@ const hostClock: GatewaySchedulerClock = {
   arm: (run, delayMs) => {
     // Host callbacks stay synchronous; execution joins belong to the scheduler.
     const timer = setTimeout(() => {
-      void run();
+      runWithMainThreadTask("scheduler:wake", () => {
+        void run();
+      });
     }, delayMs);
     timer.unref();
     return () => clearTimeout(timer);

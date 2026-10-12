@@ -51,7 +51,8 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
-  prepareToolAuthProfileStoreSource,
+  loadLegacyToolAuthProfileStore,
+  prepareToolAuthProfileStore,
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
@@ -267,17 +268,18 @@ export function createImageTool(options?: {
       : null;
   const shouldResolveAutoImageModel =
     !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
-  const resolveInitialModelConfig = (authProfileStoreSource: boolean | undefined) =>
+  const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
     resolveImageModelConfigForTool({
       cfg: options?.config,
       agentDir,
       workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      authProfileStoreSource,
+      authStore,
       preparedModelRuntime: options?.preparedModelRuntime,
     });
   const resolvedImageModelConfig = shouldResolveAutoImageModel
-    ? resolveInitialModelConfig(options?.authProfileStoreSource)
+    ? resolveInitialModelConfig(
+        options?.authProfileStore ?? loadLegacyToolAuthProfileStore(agentDir),
+      )
     : explicitImageModelConfig;
   if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
     return null;
@@ -378,9 +380,9 @@ export function createImageTool(options?: {
               modelOverride,
             });
           if (!imageModelConfig) {
-            const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+            const authStore = await prepareToolAuthProfileStore(options);
             assertCurrent();
-            imageModelConfig = resolveInitialModelConfig(authProfileStoreSource);
+            imageModelConfig = resolveInitialModelConfig(authStore);
           }
           if (!imageModelConfig) {
             throw new Error(

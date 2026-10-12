@@ -946,7 +946,8 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
             ZAI_API_KEY: "env-zai-token",
           } as NodeJS.ProcessEnv,
           provider: "zai",
-          resolveApiKeyFromConfigAndStore: () => "env-zai-token",
+          resolveApiKeyFromConfigAndStore: () => undefined,
+          resolveApiKeyCandidatesFromConfigAndStore: async () => ["env-zai-token"],
           resolveOAuthToken: async () => null,
         }),
       ).resolves.toEqual({

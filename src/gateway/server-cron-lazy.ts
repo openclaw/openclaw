@@ -281,7 +281,7 @@ export function createLazyGatewayCronState(
     async prepareWake() {
       await load();
     },
-    wake(opts) {
+    async wake(opts) {
       if (!loaded) {
         // A wake should kick off lazy loading but cannot claim success before
         // cron exists and knows whether the target job is wakeable.

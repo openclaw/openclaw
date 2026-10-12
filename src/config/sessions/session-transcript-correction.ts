@@ -16,6 +16,8 @@ import {
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteSequence,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import {
   captureIncognitoSessionHistoryBinding,
@@ -72,9 +74,71 @@ export async function withPreparedTranscriptCorrection<T>(
   afterSeq?: number,
 ): Promise<T> {
   const fenced = withOwnedSessionTranscriptWriterFence(requested);
-  const target = resolveSqliteTranscriptScope(fenced);
+  const memory = getSessionActorStorageBinding(fenced);
+  const selectedSessionId =
+    fenced.sessionId ?? memory?.actor.snapshot(memory.authority)?.entry?.sessionId;
+  if (memory && !selectedSessionId) {
+    throw new Error("Transcript correction requires its selected session window");
+  }
+  const target = memory
+    ? {
+        agentId: memory.agentId,
+        path: memory.path,
+        sessionKey: memory.actor.target.sessionKey,
+        sessionId: selectedSessionId!,
+        env: fenced.env,
+      }
+    : resolveSqliteTranscriptScope(fenced);
   const scope = { ...fenced, sessionId: target.sessionId };
   const assertOwned = captureOwnedTranscriptWriteAssertion(scope);
+  if (memory) {
+    const authority = {
+      ...memory.authority,
+      assertCurrent() {
+        memory.authority.assertCurrent();
+        memory.actor.assertReadable();
+        assertOwned();
+      },
+    };
+    const snapshot = await memory.actor.storage!.read(
+      { type: "session.correction.prepare", input: { scope, afterSeq } },
+      authority,
+    );
+    const eventJson = snapshot.rows.map((row) => row.eventJson);
+    const events: TranscriptEvent[] = eventJson.map((json) => JSON.parse(json));
+    let generation = snapshot.version.generation;
+    const value = await withTranscriptLockSettlement((enqueue) => {
+      const queue = AsyncLocalStorage.bind(enqueue);
+      return run({
+        get generation() {
+          return generation;
+        },
+        readEvents: () =>
+          queue(async () => {
+            authority.assertCurrent();
+            return events;
+          }),
+        replaceEvents: (replacement) =>
+          queue(async () => {
+            const outcome = await memory.actor.storage!.mutate(
+              {
+                type: "session.correction.commit",
+                input: {
+                  scope,
+                  version: snapshot.version,
+                  rows: selectCorrectionRows(events, replacement, eventJson),
+                  allowLaterAppends: afterSeq !== undefined,
+                },
+              },
+              authority,
+            );
+            generation = readSessionActorStorageResult(outcome).generation;
+          }),
+      });
+    });
+    authority.assertCurrent();
+    return value;
+  }
   const operation = captureIncognitoSessionOperation(scope);
   const incognito = captureIncognitoSessionHistoryBinding(scope);
   if (incognito && operation) {

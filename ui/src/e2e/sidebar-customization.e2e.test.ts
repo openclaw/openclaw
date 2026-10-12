@@ -120,7 +120,7 @@ suite.define(() => {
                 key,
                 JSON.stringify({
                   sidebarAgentsMode: "roster",
-                  sidebarEntries: ["route:agents-home", leadEntry, "route:cron"],
+                  railShortcuts: ["route:agents-home", leadEntry, "route:cron"],
                 }),
               ),
             { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },

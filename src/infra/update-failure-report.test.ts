@@ -208,27 +208,6 @@ describe("update failure report", () => {
     }
   });
 
-  it("reports a verified package rollback separately from restart safety", async () => {
-    const home = tempDirs.make("openclaw-update-report-package-rollback-");
-    const prepared = await prepareUpdateFailureReport(
-      {
-        attemptId: "attempt-package-rollback",
-        result: failedUpdate({
-          recovery: {
-            packageRollbackVerified: true,
-            reason: "runtime-verification-failed",
-            serviceRestartSafe: false,
-          },
-        }),
-      },
-      { stateDir: path.join(home, ".openclaw") },
-    );
-
-    expect(prepared.body).toContain(
-      "Recovery outcome: package rollback verified; service restart not verified (runtime-verification-failed)",
-    );
-  });
-
   it("does not substitute restored post-failure state for an unavailable update target", async () => {
     const stateDir = tempDirs.make("openclaw-update-report-target-");
     const prepared = await prepareUpdateFailureReport(
@@ -248,6 +227,9 @@ describe("update failure report", () => {
 
     expect(prepared.body).toContain("Update target: exact target unavailable; mode: git");
     expect(prepared.body).not.toContain("Update target: version 2026.8.1");
+    expect(prepared.body).toContain(
+      "Recovery outcome: package rollback verified; service restart not verified (runtime-verification-failed)",
+    );
   });
 
   it("submits once and rejects a duplicate click for the same attempt", async () => {

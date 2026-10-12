@@ -9,6 +9,10 @@ import {
   loadExactSessionEntry,
   readSessionSubmittedInput,
 } from "../config/sessions/session-accessor.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { decodeSessionTranscriptWorkerReadError } from "../config/sessions/session-history-worker-errors.js";
 import {
   captureIncognitoSessionBinding,
@@ -122,6 +126,10 @@ export async function reconcileHarnessCompletionDelivery(
     taskRunId?: string;
   },
 ): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
+  const memory = getSessionActorStorageBinding(params);
+  if (memory) {
+    return reconcileMemoryHarnessCompletionDelivery(params, memory);
+  }
   const binding = captureIncognitoSessionBinding(params);
   const claim = binding?.actor.sessions.captureCurrent(params.sessionKey);
   const reconcile = async () => {
@@ -131,6 +139,51 @@ export async function reconcileHarnessCompletionDelivery(
     return result;
   };
   return binding ? binding.actor.sessions.withSharedState(reconcile) : reconcile();
+}
+
+function reconcileMemoryHarnessCompletionDelivery(
+  params: CompletionTarget & { sourceRunId: string; taskRunId?: string },
+  binding: SessionActorStorageBinding,
+): "unowned" | "pending" | "delivered" | "blocked" {
+  try {
+    const snapshot = binding.actor.storage!.readCurrent(
+      {
+        type: "session.completion.read",
+        input: { sourceRunId: params.sourceRunId, mode: "committed" },
+      },
+      binding.authority,
+    );
+    const entry = snapshot.entry;
+    if (!entry) {
+      return "unowned";
+    }
+    const receipt = getRestartRecoveryTerminalDeliveryEvidence(entry, params.sourceRunId);
+    const claim =
+      entry.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId
+        ? entry.restartRecoveryHarnessCompletion
+        : receipt?.harnessCompletion;
+    if (!claim) {
+      return entry.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
+        hasRestartRecoveryTerminalRun(entry, params.sourceRunId) ||
+        snapshot.hasSubmittedInput
+        ? "blocked"
+        : "unowned";
+    }
+    const classified = classifyCompletionClaim(params, entry, claim);
+    if (classified) {
+      return classified;
+    }
+    const runId = entry.restartRecoveryDeliveryRunId;
+    return (runId && hasLiveCompletionOwner(claim, runId)) || snapshot.validInput
+      ? "pending"
+      : "blocked";
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
+    log.warn(
+      `Could not inspect harness completion custody for ${params.sessionKey}: ${String(error)}`,
+    );
+    return "blocked";
+  }
 }
 
 async function reconcileCurrentHarnessCompletionDelivery(

@@ -49,6 +49,8 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import {
   captureIncognitoSessionOperation,
   publishIncognitoSessionEntry,
@@ -205,6 +207,37 @@ export async function mutateSessionGoal(
       assertCurrent?: SessionSourceAssertion;
     },
 ): Promise<SessionTranscriptTurnMutationResult & { sessionEntry?: SessionEntry }> {
+  const memory = getSessionActorStorageBinding(options);
+  if (memory) {
+    let authorityFailure: unknown;
+    const outcome = await memory.actor.storage!.mutate(
+      {
+        type: "session.goal.mutate",
+        input: {
+          sessionKey: memory.actor.target.sessionKey,
+          expectedSessionId: options.expectedSessionId,
+          operation: options.operation,
+        },
+      },
+      {
+        ...memory.authority,
+        authorize(stage, facts, publication) {
+          try {
+            memory.authority.authorize(stage, facts, publication);
+            options.assertCurrent?.();
+          } catch (error) {
+            authorityFailure = error;
+            throw error;
+          }
+        },
+      },
+    );
+    if (outcome.kind === "rolled-back" && authorityFailure instanceof Error) {
+      throw authorityFailure;
+    }
+    const { previous: _previous, ...result } = readSessionActorStorageResult(outcome);
+    return result;
+  }
   const incognito = captureIncognitoSessionOperation(options);
   if (incognito) {
     const { actor, admissionSignal } = incognito;

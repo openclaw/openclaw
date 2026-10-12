@@ -9,7 +9,10 @@ import {
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
-import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restartRecoveryTestHarness } from "./subagent-registry-restart-recovery.test-support.js";
@@ -465,7 +468,7 @@ describe("interrupted requester-settle continuation ownership", () => {
 
   it.each([
     "different attempt",
-    "non-yield batch",
+    "non-cohort batch",
     "rearmed",
     "unstarted",
     "consumed",
@@ -483,8 +486,9 @@ describe("interrupted requester-settle continuation ownership", () => {
     "quiet unstarted",
   ])("retains ordinary interruption recovery for %s", async (scenario) => {
     const { child, worker, close } = cohort(scenario.startsWith("quiet "));
-    if (scenario === "non-yield batch") {
+    if (scenario === "non-cohort batch") {
       child.requesterSettleWake!.requesterYieldBatch = undefined;
+      child.requesterSettleWake!.rearmGeneration = undefined;
     }
     if (scenario === "different attempt") {
       child.requesterSettleWake!.attemptCount++;
@@ -514,6 +518,7 @@ describe("interrupted requester-settle continuation ownership", () => {
       subagentRuns.set("replacement-leaf", {
         ...child,
         runId: "replacement-leaf",
+        taskRunId: child.taskRunId ?? child.runId,
         generation: (child.generation ?? 1) + 1,
       });
     }
@@ -542,6 +547,46 @@ describe("interrupted requester-settle continuation ownership", () => {
       error: expect.stringContaining("Gateway restart"),
     });
   });
+
+  it.each(["yielded", "finished", "same-task replacement"] as const)(
+    "preserves independent shared-session task custody after a %s requester restarts",
+    async (scenario) => {
+      const { child, worker } = cohort();
+      child.generation = 1;
+      const sibling = run({
+        ...child,
+        runId: "second-leaf-task",
+        generation: 2,
+        taskRunId: scenario === "same-task replacement" ? child.runId : "second-leaf-task",
+      });
+      const children = scenario === "same-task replacement" ? [child] : [child, sibling];
+      const batchRunIds = children.map((entry) => entry.runId).toSorted();
+      for (const entry of children) {
+        entry.requesterSettleWake = {
+          ...entry.requesterSettleWake!,
+          batchRunIds,
+          requesterYieldBatch: scenario === "finished" ? undefined : true,
+        };
+      }
+      const continuationRunId = buildRequesterSettleWakeIdentity({
+        requesterSessionKey: childSessionKey,
+        requesterAgentId: "main",
+        batchRunIds,
+        rearmGeneration: 1,
+      }).runId;
+      subagentRuns.delete(worker.runId);
+      const continuation = run({ ...worker, runId: continuationRunId });
+      mocks.entries[childSessionKey]!.lifecycleRunId = continuation.runId;
+      bindGatewayContextResolver(sibling, getGatewayContextResolver(child)!);
+      subagentRuns.set(sibling.runId, sibling);
+      subagentRuns.set(continuation.runId, continuation);
+
+      const result = await recover(continuation);
+      expect(result.status).toBe(scenario === "same-task replacement" ? "terminal" : "handled");
+      expect(continuation.execution.outcome).toBeUndefined();
+      expect(dispatchAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it("rechecks incoming custody before a classified interruption can commit", async () => {
     const { child, worker } = cohort();

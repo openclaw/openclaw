@@ -109,7 +109,7 @@ async function runBoundTurn(params: {
       assertCodexBindingMayBeReplaced(binding, "running a conversation-bound Codex thread");
       let threadId = binding.threadId;
       const requestedWorkspaceDir = binding.cwd || params.data.workspaceDir;
-      const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
+      const reviewerModelProvider = await resolveModelBackedReviewerPolicyProvider({
         authProfileId: binding.authProfileId,
         modelProvider: binding.modelProvider,
         ...agentLookup,
@@ -141,7 +141,7 @@ async function runBoundTurn(params: {
       let useStickyNetworkProfile = permissionProfile !== undefined && !networkProxyBindingChanged;
       assertNativeConversationApprovalPolicySupported(runtime);
       const modelSelection = binding.model
-        ? resolveCodexAppServerRequestModelSelection({
+        ? await resolveCodexAppServerRequestModelSelection({
             model: binding.model,
             modelProvider: binding.modelProvider,
             authProfileId: binding.authProfileId,
@@ -304,7 +304,7 @@ async function runBoundTurn(params: {
             clientId: client.getInstanceId(),
             cwd: response.thread.cwd ?? (networkProxyBindingChanged ? workspaceDir : binding.cwd),
             model: response.model ?? modelSelection?.model ?? binding.model,
-            modelProvider: normalizeCodexAppServerBindingModelProvider({
+            modelProvider: await normalizeCodexAppServerBindingModelProvider({
               authProfileId: binding.authProfileId,
               modelProvider:
                 response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,

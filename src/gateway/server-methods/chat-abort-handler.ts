@@ -219,7 +219,7 @@ export async function handleChatAbortRequestWithLifecycle(
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
       return;
     }
-    if (res.descendants?.killed) {
+    if (res.descendants?.killed || res.descendants?.continuationRetired) {
       lifecycle.onDescendantsCancelled?.();
     }
     const error = res.error ?? descendantAbortError(res.descendants, "Session");

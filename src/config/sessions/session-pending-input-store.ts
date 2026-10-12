@@ -26,10 +26,12 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { runSessionActorCommand } from "./session-actor-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
+import { prepareMemoryPendingInputStore } from "./session-pending-input-memory-store.js";
 import {
   readPendingInputMutationReceipt,
   type PendingInputCustodyGrant,
@@ -45,6 +47,7 @@ import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-sta
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type PendingInputScope = SessionAccessScope & {
+  sessionActor?: import("./session-actor-storage-binding.js").SessionActorStorageBinding;
   agentId: string;
   sessionId: string;
   /** Inactive until the atomic incognito activation supplies this captured owner. */
@@ -59,6 +62,10 @@ export async function preparePendingInputStore(
   scope: PendingInputScope,
   assertCurrent: () => void,
 ) {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return prepareMemoryPendingInputStore(memory, assertCurrent);
+  }
   const captured = {
     ...scope,
     incognito: scope.incognito ?? captureIncognitoSessionOperation(scope),
@@ -328,37 +335,42 @@ export async function preparePendingInputStore(
                 }
               },
             };
-            const hot =
-              inputActor.actor.snapshot(authority) ?? (await inputActor.actor.read(authority));
-            if (!hot.entry) {
-              throw new Error("Input actor lost its staged session");
-            }
-            const expectedState = buildRestartRecoveryExpectedState(hot.entry);
+            let expectedState: ReturnType<typeof buildRestartRecoveryExpectedState> | undefined;
             let receipt: ReturnType<typeof readPendingInputMutationReceipt>;
-            const outcome = await runSessionActorCommand(inputActor.actor, authority, (snapshot) =>
-              inputActor.actor.acceptInput(
-                {
-                  commandId: randomUUID(),
-                  phaseId: `accept:${input.runId}`,
-                  expected: snapshot?.version ?? hot.version,
-                  pending: input,
-                  lifecycle: {},
-                  expectedState,
-                },
-                authority,
-                {
-                  committed(commit) {
-                    receipt = readPendingInputMutationReceipt(
-                      commit.value.pendingInputReceipt,
-                      input,
-                    );
-                    if (!receipt) {
-                      throw new Error("Input actor omitted its committed custody receipt");
-                    }
-                    publish?.(committedFacts, assertOpen);
+            const outcome = await runSessionActorCommand(
+              inputActor.actor,
+              authority,
+              async (snapshot) => {
+                const hot = snapshot ?? (await inputActor.actor.read(authority));
+                if (!hot.entry) {
+                  throw new Error("Input actor lost its staged session");
+                }
+                // Select lifecycle facts inside the FIFO, then retain them across version rebasing.
+                expectedState ??= buildRestartRecoveryExpectedState(hot.entry);
+                return inputActor.actor.acceptInput(
+                  {
+                    commandId: randomUUID(),
+                    phaseId: `accept:${input.runId}`,
+                    expected: hot.version,
+                    pending: input,
+                    lifecycle: {},
+                    expectedState,
                   },
-                },
-              ),
+                  authority,
+                  {
+                    committed(commit) {
+                      receipt = readPendingInputMutationReceipt(
+                        commit.value.pendingInputReceipt,
+                        input,
+                      );
+                      if (!receipt) {
+                        throw new Error("Input actor omitted its committed custody receipt");
+                      }
+                      publish?.(committedFacts, assertOpen);
+                    },
+                  },
+                );
+              },
             );
             if (outcome.kind !== "committed") {
               throwSessionInputActorFailure(outcome, authorityFailure);

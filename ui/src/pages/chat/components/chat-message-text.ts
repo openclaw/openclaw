@@ -17,15 +17,6 @@ import {
   type MessageTextOptions,
 } from "./chat-message-text-preparation.ts";
 
-export type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
-export {
-  MessageMarkdown,
-  MarkdownContent,
-  MarkdownText,
-  renderSolidMessageJson,
-  renderSolidMessageMarkdown,
-} from "./chat-message-text-view.tsx";
-
 registerChatMessageMetadataEnglish();
 
 export function renderMessageJson(

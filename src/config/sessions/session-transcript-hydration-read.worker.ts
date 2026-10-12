@@ -96,6 +96,7 @@ export async function readSessionTranscriptHydrationRequest(
             selection,
             undefined,
             projection,
+            request.preparedEntry,
           );
         }
       },

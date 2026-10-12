@@ -62,6 +62,10 @@ response-cache entries only for the keys acquired by that request. Repeated
 reads within the same acquisition share the refreshed value; concurrent callers
 share pending work. Ordinary acquisition keeps its existing cache lifetime.
 
+Passive model-list reads that wait for a configuration replacement resume against
+the newly committed catalog and configuration. They do not retry with the retired
+configuration. Exact runtime acquisitions remain bound to their requested configuration.
+
 Bundled providers set `discoveryMode: "strict"` in their catalog options.
 This code option keeps successful empty results empty and reports failed
 acquisition through `ProviderCatalogResult.outcomes`, rather than returning

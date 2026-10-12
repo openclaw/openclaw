@@ -7,6 +7,11 @@ import { evaluateGatewayToolCallerReceiptAdmission } from "../agents/tools/gatew
 import type { GatewayToolCallerReceiptAdmission } from "../agents/tools/gateway-caller-receipt.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { projectSessionEntryCapabilityFacts } from "../config/sessions/session-entry-capability-facts.js";
 import type {
   SessionEntryCurrentFacts,
   SessionEntryCurrentSource,
@@ -38,6 +43,47 @@ type CompletionGrantLineageParams = {
   >;
 };
 
+function createMemoryCompletionCapabilityStore(): SessionCapabilityLookup | undefined {
+  const memory = getSessionActorStorageBinding({});
+  if (!memory) {
+    return undefined;
+  }
+  const storage = memory.actor.storage!;
+  const owners = new Map<string, ReturnType<typeof captureSessionActorStorageOwner>>();
+  return {
+    authoritative: true,
+    get(sessionKey) {
+      const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+      if (agentId === memory.agentId) {
+        const entry = storage.readCurrent(
+          { type: "session.entry.read", input: { sessionKey, projection: "list" } },
+          memory.authority,
+        );
+        return entry && projectSessionEntryCapabilityFacts(entry);
+      }
+      if (!agentId || !isIncognitoSessionKey(sessionKey)) {
+        throw new Error("Completion lineage requires its selected session actor owner");
+      }
+      if (!owners.has(agentId)) {
+        owners.set(agentId, captureSessionActorStorageOwner({ agentId, sessionActor: memory }));
+      }
+      const selected = owners.get(agentId);
+      const entry = selected?.owner?.readSession(sessionKey, selected.authority)?.entry;
+      return entry && projectSessionEntryCapabilityFacts(entry);
+    },
+    getById(sessionId) {
+      const row = storage.readCurrent(
+        {
+          type: "session.entry.readById",
+          input: { sessionId, projection: "list", currentOnly: true },
+        },
+        memory.authority,
+      );
+      return row && projectSessionEntryCapabilityFacts(row.entry);
+    },
+  };
+}
+
 /**
  * Whether a completion grant's requester lineage still verifies. Grants without a
  * handoff carry no lineage and are always current. The child entry can be removed or
@@ -56,7 +102,8 @@ function isCompletionGrantLineageCurrent(params: CompletionGrantLineageParams): 
       modelId: context.modelId,
       inputProvenance: context.inputProvenance,
       trustedInternalHandoff: context.trustedInternalHandoff,
-      preparedSessionCapabilityStore: params.preparedSessionCapabilityStore,
+      preparedSessionCapabilityStore:
+        params.preparedSessionCapabilityStore ?? createMemoryCompletionCapabilityStore(),
     })
   );
 }
@@ -73,6 +120,35 @@ class CompletionLineageReadRequired extends Error {
 export function createCompletionGrantLineageAdmission(params: CompletionGrantLineageParams) {
   if (!params.context.trustedInternalHandoff) {
     return { isCurrent: () => true, admission: undefined };
+  }
+  const memoryStore = createMemoryCompletionCapabilityStore();
+  if (memoryStore) {
+    const isCurrent = () => {
+      try {
+        return isCompletionGrantLineageCurrent({
+          ...params,
+          preparedSessionCapabilityStore: memoryStore,
+        });
+      } catch {
+        return false;
+      }
+    };
+    const admission: GatewayToolCallerReceiptAdmission = {
+      async prepare() {
+        return {
+          isCurrent,
+          current: {
+            sources: [],
+            assertCurrent() {
+              if (!isCurrent()) {
+                throw new Error("CLI completion tool grant no longer matches its requester policy");
+              }
+            },
+          },
+        };
+      },
+    };
+    return { admission, isCurrent };
   }
   const topology = captureIncognitoSessionTopology();
   const admission: GatewayToolCallerReceiptAdmission = {

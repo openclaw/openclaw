@@ -191,7 +191,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     showNewMessages: false,
     onScrollToBottom: () => undefined,
     onRefresh: () => undefined,
-    getDraft: () => "",
     onDraftChange: () => undefined,
     onRequestUpdate: () => undefined,
     onSend: () => undefined,

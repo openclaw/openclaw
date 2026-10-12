@@ -8,6 +8,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
 import {
@@ -16,11 +17,14 @@ import {
   fingerprintCronRuntimeRows,
   loadedCronStoreFromRows,
   loadCronRows,
+  updateCronRuntimeRow,
 } from "./row-codec.js";
+import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import {
   adjudicateActiveCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   findActiveCronRunReceiptInDatabase,
+  finishCronRunReceiptInDatabase,
 } from "./run-receipt-store.js";
 import { retireCronRunTriggerStateInDatabase } from "./run-receipt-trigger-state.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
@@ -106,6 +110,65 @@ function applyCronReceiptMutation(db: DatabaseSync, input: MutationInput, nowMs:
   }
 }
 
+function cancelChangedQueuedRuns(
+  db: DatabaseSync,
+  input: MutationInput,
+  previousJobs: ReturnType<typeof loadCronMutationStore>["store"]["jobs"],
+  receiptSchema: ReturnType<typeof prepareCronRunReceiptWriteSchema>,
+): void {
+  const currentJobs = new Map(
+    loadCronMutationStore(db, input.storeKey).store.jobs.map((job) => [job.id, job]),
+  );
+  for (const previous of previousJobs) {
+    if (previous.state.queuedAtMs === undefined || !input.changes.changedIds.has(previous.id)) {
+      continue;
+    }
+    const current = currentJobs.get(previous.id);
+    // Re-arming an already consumed exit watch leaves its accepted event intact.
+    const rearmedExit =
+      current &&
+      previous.schedule.kind === "on-exit" &&
+      !previous.enabled &&
+      current.enabled &&
+      cronSchedulingInputsEqual({ ...previous, enabled: true }, current);
+    if (current && (cronSchedulingInputsEqual(previous, current) || rearmedExit)) {
+      continue;
+    }
+    const receipt = findActiveCronRunReceiptInDatabase({
+      database: db,
+      storePath: input.storeKey,
+      jobId: previous.id,
+    });
+    const error = current
+      ? "cron: queued job schedule changed or was disabled"
+      : "cron: queued job was removed";
+    if (receipt && receipt.startedAtMs === previous.state.queuedAtMs) {
+      finishCronRunReceiptInDatabase({
+        database: db,
+        receiptSchema,
+        handle: receipt,
+        status: "skipped",
+        finishedAtMs: input.snapshot.nowMs,
+        error,
+      });
+      recordSkippedCronRequestInDatabase(db, {
+        storeKey: input.storeKey,
+        jobId: receipt.jobId,
+        receiptId: receipt.receiptId,
+        agentId: receipt.agentId,
+        startedAt: receipt.startedAtMs,
+        endedAt: input.snapshot.nowMs,
+        error,
+        nextRunAtMs: current?.state.nextRunAtMs,
+      });
+    }
+    if (current?.state.queuedAtMs === previous.state.queuedAtMs) {
+      delete current.state.queuedAtMs;
+      updateCronRuntimeRow(db, input.storeKey, current);
+    }
+  }
+}
+
 export function mutateCronJobsInWorker(
   database: OpenClawStateDatabase,
   input: MutationInput,
@@ -116,6 +179,7 @@ export function mutateCronJobsInWorker(
       ({ db }) => {
         try {
           const receiptSchema = prepareCronRunReceiptWriteSchema(db);
+          const previousJobs = loadCronMutationStore(db, input.storeKey).store.jobs;
           if (input.agentId !== undefined && isAgentDeletionBlocked(input.agentId, {}, db)) {
             throw new Error(describeUnavailableCronAgent(input.agentId));
           }
@@ -198,6 +262,7 @@ export function mutateCronJobsInWorker(
               hooks,
             );
           }
+          cancelChangedQueuedRuns(db, input, previousJobs, receiptSchema);
           const outcome = {
             ...loadCronMutationStore(db, input.storeKey),
             names: readCronJobNamesInDatabase(db, undefined, input.storeKey),

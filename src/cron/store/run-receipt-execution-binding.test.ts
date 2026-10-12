@@ -12,13 +12,13 @@ import { saveCronStore } from "../store.js";
 import { bindCronRunReceiptExecution } from "./run-receipt-execution-binding.js";
 import {
   bindCronRunReceiptExecutionInDatabase,
-  finishCronRunReceiptAsync,
   finishCronRunReceiptInDatabase,
   releaseLocalCronRunReceiptOwnership,
 } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
   makeCronReceiptJob,
+  finishCronRunReceiptAsync,
 } from "./run-receipt-store.test-support.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 

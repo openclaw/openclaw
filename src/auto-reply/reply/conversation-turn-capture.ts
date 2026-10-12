@@ -7,7 +7,7 @@ import {
   markConversationDeliveryReplied,
   markConversationDeliverySent,
 } from "../../config/sessions/conversation-delivery-store.js";
-import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
 import { prepareConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";

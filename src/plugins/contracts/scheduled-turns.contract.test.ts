@@ -115,7 +115,7 @@ function createMockCronService(): CronServiceContract {
     getJob: vi.fn(() => undefined),
     readJob: vi.fn(async () => undefined),
     getDefaultAgentId: vi.fn(() => undefined),
-    wake: vi.fn(() => ({ ok: true })),
+    wake: vi.fn(async () => ({ ok: true })),
   } as CronServiceContract;
 }
 

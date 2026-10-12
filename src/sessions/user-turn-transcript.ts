@@ -684,9 +684,3 @@ export function createUserTurnTranscriptRecorder(
   inheritUserTurnPromptReactionSource(recorder, params.pendingInputSources);
   return recorder;
 }
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.userTurnTranscriptTestApi")] = {
-    persistUserTurnTranscript,
-  };
-}

@@ -5,6 +5,7 @@ import {
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
+import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -142,10 +143,10 @@ async function runEmbeddedAgentForSession(
   const {
     params: paramsBase,
     runSessionTarget,
-    sessionAdmission,
     contextEngineAgentId,
     queuedLifecycleGeneration,
   } = prepared;
+  let sessionAdmission = prepared.sessionAdmission;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
@@ -190,6 +191,12 @@ async function runEmbeddedAgentForSession(
     setParams: (nextParams) => {
       params = nextParams;
     },
+    onSessionWriterClaimed: (entry) => {
+      if (sessionAdmission) {
+        // Native preparation must consume the claim's postimage, not the pre-queue row.
+        sessionAdmission = { ...sessionAdmission, entry };
+      }
+    },
   });
   const { enqueueGlobal, enqueueSession, noteLaneTaskProgress, throwIfAborted } = laneController;
   const channelHint = params.messageChannel ?? params.messageProvider;
@@ -216,6 +223,9 @@ async function runEmbeddedAgentForSession(
       params.replyOperation?.markWaitingForDeferredMaintenance();
       try {
         await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
+        // Maintenance can finish while its transcript projection is still rebuilding.
+        // Settle that projection before the next attempt reads the bounded history.
+        await waitForSessionTranscriptProjection(runSessionTarget, laneController.abortSignal);
       } finally {
         params.replyOperation?.markDeferredMaintenanceWaitEnded();
       }

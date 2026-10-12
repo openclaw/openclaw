@@ -12,6 +12,12 @@ export type AcpSessionMutationSource =
   | AcpSessionSourceReadInput["source"]
   | (AcpSessionSourceReadInput["source"] & { kind: "reset" })
   | {
+      kind: "memory";
+      agentId: string;
+      path: string;
+      snapshot: { entry: SessionEntry | undefined; sources: [] };
+    }
+  | {
       kind: "ephemeral";
       agentId: string;
       path: string;

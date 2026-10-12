@@ -245,6 +245,7 @@ export async function admitReplyTurn(
         let recoveryClaimStarted = false;
         const admission = storePath
           ? await beginSessionWorkAdmission({
+              agentId: params.agentId,
               owner: REPLY_WORK_ADMISSION_OWNER,
               scope: storePath,
               isSettling: () =>

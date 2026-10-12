@@ -10,10 +10,12 @@ import {
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { prepareRemountedPublication } from "./package-update-activation-remount.test-support.js";
 import {
   assertNoPendingPackageActivation,
   runPackageActivationRecovery,
   settlePendingPackageActivation,
+  settleRemountedPackageActivation,
 } from "./package-update-activation.js";
 import { legacyPackageFingerprint } from "./package-update-legacy.test-support.js";
 
@@ -25,8 +27,9 @@ vi.mock("./package-update-activation-paths.js", async (original) => ({
 }));
 
 const fixtures = createPackageActivationLifetimeFixture();
+let fixtureRoot: string;
 beforeEach(() => {
-  fixtures.setup();
+  fixtureRoot = fixtures.setup().root;
 });
 afterEach(async () => {
   await fixtures.lifetime.cleanup();
@@ -113,6 +116,26 @@ it.skipIf(process.platform === "win32").each([
       });
     } finally {
       db.close();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "requires the complete legacy candidate digest after remount (modified=%s)",
+  async (modified) => {
+    const f = await prepareRemountedPublication(fixtures, fixtureRoot, true);
+    if (modified) {
+      fs.appendFileSync(path.join(f.packageRoot, "openclaw.mjs"), "changed");
+      const before = fs.readFileSync(f.journalPath);
+      await expect(settleRemountedPackageActivation(f.anchor, f.operationId)).rejects.toThrow(
+        "full candidate fingerprint changed",
+      );
+      expect(fs.readFileSync(f.journalPath)).toEqual(before);
+    } else {
+      await expect(
+        settleRemountedPackageActivation(f.anchor, f.operationId),
+      ).resolves.toMatchObject({ reason: "publication-settled-external-change" });
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     }
   },
 );

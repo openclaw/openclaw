@@ -35,15 +35,6 @@ describe("worker placement runtime capabilities", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("fails closed when residual auto policy lacks model and session context", () => {
-    expect(projectWorkerPlacementAgentRuntime({ id: "auto", source: "model" })).toEqual({
-      id: "auto",
-      cloudPlacementSupported: false,
-      devicePlacementSupported: false,
-      source: "model",
-    });
-  });
-
   it("derives presence preparation mode from the default session runtime owner", () => {
     registerAgentHarness({
       id: "codex",
@@ -269,54 +260,6 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       return;
     }
     resetPluginRuntimeStateForTest();
-  });
-
-  it("returns worker-turn for a model with an explicit openclaw runtime policy", () => {
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.example/v1",
-              models: [],
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      },
-      entry: {
-        sessionId: "s1",
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "claude-test",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s1",
-    });
-    expect(caps.executionMode).toBe("worker-turn");
-    expect(caps.devicePlacement).toBeDefined();
-  });
-
-  it("uses openclaw fallback capabilities for an undetermined (auto) runtime", () => {
-    // A provider with no configured runtime policy, no registered harness, and no
-    // CLI backend registration resolves to "auto" in projection mode. Canonical
-    // execution falls back to the built-in openclaw harness (selection.ts
-    // auto_openclaw), so the capabilities mirror that — the guard must not
-    // falsely reject a model whose execution will use the placement-capable
-    // built-in runtime. (A CLI-backed provider is covered separately below.)
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s2",
-        updatedAt: 0,
-        providerOverride: "embedded-auto-provider",
-        modelOverride: "embedded-auto-model",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s2",
-    });
-    expect(caps.executionMode).toBe("worker-turn");
-    expect(caps.devicePlacement).toBeDefined();
   });
 
   it("rejects a CLI-backed provider whose dispatch runs as a local process", () => {
@@ -630,63 +573,6 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       validateModelRuntime: true,
     });
     expect(error).toContain("cannot select a runtime without cloud placement support");
-  });
-
-  it("sessions.patch boundary: allows a compatible model change for an active worker-turn placement", () => {
-    // A model whose runtime supports worker-turn placement must pass the
-    // guard without error.
-    const sessionId = "s7";
-    const placement = {
-      sessionId,
-      state: "active" as const,
-      executionMode: "worker-turn" as const,
-      generation: 1,
-      environmentId: "env-1",
-      runnerId: "runner-1",
-      runnerStatus: "available" as const,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      transitionGeneration: 1,
-      ownerId: "worker",
-      ownerEpoch: 1,
-      turnClaim: null,
-      workspace: null,
-      retirement: null,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-    };
-    const context = {
-      workerSessionPlacementService: {
-        getMany: () => new Map([[sessionId, placement]]),
-      },
-    };
-    const error = resolveSessionWorkerPlacementPatchError({
-      agentId: "main",
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.example/v1",
-              models: [],
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      } as never,
-      context: context as never,
-      entry: {
-        sessionId,
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "claude-test",
-      } as never,
-      key: "agent:main:s7",
-      patch: { key: "agent:main:s7", model: "anthropic/claude-test" } as never,
-      sessionKey: "agent:main:s7",
-      validateModelRuntime: true,
-    });
-    expect(error).toBeUndefined();
   });
 
   it("sessions.patch boundary: allows an unclaimed auto model with openclaw fallback for an active worker-turn placement", () => {

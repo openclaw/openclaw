@@ -22,7 +22,6 @@ export function runUpdateRunAdmission<T>(
     throw new Error("Update run admission requires its own writable connection");
   }
   const admitted = (db: DatabaseSync, recoveryChanges: string[]) => {
-    assertCurrent?.("transaction");
     const result = operation(db, recoveryChanges);
     assertCurrent?.("commit");
     return result;
@@ -43,6 +42,7 @@ export function runUpdateRunAdmission<T>(
       return { repairable: error };
     }
   }, options);
+  assertCurrent?.("transaction");
   if (inspection) {
     if (inspection.repairable && !recoverTaskDeliveryOrphans) {
       throw inspection.repairable;

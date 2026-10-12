@@ -20,6 +20,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
@@ -386,6 +387,43 @@ const projectionSnapshotReader = createSqliteQueryCache((db) =>
 );
 
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    const { active, coldArchive, identities, navigation, projection } = actor.transcript;
+    let latestIndexedReset: CurrentTranscriptProjection["latestIndexedReset"] = null;
+    let hasUnindexedPrefix = true;
+    for (const identity of identities.values()) {
+      hasUnindexedPrefix &&= identity.seq !== navigation[0]?.seq;
+      const row = active.get(identity.seq);
+      if (
+        identity.event_type === "reset" &&
+        row &&
+        (!latestIndexedReset || identity.seq > latestIndexedReset.seq)
+      ) {
+        latestIndexedReset = {
+          active_position: row.active_position,
+          event_type: "reset",
+          seq: identity.seq,
+        };
+      }
+    }
+    return {
+      cold: Boolean(coldArchive),
+      generation: actor.hot.transcript.version.generation ?? undefined,
+      updatedAt: actor.hot.transcript.version.updatedAt,
+      hasUnclassified: projection?.hasUnclassifiedEvents ?? false,
+      latestIndexedReset,
+      hasUnindexedPrefix,
+      latestSeq: navigation.at(-1)?.seq ?? null,
+      state: projection && {
+        activeEventCount: projection.activeEventCount,
+        activeMessageCount: projection.activeMessageCount,
+        indexedSeq: projection.indexedSeq,
+        leafEventId: projection.leafEventId,
+        needsRebuild: projection.needsRebuild,
+      },
+    };
+  }
   const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),

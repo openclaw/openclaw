@@ -51,6 +51,12 @@ export async function readSessionHistoryRequest(
       result: options.readers.readBoundedMessageTail(request.params.options),
     };
   }
+  if (request.kind === "recent-text") {
+    return {
+      kind: "recent-text",
+      result: options.readers.readRecentConversationText(request.params.options),
+    };
+  }
   if (request.kind === "summary") {
     return {
       kind: "summary",

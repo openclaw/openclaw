@@ -19,7 +19,7 @@ it("retires retained Gateway bindings after metadata close fails", async () => {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const failure = new PluginRuntimeCloseRetainedError(new Error("metadata close refused"));
-  let loaded: ReturnType<typeof loadGatewayPlugins> | undefined;
+  let loaded: Awaited<ReturnType<typeof loadGatewayPlugins>> | undefined;
   let closing: Promise<unknown> | undefined;
   let restoreClose: (() => void) | undefined;
   try {
@@ -29,13 +29,13 @@ it("retires retained Gateway bindings after metadata close fails", async () => {
     assert(kernel);
     let available: PluginRuntime["gateway"]["isAvailable"] | undefined;
     const loader = await import("../plugins/loader.js");
-    const load = loader.loadOpenClawPlugins;
-    const observed = vi.spyOn(loader, "loadOpenClawPlugins").mockImplementation((options) => {
+    const load = loader.loadOpenClawPluginsAsync;
+    const observed = vi.spyOn(loader, "loadOpenClawPluginsAsync").mockImplementation((options) => {
       available = options?.runtimeOptions?.gateway?.isAvailable;
       return load(options);
     });
     try {
-      loaded = loadGatewayPlugins({
+      loaded = await loadGatewayPlugins({
         cfg: kernel.cfgAtStart,
         autoEnabledReasons: {},
         baseMethods: [],

@@ -17,6 +17,15 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import {
+  agentWorkAdmissionIdentity,
+  createAgentWorkAdmissionQueries,
+  interruptSessionWorkAdmissionOwners,
+  matchesAgentWorkAdmission,
+  sessionWorkAdmissionClosures as SESSION_WORK_ADMISSION_CLOSURES,
+  type AgentWorkAdmissionIdentity,
+} from "./session-agent-work-admission.js";
 import {
   createLifecycleDiagnosticOperation,
   type SessionLifecycleMutationOperation,
@@ -33,10 +42,14 @@ import {
   type SessionWorkAdmissionLease,
 } from "./session-work-admission-handoff.js";
 import {
+  sessionWorkAdmissionAbortError,
   waitForSessionWorkAdmissionRelease,
   type SessionWorkAdmissionInterrupt,
 } from "./session-work-admission-interruption.js";
-import { createSessionWorkAdmissionQueries } from "./session-work-admission-queries.js";
+import {
+  createSessionWorkAdmissionQueries,
+  type SessionWorkRun,
+} from "./session-work-admission-queries.js";
 
 export {
   cancelSessionWorkAdmissionHandoff,
@@ -49,14 +62,8 @@ export {
 } from "./session-work-admission-interruption.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
-type SessionWorkRun = Readonly<{
-  runId: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  controlUiVisible?: boolean;
-}>;
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
+  agent?: AgentWorkAdmissionIdentity;
   run?: SessionWorkRun;
   phase: "pending" | "acquired";
   owner?: symbol;
@@ -68,14 +75,11 @@ type SessionLifecycleMutationOwner = {
   kind?: SessionLifecycleMutationKind;
 };
 
-type SessionWorkAdmissionClosure = SessionLifecycleMutationOwner & { reason: Error };
-
 type SessionLifecycleAdmissionState = {
   lifecycleQueues: Map<string, StoreWriterQueue>;
   mutationQueues: Map<string, StoreWriterQueue>;
   activeAdmissions: Map<string, Set<SessionWorkAdmission>>;
   activeMutationRuns: Set<SessionLifecycleMutationOwner>;
-  admissionClosures: Set<SessionWorkAdmissionClosure>;
   idleWaiters: Map<string, Set<() => void>>;
   currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
 };
@@ -104,7 +108,6 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
     mutationQueues: new Map(),
     activeAdmissions: new Map(),
     activeMutationRuns: new Set(),
-    admissionClosures: new Set(),
     idleWaiters: new Map(),
     currentAdmissions: new AsyncLocalStorage(),
   }),
@@ -114,28 +117,45 @@ const {
   activeMutationRuns: ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS,
   idleWaiters: SESSION_LIFECYCLE_IDLE_WAITERS,
   currentAdmissions: CURRENT_SESSION_WORK_ADMISSIONS,
-  admissionClosures: SESSION_WORK_ADMISSION_CLOSURES,
 } = SESSION_LIFECYCLE_ADMISSION_STATE;
 const {
   collectSessionWorkAdmissions,
   collectActiveSessionWorkAdmissions,
+  captureSessionWorkRunInterruptions,
   getActiveSessionWorkAdmissionCount,
-  isSessionWorkAdmissionActive,
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
   getTerminalSessionWorkAdmissionRelease,
+  isSessionWorkAdmissionActive,
+  isCompetingSessionWorkAdmissionActive,
 } = createSessionWorkAdmissionQueries<SessionWorkAdmission>(ACTIVE_SESSION_WORK_ADMISSIONS, () =>
   CURRENT_SESSION_WORK_ADMISSIONS.getStore(),
 );
 export {
-  getSessionWorkAdmissionRelease,
   collectActiveSessionWorkAdmissions,
+  captureSessionWorkRunInterruptions,
   getActiveSessionWorkAdmissionCount,
-  isSessionWorkAdmissionActive,
+  getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
   getTerminalSessionWorkAdmissionRelease,
+  isSessionWorkAdmissionActive,
+  isCompetingSessionWorkAdmissionActive,
+};
+
+const {
+  closeAgentWorkAdmissions,
+  collectActiveAgentSessionWorkAdmissions,
+  startAgentWorkAdmissionInterruption,
+  assertSessionWorkAdmissionOpen,
+} = createAgentWorkAdmissionQueries(ACTIVE_SESSION_WORK_ADMISSIONS, () =>
+  CURRENT_SESSION_WORK_ADMISSIONS.getStore(),
+);
+export {
+  closeAgentWorkAdmissions,
+  collectActiveAgentSessionWorkAdmissions,
+  startAgentWorkAdmissionInterruption,
 };
 
 const runWithSessionIdentityLocks = createSessionIdentityLockRunner(
@@ -156,12 +176,6 @@ function hasOnlyActiveSessionLifecycleMutationKind(
     run.identities.some((identity) => identities.includes(identity)),
   );
   return active.length > 0 && active.every((run) => run.kind === kind);
-}
-
-function sessionWorkAdmissionAbortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new Error("session work admission aborted");
 }
 
 async function waitForNormalizedSessionLifecycleMutationIdle(
@@ -389,20 +403,6 @@ function isSessionWorkAdmissionTargetActive(params: {
   );
 }
 
-/** Whether another admitted turn currently owns any of these session identities. */
-export function isCompetingSessionWorkAdmissionActive(
-  scope: string,
-  identities: Iterable<string | undefined>,
-): boolean {
-  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
-  return normalizeSessionIdentities(scope, identities).some((identity) =>
-    Array.from(
-      ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? [],
-      (admission) => admission.phase === "acquired" && !currentAdmissions?.has(admission),
-    ).some(Boolean),
-  );
-}
-
 /** Capture exact host-owned admissions; replacements after an await cannot inherit the snapshot. */
 export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: GatewayContextResolver) {
   const owners = collectSessionWorkAdmissions(
@@ -430,6 +430,9 @@ export function collectActiveSessionLifecycleMutationIdentities(scope: string): 
 }
 
 export async function beginSessionWorkAdmission(params: {
+  agentId?: string;
+  statePath?: string;
+  env?: NodeJS.ProcessEnv;
   scope: string;
   identities: Iterable<string | undefined>;
   /** Only an execution owner returning an exact interruption receipt for this runId may declare it. */
@@ -455,6 +458,9 @@ export async function beginSessionWorkAdmission(params: {
     throw new GatewayDrainingError();
   }
   const rawIdentities = Array.from(params.identities);
+  const agent = params.agentId
+    ? agentWorkAdmissionIdentity({ ...params, agentId: params.agentId })
+    : undefined;
   // An adopted unbound owner must not inherit the adopting request's Gateway.
   const resolveGatewayContext = Object.hasOwn(params, "resolveGatewayContext")
     ? params.resolveGatewayContext
@@ -482,6 +488,7 @@ export async function beginSessionWorkAdmission(params: {
   let writerBarrierStarted = false;
   const { promise: releasedPromise, resolve: resolveReleased } = createDeferredCore();
   const admission: SessionWorkAdmission = {
+    agent,
     run: params.run ? Object.freeze({ ...params.run }) : undefined,
     phase: "pending",
     isSettling: params.isSettling,
@@ -542,13 +549,26 @@ export async function beginSessionWorkAdmission(params: {
     },
   };
   let removeAbortListener = () => {};
-  try {
-    const closedOwner = [...SESSION_WORK_ADMISSION_CLOSURES].find((owner) =>
-      owner.identities.some((identity) => admission.identities.has(identity)),
-    );
-    if (closedOwner) {
-      admission.interrupt?.(closedOwner.reason);
+  const assertIngressOpen = () => {
+    assertSessionWorkAdmissionOpen(admission);
+    signal.throwIfAborted();
+  };
+  const assertAgentIngressOpen = async () => {
+    assertIngressOpen();
+    if (agent) {
+      const journal = await readAgentDeletionJournalStatusInWorker(
+        agent.agentId,
+        { path: agent.statePath, env: params.env },
+        signal,
+      );
+      if (journal !== "absent") {
+        throw new Error(`Agent ${agent.agentId} deletion is in progress; new work is unavailable.`);
+      }
     }
+    assertIngressOpen();
+  };
+  try {
+    await assertAgentIngressOpen();
     if (predecessors.size > 0) {
       await racePromiseWithAbortSignal(
         Promise.all(Array.from(predecessors, (predecessor) => predecessor.released)),
@@ -576,10 +596,10 @@ export async function beginSessionWorkAdmission(params: {
         if (params.revalidateAllowed) {
           await lease.run(async () => await params.assertAllowed(signal));
         }
+        assertIngressOpen();
         if (isGatewaySubordinateWorkAdmissionClosed()) {
           throw new GatewayDrainingError();
         }
-        signal.throwIfAborted();
         if (params.revalidateAllowed) {
           admission.phase = "acquired";
         }
@@ -588,6 +608,7 @@ export async function beginSessionWorkAdmission(params: {
           async () => {
             writerBarrierStarted = true;
             signal.throwIfAborted();
+            await assertAgentIngressOpen();
             await lease.run(async () => {
               if (params.revalidateAllowed) {
                 await params.revalidateAllowed();
@@ -596,6 +617,7 @@ export async function beginSessionWorkAdmission(params: {
                 admission.phase = "acquired";
               }
             });
+            assertIngressOpen();
           },
           { reentrant: true, identities: params.storeWriterIdentities, signal },
         );
@@ -613,12 +635,23 @@ export async function beginSessionWorkAdmission(params: {
   }
 }
 
-function closeNormalizedSessionWorkAdmissions(identities: readonly string[], reason: Error) {
-  const owner = { identities, reason };
+function closeNormalizedSessionWorkAdmissions(
+  identities: readonly string[],
+  reason: Error,
+  assertCurrent?: () => void,
+  agent?: AgentWorkAdmissionIdentity,
+) {
+  const owner = { identities, reason, agent };
   SESSION_WORK_ADMISSION_CLOSURES.add(owner);
   // Retire queued ingress immediately; acquired runs keep their canonical cancellation owner.
   try {
-    startNormalizedSessionWorkAdmissionInterruption({ identities, reason, pendingOnly: true });
+    startNormalizedSessionWorkAdmissionInterruption({
+      identities,
+      reason,
+      pendingOnly: true,
+      assertCurrent,
+      agent,
+    });
   } catch (error) {
     SESSION_WORK_ADMISSION_CLOSURES.delete(owner);
     throw error;
@@ -630,88 +663,52 @@ function closeNormalizedSessionWorkAdmissions(identities: readonly string[], rea
 
 /** Fence ingress while awaiting cleanup that must run outside lifecycle/placement locks. */
 export function closeSessionWorkAdmissions(params: {
+  agent?: AgentWorkAdmissionIdentity;
   scope: string;
   identities: Iterable<string | undefined>;
   reason: Error;
+  assertCurrent?: () => void;
 }): () => void {
   return closeNormalizedSessionWorkAdmissions(
     normalizeSessionIdentities(params.scope, params.identities),
     params.reason,
+    params.assertCurrent,
+    params.agent,
   );
-}
-
-/** Capture exact run owners without interrupting unrelated or initiating admissions. */
-export function captureSessionWorkRunInterruptions(params: {
-  scope: string;
-  identities: Iterable<string | undefined>;
-  accept: (run: SessionWorkRun) => boolean;
-}): Array<{ run: SessionWorkRun; interrupt: (reason: Error) => boolean }> {
-  const identities = normalizeSessionIdentities(params.scope, params.identities);
-  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
-  const isCurrent = (admission: SessionWorkAdmission) =>
-    !admission.interrupted &&
-    identities.some((identity) => ACTIVE_SESSION_WORK_ADMISSIONS.get(identity)?.has(admission));
-  const admissions = collectSessionWorkAdmissions(
-    identities,
-    (admission) => !currentAdmissions?.has(admission) && isCurrent(admission),
-  );
-  return Array.from(admissions).flatMap((admission) => {
-    const run = admission.run;
-    if (!run || !params.accept(run)) {
-      return [];
-    }
-    return [
-      {
-        run,
-        interrupt: (reason: Error) => {
-          // Awaited preparation cannot transfer Stop to a released or replaced owner.
-          if (!isCurrent(admission)) {
-            return false;
-          }
-          return admission.interrupt?.(reason)?.runId === run.runId;
-        },
-      },
-    ];
-  });
 }
 
 function startNormalizedSessionWorkAdmissionInterruption(params: {
+  agent?: AgentWorkAdmissionIdentity;
   reason?: Error;
   identities: readonly string[];
   pendingOnly?: boolean;
+  assertCurrent?: () => void;
 }): { released: Promise<void>; interruptedRunIds: ReadonlySet<string> } {
-  const interruptedRunIds = new Set<string>();
   const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
   // In-band lifecycle commands suspend their own admitted turn while the
   // mutation runs. Interrupt competing work, not the initiating stack.
   const admissions = collectSessionWorkAdmissions(
     params.identities,
     (admission) =>
-      (!params.pendingOnly || admission.phase === "pending") && !currentAdmissions?.has(admission),
+      (!params.pendingOnly || admission.phase === "pending") &&
+      !currentAdmissions?.has(admission) &&
+      (!params.agent || matchesAgentWorkAdmission(params.agent, admission.agent)),
   );
-  for (const admission of admissions) {
-    admission.interrupted ??= params.reason ?? new Error("Session work admission interrupted");
-    const receipt = admission.interrupt?.(admission.interrupted);
-    if (receipt) {
-      interruptedRunIds.add(receipt.runId);
-    }
-  }
-  return {
-    interruptedRunIds,
-    released: Promise.all(Array.from(admissions, (admission) => admission.released)).then(
-      () => undefined,
-    ),
-  };
+  return interruptSessionWorkAdmissionOwners(admissions, params.reason, params.assertCurrent);
 }
 
 export function startSessionWorkAdmissionInterruption(params: {
+  agent?: AgentWorkAdmissionIdentity;
   reason?: Error;
+  assertCurrent?: () => void;
   scope: string;
   identities: Iterable<string | undefined>;
 }): { released: Promise<void>; interruptedRunIds: ReadonlySet<string> } {
   return startNormalizedSessionWorkAdmissionInterruption({
+    agent: params.agent,
     identities: normalizeSessionIdentities(params.scope, params.identities),
     reason: params.reason,
+    assertCurrent: params.assertCurrent,
   });
 }
 

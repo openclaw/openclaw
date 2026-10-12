@@ -3,10 +3,17 @@ import {
   type BoardGetParams,
   type BoardSnapshot,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  getOwner,
+  onCleanup,
+  runWithOwner,
+  Show,
+} from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { t } from "../../i18n/index.ts";
 import {
   acquireBoardProviderForSession,
   type BoardProvider,
@@ -20,6 +27,7 @@ import {
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
 import { projectBoardProvider } from "../../lib/reactive/domain-board.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -304,6 +312,7 @@ class BoardDocumentController {
 }
 
 function BoardDocumentContent(props: BoardDocumentProps) {
+  const owner = getOwner();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const controller = new BoardDocumentController(props, () => setRevision((value) => value + 1));
   createEffect(
@@ -313,7 +322,7 @@ function BoardDocumentContent(props: BoardDocumentProps) {
       sessionKey: props.sessionKey,
       preparedSession: props.preparedSession,
     }),
-    () => untrack(() => controller.update()),
+    () => runWithOwner(owner, () => controller.update()),
   );
   onCleanup(() => controller.dispose());
   const state = createMemo(() => {

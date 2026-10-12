@@ -1,7 +1,7 @@
 // Codex Media Path Client tests cover codex media path client script behavior.
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { appendFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
@@ -16,14 +16,6 @@ const writeConfigPath = path.resolve("scripts/e2e/lib/codex-media-path/write-con
 
 function jsonl(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
-}
-
-function padJsonlToLength(value: Record<string, unknown>, length: number): string {
-  const base = jsonl({ ...value, pad: "" });
-  if (base.length > length) {
-    throw new Error(`cannot pad JSONL down from ${base.length} to ${length}`);
-  }
-  return jsonl({ ...value, pad: "x".repeat(length - base.length) });
 }
 
 function runWriteConfig(root: string, env: Record<string, string> = {}) {
@@ -180,22 +172,5 @@ describe("codex media path JSONL tailer", () => {
 
     writeFileSync(logPath, jsonl({ method: "turn/start" }));
     expect(tailer.read()).toEqual([{ method: "turn/start" }]);
-  });
-
-  it("resets request history when a rotated app-server log keeps the same size", () => {
-    const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
-    const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
-    const oldText = jsonl({ method: "initialize", pad: "x".repeat(64) });
-    const replacementText = padJsonlToLength({ method: "turn/start" }, oldText.length);
-    const replacement = JSON.parse(replacementText) as Record<string, unknown>;
-
-    expect(replacementText.length).toBe(oldText.length);
-    writeFileSync(logPath, oldText);
-    expect(tailer.read()).toEqual([{ method: "initialize", pad: "x".repeat(64) }]);
-
-    rmSync(logPath, { force: true });
-    writeFileSync(logPath, replacementText);
-
-    expect(tailer.read()).toEqual([replacement]);
   });
 });

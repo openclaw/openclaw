@@ -148,7 +148,9 @@ describe("terminal panel readiness", () => {
       expect(
         panel.renderRoot.querySelector(".tabstrip-tab")?.classList.contains("is-connecting"),
       ).toBe(true);
-      expect(panel.renderRoot.querySelector("wa-tab-panel")?.active).toBe(true);
+      expect(panel.renderRoot.querySelector('[role="tabpanel"]')?.getAttribute("aria-hidden")).toBe(
+        "false",
+      );
     });
 
     open.resolve(terminalOpenResult("session-1"));

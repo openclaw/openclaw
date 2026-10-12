@@ -11,6 +11,7 @@ import { runModelsAuthLoginFlowForGateway } from "../../commands/models/auth.js"
 import { resolveManifestDeclaredProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import {
   formatProviderLoginChoiceRef,
+  isProviderCliLoginChoiceStartable,
   isProviderLoginChoiceStartable,
 } from "../../plugins/provider-login-options.js";
 import { createNonExitingRuntime } from "../../runtime.js";
@@ -21,13 +22,18 @@ import {
 import { WizardSession } from "../../wizard/session.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
+import {
+  captureLocalStateMutationGuard,
+  localStateOwnerChangedError,
+} from "./local-state-owner.js";
 import { rejectExistingSetupWizardSession } from "./system-agent-setup-wizard.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { startWizardLogin } from "./wizard-login.js";
 
 export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
-  "models.authLogin": async ({ params, respond, context, client }) => {
+  "models.authLogin": async (options) => {
+    const { params, respond, context, client } = options;
     if (
       !assertValidParams(
         params,
@@ -49,6 +55,19 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    let assertOwner: (() => void) | undefined;
+    if (params.expectedOwnerId) {
+      try {
+        // A wizard publishes its own config changes; bind each effect to the
+        // same physical owner without pinning the pre-login config snapshot.
+        const expectedOwnerId = params.expectedOwnerId;
+        assertOwner = () => captureLocalStateMutationGuard(expectedOwnerId, options)();
+        assertOwner();
+      } catch (error) {
+        respond(false, undefined, localStateOwnerChangedError(error));
+        return;
+      }
+    }
     if (rejectExistingSetupWizardSession({ sessionId: params.sessionId, context, respond })) {
       return;
     }
@@ -60,8 +79,11 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
       }).filter((entry) => formatProviderLoginChoiceRef(entry) === params.authChoice);
       return matches.length === 1 ? matches[0] : undefined;
     };
+    const isStartable = params.expectedOwnerId
+      ? isProviderCliLoginChoiceStartable
+      : isProviderLoginChoiceStartable;
     const choice = resolveChoice();
-    if (!choice || !isProviderLoginChoiceStartable(choice)) {
+    if (!choice || !isStartable(choice)) {
       respond(
         false,
         undefined,
@@ -73,6 +95,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
       return;
     }
     const assertCurrent = () => {
+      assertOwner?.();
       client.connectionSignal?.throwIfAborted();
       if (client.invalidated || !client.connect.scopes?.includes("operator.admin")) {
         throw new Error("Provider login authority is no longer active.");
@@ -80,7 +103,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
       const current = resolveChoice();
       if (
         !current ||
-        !isProviderLoginChoiceStartable(current) ||
+        !isStartable(current) ||
         current.pluginId !== choice.pluginId ||
         current.providerId !== choice.providerId ||
         current.methodId !== choice.methodId
@@ -131,7 +154,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                 runtime,
                 prompter,
                 signal: browser?.signal ?? signal,
-                isRemote: true,
+                isRemote: !params.expectedOwnerId,
                 openUrl,
                 browserAuthorization: browser?.available ? browser.authorize : undefined,
                 assertCurrent: assertFlowCurrent,

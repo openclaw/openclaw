@@ -184,17 +184,17 @@ describe("bounded memory publication transfer", () => {
       ).toEqual([]);
       const staged = bind();
       const input = replacement("staged text survives scalar cleanup");
-      const { chunks, embeddings: _embeddings, ...header } = input;
+      const { chunks: _chunks, embeddings: _embeddings, ...header } = input;
       staged.execute({
         type: "stage.start",
-        input: { operation: "staged", header, rows: chunks.length },
+        input: { header },
       });
       for (const fragments of memoryPublicationBatches(input)) {
-        staged.execute({ type: "stage.append", input: { operation: "staged", fragments } });
+        staged.execute({ type: "stage.append", input: { fragments } });
       }
-      expect(
-        staged.execute({ type: "source.replace", input: { operation: "staged", state } }),
-      ).toMatchObject({ ok: true });
+      expect(staged.execute({ type: "source.replace", input: { state } })).toMatchObject({
+        ok: true,
+      });
       staged.close();
       expect(db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
         { text: "staged text survives scalar cleanup" },
@@ -425,15 +425,15 @@ describe("bounded memory publication transfer", () => {
       },
     );
     const backend = await createBackend(owner);
-    const { chunks, embeddings: _embeddings, ...header } = replacement();
+    const { chunks: _chunks, embeddings: _embeddings, ...header } = replacement();
     backend.execute({
       type: "stage.start",
-      input: { operation: "fts", header, rows: chunks.length },
+      input: { header },
     });
     for (const fragments of memoryPublicationBatches(replacement())) {
-      backend.execute({ type: "stage.append", input: { operation: "fts", fragments } });
+      backend.execute({ type: "stage.append", input: { fragments } });
     }
-    backend.execute({ type: "stage.discard", input: { operation: "fts" } });
+    backend.execute({ type: "stage.discard", input: undefined });
     expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   });
 
@@ -727,6 +727,31 @@ describe("bounded memory publication transfer", () => {
     });
   });
 
+  it("keeps concurrent large source transfers separate through their publication scopes", async () => {
+    const owner = await createOwner();
+    const inputs = ["first", "second"].map((name) => {
+      const input = replacement(`${name} ${"x".repeat(350_000)}`);
+      input.entry = { ...input.entry, path: `memory/${name}.md`, hash: name };
+      input.chunks = input.chunks.map((chunk) => ({ ...chunk, hash: name }));
+      expect(memoryPublicationInline(input)).toBeUndefined();
+      return input;
+    });
+
+    await Promise.all(
+      inputs.map((input) =>
+        owner.replaceSource(
+          input,
+          () => undefined,
+          async () => true,
+        ),
+      ),
+    );
+
+    expect(
+      owner.db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all(),
+    ).toEqual(inputs.map((input) => ({ path: input.entry.path, text: input.chunks[0]!.text })));
+  });
+
   it("publishes a session delta that keeps retained rows and reports retained drift", async () => {
     const owner = await createOwner();
     ensureMemorySessionTombstones(fixtureWriter(owner));
@@ -767,9 +792,6 @@ describe("bounded memory publication transfer", () => {
     );
     const [first] = rows();
     const delta = session("v2", [turn(3)], [turn(1)]);
-    expect([...memoryPublicationBatches(delta)].flat().map((fragment) => fragment.row)).toEqual([
-      0, 1,
-    ]);
     await expect(
       owner.replaceSource(
         delta,
@@ -928,20 +950,16 @@ describe("bounded memory publication transfer", () => {
     input.embeddings = input.chunks.map(() => vector);
     const rows: MemorySourceIndexRow[] = [];
     let json = "";
-    let part = 0;
     let batches = 0;
     for (const batch of memoryPublicationBatches(input)) {
       batches++;
       expect(serialize(batch).byteLength).toBeLessThanOrEqual(512 * 1024);
       for (const fragment of batch) {
         expect(fragment.json.length).toBeLessThanOrEqual(16 * 1024);
-        expect(fragment.row).toBe(rows.length);
-        expect(fragment.part).toBe(part++);
         json += fragment.json;
         if (fragment.last) {
           rows.push(JSON.parse(json));
           json = "";
-          part = 0;
         }
       }
     }
@@ -953,48 +971,4 @@ describe("bounded memory publication transfer", () => {
     );
     expect(rows).toEqual(input.chunks.map((row) => ({ chunk: row, embedding: expectedVector })));
   });
-
-  it.each(["incomplete", "out-of-order", "wrong-operation"] as const)(
-    "rejects %s input before source mutation",
-    async (fault) => {
-      const owner = await createOwner();
-      const backend = await createBackend(owner);
-      const { chunks, embeddings: _embeddings, ...header } = replacement();
-      backend.execute({
-        type: "stage.start",
-        input: { operation: "owned", header, rows: chunks.length },
-      });
-      const append = () =>
-        backend.execute({
-          type: "stage.append",
-          input: {
-            operation: fault === "wrong-operation" ? "stale" : "owned",
-            fragments: [{ row: 0, part: fault === "out-of-order" ? 1 : 0, json: "{", last: false }],
-          },
-        });
-      if (fault === "incomplete") {
-        append();
-      } else {
-        expect(append).toThrow(fault === "out-of-order" ? "out of order" : "owner changed");
-      }
-      expect(() =>
-        backend.execute({
-          type: "source.replace",
-          input: {
-            operation: "owned",
-            state: {
-              vector: { enabled: false, available: false },
-              fts: { enabled: true, available: true },
-            },
-          },
-        }),
-      ).toThrow("not sealed");
-      expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
-      expect(owner.db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
-      backend.execute({ type: "stage.discard", input: { operation: "owned" } });
-      expect(() =>
-        backend.execute({ type: "stage.start", input: { operation: "next", header, rows: 0 } }),
-      ).not.toThrow();
-    },
-  );
 });

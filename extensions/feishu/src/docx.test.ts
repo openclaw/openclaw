@@ -92,13 +92,6 @@ function expectLoadWebMediaCall(fileName: string, localRoots: unknown[] | undefi
 }
 
 function mockLocalFileUpload() {
-  blockChildrenCreateMock.mockResolvedValueOnce({
-    code: 0,
-    data: {
-      children: [{ block_type: 23, block_id: "file_block_1" }],
-    },
-  });
-
   loadWebMediaMock.mockResolvedValueOnce({
     buffer: Buffer.from("hello from local file", "utf8"),
     fileName: "test-local.txt",
@@ -648,12 +641,6 @@ describe("feishu_doc image fetch hardening", () => {
       buffer: Buffer.from("remote file", "utf8"),
       fileName: "](/unexpected) ![image](https://attacker.test/image.png)",
     });
-    blockChildrenCreateMock.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        children: [{ block_type: 2, block_id: "placeholder_block_1" }],
-      },
-    });
     const feishuDocTool = resolveFeishuDocTool();
 
     const result = await executeFeishuDocTool(feishuDocTool, {
@@ -670,12 +657,18 @@ describe("feishu_doc image fetch hardening", () => {
     expect(remoteReadInput.url).toBe("https://cdn.test/remote.txt");
     expect(remoteReadInput).not.toHaveProperty("responseHeaderTimeoutMs");
     expect(remoteReadInput).not.toHaveProperty("readIdleTimeoutMs");
-    expect(convertMock).toHaveBeenCalledWith({
+    expect(driveUploadAllMock).toHaveBeenCalledWith({
       data: {
-        content_type: "markdown",
-        content: "[file](https://example.com/placeholder)",
+        file_name: "](/unexpected) ![image](https://attacker.test/image.png)",
+        parent_type: "docx_file",
+        parent_node: "doc_1",
+        size: Buffer.byteLength("remote file"),
+        file: Buffer.from("remote file", "utf8"),
       },
     });
+    expect(convertMock).not.toHaveBeenCalled();
+    expect(blockChildrenCreateMock).not.toHaveBeenCalled();
+    expect(blockChildrenBatchDeleteMock).not.toHaveBeenCalled();
   });
 
   it("passes workspace localRoots for upload_image absolute local paths when workspace-only policy is active", async () => {

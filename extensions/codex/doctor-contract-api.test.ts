@@ -591,7 +591,7 @@ describe("codex doctor contract", () => {
         threadId: "thread-1",
       });
       const sessionStateKey = sessionBindingKey("session-current", sessionKey);
-      const imported = createStoredCodexAppServerBinding(
+      const imported = await createStoredCodexAppServerBinding(
         JSON.parse(await fs.readFile(fixture.sidecarPath, "utf8")),
       );
       if (!imported) {
@@ -718,7 +718,7 @@ describe("codex doctor contract", () => {
       threadId: "thread-retired",
     });
     const store = openBindingStore(fixture.env);
-    const active = createStoredCodexAppServerBinding(
+    const active = await createStoredCodexAppServerBinding(
       JSON.parse(await fs.readFile(fixture.sidecarPath, "utf8")),
     );
     if (!active) {

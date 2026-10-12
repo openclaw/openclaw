@@ -5,7 +5,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import * as pluginResources from "../plugins/doctor-contract-registry.js";
+import { preparePluginDoctorMigrationResources } from "../plugins/doctor-migration-resources.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -18,6 +20,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
@@ -67,6 +70,14 @@ it("keeps config and declared plugin resources while excluding disposable core i
         await fs.writeFile(`${agent}-journal`, "");
         const companionAlias = path.join(declared, "agent.sqlite-journal");
         await fs.symlink(`${agent}-journal`, companionAlias);
+        const legacyCanvasRoot = path.join(stateDir, "legacy-canvas-host");
+        const canvasDocument = path.join(legacyCanvasRoot, "documents", "retained", "index.html");
+        const canvasDestination = path.join(stateDir, "canvas", "documents");
+        await fs.mkdir(path.dirname(canvasDocument), { recursive: true });
+        await fs.writeFile(canvasDocument, "original Canvas document");
+        const { stateMigrations } = await loadBundledPluginFacade<{
+          stateMigrations: PluginDoctorStateMigration[];
+        }>({ pluginId: "canvas", artifactBasename: "doctor-contract-api.ts" });
         const rawConfig = await fs.readFile(state.configPath);
         const sourceBytes = await Promise.all(
           [shared, agent, pluginDatabase, skill].map((file) => fs.readFile(file)),
@@ -80,8 +91,20 @@ it("keeps config and declared plugin resources while excluding disposable core i
               pluginId: "synthetic-legacy",
               message: "Synthetic legacy resources are undeclared",
             });
+            const canvas = await preparePluginDoctorMigrationResources(
+              stateMigrations.map((migration) => ({ pluginId: "canvas", migration })),
+              {
+                ...params,
+                config: {
+                  plugins: {
+                    entries: { canvas: { config: { host: { root: legacyCanvasRoot } } } },
+                  },
+                },
+              },
+            );
             return {
               resources: [
+                ...canvas.resources,
                 { path: plugin, kind: "directory" },
                 { path: declared, kind: "directory" },
                 { path: shared, kind: "sqlite" },
@@ -147,6 +170,18 @@ it("keeps config and declared plugin resources while excluding disposable core i
           };
           expect(await fs.readFile(payload(state.configPath))).toEqual(rawConfig);
           expect(await fs.readFile(payload(skill))).toEqual(sourceBytes[3]);
+          expect(await fs.readFile(payload(canvasDocument), "utf8")).toBe(
+            "original Canvas document",
+          );
+          expect(manifest.entries).toContainEqual({
+            kind: "missing",
+            sourcePath: canvasDestination,
+            sqlite: false,
+            directory: true,
+          });
+          expect((manifest.warnings ?? []).some((warning) => warning.pluginId === "canvas")).toBe(
+            false,
+          );
           const captured = new DatabaseSync(payload(pluginDatabase), { readOnly: true });
           try {
             expect(captured.prepare("SELECT value FROM payload").all()).toEqual([

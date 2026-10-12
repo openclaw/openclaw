@@ -13,14 +13,18 @@ import {
   resolveAiTransportHeaderSentinels,
   type AiTransportHost,
 } from "../host.js";
-import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
+import {
+  claimResponsesCompactRequest,
+  copyResponsesCompactRequest,
+} from "../transports/openai-responses-compact-request.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
   type OpenAIResponsesReplayMode,
 } from "../transports/openai-responses-compaction-replay.js";
+import { createResponsesV2CompactionCollector } from "../transports/openai-responses-compaction-v2.js";
 import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
@@ -48,13 +52,7 @@ import {
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   parseRetryAfterSeconds,
 } from "../transports/transport-utils.js";
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  SimpleStreamOptions,
-  StreamFunction,
-} from "../types.js";
+import type { AssistantMessage, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import {
   appendAssistantMessageDiagnostic,
   createAssistantMessageDiagnostic,
@@ -72,13 +70,16 @@ import {
   getFirstStreamEventTimeoutMs,
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { CodexApiError, mapCodexEvents } from "./openai-chatgpt-responses-events.js";
 import {
   CodexProtocolError,
   parseOpenAIChatGptResponsesSse,
   resolveCodexUrl,
 } from "./openai-chatgpt-responses-protocol.js";
+import {
+  buildRequestBody,
+  type OpenAICodexResponsesOptions,
+} from "./openai-chatgpt-responses-request.js";
 import {
   addCodexWebSocketSseFallback,
   buildCodexWebSocketHeaders,
@@ -105,17 +106,10 @@ import {
 } from "./openai-chatgpt-responses-websocket-state.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { readOpenAIMisalignmentReview } from "./openai-provider-refusal.js";
-import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
-import {
-  resolveOpenAISimpleReasoningEffort,
-  resolveOpenAIRequestReasoning,
-  type OpenAIRequestReasoningEffort,
-} from "./openai-request-reasoning.js";
-import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
+import { resolveOpenAISimpleReasoningEffort } from "./openai-request-reasoning.js";
 import {
   applyResponsesServiceTierPricing,
   convertResponsesMessages,
-  convertResponsesToolPayload,
   createResponsesAssistantOutput,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -149,13 +143,6 @@ const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reac
 const WEBSOCKET_REPLAY_REJECTION =
   "Codex error: Persisted response contains hosted-tool, compaction, or unverifiable hidden reasoning state that Rustponses cannot replay. Start a new response or use the Python Responses service for this continuation.";
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
-
-interface OpenAICodexResponsesOptions extends BaseOpenAIStreamOptions {
-  reasoningEffort?: OpenAIRequestReasoningEffort;
-  reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
-  serviceTier?: ResponseCreateParamsStreaming["service_tier"];
-  textVerbosity?: "low" | "medium" | "high";
-}
 
 type ObserveResponsesPromptEgress = NonNullable<
   ReturnType<typeof createResponsesPromptEgressObserver>
@@ -240,6 +227,11 @@ export const streamOpenAICodexResponses: StreamFunction<
   OpenAICodexResponsesOptions
 > = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
+  const compactRequest = claimResponsesCompactRequest(options);
+  const v2Compaction =
+    compactRequest?.mode === "v2"
+      ? createResponsesV2CompactionCollector(compactRequest.replayBudget)
+      : undefined;
 
   void (async () => {
     const startedAt = Date.now();
@@ -250,6 +242,9 @@ export const streamOpenAICodexResponses: StreamFunction<
     const output = createResponsesAssistantOutput(model);
 
     try {
+      if (compactRequest && (!v2Compaction || responsesRequestLifecycle.get(options))) {
+        throw new Error("Native ChatGPT compaction requires an unreviewed V2 request");
+      }
       const unresolvedApiKey = requireApiKey(model.provider, options?.apiKey);
       // WebSocket auth has no fetch seam; unwrap immediately before request construction.
       const transportHost = getAiTransportHost();
@@ -260,10 +255,22 @@ export const streamOpenAICodexResponses: StreamFunction<
 
       const accountId = extractOpenAICodexAccountId(apiKey);
       const buildBody = async (replayMode: OpenAIResponsesReplayMode) => {
-        let body = buildRequestBody(model, context, options, replayMode);
+        let body = buildRequestBody(
+          model,
+          context,
+          CODEX_TOOL_CALL_PROVIDERS,
+          options,
+          replayMode,
+          Boolean(v2Compaction),
+        );
+        const restoreUsers = v2Compaction?.preserveUsers(body.input ?? []);
         const nextBody = await options?.onPayload?.(body, model);
         if (nextBody !== undefined) {
           body = nextBody as RequestBody;
+        }
+        if (restoreUsers) {
+          body.input = [...restoreUsers(body.input ?? []), { type: "compaction_trigger" }];
+          v2Compaction?.assertReplayFits(body.input, model);
         }
         return body;
       };
@@ -294,21 +301,27 @@ export const streamOpenAICodexResponses: StreamFunction<
       const requestOptions =
         activeSignal === options?.signal ? options : { ...options, signal: activeSignal };
       const processStream: ProcessCodexStream = (events, streamOptions, activitySignal) =>
-        processResponsesStream(events, output, stream, model, {
-          serviceTier: streamOptions?.serviceTier,
-          firstEventTimeoutMs: getFirstStreamEventTimeoutMs(streamOptions),
-          abortFirstEventStream: firstEventAbort?.abort,
-          onFirstEventTimeout: getFirstStreamEventTimeoutHandler(streamOptions),
-          // Activity belongs to the caller signal, not the request-scoped abort composite.
-          signal: activitySignal ?? streamOptions?.signal,
-          reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
-            sessionId: streamOptions?.sessionId,
-            authProfileId: streamOptions?.authProfileId,
-          }),
-          resolveServiceTier: resolveCodexServiceTier,
-          applyServiceTierPricing: (usage, serviceTier) =>
-            applyResponsesServiceTierPricing(usage, serviceTier, model),
-        });
+        processResponsesStream(
+          v2Compaction ? v2Compaction.observe(events) : events,
+          output,
+          stream,
+          model,
+          {
+            serviceTier: streamOptions?.serviceTier,
+            firstEventTimeoutMs: getFirstStreamEventTimeoutMs(streamOptions),
+            abortFirstEventStream: firstEventAbort?.abort,
+            onFirstEventTimeout: getFirstStreamEventTimeoutHandler(streamOptions),
+            // Activity belongs to the caller signal, not the request-scoped abort composite.
+            signal: activitySignal ?? streamOptions?.signal,
+            reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+              sessionId: streamOptions?.sessionId,
+              authProfileId: streamOptions?.authProfileId,
+            }),
+            resolveServiceTier: resolveCodexServiceTier,
+            applyServiceTierPricing: (usage, serviceTier) =>
+              applyResponsesServiceTierPricing(usage, serviceTier, model),
+          },
+        );
       const completeStream = (
         terminal: CompletedResponse | null | undefined,
         attempt: ResponsesEncryptedContentAttempt<RequestBody>,
@@ -320,7 +333,20 @@ export const streamOpenAICodexResponses: StreamFunction<
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new ErrorType(output.errorMessage ?? "An unknown error occurred");
         }
-        if (terminal && attempt.kind === "initial") {
+        if (v2Compaction && compactRequest) {
+          const compacted = v2Compaction.finish({
+            terminal: terminal ?? undefined,
+            input: attempt.request.input ?? [],
+            model,
+            options: {
+              signal: options?.signal,
+              sessionId: options?.sessionId,
+              authProfileId: options?.authProfileId,
+            },
+          });
+          compactRequest.resolve({ ...compacted, modelUsage: output.usage });
+        }
+        if (!v2Compaction && terminal && attempt.kind === "initial") {
           recordResponsesContextUsage(
             output,
             model,
@@ -616,6 +642,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         requestTimedOut && requestTimeoutMs !== undefined
           ? formatRequestTimeoutError(requestTimeoutMs, error)
           : error;
+      compactRequest?.reject(normalizedError);
       for (const block of output.content.filter((candidate) => candidate.type === "toolCall")) {
         delete block.partialJson;
       }
@@ -667,6 +694,7 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
       ?.authProfileId,
     reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
   } satisfies OpenAICodexResponsesOptions;
+  copyResponsesCompactRequest(options, resolvedOptions);
   responsesPromptObserver.copy(options, resolvedOptions);
   const lifecycle = responsesRequestLifecycle.get(options);
   if (lifecycle) {
@@ -674,74 +702,6 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
   }
   return streamOpenAICodexResponses(model, context, resolvedOptions);
 };
-
-function buildRequestBody(
-  model: Model<"openai-chatgpt-responses">,
-  context: Context,
-  options?: OpenAICodexResponsesOptions,
-  replayMode: OpenAIResponsesReplayMode = "checkpoint",
-): RequestBody {
-  const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
-    includeSystemPrompt: false,
-    replayResponsesItemIds: false,
-    sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
-    replayMode,
-  });
-
-  const body: RequestBody = {
-    model: model.id,
-    store: false,
-    stream: true,
-    instructions:
-      stripSystemPromptCacheBoundary(context.systemPrompt ?? "") || "You are a helpful assistant.",
-    input: messages,
-    text: { verbosity: options?.textVerbosity || "low" },
-    include: ["reasoning.encrypted_content"],
-    prompt_cache_key:
-      options?.cacheRetention === "none"
-        ? undefined
-        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-  };
-
-  if (options?.responseFormat !== undefined) {
-    body.text = {
-      ...body.text,
-      format: resolveOpenAIResponsesTextFormat(options.responseFormat),
-    };
-  }
-
-  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
-    body.temperature = options.temperature;
-  }
-
-  if (options?.serviceTier !== undefined) {
-    body.service_tier = options.serviceTier;
-  }
-
-  if (context.tools) {
-    // Explicit false prevents the backend from normalizing optional properties into required ones.
-    const tools = convertResponsesToolPayload(context.tools, { strict: false });
-    if (tools.length > 0) {
-      body.tools = tools;
-      body.tool_choice = "auto";
-      body.parallel_tool_calls = true;
-    }
-  }
-
-  const effort =
-    options?.reasoningEffort === undefined
-      ? undefined
-      : resolveOpenAIRequestReasoning(model, options.reasoningEffort).effort;
-  if (effort !== undefined) {
-    body.reasoning = {
-      effort,
-      ...(effort === "none" ? {} : { summary: options?.reasoningSummary ?? "auto" }),
-    };
-  }
-
-  return body;
-}
 
 function resolveCodexServiceTier(
   responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,

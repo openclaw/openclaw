@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
+import { markCanonicalSessionValidationPending } from "../../../../src/config/sessions/session-canonical-key.js";
 import { seedCanonicalSessionValidation } from "../../../../src/config/sessions/session-canonical-validation.js";
 import { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db-lifecycle.js";
@@ -21,7 +22,6 @@ import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { listSessionTranscriptCorpusEntriesForAgent } from "./session-files.js";
-import { listSessionTranscriptCorpusEntriesForAgentSync } from "./session-transcript-corpus.js";
 
 function pauseDirectoryDiscovery(sessionsDir: string) {
   const entered = createDeferred();
@@ -72,10 +72,8 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         expect(tableExists(db, "session_transcript_archives")).toBe(archiveTablePresent);
 
         const options = { includeContentRevision, readOnly };
-        const expected = listSessionTranscriptCorpusEntriesForAgentSync("main", options);
         const actual = await listSessionTranscriptCorpusEntriesForAgent("main", options);
 
-        expect(actual).toEqual(expected);
         expect(actual).toHaveLength(2);
         const archive = actual.find((entry) => entry.artifactKind === "archive-artifact");
         expect(archive).toMatchObject({
@@ -192,7 +190,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         transcriptSource: "sqlite",
         updatedAtMs: persisted?.updatedAt,
       };
-      expect(listSessionTranscriptCorpusEntriesForAgentSync("main", options)).toEqual([
+      expect(await listSessionTranscriptCorpusEntriesForAgent("main", options)).toEqual([
         { ...expected, sessionKind: "interactive" },
       ]);
 
@@ -205,9 +203,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(sessionKey)
           ?.entry_valid;
       expect(validity()).toBe(0);
-      expect(listSessionTranscriptCorpusEntriesForAgentSync("main", options)).toEqual([expected]);
-      expect(validity()).toBe(0);
-
       await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).resolves.toEqual([
         expected,
       ]);
@@ -216,6 +211,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })?.db === db).toBe(
         true,
       );
+      runSqliteImmediateTransactionSync(db, () => {
+        markCanonicalSessionValidationPending(database, [sessionKey]);
+      });
       await closeOpenClawAgentDatabasesAsync(state.stateDir);
       expect(db.isOpen).toBe(false);
       await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).rejects.toThrow(

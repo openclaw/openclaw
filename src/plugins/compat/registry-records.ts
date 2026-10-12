@@ -1,9 +1,12 @@
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
 import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
+import { ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD } from "./assistant-text-phase-terminal-hint-record.js";
+import { AUTH_ASYNC_COMPAT_RECORD } from "./auth-async-record.js";
 import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
 import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
+import { MEMORY_SESSION_COMPAT_RECORDS } from "./memory-session-records.js";
 import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
 import { MODEL_ACCOUNT_CONNECT_COMPAT_RECORD } from "./model-account-connect-record.js";
 import { NATIVE_EXEC_APPROVAL_COMPAT_RECORD } from "./native-exec-approval-record.js";
@@ -34,6 +37,7 @@ const ACTIVATION_HINT_METADATA = {
 export const PLUGIN_COMPAT_RECORDS = [
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
+  AUTH_ASYNC_COMPAT_RECORD,
   ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
@@ -47,20 +51,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
   PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
-  {
-    code: "assistant-text-phase-terminal-hint",
-    status: "deprecated",
-    owner: "sdk",
-    introduced: "2026-08-17",
-    deprecated: "2026-10-11",
-    warningStarts: "2026-10-11",
-    removalGate: "next-plugin-sdk-major",
-    replacement: "Omit textPhaseRequiresTerminal; unphased text is never retroactively classified.",
-    docsPath: "/concepts/streaming#text-phases-and-final-replies",
-    surfaces: ["AssistantMessage.openclawDelivery.textPhaseRequiresTerminal"],
-    diagnostics: ["TypeScript @deprecated annotation; no runtime warning for the ignored field"],
-    tests: ["src/plugin-sdk/assistant-message-compat.test.ts"],
-  },
+  ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD,
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",
@@ -102,29 +93,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     releaseNote:
       "Placement reads, retirement, device demand, standing-grant preparation, and GitHub orphan deferral expose awaited methods while retaining the synchronous Gateway-context contracts shipped to plugins in 2026.9.7, 2026.9.8, and 2026.10.1-beta.1. Internal placement operations use the SQLite worker; stored data and update behavior are unchanged.",
   },
-  {
-    code: "memory-session-sync-inventory",
-    status: "deprecated",
-    owner: "sdk",
-    introduced: "2026-08-09",
-    deprecated: "2026-10-01",
-    warningStarts: "2026-10-01",
-    removalGate: "next-plugin-sdk-major",
-    replacement:
-      "Await loadArchivedSessionsAsync and resolveMemorySessionTargetsAsync from memory-core-host-engine-sessions. Synchronous readers retain their existing signatures and results until the next Plugin SDK major.",
-    docsPath: "/plugins/sdk-migration/compatibility-policy#memory-session-inventory-readers",
-    surfaces: ["loadArchivedSessions", "resolveMemorySessionTargets"],
-    diagnostics: [
-      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
-    ],
-    tests: [
-      "src/plugin-sdk/memory-core-host-engine-sessions.test.ts",
-      "src/plugins/compat/registry.test.ts",
-      "extensions/memory-core/src/memory-forget.sources.test.ts",
-    ],
-    releaseNote:
-      "Memory archive discovery and forget target selection can be awaited through worker-backed SDK readers; synchronous readers remain compatible until the next Plugin SDK major.",
-  },
+  ...MEMORY_SESSION_COMPAT_RECORDS,
   {
     code: "channel-webhook-listener-config-inputs",
     status: "deprecated",

@@ -138,6 +138,7 @@ export type McpAppViewProps = {
   title: string;
   deepLink: string | undefined;
   onRelaunch: (() => void) | undefined;
+  onHeightChange: ((height: number) => void) | undefined;
   relaunching: boolean;
   displayMode: "inline" | "fullscreen";
 };
@@ -231,6 +232,18 @@ export class McpAppViewController {
     }
   }
 
+  updateReservedHeight() {
+    if (this.mount) {
+      this.mount.style.minHeight =
+        this.host.surface === "conversation" && !this.fillContainer && this.displayMode === "inline"
+          ? `${this.resources?.frameHeight ?? this.height}px`
+          : "";
+      if (this.host.onHeightChange) {
+        this.host.style.minHeight = "";
+      }
+    }
+  }
+
   updatePresentation() {
     this.confirmation.update();
     if (this.displayMode === "fullscreen") {
@@ -244,6 +257,7 @@ export class McpAppViewController {
         this.fillContainer || this.displayMode === "fullscreen" ? "100%" : `${this.height}px`;
       this.resources.updateHostContext?.();
     }
+    this.updateReservedHeight();
   }
 
   private async request<T = unknown>(
@@ -627,10 +641,18 @@ export class McpAppViewController {
       };
       this.bindOpenLinkHandler(bridge, binding, createdResources, signal);
       bridge.onsizechange = ({ height }) => {
-        if (height !== undefined && !this.fillContainer && this.displayMode !== "fullscreen") {
+        if (
+          height !== undefined &&
+          Number.isFinite(height) &&
+          isCurrent() &&
+          !this.fillContainer &&
+          this.displayMode !== "fullscreen"
+        ) {
           const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
           createdResources.frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;
+          this.updateReservedHeight();
+          this.host.onHeightChange?.(nextHeight);
           bridge.setHostContext(buildHostContext());
         }
       };

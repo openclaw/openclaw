@@ -390,7 +390,7 @@ export async function resumeThread(
           if (typeof resumedCwd !== "string") {
             throw new Error(`Codex thread/resume returned no cwd for ${normalizedThreadId}`);
           }
-          const modelProvider = normalizeCodexAppServerBindingModelProvider({
+          const modelProvider = await normalizeCodexAppServerBindingModelProvider({
             authProfileId,
             modelProvider: response.modelProvider ?? undefined,
             agentDir: scope.agentDir,

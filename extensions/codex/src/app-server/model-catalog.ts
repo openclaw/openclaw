@@ -116,7 +116,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         options.start.transport === "stdio" && !isCodexAppServerProxyLaunch(options.start.args);
       const authProfileStore =
         ownsLocalProcess && options.start.homeScope === "agent"
-          ? resolveCodexAppServerAuthProfileStore({
+          ? await resolveCodexAppServerAuthProfileStore({
               agentDir: params.agentDir,
               config: params.config,
             })

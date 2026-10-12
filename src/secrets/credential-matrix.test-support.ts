@@ -26,6 +26,9 @@ export type SecretRefCredentialMatrixDocument = {
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
   const entriesByKey = new Map<string, CredentialMatrixEntry>();
   for (const entry of getSecretTargetRegistry({ sourceTree: true })) {
+    if (!entry.includeInPlan) {
+      continue;
+    }
     const matrixEntry = Object.assign(
       { id: entry.id, configFile: entry.configFile, path: entry.pathPattern },
       entry.refPathPattern ? { refPath: entry.refPathPattern } : {},

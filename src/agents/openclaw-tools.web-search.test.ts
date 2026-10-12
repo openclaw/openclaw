@@ -8,9 +8,11 @@ import {
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreSnapshotCore,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
 import * as authSource from "./auth-profiles/source-check.js";
+import * as authStore from "./auth-profiles/store-runtime.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
@@ -33,6 +35,10 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   resolveProviders.mockReset().mockReturnValue([]);
+  vi.spyOn(authStore, "ensureAuthProfileStoreWithoutExternalProfilesAsync").mockImplementation(
+    async (agentDir) =>
+      getRuntimeAuthProfileStoreSnapshotCore(agentDir) ?? { version: 1, profiles: {} },
+  );
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -78,7 +84,7 @@ describe("unconfigured web search tool surface", () => {
   });
 
   it.each([
-    { prepared: true, source: false, provider: "test-search-auth", configured: false },
+    { prepared: true, source: false, provider: "test-search-auth", configured: true },
     { prepared: true, source: true, provider: "unrelated-provider", configured: false },
     { prepared: true, source: true, provider: "test-search-auth", configured: true },
     { prepared: true, source: undefined, provider: "test-search-auth", configured: true },
@@ -147,18 +153,13 @@ describe("unconfigured web search tool surface", () => {
         },
         { reader },
       );
-      // Source presence still requires a matching provider credential.
+      // Prepared credentials are authoritative; source hints cannot override them.
       expect(tools.some((tool) => tool.name === "web_search")).toBe(configured);
       expect(onWebSearchConfiguration).toHaveBeenCalledExactlyOnceWith(configured);
-      if (authProfileStoreSource === undefined && !prepared) {
-        if (reader) {
-          expect(sourceProbe).toHaveBeenCalledExactlyOnceWith(agentDir, reader);
-        } else {
-          expect(sourceProbe).toHaveBeenCalledExactlyOnceWith(agentDir);
-        }
-      } else {
-        expect(sourceProbe).not.toHaveBeenCalled();
-      }
+      expect(
+        authStore.ensureAuthProfileStoreWithoutExternalProfilesAsync,
+      ).toHaveBeenCalledExactlyOnceWith(agentDir, { allowKeychainPrompt: false });
+      expect(sourceProbe).not.toHaveBeenCalled();
     },
   );
 

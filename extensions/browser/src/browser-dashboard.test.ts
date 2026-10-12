@@ -574,7 +574,7 @@ describe("Browser dashboard lifetime", () => {
     expect(listTabs).not.toHaveBeenCalled();
   });
 
-  it("retains failed stale-creation cleanup and retries it after the browser recovers", async () => {
+  it("reports a failed new-tab cleanup without retaining speculative recovery state", async () => {
     browser.open.mockImplementationOnce(async () => {
       const tab = fixture.openedTab();
       fixture.widgets = [];
@@ -585,20 +585,17 @@ describe("Browser dashboard lifetime", () => {
       reason: "target-close-failed",
     });
     await expect(requestBrowserDashboard(request)).rejects.toThrow(
-      /retained cleanup record will retry/,
+      /close its newly opened tab manually/,
     );
     expect(fixture.tabs).toHaveLength(1);
-    expect(await readBrowserDashboardTabs()).toEqual([
+    expect(await readBrowserDashboardTabs()).toEqual([]);
+    expect(browser.closeOwned).toHaveBeenCalledWith(
       expect.objectContaining({
         nativeTargetId: "target-1",
-        profileFingerprint: "profile-one",
-        browserInstanceFingerprint: "browser-one",
-        dashboard: expect.objectContaining({ state: "released" }),
+        expectedProfileFingerprint: "profile-one",
+        expectedBrowserInstanceFingerprint: "browser-one",
       }),
-    ]);
-    await expect(sweepTrackedBrowserTabs({ ordinaryCleanup: false })).resolves.toBe(1);
-    expect(fixture.tabs).toEqual([]);
-    expect(await readBrowserDashboardTabs()).toEqual([]);
+    );
   });
 
   it.each(["Stop", "removal"] as const)(

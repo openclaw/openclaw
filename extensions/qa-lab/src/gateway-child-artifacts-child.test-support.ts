@@ -24,21 +24,23 @@ await Promise.all(
     }),
   ),
 );
-const stores = roots.map((root) => {
-  const stateDir = path.join(root, "state");
-  const agentDir = path.join(stateDir, "agents", "qa", "agent");
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  return {
-    agentDir,
-    agent: openOpenClawAgentDatabase({
-      agentId: "qa",
-      env,
-      path: path.join(agentDir, "openclaw-agent.sqlite"),
-    }),
-    shared: openOpenClawStateDatabase({ env }),
-    profiles: readQaAuthProfiles(agentDir),
-  };
-});
+const stores = await Promise.all(
+  roots.map(async (root) => {
+    const stateDir = path.join(root, "state");
+    const agentDir = path.join(stateDir, "agents", "qa", "agent");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    return {
+      agentDir,
+      agent: openOpenClawAgentDatabase({
+        agentId: "qa",
+        env,
+        path: path.join(agentDir, "openclaw-agent.sqlite"),
+      }),
+      shared: openOpenClawStateDatabase({ env }),
+      profiles: await readQaAuthProfiles(agentDir),
+    };
+  }),
+);
 const sibling = stores[1];
 const leases = () =>
   sibling.shared.db.prepare("SELECT * FROM agent_database_leases ORDER BY lease_id").all();
@@ -47,7 +49,7 @@ await cleanupQaGatewayTempRoots({ tempRoot, stagedBundledPluginsRoot });
 assert.equal(fs.existsSync(tempRoot), false);
 assert.equal(sibling.agent.db.isOpen, true);
 assert.equal(sibling.shared.db.isOpen, true);
-assert.deepEqual(readQaAuthProfiles(sibling.agentDir), sibling.profiles);
+assert.deepEqual(await readQaAuthProfiles(sibling.agentDir), sibling.profiles);
 assert.deepEqual(leases(), beforeLeases);
 process.stdout.write(
   JSON.stringify({

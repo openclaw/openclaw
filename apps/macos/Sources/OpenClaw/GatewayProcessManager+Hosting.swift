@@ -293,6 +293,7 @@ extension GatewayProcessManager {
             }
             guard self.isCurrentGatewayStart(startGeneration) else { return }
             let environment = try self.appHostedEnvironment(runtime: runtime)
+            try OpenClawConfigFile.ensureAppHostedGatewayAuth(environment: environment)
             let pid = try await self.childSupervisor.start(configuration: .init(
                 bun: runtime.bun,
                 packageRoot: runtime.packageRoot,

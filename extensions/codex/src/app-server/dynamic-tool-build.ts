@@ -9,7 +9,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
-  resolveModelAuthMode,
+  resolveModelAuthModeAsync,
   resolveSandboxContext,
   supportsModelTools,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -259,7 +259,7 @@ export async function buildDynamicTools(
     modelApi: params.model.api,
     modelContextWindowTokens: params.model.contextWindow,
     delegationCapability: params.delegationCapability,
-    modelAuthMode: resolveModelAuthMode(
+    modelAuthMode: await resolveModelAuthModeAsync(
       params.model.provider,
       params.config,
       params.toolAuthProfileStore ?? params.authProfileStore,

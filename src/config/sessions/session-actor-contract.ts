@@ -7,7 +7,12 @@ import type {
   SessionActorLifetime,
   SessionActorHotState,
 } from "./session-actor-state.types.js";
-import type { SessionActorStorage } from "./session-actor-storage-contract.js";
+import type {
+  SessionActorStorageAuthority,
+  SessionActorStorageOutcome,
+  SessionActorStorageReads,
+  SessionActorStorageWrites,
+} from "./session-actor-storage-contract.js";
 import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
@@ -310,6 +315,31 @@ type SessionActorCommands = {
     authority: SessionActorAuthority,
     observer?: SessionActorCommitObserver<SessionActorPhaseResults[Phase]>,
   ) => Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>>;
+};
+
+type SessionActorStorageCommitObserver<Value> = {
+  committed(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+};
+
+/** Bound at acquisition; shares the actor's accepted work, FIFO, and state owner. */
+export type SessionActorStorage = {
+  /** Synchronous current facts for an actual effect; never reads an uninstalled working copy. */
+  readCurrent<Key extends keyof SessionActorStorageReads>(
+    query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
+    authority: SessionActorStorageAuthority,
+  ): SessionActorStorageReads[Key]["output"];
+  /** Acquire a separately releasable handle from this already-selected owner. */
+  acquire(sessionKey: string, lifetime?: SessionActorLifetime): Promise<SessionActor>;
+
+  read<Key extends keyof SessionActorStorageReads>(
+    query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
+    authority: SessionActorStorageAuthority,
+  ): Promise<SessionActorStorageReads[Key]["output"]>;
+  mutate<Key extends keyof SessionActorStorageWrites>(
+    command: { type: Key; input: SessionActorStorageWrites[Key]["input"] },
+    authority: SessionActorStorageAuthority,
+    observer?: SessionActorStorageCommitObserver<SessionActorStorageWrites[Key]["output"]>,
+  ): Promise<SessionActorStorageOutcome<SessionActorStorageWrites[Key]["output"]>>;
 };
 
 /**

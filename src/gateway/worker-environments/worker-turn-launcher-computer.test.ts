@@ -41,6 +41,7 @@ import {
   computerDescriptor,
   createWorkerSessionTurnPlacementProvider,
   readLaunchToolNames,
+  measureLaunchTurn,
   placements,
   seedActivePlacement,
   setupWorkerTurnLauncherTest,
@@ -50,21 +51,26 @@ import {
 
 afterAll(closeStateDatabaseForTest);
 
-const prepareGitHubBinding = vi.hoisted(() => vi.fn());
-vi.mock("./worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: prepareGitHubBinding,
+const readGitHubFact = vi.hoisted(() => vi.fn());
+// mock-isolation: Worker launches consume facts without starting identity discovery.
+vi.mock("../github-publication-discovery.js", () => ({
+  readGitHubPublicationFact: readGitHubFact,
 }));
 
 describe("worker launch capabilities", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   beforeEach(() => {
-    prepareGitHubBinding.mockReset().mockResolvedValue(undefined);
+    readGitHubFact.mockReset().mockReturnValue({ available: false });
   });
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
-  it.each([true, false])(
-    "carries only an available GitHub identity in the launch envelope (%s)",
-    async (available) => {
+  it.each([
+    { label: "available", available: true, revoked: false },
+    { label: "unavailable", available: false, revoked: false },
+    { label: "revoked before launch", available: true, revoked: true },
+  ])(
+    "carries only a current GitHub identity in the launch envelope ($label)",
+    async ({ available, revoked }) => {
       await seedActivePlacement();
       const github: WorkerGitHubLaunchBinding = {
         token: "synthetic-turn-bound-github-token",
@@ -73,7 +79,9 @@ describe("worker launch capabilities", () => {
         remoteUrl: "https://github.com/owner/repo.git",
         gitAuthor: { name: "Shared Bot", email: "shared@example.test" },
       };
-      prepareGitHubBinding.mockResolvedValue(available ? github : undefined);
+      readGitHubFact.mockReturnValue(
+        available ? { available: true, github } : { available: false },
+      );
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
         if (available) {
           expect(plan.assignment.github).toEqual(github);
@@ -84,6 +92,13 @@ describe("worker launch capabilities", () => {
       });
       const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
+        measureLaunchTurn: (plan, claim) => {
+          if (revoked) {
+            expect(plan.assignment.github).toEqual(github);
+            readGitHubFact.mockReturnValue({ available: true });
+          }
+          return measureLaunchTurn(plan, claim);
+        },
         stageAttachments: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
@@ -96,14 +111,20 @@ describe("worker launch capabilities", () => {
         startTunnel: vi.fn(async () => tunnel),
       };
       const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-      await expect(
-        provider.executeTurn(
-          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-github" },
-          turn("run-github"),
-          vi.fn(),
-        ),
-      ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
-      expect(launchTurn).toHaveBeenCalledOnce();
+      const execution = provider.executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-github" },
+        turn("run-github"),
+        vi.fn(),
+      );
+      if (revoked) {
+        await expect(execution).rejects.toThrow(
+          "GitHub identity changed before worker launch; retry the turn.",
+        );
+        expect(launchTurn).not.toHaveBeenCalled();
+      } else {
+        await expect(execution).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+        expect(launchTurn).toHaveBeenCalledOnce();
+      }
     },
   );
 

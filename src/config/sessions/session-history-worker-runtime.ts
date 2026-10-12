@@ -178,33 +178,12 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       }
     : undefined;
   if (request.kind === "rpc" || request.kind === "rpc-message") {
-    const params = request.params;
-    const captured = {
-      encodeResponse: params.encodeResponse,
-      compactionMetrics: params.compactionMetrics?.map((metric) => ({ ...metric })),
+    const captured = { ...request };
+    captured.params = {
+      ...structuredClone({ ...request.params, entry: undefined }),
       entry: capturedEntry,
-      provider: params.provider,
-      sessionId: params.sessionId,
-      storePath: params.storePath,
-      sessionAgentId: params.sessionAgentId,
-      canonicalKey: params.canonicalKey,
-      max: params.max,
-      maxHistoryBytes: params.maxHistoryBytes,
-      responseHistoryBytes: params.responseHistoryBytes,
-      effectiveMaxChars: params.effectiveMaxChars,
-      toolResultMaxChars: params.toolResultMaxChars,
-      offset: params.offset,
-      messageId: params.messageId,
-      ...(params.pageCursor ? { pageCursor: { ...params.pageCursor } } : {}),
-      ignoreCliSessionImports: params.ignoreCliSessionImports,
-      cliHistoryHomeDir: params.cliHistoryHomeDir,
-      ...(params.cliHistoryRedaction
-        ? { cliHistoryRedaction: structuredClone(params.cliHistoryRedaction) }
-        : {}),
     };
-    return request.kind === "rpc-message"
-      ? { kind: "rpc-message", params: { ...captured, messageId: request.params.messageId } }
-      : { kind: "rpc", params: captured };
+    return captured;
   }
   const params = request.params;
   return {
@@ -391,7 +370,9 @@ export async function readSessionHistoryPageInWorker(
         capturedRequest.kind === "recent-page" &&
         capturedRequest.params.exactArchivePath !== undefined;
       const readOnly =
-        capturedRequest.kind === "active-accounting" || capturedRequest.kind === "bounded-tail"
+        capturedRequest.kind === "active-accounting" ||
+        capturedRequest.kind === "bounded-tail" ||
+        capturedRequest.kind === "recent-text"
           ? true
           : capturedRequest.kind === "artifacts"
             ? capturedRequest.params.query.kind === "image-page"
@@ -422,6 +403,7 @@ export async function readSessionHistoryPageInWorker(
               } catch (error) {
                 if (
                   (capturedRequest.kind === "active-accounting" ||
+                    capturedRequest.kind === "recent-text" ||
                     (capturedRequest.kind === "bounded-tail" &&
                       !capturedRequest.params.options.readOnly)) &&
                   isSessionTranscriptProjectionUnavailableError(error)

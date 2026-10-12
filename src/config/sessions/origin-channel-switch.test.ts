@@ -5,7 +5,8 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
+import { projectLastRoutePatch } from "./metadata-projection.js";
+import { deriveSessionMetaPatch, prepareSessionMetaPatch } from "./metadata.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 const sessionKey = "agent:user";
@@ -136,7 +137,7 @@ describe("session origin across a channel switch", () => {
   });
 
   it("preserves a fresh rich route when the inbound identity switches providers", () => {
-    const patch = deriveLastRoutePatch({
+    const patch = projectLastRoutePatch({
       sessionKey,
       existing: applyOrigin(undefined, slackTurn),
       route: {
@@ -145,7 +146,7 @@ describe("session origin across a channel switch", () => {
         target: { to: "chat:42", rawTo: "@forty-two", chatType: "group" },
         thread: { id: 456, kind: "topic", source: "turn" },
       },
-      ctx: telegramTurn as MsgContext,
+      metadata: prepareSessionMetaPatch({ ctx: telegramTurn as MsgContext }),
     });
 
     expect(patch.delivery).toMatchObject({

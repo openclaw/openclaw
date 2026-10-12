@@ -129,7 +129,10 @@ Implementation:
 - `sanitizeContentBlocksImages` in `src/agents/tool-images.ts`
 - Max image side is configurable via `agents.defaults.imageMaxDimensionPx`
   (default: `1200`)
-- Blank text blocks are removed while this pass walks replay content.
+- Unsigned blank text blocks are removed while this pass walks replay content.
+  Blank assistant text with a provider replay signature is retained byte-for-byte,
+  including whitespace-only messages, so later reasoning keeps its
+  original request prefix and item order.
   Assistant turns that become empty are dropped unless they own opaque
   provider replay state; user and tool-result turns that become empty receive
   a non-empty omitted-content placeholder.

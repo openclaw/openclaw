@@ -32,6 +32,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { getSessionInputActor } from "./session-input-actor.js";
@@ -84,12 +85,18 @@ export async function appendExpectedSessionTranscriptTurn(
       "Awaited transcript preparation requires one message without transaction predicates",
     );
   }
-  const resolved = captureLifecycleDatabaseScope(
-    resolveSqliteTranscriptScope({
-      ...scope,
-      sessionId: options.expectedSessionId,
-    }),
-  );
+  const memory = getSessionActorStorageBinding(scope);
+  const resolved = memory
+    ? {
+        agentId: memory.agentId,
+        path: memory.path,
+        sessionKey: memory.actor.target.sessionKey,
+        sessionId: options.expectedSessionId,
+        env: scope.env ?? process.env,
+      }
+    : captureLifecycleDatabaseScope(
+        resolveSqliteTranscriptScope({ ...scope, sessionId: options.expectedSessionId }),
+      );
   const context: SessionTranscriptTurnWriteContext = {
     agentId: resolved.agentId,
     sessionId: options.expectedSessionId,
@@ -108,7 +115,9 @@ export async function appendExpectedSessionTranscriptTurn(
       }
       return !append.workerPreparation || (!append.predicate && !repeated);
     });
-  const incognito = captureIncognitoSessionOperation({ ...scope, storePath: resolved.path });
+  const incognito = memory
+    ? undefined
+    : captureIncognitoSessionOperation({ ...scope, storePath: resolved.path });
   const inputActor = !nativeReservation && (await getSessionInputActor(resolved));
   if (
     !nativeReservation &&

@@ -30,6 +30,19 @@ all incompatibilities without modifying the source files.
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
+Agent deletion adds a nullable `phase TEXT` column to its existing journal on
+first deletion or Doctor reconstruction. `draining` closes ingress while existing
+runs abort and settle before database retirement. The deletion owner then records
+`retiring` and completes cleanup. Recovery resumes the recorded phase after a
+restart; retries never move retirement back to draining. Journals without the
+column, or with a null phase, retain their previous retirement meaning without
+rewriting their paths or completion state. Older readers continue treating every
+journal row as a deletion fence and may require an explicit cleanup retry. The
+numeric schema version, journal retention, and rollback backup policy are unchanged.
+Retirement-only callers leave the phase null. Automatic Gateway recovery leaves
+those journals with retained Claw ownership to the existing Claw removal owner;
+its selective package and workspace cleanup still requires a removal-plan retry.
+
 Linux Node worker cleanup uses the additive `node_worker_launch_process_scopes`
 companion table. Its launch-bound `linux-subreaper` certificate records kernel
 descendant extinction independently of `node_worker_launch_cleanup.lineage_settled`.

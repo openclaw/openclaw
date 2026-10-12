@@ -479,26 +479,20 @@ export async function touchSessionBrowserTab(
   const key = canonicalStorageKey(params, identity);
   if (
     key &&
-    (await withBrowserSessionTabSelection(key, params.authority, async (tab) => {
-      const candidate = parseBrowserSessionTabRecord(await tab.lookup());
-      if (!candidate) {
-        return false;
-      }
-      await tab.update(
-        (current) => {
-          const record = parseBrowserSessionTabRecord(current);
-          if (!record || !sameBrowserSessionTabRecord(record, candidate)) {
-            return undefined;
-          }
-          if (record.cleanupKind === "sweep") {
-            return { ...withoutBrowserSessionTabCleanup(record), lastUsedAt: now };
-          }
-          return { ...record, lastUsedAt: now };
-        },
-        () => activeDurableStorageKeys().add(key),
-      );
-      return true;
-    }))
+    (await updateBrowserSessionTab(
+      key,
+      (current) => {
+        const record = parseBrowserSessionTabRecord(current);
+        if (!record) {
+          return undefined;
+        }
+        return {
+          ...(record.cleanupKind === "sweep" ? withoutBrowserSessionTabCleanup(record) : record),
+          lastUsedAt: now,
+        };
+      },
+      { ...params.authority, onCommitted: () => activeDurableStorageKeys().add(key) },
+    ))
   ) {
     return;
   }

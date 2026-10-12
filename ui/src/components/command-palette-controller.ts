@@ -15,7 +15,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   HumanMentionMenu,
   type HumanMentionMenuHost,
-} from "../pages/chat/components/chat-composer-mention-menu.ts";
+} from "../pages/chat/components/chat-composer-mention-menu.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
   PluginIconController,

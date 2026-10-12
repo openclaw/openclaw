@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import * as authProfileStore from "../../agents/auth-profiles/store.js";
+import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
 import { buildModelAliasIndex, type ModelAliasIndex } from "../../agents/model-selection.js";
@@ -199,7 +199,7 @@ describe("mixed inline directives", () => {
       persistenceStarted.resolve({ ...entry });
       return persistence.promise;
     });
-    vi.spyOn(authProfileStore, "findPersistedAuthProfileCredential").mockReturnValue({
+    vi.spyOn(authProfileStore, "findPersistedAuthProfileCredentialAsync").mockResolvedValue({
       type: "api_key",
       provider: "openai",
       key: "test-key",

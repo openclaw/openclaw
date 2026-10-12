@@ -21,6 +21,7 @@ import {
   prepareUserProfileIdentity,
   readUserProfileAliases,
   readUserProfileIdentity,
+  readResidentUserProfileAliases,
   captureResidentUserProfileAccess,
   isUserProfileCatalogReady,
   resolveUserProfileReference,
@@ -300,7 +301,7 @@ describe("resident profile display and reference catalog", () => {
               { identity, authenticationAlias: { kind: "email", email: "first@example.test" } },
               options,
             );
-      const seen = vi.fn(() => readUserProfileAliases(second.id, options));
+      const seen = vi.fn(() => readResidentUserProfileAliases(second.id, options));
       releases.push(sessionChanges.subscribe(seen));
       expect(() =>
         runOpenClawStateWriteTransaction(() => {
@@ -510,6 +511,9 @@ describe("resident profile display and reference catalog", () => {
         value: target.id,
       });
       expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id, target.id]));
+      expect(readResidentUserProfileAliases(source.id, options)).toEqual(
+        new Set([source.id, target.id]),
+      );
     }
     expect(reads).not.toHaveBeenCalled();
     expect(native).not.toHaveBeenCalled();

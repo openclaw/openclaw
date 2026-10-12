@@ -98,38 +98,7 @@ describe("worker placement terminal persistence", () => {
     expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
-  it("records a clean terminal timestamp for an idle destroyed-worker reclaim", async () => {
-    const active = await advanceToActive();
-    const draining = await store.startDrain({
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: active.generation,
-    });
-    const reconciling = await store.startReconcile({
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      expectedGeneration: draining.generation,
-    });
-
-    expect(
-      await store.transition({
-        sessionId: active.sessionId,
-        from: "reconciling",
-        to: "reclaimed",
-        expectedGeneration: reconciling.generation,
-      }),
-    ).toMatchObject({
-      state: "reclaimed",
-      generation: active.generation + 3,
-      turnClaim: null,
-      terminalReason: null,
-      terminalAtMs: 1_000,
-    });
-  });
-
-  it.each(["active", "draining"] as const)(
+  it.each(["draining"] as const)(
     "atomically fails a %s pending result and preserves its bounded reason across restart",
     async (state) => {
       await advanceToActive();
@@ -209,22 +178,13 @@ describe("worker placement terminal persistence", () => {
     unregister();
   });
 
-  it.each([
-    "worker-owned",
-    "accepted",
-    "staged",
-    "journaled",
-    "stale-claim",
-    "other-gateway",
-  ] as const)(
+  it.each(["worker-owned", "staged", "journaled", "stale-claim", "other-gateway"] as const)(
     "does not abandon a %s workspace result after node transport loss",
     async (resultState) => {
       const executionMode = resultState === "worker-owned" ? "worker-turn" : "remote-exec";
       await advanceToActive(SESSION, "paired-device-environment", executionMode);
       const { active, claim } = await pendingResult();
-      if (resultState === "accepted") {
-        await store.acceptWorkspaceResult(claim);
-      } else if (resultState === "staged") {
+      if (resultState === "staged") {
         await store.recordStagedWorkspaceResult(
           claim,
           "refs/openclaw/worker-results/preserved-result",

@@ -182,6 +182,7 @@ export function createMattermostModelPickerInteractionHandler(
         cfg,
         route: modelSessionRoute,
         data,
+        sessionEntry,
       });
       const viewParams = {
         ownerUserId: pickerState.ownerUserId,
@@ -238,7 +239,11 @@ export function createMattermostModelPickerInteractionHandler(
         cfg,
         route: modelSessionRoute,
         data,
-        readConsistency: "latest",
+        sessionEntry: await getSessionEntryAsync({
+          agentId: modelSessionRoute.agentId,
+          storePath: resolveStorePath(cfg.session?.store, { agentId: modelSessionRoute.agentId }),
+          sessionKey: modelSessionRoute.sessionKey,
+        }),
       });
       const view = renderMattermostModelsPickerView({
         ownerUserId: pickerState.ownerUserId,

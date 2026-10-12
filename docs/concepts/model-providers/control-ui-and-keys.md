@@ -32,7 +32,7 @@ The **Defaults** card manages the primary model, utility model, first fallback, 
 
 If model discovery fails, the Defaults card shows the reported error with **Retry**. Your saved model choices remain available while you retry.
 
-The fallback selector edits the first model in the ordered fallback chain. Replacing it preserves any later fallbacks already configured; selecting **No fallback model** clears the chain. Use `openclaw models fallbacks` to manage the full ordered list.
+The fallback selector edits the first model in the ordered fallback chain. Replacing it preserves any later fallbacks already configured. A count below the label shows those additional fallbacks. When there is more than one fallback, **No fallback model** shows how many models it will remove when it clears the chain. Use `openclaw models fallbacks` to manage the full ordered list.
 
 ## Plugin-owned provider behavior
 

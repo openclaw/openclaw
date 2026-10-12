@@ -111,7 +111,7 @@ function createHarness() {
   });
   const patch = vi.fn(async () => undefined);
   attachRestMock(client, { post, get, patch });
-  const session = vi.spyOn(sessionStore, "getSessionEntry").mockReturnValue(undefined);
+  const session = vi.spyOn(sessionStore, "getSessionEntryAsync").mockResolvedValue(undefined);
   vi.spyOn(pickerState, "loadDiscordModelPickerData").mockResolvedValue(
     createModelsProviderData({ "test-provider": ["test-model"] }),
   );

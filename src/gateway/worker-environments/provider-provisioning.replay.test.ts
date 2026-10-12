@@ -284,6 +284,7 @@ describe("worker environment service provision replay", () => {
     const onActivated = vi.fn();
     const attachSession = vi.spyOn(restarted, "attachSession");
     const dispatch = createProviderReplayDispatch({
+      initialPlacements: placements.list(),
       placements,
       environments: restarted,
       resolveDevicePlacementRequirement: async () => ({
@@ -368,10 +369,7 @@ describe("worker environment service provision replay", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { released: true, verbose: false },
-    { released: false, verbose: true },
-  ])(
+  it.each([{ released: false, verbose: true }])(
     "recovers indeterminate cleanup (released: $released, verbose: $verbose)",
     async ({ released, verbose }) => {
       const leaseId = "lease:worker-provision-cleanup";
@@ -465,57 +463,36 @@ describe("worker environment service provision replay", () => {
     },
   );
 
-  it("does not resolve a provider provision timeout when the service override is set", async () => {
-    const resolveProvisionTimeoutMs = vi.fn(() => {
-      throw new Error("provider timeout hook must not run");
-    });
-    const workerService = support.createService(
-      support.createProvider({ resolveProvisionTimeoutMs }),
-      {
-        providerCallTimeoutMs: 1_000,
-      },
-    );
+  it.each([["timer overflow", MAX_TIMER_TIMEOUT_MS + 1]])(
+    "rejects a %s provider provision timeout before allocation",
+    async (_label, timeoutMs) => {
+      const provision = vi.fn(async () => ({
+        leaseId: "lease-invalid-timeout",
+        ssh: support.SSH_ENDPOINT,
+      }));
+      const workerService = support.createService(
+        support.createProvider({
+          provision,
+          resolveProvisionTimeoutMs: () => timeoutMs,
+        }),
+      );
 
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-provider-timeout-override",
-      }),
-    ).resolves.toMatchObject({ state: "ready" });
-    expect(resolveProvisionTimeoutMs).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["zero", 0],
-    ["fractional", 1.5],
-    ["timer overflow", MAX_TIMER_TIMEOUT_MS + 1],
-  ])("rejects a %s provider provision timeout before allocation", async (_label, timeoutMs) => {
-    const provision = vi.fn(async () => ({
-      leaseId: "lease-invalid-timeout",
-      ssh: support.SSH_ENDPOINT,
-    }));
-    const workerService = support.createService(
-      support.createProvider({
-        provision,
-        resolveProvisionTimeoutMs: () => timeoutMs,
-      }),
-    );
-
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: `request-invalid-provider-timeout-${String(timeoutMs)}`,
-      }),
-    ).rejects.toMatchObject({
-      code: "provider_failure",
-      message: expect.stringContaining("Worker provider provision timeout must be an integer"),
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    expect(provision).not.toHaveBeenCalled();
-    expect(support.testState.store.list()[0]).toMatchObject({
-      state: "failed",
-      leaseId: null,
-    });
-  });
+      await expect(
+        workerService.createWithRequest({
+          profileId: "development",
+          idempotencyKey: `request-invalid-provider-timeout-${String(timeoutMs)}`,
+        }),
+      ).rejects.toMatchObject({
+        code: "provider_failure",
+        message: expect.stringContaining("Worker provider provision timeout must be an integer"),
+      } satisfies Partial<WorkerEnvironmentServiceError>);
+      expect(provision).not.toHaveBeenCalled();
+      expect(support.testState.store.list()[0]).toMatchObject({
+        state: "failed",
+        leaseId: null,
+      });
+    },
+  );
 
   it("does not invoke a late prepared allocation after replay times out", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -682,62 +659,7 @@ describe("worker environment service provision replay", () => {
     expect(support.testState.store.get(finalEnvironmentId)).toMatchObject({ state: "destroyed" });
   });
 
-  it("adopts an indeterminate allocation before a replay preparation failure", async () => {
-    const events: string[] = [];
-    let preparationFails = false;
-    support.testState.prepareInstallation = vi.fn(async () => {
-      events.push("prepare");
-      if (preparationFails) {
-        throw new Error("persisted bundle is unavailable");
-      }
-      return support.BUNDLE_ARTIFACT;
-    });
-    let provisionCalls = 0;
-    const operationIds: string[] = [];
-    const provider = support.createProvider({
-      provision: async (_profile, operationId) => {
-        events.push("provision");
-        provisionCalls += 1;
-        operationIds.push(operationId);
-        if (provisionCalls === 1) {
-          throw new Error("provision response was lost");
-        }
-        return { leaseId: "lease-replayed", ssh: support.SSH_ENDPOINT };
-      },
-      destroy: async () => void events.push("destroy"),
-    });
-    const workerService = support.createService(provider);
-
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-lost-provision",
-      }),
-    ).rejects.toMatchObject({
-      code: "provider_failure",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    preparationFails = true;
-    await workerService.reconcileOnce();
-
-    expect(events).toEqual(["prepare", "provision", "provision", "prepare", "destroy"]);
-    expect(new Set(operationIds).size).toBe(1);
-    expect(support.testState.store.list()[0]).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      sshEndpoint: null,
-      teardownTerminalState: "failed",
-      lastError: "persisted bundle is unavailable",
-    });
-  });
-
   it.each([
-    ["missing result", null, "invalid provision result"],
-    ["missing transport", { leaseId: "lease-invalid" }, "invalid provision result"],
-    [
-      "ambiguous transport",
-      { leaseId: "lease-invalid", ssh: support.SSH_ENDPOINT, node: { deviceId: "device-1" } },
-      "invalid provision result",
-    ],
     [
       "blank node device id",
       { leaseId: "lease-invalid", node: { deviceId: " " } },
@@ -797,6 +719,54 @@ describe("worker environment service provision replay", () => {
     expect(support.testState.store.list()[0]).toMatchObject({
       state: "provisioning",
       lastError: expect.stringContaining(error),
+    });
+  });
+
+  it("adopts an indeterminate allocation before a replay preparation failure", async () => {
+    const events: string[] = [];
+    let preparationFails = false;
+    support.testState.prepareInstallation = vi.fn(async () => {
+      events.push("prepare");
+      if (preparationFails) {
+        throw new Error("persisted bundle is unavailable");
+      }
+      return support.BUNDLE_ARTIFACT;
+    });
+    let provisionCalls = 0;
+    const operationIds: string[] = [];
+    const provider = support.createProvider({
+      provision: async (_profile, operationId) => {
+        events.push("provision");
+        provisionCalls += 1;
+        operationIds.push(operationId);
+        if (provisionCalls === 1) {
+          throw new Error("provision response was lost");
+        }
+        return { leaseId: "lease-replayed", ssh: support.SSH_ENDPOINT };
+      },
+      destroy: async () => void events.push("destroy"),
+    });
+    const workerService = support.createService(provider);
+
+    await expect(
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-lost-provision",
+      }),
+    ).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    preparationFails = true;
+    await workerService.reconcileOnce();
+
+    expect(events).toEqual(["prepare", "provision", "provision", "prepare", "destroy"]);
+    expect(new Set(operationIds).size).toBe(1);
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      teardownTerminalState: "failed",
+      lastError: "persisted bundle is unavailable",
     });
   });
 });

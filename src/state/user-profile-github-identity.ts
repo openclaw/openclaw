@@ -6,11 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
-import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  type SqliteSchemaFacts,
-} from "../infra/sqlite-schema-facts.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
@@ -26,7 +22,6 @@ import {
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
   selectProfileDisplayEntries,
-  hasProfileRoleColumn,
   selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   setUserProfileEmailBinding,
@@ -45,34 +40,6 @@ import type {
 
 const GITHUB_PROVIDER = "github";
 const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";
-const githubColumnFacts = new WeakMap<
-  SqliteSchemaFacts,
-  { primaryAccount: boolean; verifiedLogin: boolean }
->();
-
-function readGitHubColumns(db: DatabaseSync) {
-  const schema = getAdmittedSqliteSchemaFacts(db);
-  if (!schema) {
-    return {
-      primaryAccount: tableHasColumn(db, "user_profiles", "primary_github_account_id"),
-      verifiedLogin: tableHasColumn(db, "user_profile_identities", "canonical_login"),
-    };
-  }
-  let columns = githubColumnFacts.get(schema);
-  if (!columns) {
-    const hasColumn = (table: "user_profiles" | "user_profile_identities", column: string) => {
-      const sql = schema.tableSql.get(table);
-      return sql !== undefined && parseSqliteTableDefinition(sql, table).columns.has(column);
-    };
-    columns = {
-      primaryAccount: hasColumn("user_profiles", "primary_github_account_id"),
-      verifiedLogin: hasColumn("user_profile_identities", "canonical_login"),
-    };
-    githubColumnFacts.set(schema, columns);
-  }
-  return columns;
-}
-
 export function selectStoredGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
@@ -81,8 +48,7 @@ export function selectStoredGitHubIdentities(
   if (profileIds?.length === 0 || accountIds?.length === 0) {
     return new Map();
   }
-  const columns = readGitHubColumns(db);
-  if (!columns.verifiedLogin) {
+  if (!tableHasColumn(db, "user_profile_identities", "canonical_login")) {
     return new Map();
   }
   let query = userProfilesDb(db)
@@ -91,7 +57,7 @@ export function selectStoredGitHubIdentities(
     .select(["profile_id", "subject", "canonical_login"])
     // Read-only catalog projections must not initialize a pre-feature database.
     .select((eb) => [
-      columns.primaryAccount
+      tableHasColumn(db, "user_profiles", "primary_github_account_id")
         ? "user_profiles.primary_github_account_id"
         : eb.val<number | null>(null).as("primary_github_account_id"),
     ])
@@ -157,8 +123,7 @@ export function selectUserProfileRoleAuthority(
   if (!tableExists(db, "user_profiles")) {
     return undefined;
   }
-  const columns = readGitHubColumns(db);
-  const hasRole = hasProfileRoleColumn(getAdmittedSqliteSchemaFacts(db));
+  const hasRole = getAdmittedSqliteSchemaFacts(db) && tableHasColumn(db, "user_profiles", "role");
   const query = userProfilesDb(db)
     .selectFrom("user_profiles as requested")
     .leftJoin("user_profiles as canonical", (join) =>
@@ -173,13 +138,13 @@ export function selectUserProfileRoleAuthority(
     .select("profile.id as profile_id")
     .select((eb) => [
       hasRole ? "profile.role" : eb.val<string | null>(null).as("role"),
-      columns.primaryAccount
+      tableHasColumn(db, "user_profiles", "primary_github_account_id")
         ? "profile.primary_github_account_id"
         : eb.val<number | null>(null).as("primary_github_account_id"),
     ]);
   const rows = executeSqliteQuerySync(
     db,
-    columns.verifiedLogin
+    tableHasColumn(db, "user_profile_identities", "canonical_login")
       ? query
           .leftJoin("user_profile_identities as identity", (join) =>
             join
@@ -237,7 +202,7 @@ function resolveCachedGitHubIdentityInDatabase(
   if (
     !tableExists(db, "user_profiles") ||
     !tableExists(db, "user_profile_identities") ||
-    !readGitHubColumns(db).verifiedLogin
+    !tableHasColumn(db, "user_profile_identities", "canonical_login")
   ) {
     return undefined;
   }

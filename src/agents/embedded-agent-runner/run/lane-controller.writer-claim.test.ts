@@ -131,6 +131,7 @@ describe("embedded run durable writer admission", () => {
       workspaceDir: "/tmp",
       enqueue: async (task) => await task(),
     };
+    let admittedEntry: InternalSessionEntry | undefined;
     const controller = createEmbeddedRunLaneController({
       getLifecycleGeneration: () => lifecycleGeneration,
       getParams: () => params,
@@ -141,10 +142,22 @@ describe("embedded run durable writer admission", () => {
       setParams: (next) => {
         params = next;
       },
+      onSessionWriterClaimed: (entry) => {
+        admittedEntry = entry;
+      },
     });
 
     try {
-      await controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
+      await controller.enqueueSession(() =>
+        controller.enqueueGlobal(async () => {
+          expect(admittedEntry).toMatchObject({
+            activeWriterRunId: "run-b",
+            lifecycleRevision,
+            sessionId,
+          });
+          return completedResult;
+        }),
+      );
     } finally {
       unsubscribe();
     }

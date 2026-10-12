@@ -21,6 +21,9 @@ function ownerKey(options: MemoryOwnerOptions) {
  * move here together at cutover; this registry never imports or mirrors their state.
  */
 export const memorySessionActorOwners = {
+  list(): readonly MemoryOwner[] {
+    return [...owners.values()];
+  },
   get(options: MemoryOwnerOptions): MemoryOwner {
     const location = ownerLocation(options);
     const key = ownerKey(location);

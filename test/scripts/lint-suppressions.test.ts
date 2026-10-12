@@ -273,6 +273,8 @@ describe("production lint suppressions", () => {
         // Synchronous acquisition failures reject with the acquiring owner's original value.
         "src/shared/store-writer-acquisitions.ts|typescript/prefer-promise-reject-errors|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
+        // JSON string scanning must detect and reject unescaped control characters.
+        "src/state/json-predicate-fields.ts|no-control-regex|1",
         // Native statement methods are captured before proxy forwarding restores their receiver.
         "src/state/openclaw-agent-canonical-validation-receipt.test-support.ts|typescript/unbound-method|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
@@ -289,6 +291,7 @@ describe("production lint suppressions", () => {
         "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
         // PanelRefreshStatus keeps its shared className prop across rendering callers.
+        "ui/src/pages/custodian/custodian-surface.tsx|solid/no-react-specific-props|1",
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
       ]),
     );

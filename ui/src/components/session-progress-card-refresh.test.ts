@@ -190,12 +190,12 @@ describe("progress card refresh control", () => {
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
     summary.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(false);
-    // Native details toggle delivery is a task, separate from the owned activity timer.
-    vi.advanceTimersByTime(0);
+    // Settle native toggle delivery and deferred scroll geometry before counting activity timers.
+    vi.advanceTimersToNextFrame();
     expect(vi.getTimerCount()).toBe(1);
     show("details");
     expect(container.querySelector("details")?.open).toBe(true);
-    vi.advanceTimersByTime(0);
+    vi.advanceTimersToNextFrame();
     expect(vi.getTimerCount()).toBe(1);
   });
 

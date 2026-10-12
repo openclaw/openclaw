@@ -25,7 +25,7 @@ const actions: readonly [CatalogSessionMenuAction, string, IconName][] = [
   ["delete", "chat.catalog.deleteSession", "trash"],
 ];
 
-export const CatalogSessionMenu = defineSolidBridge<Props>(
+defineSolidBridge<Props>(
   "openclaw-catalog-session-menu",
   (props, host) => {
     onSettled(() => promoteToPopoverTopLayer(host));

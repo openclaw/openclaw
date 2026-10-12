@@ -26,6 +26,7 @@ import {
   type CapturedRuntimeConfigRead,
   getRuntimeConfigCapture,
 } from "./runtime-config-capture-state.js";
+import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import { configSnapshotsMatch, stableConfigStringify } from "./runtime-config-snapshot-match.js";
 import { runtimeSessionChangeScope } from "./runtime-session-changes.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
@@ -234,6 +235,7 @@ function publishRuntimeConfigSnapshot(
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = metadata;
   runtimeModelConfigCacheKey = hashModelConfig(config, sourceConfig ?? config);
+  runtimeConfigPublication.current = { config, revision: metadata };
   runtimeConfigPublishedFacts = facts;
   if (!valuesUnchanged && !matchesPublished) {
     sessionChanges.emit({ all: true, scope });
@@ -359,6 +361,7 @@ export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean }
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
   runtimeModelConfigCacheKey = null;
+  runtimeConfigPublication.current = undefined;
   runtimeConfigPublishedFacts = null;
   runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;

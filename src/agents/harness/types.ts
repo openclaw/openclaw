@@ -185,6 +185,8 @@ type AgentHarnessIsolatedCompletionParams = {
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
   outputTextPolicy?: "strict-visible";
+  /** Report inference dispatch through settlement, excluding preparation and cleanup. */
+  onRequestComplete?: (durationMs: number) => void;
   streamParams?: {
     maxTokens?: number;
     temperature?: number;

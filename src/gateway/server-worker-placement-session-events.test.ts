@@ -35,6 +35,7 @@ describe("worker placement session events", () => {
     });
     const warn = vi.fn(() => failureReported.resolve());
     const runtime = createGatewayWorkerPlacementRuntime({
+      initialPlacements: [],
       scheduler,
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),

@@ -10,8 +10,8 @@ import "../styles/agent-row-chip.css";
 
 type AgentRowChipProps = { agentId?: string };
 
-export type AgentRowChipElement = SolidBridgeElement<AgentRowChipProps>;
-export const AgentRowChip = defineSolidBridge<AgentRowChipProps>(
+type AgentRowChipElement = SolidBridgeElement<AgentRowChipProps>;
+defineSolidBridge<AgentRowChipProps>(
   "openclaw-agent-row-chip",
   (props) => {
     const context = projectSource(useOptionalApplication(), {

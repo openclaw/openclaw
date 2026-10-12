@@ -295,6 +295,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
+    widgetLayout: props.widgetLayout,
     agentId: assistantAgentId,
     runActive: props.runActive,
     asyncQuestions,
@@ -334,8 +335,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
           .onOpenSession=${props.onOpenSession}
         ></openclaw-chat-subagent-activity>`
       : undefined,
-    // Subagents the panel does not list still open as sessions, and have no list to show.
-    onOpenSubagent: (subagents.listed && props.onOpenSubagent) || props.onOpenSession,
     onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
     runOutputTokens,
     questionPrompts,

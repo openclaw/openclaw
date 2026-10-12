@@ -5,6 +5,10 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import {
@@ -192,8 +196,22 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
 
 /** Loads runtime trajectory events from per-agent SQLite rows in storage order. */
 export async function loadSqliteTrajectoryRuntimeEvents(
-  scope: SqliteTrajectoryRuntimeReadScope,
+  scope: SqliteTrajectoryRuntimeReadScope & { sessionActor?: SessionActorStorageBinding },
 ): Promise<TrajectoryEvent[]> {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return memory.actor.storage!.read(
+      {
+        type: "session.trajectory.read",
+        input: {
+          sessionId: scope.sessionId,
+          maxEventBytes: scope.maxEventBytes,
+          maxEventCount: scope.maxEventCount,
+        },
+      },
+      memory.authority,
+    );
+  }
   const incognito = captureIncognitoSessionOperation(scope);
   if (incognito) {
     const session = incognito.actor.sessions
@@ -222,11 +240,29 @@ export async function loadSqliteTrajectoryRuntimeEvents(
 /** Loads runtime trajectory event rows with storage seqs for follow/export cursors. */
 export function loadSqliteTrajectoryRuntimeEventRowsSync(
   scope: SqliteTrajectoryRuntimeReadScope & {
+    sessionActor?: SessionActorStorageBinding;
     afterSeq?: number;
     maxEvents?: number;
     tailEvents?: number;
   },
 ): SqliteTrajectoryRuntimeEventRow[] {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return memory.actor.storage!.readCurrent(
+      {
+        type: "session.trajectory.rows",
+        input: {
+          sessionId: scope.sessionId,
+          maxEventBytes: scope.maxEventBytes,
+          maxEventCount: scope.maxEventCount,
+          afterSeq: scope.afterSeq,
+          maxEvents: scope.maxEvents,
+          tailEvents: scope.tailEvents,
+        },
+      },
+      memory.authority,
+    );
+  }
   const read = withOpenClawAgentDatabaseReadOnly(
     (database) => {
       const db = getTrajectoryKysely(database.db);

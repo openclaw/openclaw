@@ -34,7 +34,7 @@ import {
 } from "./session-transcript-append-postimage.js";
 import {
   buildExpectedTranscriptTurnSessionPatch,
-  sessionMatchesExpectedTranscriptTurn,
+  prepareSessionTranscriptTurnEntry,
 } from "./session-transcript-turn-state.js";
 import {
   sessionTurnPredicateMatches,
@@ -52,34 +52,7 @@ export function createSessionTranscriptTurnKernel(
   options: SqliteSessionTurnOptions,
   assertRouting?: (database: OpenClawAgentDatabase) => void,
 ) {
-  const initialEntry = options.initialSessionEntry
-    ? structuredClone(options.initialSessionEntry)
-    : undefined;
-  if (
-    initialEntry &&
-    (initialEntry.sessionId !== options.expectedSessionId ||
-      options.expectedLifecycleRevision !== undefined ||
-      options.expectedWriterRunId !== undefined ||
-      options.expectedSessionState !== undefined)
-  ) {
-    throw new Error(
-      "Session initialization requires its new identity and no existing writer state.",
-    );
-  }
-  const resolveExpectedEntry = (selected: { entry: SessionEntry } | undefined) => {
-    if (
-      options.selectedSessionId !== undefined &&
-      ((selected?.entry.sessionId ?? null) !== options.selectedSessionId ||
-        selected?.entry.lifecycleRevision !== (options.selectedLifecycleRevision ?? undefined))
-    ) {
-      return undefined;
-    }
-    // A prepared creation cannot adopt a row that appeared while admission was awaiting work.
-    if (initialEntry) {
-      return selected ? undefined : initialEntry;
-    }
-    return sessionMatchesExpectedTranscriptTurn(selected, options) ? selected.entry : undefined;
-  };
+  const { initialEntry, resolveExpectedEntry } = prepareSessionTranscriptTurnEntry(options);
   const readEntry = (
     database: Parameters<typeof readSessionEntryRow>[0],
     includeWindowFacts?: true,

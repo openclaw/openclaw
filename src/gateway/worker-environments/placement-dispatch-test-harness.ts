@@ -440,6 +440,7 @@ export function createHarness(
     Object.assign(environments, options.environmentService);
   }
   const service = createWorkerPlacementDispatchService({
+    initialPlacements: placementStore.list(),
     placements,
     environments,
     isShuttingDown: options.isShuttingDown,
@@ -645,6 +646,7 @@ export const createRecoveryService = (
   isShuttingDown: () => boolean = () => false,
 ) =>
   createWorkerPlacementDispatchService({
+    initialPlacements: placements.list(),
     placements,
     environments,
     isShuttingDown,

@@ -14,7 +14,11 @@ const mocks = vi.hoisted(() => ({
 const codexClient = vi.hoisted(() => ({
   resolveCodexClientVersion: vi.fn(async (): Promise<string | undefined> => undefined),
 }));
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => mocks);
+// mock-isolation: Discovery fixtures supply synthetic credentials and account metadata.
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: mocks.resolveApiKeyForProvider,
+  resolveProviderAuthProfileMetadataAsync: mocks.resolveProviderAuthProfileMetadata,
+}));
 // mock-isolation: the real facade loads the Codex plugin, which probes the host PATH for codex.
 vi.mock("openclaw/plugin-sdk/codex-client-version-runtime", () => codexClient);
 const codexPackage = JSON.parse(

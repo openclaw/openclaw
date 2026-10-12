@@ -300,6 +300,13 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toContain("turn/start rejected before result metadata");
+    expect(await patchSessionEntryMock.mock.results[0]?.value).toMatchObject({
+      systemSent: true,
+      skillsSnapshot: {
+        prompt: "<available_skills></available_skills>",
+        version: 42,
+      },
+    });
     expect(persistedAtStartup.get("agent:main:cron:test")).toMatchObject({
       sessionId: "test-session-id",
       agentHarnessId: "codex",

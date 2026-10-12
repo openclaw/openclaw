@@ -878,45 +878,6 @@ describe("theme RPC", () => {
     expect(getUserPreferences(otherProfileId)).toEqual({});
   });
 
-  it.each(
-    ["select", "mode-only"].flatMap((action) =>
-      ["replaced", "unavailable"].map((change) => ({ action, change })),
-    ),
-  )("refuses a plugin palette $change before commit during $action", async ({ action, change }) => {
-    const installed = pluginTheme();
-    pluginThemes.push(installed);
-    const original = {
-      "ui.theme": action === "select" ? "claw" : installed.id,
-      "ui.themeMode": "system",
-      "ui.accent": "#aabbcc",
-    };
-    expect(setUserPreferences(requesterProfileId, original).ok).toBe(true);
-    let reachedCommit = false;
-    beforeWorkerCommit(() => {
-      reachedCommit = true;
-      if (change === "unavailable") {
-        pluginThemes.length = 0;
-        return;
-      }
-      pluginThemes[0] = {
-        ...installed,
-        modes: ["light"],
-        definition: {
-          name: installed.name,
-          description: "Replacement light-only palette",
-          light: createThemePaletteFixture(),
-        },
-      };
-    });
-    const params = action === "select" ? { id: installed.id, mode: "dark" } : { mode: "dark" };
-    expect(await invoke("themes.set", params)).toMatchObject({
-      ok: false,
-      error: { message: expect.stringContaining("theme plugin changed") },
-    });
-    expect(reachedCommit).toBe(true);
-    expect(getUserPreferences(requesterProfileId)).toEqual(original);
-  });
-
   it("rolls back both import and selection when the live run retires at the commit boundary", async () => {
     const identity = runtimeIdentity(requesterProfileId);
     const synthetic = client();

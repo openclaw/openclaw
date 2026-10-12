@@ -2,7 +2,7 @@ import { isMainThread } from "node:worker_threads";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureAgentDeletionDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
@@ -66,7 +66,7 @@ export async function purgeDeletedAgentSessionEntries(
   const database = { ...toDatabaseOptions(resolved), path: resolved.path };
   const execution =
     isMainThread && supportsOpenClawAgentDatabaseExecution(database)
-      ? captureOpenClawAgentDatabaseExecution(database)
+      ? await captureAgentDeletionDatabaseExecution(database)
       : undefined;
   const selection = {
     cfg: structuredClone(params.cfg),

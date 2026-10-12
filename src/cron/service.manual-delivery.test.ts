@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 import { MessageChannel } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -14,9 +12,6 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -27,11 +22,8 @@ import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import type { CronEvent } from "./service/state.js";
-import { cronStoreKey } from "./store/key.js";
-import type { CronJob } from "./types.js";
 
 const FOUR_HOURS_MS = 4 * 60 * 60_000;
-const execFileAsync = promisify(execFile);
 
 describe("manual cron delivery occurrence", () => {
   it("keeps the event loop live and joins a cancelled native receipt read before payload dispatch", async () => {
@@ -102,6 +94,12 @@ describe("manual cron delivery occurrence", () => {
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         runScriptJob,
+        onEvent: (event) => {
+          if (event.action === "started") {
+            // Preflight recovery reads hold the mutation lock; gate the active payload's read.
+            Atomics.store(gate, 0, 1);
+          }
+        },
       });
       let run: ReturnType<CronService["run"]> | undefined;
       try {
@@ -115,7 +113,6 @@ describe("manual cron delivery occurrence", () => {
           wakeMode: "now",
           payload: { kind: "script", script: "return {}" },
         });
-        Atomics.store(gate, 0, 1);
         run = cron.run(job.id, "force");
         expect(
           await Promise.race([
@@ -153,118 +150,6 @@ describe("manual cron delivery occurrence", () => {
       }
     });
   });
-
-  it.each(["trigger", "script", "webhook"] as const)(
-    "refuses the %s effect after a foreign receipt commit despite an inherited discovery snapshot",
-    async (phase) => {
-      await withOpenClawTestState({ label: "cron-current-receipt" }, async (state) => {
-        const storePath = state.statePath("cron", "jobs.json");
-        const databasePath = resolveOpenClawStateSqlitePath(state.env);
-        let now = Date.now();
-        const retireReceipt = vi.fn(async (job: CronJob) => {
-          const { stdout } = await execFileAsync(
-            process.execPath,
-            [
-              "--input-type=module",
-              "-e",
-              `import { DatabaseSync } from "node:sqlite";
-               const db = new DatabaseSync(process.argv[1]);
-               try {
-                 const result = db.prepare("UPDATE cron_run_receipts SET status = 'superseded', finished_at_ms = ?, error_text = 'foreign receipt retirement' WHERE store_key = ? AND job_id = ? AND status = 'running'").run(Number(process.argv[4]), process.argv[2], process.argv[3]);
-                 process.stdout.write(JSON.stringify({ changes: result.changes, pid: process.pid }));
-               } finally { db.close(); }`,
-              databasePath,
-              cronStoreKey(storePath),
-              job.id,
-              String(now),
-            ],
-            { env: {} },
-          );
-          const result: unknown = JSON.parse(stdout);
-          expect(result).toEqual({ changes: 1, pid: expect.any(Number) });
-          expect(result).not.toMatchObject({ pid: process.pid });
-        });
-        const evaluateCronTrigger = vi.fn(async ({ job }: { job: CronJob }) => {
-          await retireReceipt(job);
-          return { kind: "evaluated" as const, fire: true };
-        });
-        const runScriptJob = vi.fn(async ({ job }: { job: CronJob }) => {
-          await retireReceipt(job);
-          return { status: "ok" as const, notify: "must not enqueue", wake: "now" as const };
-        });
-        const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
-          await retireReceipt(job);
-          return { status: "ok" as const, summary: "must not send" };
-        });
-        const enqueueSystemEvent = vi.fn();
-        const requestHeartbeat = vi.fn();
-        const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
-        const cron = new CronService({
-          scheduler: createTestGatewayScheduler(),
-          storePath,
-          cronEnabled: false,
-          defaultAgentId: "main",
-          nowMs: () => now,
-          cronConfig: { triggers: { enabled: true } },
-          log: createNoopLogger(),
-          evaluateCronTrigger,
-          runScriptJob,
-          runIsolatedAgentJob,
-          enqueueSystemEvent,
-          requestHeartbeat,
-          sendCronWebhook,
-        });
-        try {
-          await cron.start();
-          const job = await cron.add({
-            name: "current receipt before effect",
-            agentId: "main",
-            enabled: true,
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: phase === "webhook" ? "isolated" : "main",
-            wakeMode: "now",
-            payload:
-              phase === "script"
-                ? { kind: "script", script: "return { notify: 'must not enqueue' }" }
-                : phase === "webhook"
-                  ? { kind: "agentTurn", message: "produce a result" }
-                  : { kind: "systemEvent", text: "must not enqueue" },
-            ...(phase === "trigger" ? { trigger: { script: "return { fire: true }" } } : {}),
-            ...(phase === "webhook"
-              ? { delivery: { mode: "webhook", to: "https://example.invalid/hook" } }
-              : {}),
-          });
-          if (job.state.nextRunAtMs === undefined) {
-            throw new Error("Receipt fixture has no scheduled occurrence");
-          }
-          now = job.state.nextRunAtMs;
-          await withOpenClawStateDatabaseReadSnapshot(
-            async () => {
-              await expect(cron.run(job.id, "due")).resolves.toMatchObject({
-                ok: true,
-                ran: true,
-              });
-            },
-            { path: databasePath, env: state.env },
-          );
-          expect(retireReceipt).toHaveBeenCalledOnce();
-          expect(evaluateCronTrigger).toHaveBeenCalledTimes(phase === "trigger" ? 1 : 0);
-          expect(runScriptJob).toHaveBeenCalledTimes(phase === "script" ? 1 : 0);
-          expect(runIsolatedAgentJob).toHaveBeenCalledTimes(phase === "webhook" ? 1 : 0);
-          expect(enqueueSystemEvent).not.toHaveBeenCalled();
-          expect(requestHeartbeat).not.toHaveBeenCalled();
-          expect(sendCronWebhook).not.toHaveBeenCalled();
-          expect(
-            openOpenClawStateDatabase()
-              .db.prepare("SELECT status, error_text FROM cron_run_receipts WHERE job_id = ?")
-              .all(job.id),
-          ).toEqual([{ status: "superseded", error_text: "foreign receipt retirement" }]);
-        } finally {
-          cron.stop();
-        }
-      });
-    },
-  );
 
   it.each([
     { label: "queued force", mode: "force", queued: true },

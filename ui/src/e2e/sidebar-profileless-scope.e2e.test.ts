@@ -44,7 +44,7 @@ suite.define(() => {
             "users.prefs.get": {
               status: "ok",
               entries: {
-                "ui.sidebarEntries": [],
+                "ui.railShortcuts": [],
                 "new-session.migration.v1": true,
               },
             },

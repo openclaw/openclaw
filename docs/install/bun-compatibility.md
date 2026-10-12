@@ -243,6 +243,14 @@ cleanup warning and retains ownership of those files without failing the
 inspection. Read errors and required-cleanup failures still stop the operation;
 the original state database is unchanged.
 
+Gateway discovery, database schema preflight, and state ownership inspection
+follow the same policy when Windows reports a private snapshot as busy after a
+successful read. On a runtime without qualified native close, startup records a
+`SQLite snapshot cleanup deferred` warning and keeps the snapshot registered for
+cleanup at exit or by the next process's abandoned-snapshot reclamation. Read, schema, admission,
+native-close, and other removal errors still fail; runtimes with qualified native
+close continue to require immediate cleanup.
+
 The result is never saved in config or state. Each new long-lived host checks its
 selected runtime and library again, including after an upgrade, downgrade, or rollback.
 No schema or data migration is needed, and the installed updater is unchanged.

@@ -132,7 +132,7 @@ export async function resolveUtilityCompletionRuntimeForAgent(
           delete prepared.agentHarnessRuntimeOverride;
         }
       }
-      const runtime = resolveIsolatedCompletionRuntime({
+      const runtime = await resolveIsolatedCompletionRuntime({
         ...prepared,
         agentDir: params.agentDir ?? prepared.agentDir,
         workspaceDir: params.workspaceDir,

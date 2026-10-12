@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
-  loadMemorySessionMetadataBatch,
+  loadMemorySessionMetadataBatchAsync,
   matchesSessionEntryPrefixHash,
   sessionPathForFile,
   statSessionEntrySync,
@@ -196,11 +196,11 @@ export function resolveAdmissionPolicy(
   return Object.values(policy).some((entries) => entries.length > 0) ? policy : undefined;
 }
 
-export function sessionExclusionReasons(
+export async function sessionExclusionReasons(
   sources: readonly SessionIngestionSource[],
   policy: SessionAdmissionPolicy | undefined,
   forgottenSessionIds: ReadonlySet<string>,
-): ReadonlyMap<SessionIngestionSource, string> {
+): Promise<ReadonlyMap<SessionIngestionSource, string>> {
   const reasons = new Map<SessionIngestionSource, string>();
   const scopes = new Map<
     string,
@@ -235,14 +235,16 @@ export function sessionExclusionReasons(
   if (!policy) {
     return reasons;
   }
-  // Keep the whole decision synchronous after corpus and tombstone preparation.
+  // Resolve each store as one batch before applying its exclusion policy.
   for (const scope of scopes.values()) {
     const metadata = new Map(
-      loadMemorySessionMetadataBatch({
-        agentId: scope.agentId,
-        storePath: scope.storePath,
-        sessions: scope.sessions.map(({ sessionId, sessionKey }) => ({ sessionId, sessionKey })),
-      }).map((entry) => [entry.sessionId, entry]),
+      (
+        await loadMemorySessionMetadataBatchAsync({
+          agentId: scope.agentId,
+          storePath: scope.storePath,
+          sessions: scope.sessions.map(({ sessionId, sessionKey }) => ({ sessionId, sessionKey })),
+        })
+      ).map((entry) => [entry.sessionId, entry]),
     );
     for (const { source, sessionId, sessionKey } of scope.sessions) {
       const entry = metadata.get(sessionId);

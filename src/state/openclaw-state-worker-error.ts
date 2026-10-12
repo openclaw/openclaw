@@ -115,7 +115,7 @@ export function encodeOpenClawStateWorkerError(
 }
 
 function isErrorValue(value: unknown, count: number): value is ErrorValue {
-  if (!isRecord(value) || Object.keys(value).length !== 1) {
+  if (!isRecord(value)) {
     return false;
   }
   if ("ref" in value) {
@@ -137,20 +137,8 @@ function parseNode(value: unknown, count: number) {
   if (!identity) {
     return undefined;
   }
-  const allowed = new Set([
-    ...Object.keys(identity),
-    "name",
-    "message",
-    "code",
-    "errcode",
-    "errno",
-    "nativeOpen",
-    "stateDatabasePath",
-    "cause",
-  ]);
   const errors: ErrorValue[] = [];
   if (identity.type === "aggregate") {
-    allowed.add("errors");
     if (!Array.isArray(value.errors)) {
       return undefined;
     }
@@ -162,7 +150,6 @@ function parseNode(value: unknown, count: number) {
     }
   }
   if (
-    Object.keys(value).some((key) => !allowed.has(key)) ||
     (identity.type === "session-transcript-writer-claim-rebound" &&
       identity.refusal !== undefined &&
       "cause" in value) ||
@@ -202,7 +189,6 @@ function decodeErrorGraph(
   try {
     if (
       !isRecord(value) ||
-      Object.keys(value).some((key) => !["version", "root", "nodes"].includes(key)) ||
       value.version !== 1 ||
       !Array.isArray(value.nodes) ||
       typeof value.root !== "number" ||
@@ -220,29 +206,17 @@ function decodeErrorGraph(
       }
       nodes.push(node);
     }
-    const visited = new Set<number>();
-    const pending = [value.root];
-    let canonical = false;
-    for (const ref of pending) {
-      if (visited.has(ref)) {
-        continue;
-      }
-      visited.add(ref);
-      const node = nodes[ref]!;
-      canonical ||=
+    // The encoder selects fields and only emits nodes reachable from its root.
+    const canonical = nodes.some(
+      (node) =>
         node.stateDatabasePath !== undefined ||
         node.nativeOpen === true ||
         isNativeErrorCode(node.errcode) ||
         isSqliteLockError(node) ||
         (node.type === "aggregate" && node.name === DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME) ||
-        (node.type !== "error" && node.type !== "aggregate");
-      for (const edge of [...(node.cause ? [node.cause] : []), ...(node.errors ?? [])]) {
-        if ("ref" in edge) {
-          pending.push(edge.ref);
-        }
-      }
-    }
-    if ((!canonical && options.includeOrdinary !== true) || visited.size !== nodes.length) {
+        (node.type !== "error" && node.type !== "aggregate"),
+    );
+    if (!canonical && options.includeOrdinary !== true) {
       return undefined;
     }
     const errors = nodes.map(createError);
@@ -300,107 +274,72 @@ export function hydrateOpenClawStateWorkerError(
   if (!(value instanceof Error)) {
     return value;
   }
-  type Node = {
-    source: Error;
-    parents: Set<Node>;
-    changed: boolean;
-    opaque: boolean;
-    replacement: Error;
-    cause?: { value: unknown };
-    errors?: unknown[];
-  };
-  const nodes = new Map<Error, Node>();
-  const queue: Node[] = [];
-  const add = (error: Error): Node => {
-    const previous = nodes.get(error);
-    if (previous) {
-      return previous;
-    }
-    const node: Node = {
-      source: error,
-      replacement: error,
-      parents: new Set(),
-      changed: false,
-      opaque: false,
-    };
-    nodes.set(error, node);
-    queue.push(node);
-    const payload: unknown = Object.getOwnPropertyDescriptor(error, retainedPayloadKey)?.value;
-    const graph = payload === undefined ? undefined : decodeErrorGraph(payload, options);
-    if (graph) {
-      node.replacement = graph.errors[graph.root]!;
-      node.opaque = true;
-      node.changed = true;
-    }
-    return node;
-  };
-  const root = add(value);
-  for (const node of queue) {
-    if (node.opaque) {
+  const replacements = new Map<Error, Error>();
+  const pending = [{ error: value, finish: false }];
+  const replace = (child: unknown): unknown =>
+    child instanceof Error ? (replacements.get(child) ?? child) : child;
+  while (pending.length > 0) {
+    const entry = pending.pop()!;
+    const { error } = entry;
+    if (!entry.finish) {
+      if (replacements.has(error)) {
+        continue;
+      }
+      // A circular local cause stays on its original object; wire graphs keep their aliases.
+      replacements.set(error, error);
+      const payload: unknown = Object.getOwnPropertyDescriptor(error, retainedPayloadKey)?.value;
+      const graph = payload === undefined ? undefined : decodeErrorGraph(payload, options);
+      if (graph) {
+        replacements.set(error, graph.errors[graph.root]!);
+        continue;
+      }
+      pending.push({ error, finish: true });
+      if (error.cause instanceof Error) {
+        pending.push({ error: error.cause, finish: false });
+      }
+      if (error instanceof AggregateError) {
+        for (const child of error.errors) {
+          if (child instanceof Error) {
+            pending.push({ error: child, finish: false });
+          }
+        }
+      }
       continue;
     }
-    const edge = (child: unknown) => {
-      if (child instanceof Error) {
-        add(child).parents.add(node);
-      }
-    };
-    if ("cause" in node.source) {
-      node.cause = { value: node.source.cause };
-      edge(node.cause.value);
-    }
-    if (node.source instanceof AggregateError) {
-      node.errors = [...node.source.errors];
-      node.errors.forEach(edge);
-    }
-  }
-  const affected = queue.filter((node) => node.changed);
-  for (const node of affected) {
-    for (const parent of node.parents) {
-      if (!parent.changed) {
-        parent.changed = true;
-        affected.push(parent);
-      }
-    }
-  }
-  if (!root.changed) {
-    return value;
-  }
-  for (const node of affected) {
-    if (node.replacement === node.source) {
-      node.replacement =
-        node.source instanceof AggregateError
-          ? new AggregateError([], node.source.message)
-          : new Error(node.source.message);
-      Object.setPrototypeOf(node.replacement, Object.getPrototypeOf(node.source));
-    }
-  }
-  const replace = (child: unknown): unknown => {
-    const node = child instanceof Error ? nodes.get(child) : undefined;
-    return node?.changed ? node.replacement : child;
-  };
-  for (const node of affected) {
-    if (node.opaque) {
+    const cause = replace(error.cause);
+    const originalErrors = error instanceof AggregateError ? error.errors : undefined;
+    const errors = originalErrors?.map(replace);
+    if (
+      cause === error.cause &&
+      (!errors || errors.every((child, index) => child === originalErrors?.[index]))
+    ) {
       continue;
     }
-    const descriptors = Object.getOwnPropertyDescriptors(node.source);
+    const replacement =
+      error instanceof AggregateError
+        ? new AggregateError([], error.message)
+        : new Error(error.message);
+    Object.setPrototypeOf(replacement, Object.getPrototypeOf(error));
+    const descriptors = Object.getOwnPropertyDescriptors(error);
     Reflect.deleteProperty(descriptors, retainedPayloadKey);
-    if (node.cause) {
+    if ("cause" in error) {
       descriptors.cause = {
-        configurable: descriptors.cause?.configurable ?? true,
-        enumerable: descriptors.cause?.enumerable ?? false,
-        writable: descriptors.cause?.writable ?? true,
-        value: replace(node.cause.value),
+        configurable: true,
+        writable: true,
+        ...descriptors.cause,
+        value: cause,
       };
     }
-    if (node.errors) {
+    if (errors) {
       descriptors.errors = {
-        configurable: descriptors.errors?.configurable ?? true,
-        enumerable: descriptors.errors?.enumerable ?? false,
-        writable: descriptors.errors?.writable ?? true,
-        value: node.errors.map(replace),
+        configurable: true,
+        writable: true,
+        ...descriptors.errors,
+        value: errors,
       };
     }
-    Object.defineProperties(node.replacement, descriptors);
+    Object.defineProperties(replacement, descriptors);
+    replacements.set(error, replacement);
   }
-  return root.replacement;
+  return replacements.get(value)!;
 }

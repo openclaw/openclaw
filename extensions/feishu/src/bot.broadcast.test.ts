@@ -87,13 +87,15 @@ describe("broadcast dispatch", () => {
   }
 
   it("sends no-visible-reply fallback for active broadcast failed final delivery", async () => {
-    mockDispatchReply
-      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
-      .mockResolvedValueOnce({
-        queuedFinal: true,
-        counts: { final: 1 },
-        settledReceipt: failedFinalReceipt,
-      });
+    mockDispatchReply.mockImplementation(async ({ ctx }) =>
+      String(ctx.SessionKey).startsWith("agent:main:")
+        ? {
+            queuedFinal: true,
+            counts: { final: 1 },
+            settledReceipt: failedFinalReceipt,
+          }
+        : { queuedFinal: false, counts: { final: 1 } },
+    );
     const ensureNoVisibleReplyFallback = vi.fn();
     const activeDeliver = vi.fn(async () => undefined);
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
@@ -119,14 +121,16 @@ describe("broadcast dispatch", () => {
   });
 
   it("skips no-visible-reply fallback for source-suppressed active broadcast dispatch", async () => {
-    mockDispatchReply
-      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
-      .mockResolvedValueOnce({
-        queuedFinal: false,
-        counts: { final: 0 },
-        sourceReplyDeliveryMode: "message_tool_only",
-        noVisibleReplyFallbackEligible: true,
-      });
+    mockDispatchReply.mockImplementation(async ({ ctx }) =>
+      String(ctx.SessionKey).startsWith("agent:main:")
+        ? {
+            queuedFinal: false,
+            counts: { final: 0 },
+            sourceReplyDeliveryMode: "message_tool_only",
+            noVisibleReplyFallbackEligible: true,
+          }
+        : { queuedFinal: false, counts: { final: 1 } },
+    );
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
       dispatcherOptions: {},

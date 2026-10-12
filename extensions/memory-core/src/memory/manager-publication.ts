@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
@@ -101,20 +100,19 @@ export async function publishMemorySource(params: {
     );
   }
   return run(async (scope) => {
-    const operation = randomUUID();
-    const { header, rows } = memoryPublicationHeader(replacement);
-    await scope.execute({ type: "stage.start", input: { operation, header, rows } });
+    const header = memoryPublicationHeader(replacement);
+    await scope.execute({ type: "stage.start", input: { header } });
     for (const fragments of memoryPublicationBatches(replacement)) {
-      await scope.execute({ type: "stage.append", input: { operation, fragments } });
+      await scope.execute({ type: "stage.append", input: { fragments } });
     }
     const result = await retry(
-      () => scope.execute({ type: "source.replace", input: { operation, state: state() } }),
+      () => scope.execute({ type: "source.replace", input: { state: state() } }),
       prepare,
     );
     assertPublished?.();
     // Thrown failures close through the host owner; another command could hide the write outcome.
     if (result === undefined) {
-      await scope.execute({ type: "stage.discard", input: { operation } });
+      await scope.execute({ type: "stage.discard", input: undefined });
     }
     return result;
   });
@@ -163,20 +161,19 @@ export async function publishMemoryEmbeddingCache(params: {
     }
     return current;
   }
-  const operation = randomUUID();
   await scope.execute({
     type: "cache.stage.start",
-    input: { operation, header: mutation.header, rows: mutation.entries.length },
+    input: { header: mutation.header },
   });
   for (const fragments of memoryEmbeddingCacheBatches(mutation.entries)) {
-    await scope.execute({ type: "stage.append", input: { operation, fragments } });
+    await scope.execute({ type: "stage.append", input: { fragments } });
   }
   const current = await retry(
-    () => scope.execute({ type: "cache.write", input: { operation, expectedRevision } }),
+    () => scope.execute({ type: "cache.write", input: { expectedRevision } }),
     prepare,
   );
   if (current === undefined) {
-    await scope.execute({ type: "stage.discard", input: { operation } });
+    await scope.execute({ type: "stage.discard", input: undefined });
   }
   if (current === false) {
     // Publish generation invalidation before releasing this writer turn.

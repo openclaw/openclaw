@@ -4,7 +4,10 @@ import {
   isReasoningOnlyLengthAssistantTurn,
   isStreamErrorFallbackContent,
 } from "@openclaw/ai/internal/shared";
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import {
+  isCompactionReplayCheckpoint,
+  replaceCompactionReplayOwnerContent,
+} from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
@@ -298,7 +301,8 @@ function normalizeAssistantReplayMessage(
   if (
     isStreamErrorFallbackContent(message.content) &&
     (message.stopReason === "error" ||
-      isZeroUsageEmptyStopAssistantTurn({ ...message, content: [] }))
+      (isZeroUsageEmptyStopAssistantTurn({ ...message, content: [] }) &&
+        !isCompactionReplayCheckpoint(message.providerReplay)))
   ) {
     return null;
   }

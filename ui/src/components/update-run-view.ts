@@ -1,1 +1,1 @@
-export { UpdateRunView } from "./update-run-view.tsx";
+import "./update-run-view.tsx";

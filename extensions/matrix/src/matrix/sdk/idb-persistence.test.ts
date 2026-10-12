@@ -204,13 +204,6 @@ describe("Matrix IndexedDB persistence", () => {
     if (!laterChunk) {
       throw new Error("expected snapshot chunk 11");
     }
-    const { db } = openOpenClawStateDatabase({
-      env: openMatrixIdbSnapshotStoreOptions(tmpDir).env,
-    });
-    db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
-      "invalid JSON",
-      laterChunk.key,
-    );
     await store.register(chunk.key, { ...chunk.value, index: -1 });
     expect(await readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
     await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBeNull();
@@ -218,6 +211,20 @@ describe("Matrix IndexedDB persistence", () => {
     expect(await readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
     await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBeNull();
     await store.register(chunk.key, chunk.value);
+    // Corrupt offline storage, not a live owner's cached rows.
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    const { db, path: databasePath } = openOpenClawStateDatabase({
+      env: openMatrixIdbSnapshotStoreOptions(tmpDir).env,
+    });
+    db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
+      "invalid JSON",
+      laterChunk.key,
+    );
+    await closeOpenClawStateDatabaseAsync();
+    // A fresh physical file models the cold-process read without cached row facts.
+    fs.copyFileSync(databasePath, `${databasePath}.corrupt`);
+    fs.renameSync(`${databasePath}.corrupt`, databasePath);
     await expect(readMatrixIdbSnapshotJson(tmpDir)).rejects.toMatchObject(
       expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
     );

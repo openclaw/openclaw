@@ -608,27 +608,34 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked", "git-modules"] as
   },
 );
 
-it.each(["npm", "pnpm11"] as const)(
+it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
   "keeps the retained %s runtime inside its install's dependency owner",
   async (layout) => {
     const base = await fs.realpath(tempDirs.make("retained-dependency-owner-"));
-    const globalRoot = path.join(base, "prefix", layout === "npm" ? "lib/node_modules" : "v11");
-    const root =
-      layout === "npm"
-        ? path.join(globalRoot, "openclaw")
-        : path.join(globalRoot, ".pnpm/openclaw@1/node_modules/openclaw");
-    const dependency = path.join(
-      globalRoot,
-      layout === "npm" ? "fixture" : ".pnpm/node_modules/fixture",
-    );
+    const npm = layout !== "pnpm11";
+    const globalRoot = path.join(base, "prefix", npm ? "lib/node_modules" : "v11");
+    const root = npm
+      ? path.join(globalRoot, "openclaw")
+      : path.join(globalRoot, ".pnpm/openclaw@1/node_modules/openclaw");
+    // `npm link` leaves only a global link to a package checkout elsewhere.
+    const dependency =
+      layout === "npm-linked"
+        ? path.join(base, "linked/fixture")
+        : path.join(globalRoot, npm ? "fixture" : ".pnpm/node_modules/fixture");
     const ambientModules = path.join(base, "node_modules");
+    // Another globally installed tool shares the install's module directory.
+    const globalSibling = path.join(globalRoot, "unrelated-global");
     for (const directory of [
       path.join(root, "dist"),
       dependency,
+      globalSibling,
       path.join(ambientModules, "ambient-peer"),
       path.join(ambientModules, "unrelated"),
     ]) {
       await mkdir(directory, { recursive: true });
+    }
+    if (layout === "npm-linked") {
+      await symlink(dependency, path.join(globalRoot, "fixture"), "junction");
     }
     await writeFile(
       path.join(root, "package.json"),
@@ -651,26 +658,44 @@ it.each(["npm", "pnpm11"] as const)(
       '{"name":"ambient-peer"}',
     );
     await writeFile(path.join(ambientModules, "unrelated/sentinel.txt"), "unrelated dependency");
+    await writeFile(path.join(globalSibling, "package.json"), '{"name":"unrelated-global"}');
     const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
     await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
       await retain({
         mutationRoots: [globalRoot],
-        installTarget: {
-          manager: layout === "npm" ? "npm" : "pnpm",
-          command: layout === "npm" ? "npm" : "pnpm",
-          globalRoot,
-          packageRoot: root,
-        },
+        // Without an install target the enclosing module directory is the only
+        // known owner of hoisted dependencies.
+        ...(layout === "npm-unresolved"
+          ? {}
+          : {
+              installTarget: {
+                manager: npm ? ("npm" as const) : ("pnpm" as const),
+                command: npm ? "npm" : "pnpm",
+                globalRoot,
+                packageRoot: root,
+              },
+            }),
         timeoutMs: 30_000,
         assertCurrent() {},
       });
       const retainedUrl = captureRuntimeWorkerSource(moduleUrl).moduleUrl;
       const retainedRoot = path.resolve(path.dirname(fileURLToPath(retainedUrl)), "..");
       const retainedAmbient = path.resolve(retainedRoot, path.relative(root, ambientModules));
+      const retainedSibling = stat(path.resolve(retainedRoot, path.relative(root, globalSibling)));
+      if (layout === "npm-unresolved") {
+        await expect(retainedSibling).resolves.toBeDefined();
+      } else {
+        await expect(retainedSibling).rejects.toMatchObject({ code: "ENOENT" });
+      }
       await rename(globalRoot, `${globalRoot}.previous`);
       await mkdir(globalRoot);
       await rm(`${globalRoot}.previous`, { recursive: true });
+      await rm(path.join(base, "linked"), { recursive: true, force: true });
       expect((await import(retainedUrl.href)).value).toBe("hoisted survived");
+      if (layout === "npm-linked" || layout === "npm-unresolved") {
+        // These owners resolve their peers from their own locations, as Node does.
+        return;
+      }
       await expect(stat(path.join(retainedAmbient, "ambient-peer"))).rejects.toMatchObject({
         code: "ENOENT",
       });

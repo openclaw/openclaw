@@ -25,18 +25,16 @@ import { createCronServiceState } from "./service/state.js";
 import { saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import {
-  activateCronRunReceiptInDatabase,
   assertCronRunReceiptCurrentInDatabase,
-  CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
-  finishCronRunReceiptAsync,
 } from "./store/run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
   makeCronReceiptJob,
+  finishCronRunReceiptAsync,
 } from "./store/run-receipt-store.test-support.js";
 
-it("rechecks unrepaired delivery in the current row before activating a prepared run", async () => {
+it("rejects unrepaired delivery in the current receipt row", async () => {
   await withOpenClawTestState({ label: "cron-receipt-delivery" }, async (fixture) => {
     const job = makeCronReceiptJob("delivery-changed-after-claim");
     job.delivery = { mode: "announce", channel: "telegram", to: "synthetic-target" };
@@ -69,16 +67,6 @@ it("rechecks unrepaired delivery in the current row before activating a prepared
       await expect(
         assertServiceCronRunReceiptCurrent(state, handle, marker, context),
       ).rejects.toThrow("openclaw doctor --fix");
-      expect(() =>
-        runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
-          activateCronRunReceiptInDatabase({
-            database: transactionDb,
-            handle,
-            startedAtMs: 2,
-            resolveAgentId: (current) => current.agentId!,
-          }),
-        ),
-      ).toThrow(CronRunReceiptRevisionError);
       expect(() =>
         runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
           assertCronRunReceiptCurrentInDatabase({

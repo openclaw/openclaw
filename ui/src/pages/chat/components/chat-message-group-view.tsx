@@ -137,14 +137,6 @@ function PreparedMessage(props: {
   );
 }
 
-export function renderSolidActivityGroup(
-  groups: readonly MessageGroupData[],
-  opts: NativeMessageGroupOptions,
-  presentation: "standalone" | "continuation" = "standalone",
-) {
-  return <ActivityGroup groups={groups} options={opts} presentation={presentation} />;
-}
-
 export function ActivityGroup(props: {
   groups: readonly MessageGroupData[];
   options: NativeMessageGroupOptions;

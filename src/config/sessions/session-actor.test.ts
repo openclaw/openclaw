@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -25,6 +26,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
@@ -120,6 +122,22 @@ it("acquires the exact cold durable execution owner and installs a real worker c
       expect(actor.snapshot(authority)?.entry?.sessionId).toBe(fixture.scope.sessionId);
       expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(543);
       expect(fixture.read()?.updatedAt).toBe(543);
+      const before = actor.snapshot(authority)!;
+      await patchSessionEntryCore(
+        {
+          agentId: "main",
+          storePath: fixture.database.path,
+          sessionKey: fixture.scope.sessionKey,
+          env,
+        },
+        () => ({ label: "published patch" }),
+        { skipMaintenance: true, preserveActivity: true },
+      );
+      const after = actor.snapshot(authority);
+      expect(after?.entry).toMatchObject({ label: "published patch", updatedAt: 543 });
+      expect(after?.transcript).toEqual(before.transcript);
+      expect(after?.pendingInputs).toEqual(before.pendingInputs);
+      expect(after?.version).toEqual({ ...before.version, sequence: before.version.sequence + 1 });
     } finally {
       await actor.release();
     }
@@ -139,6 +157,7 @@ async function withActor(
       drain?: Promise<void>;
       onExecuted?: () => void;
       admissionCancelled?: boolean;
+      disclosureRevoked?: boolean;
     };
     retireGeneration(this: void): void;
     nativePatch(this: void, updatedAt: number): void;
@@ -172,7 +191,11 @@ async function withActor(
         }
       },
       assertCurrent() {},
-      assertReadable() {},
+      assertReadable() {
+        if (fault.disclosureRevoked) {
+          throw new Error("Snapshot disclosure revoked");
+        }
+      },
     };
     const replica = createSessionActorReplica({
       target,
@@ -640,6 +663,61 @@ it("admits tool appends once per transaction boundary without transferring trans
     expect((await actor.read(authority)).transcript).toEqual(committed.transcript);
   });
 });
+
+it.each([false, true])(
+  "appends prepared session-manager messages without snapshot disclosure (toolResult=%s)",
+  async (toolResult) => {
+    await withActor(async ({ actor, fault, admissions }) => {
+      const initial = await actor.read(authority);
+      const sessionId = initial.entry!.sessionId;
+      fault.disclosureRevoked = true;
+      expect(() => actor.snapshot(authority)).toThrow("Snapshot disclosure revoked");
+      admissions.length = 0;
+      const result = await appendSessionManagerActor({
+        actor,
+        toolResult,
+        assertCurrent: () => authority.assertCurrent(),
+        append: {
+          kind: "message",
+          input: {
+            scope: {
+              agentId: "main",
+              storePath:
+                actor.target.database.kind === "file"
+                  ? actor.target.database.nativeLocation
+                  : "unused",
+              sessionKey: actor.target.sessionKey,
+              sessionId,
+            },
+            cwd: "/synthetic",
+            messageJson: JSON.stringify(
+              toolResult
+                ? {
+                    role: "toolResult",
+                    toolCallId: "prepared-tool",
+                    toolName: "synthetic",
+                    content: [{ type: "text", text: "prepared result" }],
+                    isError: false,
+                    timestamp: 2,
+                  }
+                : { role: "user", content: "prepared input", timestamp: 2 },
+            ),
+          },
+        },
+      });
+      expect(result.failure).toBeUndefined();
+      expect(result.committed).toMatchObject({
+        kind: "message",
+        value: { snapshot: { ok: true } },
+      });
+      expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
+      fault.disclosureRevoked = false;
+      const current = actor.snapshot(authority)!;
+      expect(current.version.sequence).toBe(initial.version.sequence + 1);
+      expect(current.transcript.anchors).toHaveLength(initial.transcript.anchors.length + 1);
+    });
+  },
+);
 
 it("retains rollback state and fences unknown commits until an explicit read", async () => {
   await withActor(async ({ actor, commands, fault }) => {

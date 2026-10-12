@@ -18,6 +18,7 @@ import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
 } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
@@ -206,6 +207,24 @@ describe("managed attachment SQLite visibility", () => {
       expect(fs.existsSync(f.originalPath)).toBe(true);
     },
   );
+
+  it("collects media after an in-process session replacement invalidates the selected entry", async () => {
+    const f = await fixture();
+    await seed(f, [message(f.messageId, null, [f.block])]);
+    expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
+      deletedRecordCount: 0,
+      retainedCount: 1,
+    });
+
+    await replaceSessionEntry(f.scope, { sessionId: "replacement-session", updatedAt: Date.now() });
+
+    expect(await cleanupManagedOutgoingMediaRecords({ stateDir })).toMatchObject({
+      deletedRecordCount: 1,
+      retainedCount: 0,
+    });
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).toBeNull();
+    expect(fs.existsSync(f.originalPath)).toBe(false);
+  });
 
   it("reads managed attachment membership without validating unrelated payloads", async () => {
     const f = await fixture();

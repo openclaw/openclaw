@@ -342,7 +342,7 @@ retaining the idle handoff for polls that can block.
 
 The pinned build pairs Bun `65d94e7156da4b6aca649dac5f19b8294b757570` with WebKit
 `01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
-`openclaw-v1.4.3-20261010-65d94e7156-webkit-01f208ae7a`.
+`openclaw-v1.4.3-20261010-65d94e7156-webkit-01f208ae7a-r2`.
 This build shares source buffers on `node:vm` cache hits, refactors module
 resolution, aligns TLS teardown with Node, fixes subprocess retirement, and
 enforces Node-compatible process and Worker heap limits. It fixes N-API cleanup
@@ -352,9 +352,10 @@ stale VM-entry storage initialization, uses a two-pointer VMEntryScope, and
 fixes Linux foreign-stack suspension deadlocks.
 It retains deferred VM bytecode generation, integral heap-sampling byte sizes,
 inspector snapshot cleanup, and the previous worker heap-cap, module-resolution,
-test-deadline, GC cadence, and idle-worker fixes. The release publishes the four
-Darwin/Linux targets; Darwin executables are Developer ID signed and notarized.
-Windows publication remains gated on signing.
+test-deadline, GC cadence, and idle-worker fixes. This same-commit rebuild publishes
+Darwin/Linux targets and Authenticode-signed Windows x64/arm64 targets from the
+OpenClaw Foundation. Darwin executables remain Developer ID signed and notarized;
+the shared pin records Windows targets as signed and not test-only.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module
 graphs. It activates after 1,750 distinct compiled sources and defaults to a
@@ -827,6 +828,7 @@ activity does not reevaluate the guards or change their statuses. Command mentio
 in prose, quotes, or code fences are not approval comments. The workflow filters
 ordinary comments before allocating a runner; a command mention can start the
 lightweight resolver, which validates the syntax before scheduling review.
+GitHub still records skipped workflow runs for ordinary comments.
 Both guards share one review job, and comment events do not rerun the test suite.
 Evaluation uses trusted repository code and GitHub metadata without
 executing contributor code or comment text.

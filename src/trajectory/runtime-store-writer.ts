@@ -15,6 +15,10 @@ import {
   resolveSqliteSessionKey,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
@@ -51,6 +55,7 @@ import {
   scheduleSqliteTrajectoryRuntimeRetention,
   settleIncognitoTrajectoryRuntimeRetention,
 } from "./runtime-retention.js";
+import { createMemoryTrajectoryRuntimeSink } from "./runtime-store-memory.js";
 import type {
   SerializedTrajectoryEvent,
   SqliteTrajectoryRuntimeAppend,
@@ -66,6 +71,7 @@ type TrajectoryRuntimeSinkParams = {
   sessionKey?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   assertCommitAllowed?: () => void;
+  sessionActor?: SessionActorStorageBinding;
 };
 
 type IncognitoTrajectoryTarget = NonNullable<
@@ -107,6 +113,14 @@ export async function createSqliteTrajectoryRuntimeSink(input: TrajectoryRuntime
         : undefined;
   params.assertCommitAllowed?.();
   const selected = scope ?? marker;
+  const memory = getSessionActorStorageBinding({
+    ...selected,
+    sessionKey: scope?.sessionKey ?? params.sessionKey,
+    sessionActor: params.sessionActor,
+  });
+  if (memory) {
+    return createMemoryTrajectoryRuntimeSink(memory, params);
+  }
   const incognito = selected && captureIncognitoSessionOperation({ ...selected, env: params.env });
   if (incognito) {
     const sessionKey =

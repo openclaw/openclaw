@@ -17,14 +17,17 @@ import type {
   StoredSessionSuggestionResolution,
   StoredSessionSuggestionState,
 } from "./session-sharing-store.types.js";
+import {
+  MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR,
+  MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION,
+  MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS,
+  SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+} from "./session-suggestion-policy.js";
 import { SessionWorkStartInvalidatedError } from "./work-start-error.js";
 
 type SuggestionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_suggestions">;
 
-const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
-const MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION = 100;
-const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
-export const SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS = 30_000;
+export { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "./session-suggestion-policy.js";
 
 function suggestionDb(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<SuggestionDatabase>(database.db);

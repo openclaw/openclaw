@@ -182,6 +182,24 @@ not identify the thread consuming CPU or prove a main-thread hang. Inspect the
 delay measurements alongside CPU pressure. The `eventLoop` diagnostic does not
 change the readiness result by itself.
 
+Main-thread callbacks longer than one second produce a `main-thread stall` log
+with a code-owned task label where available. On Node 26, a bounded CPU flight
+recorder writes one additional bounded `main-thread stall profile` line with a
+trailing window's top inclusive frames, sample count, and truncation status.
+Several callbacks can finish before a sample, so this window is not assigned to
+an individual task. It samples every 10 ms and rotates five-second windows without
+stopping the sampler. At most two windows are retained; no profile files are
+written. Symbols and locations use the same redaction policy as on-demand
+diagnostic profiles. Inclusive counts overlap when a sampled stack contains
+several listed frames; they are not independent durations.
+
+The recorder skips Bun, Node 24 (which lacks the bounded coarse-sampling API),
+and processes already started with conflicting profiling, tracing, or debugger
+options. Callback labels still work on those runtimes. Native blocking work can
+remain unsymbolized, and an unusually long stall can exhaust the sample cap;
+`truncated=true` identifies incomplete evidence. Recorder failures are logged
+once and disable recording for that monitor's lifetime.
+
 ## Uptime monitoring
 
 External uptime monitoring services should use the dedicated `/health` endpoint, not `/v1/chat/completions`.

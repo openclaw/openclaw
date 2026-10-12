@@ -706,6 +706,7 @@ describe("attributed sender avatars", () => {
       id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
       identity: { type: "profile" as const, id: "dd7c98e2-f51d-4590-b588-fa0682e165b7" },
       name: "hrudolph",
+      profileAvatarUrl: "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar",
     };
     const renderSender = () =>
       render(renderChatAvatar("user", undefined, undefined, sender), container);

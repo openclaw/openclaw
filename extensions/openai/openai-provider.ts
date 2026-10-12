@@ -708,7 +708,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const [
-          { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata },
+          { resolveApiKeyForProvider, resolveProviderAuthProfileMetadataAsync },
           { isNonSecretApiKeyMarker },
         ] = await Promise.all([
           import("openclaw/plugin-sdk/provider-auth-runtime"),
@@ -734,7 +734,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           }
         }
         if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
-          const metadata = resolveProviderAuthProfileMetadata({
+          const metadata = await resolveProviderAuthProfileMetadataAsync({
             provider: PROVIDER_ID,
             cfg: ctx.config,
             ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),

@@ -1,8 +1,8 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
-import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import "../tooltip.ts";
 
 export function BoardPendingCapabilities(props: {

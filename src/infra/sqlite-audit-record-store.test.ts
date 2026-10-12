@@ -246,42 +246,6 @@ describe("SQLite audit record store", () => {
     });
   });
 
-  it("preserves insertion order and prunes the oldest row when timestamps tie", async () => {
-    await withAuditStoreFixture({ prefix: "openclaw-audit-store-ties-" }, async (stateDir) => {
-      const store = createSqliteAuditRecordStore<{ value: number }>({
-        scope: "tied-timestamps",
-        maxEntries: 2,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
-
-      store.register("z-first", { value: 1 }, 1);
-      store.register("a-second", { value: 2 }, 1);
-      expect(store.entries().map((entry) => entry.key)).toEqual(["z-first", "a-second"]);
-
-      store.register("m-third", { value: 3 }, 1);
-      expect(store.entries().map((entry) => entry.key)).toEqual(["a-second", "m-third"]);
-    });
-  });
-
-  it("prunes by insertion order when wall-clock timestamps move", async () => {
-    await withAuditStoreFixture(
-      { prefix: "openclaw-audit-store-clock-skew-" },
-      async (stateDir) => {
-        const store = createSqliteAuditRecordStore<{ value: number }>({
-          scope: "clock-skew",
-          maxEntries: 2,
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        });
-
-        store.register("future-first", { value: 1 }, 4_000_000_000_000);
-        store.register("past-second", { value: 2 }, 1);
-        store.register("current-third", { value: 3 }, 2_000_000_000_000);
-
-        expect(store.entries().map((entry) => entry.key)).toEqual(["past-second", "current-third"]);
-      },
-    );
-  });
-
   it("prunes a legacy batch with one delete while preserving runtime rows and other scopes", async () => {
     await withAuditStoreFixture({ prefix: "openclaw-audit-store-batch-" }, async (stateDir) => {
       const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };

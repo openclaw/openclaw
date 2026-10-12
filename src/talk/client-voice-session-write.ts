@@ -5,6 +5,7 @@ import {
   applySessionEntryTargetOperation,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "../config/sessions/session-pending-input-authority.js";
@@ -44,6 +45,7 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
+import { ensureMemoryVoiceEntry, prepareMemoryVoiceSource } from "./client-voice-memory-entry.js";
 import {
   assertClientVoiceSessionSettlementCurrent,
   withClientVoiceSessionSettlement,
@@ -280,19 +282,28 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
     }
     return created.sessionId;
   };
-  if (isIncognitoSessionKey(params.sessionKey)) {
-    const { operation, fallbackEntry } = reduction();
-    const authority = composeSessionSourceAssertion([params.requester, params.source]);
+  const memory = getSessionActorStorageBinding(params);
+  if (memory || isIncognitoSessionKey(params.sessionKey)) {
+    const prepared = reduction();
+    const assertCurrent = composeSessionSourceAssertion([
+      assertLifetimeCurrent,
+      params.requester,
+      params.source,
+    ]);
     return complete(
-      await applySessionEntryOperation(params, operation, {
-        ...publication,
-        fallbackEntry,
-        workerGuard: { assertCurrent: assertLifetimeCurrent },
-        assertCommitAllowed: () => {
-          assertLifetimeCurrent();
-          authority();
-        },
-      }),
+      memory
+        ? await ensureMemoryVoiceEntry({
+            binding: memory,
+            ...prepared,
+            ...publication,
+            assertCurrent,
+          })
+        : await applySessionEntryOperation(params, prepared.operation, {
+            ...publication,
+            fallbackEntry: prepared.fallbackEntry,
+            workerGuard: { assertCurrent: assertLifetimeCurrent },
+            assertCommitAllowed: assertCurrent,
+          }),
     );
   }
   const resources: Array<Pick<PreparedSessionSourceAuthority, "release">> = [];
@@ -407,9 +418,13 @@ export async function mutateAuthorizedClientVoiceSession<T>(
 ): Promise<T> {
   const resources: Array<Pick<PreparedSessionSourceAuthority, "release">> = [];
   return withClientVoiceSessionResources(resources, async () => {
-    const sourceCandidates = params.source
-      ? captureSessionStoreReadCandidates(params.source.storePath)
-      : [];
+    const memorySource = params.source
+      ? getSessionActorStorageBinding({ storePath: params.source.storePath })
+      : undefined;
+    const sourceCandidates =
+      params.source && !memorySource
+        ? captureSessionStoreReadCandidates(params.source.storePath)
+        : [];
     const sourceIdentities = captureSessionStoreCandidateIdentities(sourceCandidates);
     const assertSourceLocatorsCurrent = () => {
       if (!sourceCandidates.every(isSessionStoreReadCandidateCurrent)) {
@@ -430,7 +445,10 @@ export async function mutateAuthorizedClientVoiceSession<T>(
         let assertSourceIdentityCurrent: (() => void) | undefined;
         let authority: PreparedSessionSourceAuthority | undefined;
         let workerGrant: SessionSourceWriteGrant | undefined;
-        if (params.source) {
+        if (params.source && memorySource) {
+          authority = await prepareMemoryVoiceSource(memorySource, params.source.assertCurrent);
+          resources.push(authority);
+        } else if (params.source) {
           if (
             params.source.prepareWorkerGrant &&
             !requester.nativeSource &&

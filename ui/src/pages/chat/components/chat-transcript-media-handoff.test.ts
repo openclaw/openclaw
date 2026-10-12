@@ -543,6 +543,9 @@ describe("canonical image presentation handoff", () => {
         ]);
       } else if (change === "disconnect") {
         fixture.setConnected(false);
+        fixture.container.remove();
+        await flushDeferredRowPrune();
+        document.body.append(fixture.container);
         fixture.setConnected(true);
       }
       if (change !== "denial") {

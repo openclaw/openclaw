@@ -403,6 +403,8 @@ describe("createGatewayKernel", () => {
         env: {
           ...KERNEL_TEST_ENV,
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+          OPENCLAW_SKIP_CHANNELS: undefined,
+          OPENCLAW_SKIP_PROVIDERS: undefined,
         },
       });
       const previousOverrides = getConfigOverrides();

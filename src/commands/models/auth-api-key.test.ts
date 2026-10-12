@@ -275,6 +275,20 @@ describe("shared API-key editing and removal", () => {
           order: [profileId, "sample:backup"],
         });
       }
+      const ownerDir = owner ? agentDir(owner) : undefined;
+      const stored = loadPersistedAuthProfileStore(ownerDir)!;
+      const failureState = {
+        lastUsed: 1_700_000_000_000,
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit" as const,
+        errorCount: 3,
+        failureCounts: { rate_limit: 3 },
+      };
+      stored.usageStats = {
+        [profileId]: failureState,
+        ...(owner ? { "sample:backup": failureState } : {}),
+      };
+      authStoreRuntime.saveAuthProfileStore(stored, ownerDir);
       const configuredProfile = {
         provider: "sample",
         mode: "api_key" as const,
@@ -299,7 +313,10 @@ describe("shared API-key editing and removal", () => {
       expect(
         loadPersistedAuthProfileStore(owner ? agentDir(owner) : undefined)?.profiles[profileId],
       ).toMatchObject({ key: "synthetic-new-key", ...metadata });
+      const usageStats = loadPersistedAuthProfileStore(ownerDir)?.usageStats;
+      expect(usageStats?.[profileId]).toEqual({ lastUsed: failureState.lastUsed, errorCount: 0 });
       if (owner) {
+        expect(usageStats?.["sample:backup"]).toEqual(failureState);
         expect(result).toMatchObject({ profileId });
         const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir(owner));
         expect(store.profiles[profileId]).toMatchObject({ key: "synthetic-new-key" });

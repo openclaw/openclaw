@@ -260,7 +260,7 @@ export async function runCodexAppServerSideQuestion(
   });
   const modelSelection =
     supervisionModelSelection ??
-    resolveCodexAppServerThreadModelSelection({
+    (await resolveCodexAppServerThreadModelSelection({
       homeScope: appServer.start.homeScope,
       provider: params.provider,
       model: params.model,
@@ -271,7 +271,7 @@ export async function runCodexAppServerSideQuestion(
       authProfileStore: preparedRuntimeAuth.authProfileStore,
       agentDir: params.agentDir,
       config: params.cfg,
-    });
+    }));
 
   const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
     appServer,

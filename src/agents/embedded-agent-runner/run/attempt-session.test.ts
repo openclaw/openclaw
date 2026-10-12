@@ -113,7 +113,7 @@ const attempt = {
 
 function createInput(options?: { activationError?: Error }) {
   const events: string[] = [];
-  const settingsManager = { id: "settings" };
+  const settingsManager = { id: "settings", getCompactionEnabled: () => true };
   const resourceLoader = {
     reload: vi.fn(async () => {
       events.push("resource-reload");

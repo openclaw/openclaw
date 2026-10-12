@@ -1219,6 +1219,7 @@ CREATE TABLE IF NOT EXISTS agent_databases (
 CREATE TABLE IF NOT EXISTS agent_deletion_journal (
   agent_id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL DEFAULT '',
+  phase TEXT,
   agent_dir TEXT NOT NULL,
   workspace_dir TEXT NOT NULL,
   sessions_dir TEXT NOT NULL,

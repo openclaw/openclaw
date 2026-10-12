@@ -50,6 +50,8 @@ const HANDOFF_BUSY_TIMEOUT_MS = 5_000;
 const writeAdmissions = new AsyncLocalStorage<{
   owner: string;
   deadline: number;
+  databasePath: string;
+  lockRoot?: Root;
 }>();
 
 type HandoffDatabaseOwner = {
@@ -413,12 +415,14 @@ export function createManagedHandoffLeaseDatabase(
     if (!observeUnadoptable(target)) {
       return;
     }
+    const current = writeAdmissions.getStore();
+    const admission = current?.databasePath === target ? current : undefined;
     const release = acquireFileLockSyncWithRetry(
       target,
-      writeLockRoot
+      writeLockRoot || admission
         ? {
-            lockRoot: writeLockRoot,
-            reentrantOwner: writeAdmissions.getStore()?.owner,
+            lockRoot: writeLockRoot ?? admission?.lockRoot,
+            reentrantOwner: admission?.owner,
             timeoutMs: HANDOFF_BUSY_TIMEOUT_MS,
           }
         : undefined,
@@ -520,18 +524,28 @@ export function createManagedHandoffLeaseDatabase(
     }
   }
   function withDatabase<T>(write: boolean, operation: (db: HandoffDatabase) => T): T {
-    if (!write || !writeLockRoot) {
+    if (!write || (!writeLockRoot && (process.platform !== "win32" || existingIdentity))) {
       return accessDatabase(write, operation);
     }
     assertCurrent();
-    const admission = writeAdmissions.getStore() ?? {
-      owner: randomUUID(),
-      deadline: performance.now() + HANDOFF_BUSY_TIMEOUT_MS,
-    };
+    const inherited = writeAdmissions.getStore();
+    const admission =
+      inherited?.databasePath === databasePath
+        ? inherited
+        : {
+            owner: randomUUID(),
+            deadline: performance.now() + HANDOFF_BUSY_TIMEOUT_MS,
+            databasePath,
+            lockRoot: writeLockRoot,
+          };
+    if (!writeLockRoot && !existingIdentity) {
+      prepareHandoffDirectory(databasePath);
+    }
     const remaining = () => Math.max(0, Math.ceil(admission.deadline - performance.now()));
     // Wait before pinning a SHARED snapshot, which would block the current writer's commit.
+    // Direct Windows initializers share this lock: fs-safe briefly publishes two links.
     const release = acquireFileLockSyncWithRetry(databasePath, {
-      lockRoot: writeLockRoot,
+      lockRoot: writeLockRoot ?? admission.lockRoot,
       reentrantOwner: admission.owner,
       timeoutMs: remaining(),
     });

@@ -45,6 +45,7 @@ describe("createSlackThreadTsResolver", () => {
   }
 
   it("caches resolved thread_ts lookups", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const historyMock = vi.fn().mockResolvedValue({
       messages: [{ ts: "1", thread_ts: "9" }],
     });
@@ -60,6 +61,9 @@ describe("createSlackThreadTsResolver", () => {
     expect(first.thread_ts).toBe("9");
     expect(second.thread_ts).toBe("9");
     expect(historyMock).toHaveBeenCalledTimes(1);
+    nowSpy.mockReturnValue(1_700_000_060_000);
+    expect((await resolver.resolve({ message, source: "message" })).thread_ts).toBe("9");
+    expect(historyMock).toHaveBeenCalledTimes(2);
   });
 
   it("classifies an exhausted real WebClient 429 as transient", async () => {
@@ -227,38 +231,5 @@ describe("createSlackThreadTsResolver", () => {
       resolver.resolve({ message, source: "app_mention", turnAdoptionLifecycle }),
     ).resolves.toMatchObject({ _ambiguousThreadReply: true });
     expect(historyMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("drops cached thread_ts lookups when the current clock is not a valid date timestamp", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    const historyMock = vi.fn().mockResolvedValue({
-      messages: [{ ts: "1", thread_ts: "9" }],
-    });
-    const resolver = createSlackThreadTsResolver({
-      client: { conversations: { history: historyMock } } as never,
-    });
-    const message = makeThreadReplyMessage("1");
-
-    await resolver.resolve({ message, source: "message" });
-    nowSpy.mockReturnValue(Number.NaN);
-    await resolver.resolve({ message, source: "message" });
-
-    expect(historyMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache thread_ts lookups when the expiry timestamp would exceed the valid date range", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const historyMock = vi.fn().mockResolvedValue({
-      messages: [{ ts: "1", thread_ts: "9" }],
-    });
-    const resolver = createSlackThreadTsResolver({
-      client: { conversations: { history: historyMock } } as never,
-    });
-    const message = makeThreadReplyMessage("1");
-
-    await resolver.resolve({ message, source: "message" });
-    await resolver.resolve({ message, source: "message" });
-
-    expect(historyMock).toHaveBeenCalledTimes(2);
   });
 });

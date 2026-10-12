@@ -13,11 +13,11 @@ import {
   loadedCronStoreFromRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
+import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
+  claimCronRunReceiptForTest,
   finishCronRunReceiptAsync,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptForTest } from "../cron/store/run-receipt-store.test-support.js";
+} from "../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { buildCronExecOperationBinding } from "../gateway/operator-approval-standing-grants.js";
 import {

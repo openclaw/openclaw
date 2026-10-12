@@ -597,21 +597,6 @@ export async function pauseVirtualClock(page: Page): Promise<void> {
   await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 5_000);
 }
 
-// New-session place catalog refreshes read placement policy before inventory. Mock
-// replies are delivered on page timers, so a paused virtual clock holds that read
-// until advanced; release it without reaching any retry deadline.
-export async function releasePlacementPolicyRead(
-  page: Page,
-  gateway: MockGatewayControls,
-  trigger: () => Promise<void>,
-): Promise<void> {
-  const match = { includeSessionPlacement: true };
-  const before = (await gateway.getRequests("agents.list", match)).length;
-  await trigger();
-  await gateway.waitForRequest("agents.list", { after: before, match });
-  await page.clock.runFor(1);
-}
-
 export async function startControlUiE2eServer(
   buildInfo?: ControlUiBuildInfo,
   options: ControlUiE2eServerOptions = {},

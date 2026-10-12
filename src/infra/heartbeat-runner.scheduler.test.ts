@@ -446,7 +446,7 @@ describe("targeted unscheduled wake dispatch", () => {
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
     });
     expect(
-      wakeCronService(state, {
+      await wakeCronService(state, {
         mode: "next-heartbeat",
         text: "Operator requested a session update.",
         agentId: "main",

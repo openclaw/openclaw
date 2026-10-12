@@ -11,24 +11,24 @@ import { hasDeliveryTargetFields } from "../../utils/delivery-context.shared.js"
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
 import {
-  loadExactSessionEntryCandidatesReadOnlyBatch,
-  loadExactSessionEntryReadOnly,
-  openSessionEntryReadView,
-} from "./session-accessor.js";
-import type { SessionEntryReadView } from "./session-accessor.types.js";
-import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
+  readSessionEntryReadOnlyInWorker,
+  readSessionEntriesFromStoreInWorker,
+  readSessionEntrySummariesInWorker,
+} from "./session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
   isConfirmedLowercasedLegacyAlias,
   normalizeStoreSessionKey,
 } from "./store-entry.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
+import { resolveAllAgentSessionStoreTargetsAsync } from "./targets-runtime.js";
 import type { SessionEntry } from "./types.js";
 
 /** Reads only the current session; missing delivery must not widen into alias discovery. */
-export function readExactSessionDeliveryContext(params: {
+export async function readExactSessionDeliveryContext(params: {
   cfg: OpenClawConfig;
   sessionKey: string | undefined;
   sessionId?: string;
@@ -39,11 +39,12 @@ export function readExactSessionDeliveryContext(params: {
   }
   try {
     const { agentId, canonicalKey } = resolveSessionStoreIdentity({ cfg: params.cfg, sessionKey });
-    const entry = loadExactSessionEntryReadOnly({
+    const entry = await readSessionEntryReadOnlyInWorker({
+      agentId,
       storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
       sessionKey: canonicalKey,
       projection: "list",
-    })?.entry;
+    });
     if (params.sessionId && entry?.sessionId !== params.sessionId) {
       return undefined;
     }
@@ -60,11 +61,11 @@ export function readExactSessionDeliveryContext(params: {
  * Thread/topic keys first try their exact store entry, then fall back to the base session when
  * the thread entry has no delivery route of its own.
  */
-export function extractDeliveryInfo(
+export async function extractDeliveryInfo(
   sessionKey: string | undefined,
   options?: { cfg?: OpenClawConfig },
-): DeliveryInfo {
-  return extractDeliveryInfoBatch([sessionKey], options)[0]!;
+): Promise<DeliveryInfo> {
+  return (await extractDeliveryInfoBatch([sessionKey], options))[0]!;
 }
 
 type DeliveryInfo = {
@@ -75,21 +76,22 @@ type DeliveryInfo = {
 };
 
 type DeliveryLookup = {
+  agentId: string;
   sessionKeys: string[];
   baseKeys: string[];
   storePaths: string[];
 };
 
 type DeliveryStoreRead = {
-  get: SessionEntryReadView["get"];
-  normalizedIndex: () => Map<string, SessionEntry>;
+  get: (sessionKey: string) => SessionEntry | undefined;
+  normalizedIndex: () => Promise<Map<string, SessionEntry>>;
 };
 
-/** Resolves one synchronous batch; only detached delivery facts leave the read scope. */
-export function extractDeliveryInfoBatch(
+/** Resolves one batch through the session owner; only detached delivery facts leave the read scope. */
+export async function extractDeliveryInfoBatch(
   sessionKeys: readonly (string | undefined)[],
   options?: { cfg?: OpenClawConfig },
-): DeliveryInfo[] {
+): Promise<DeliveryInfo[]> {
   const parsed = sessionKeys.map((sessionKey) => ({
     sessionKey,
     ...resolveSessionThreadInfo(sessionKey),
@@ -107,100 +109,91 @@ export function extractDeliveryInfoBatch(
   } catch {
     return results;
   }
-  let storeTargets: ReturnType<typeof resolveAllAgentSessionStoreTargetsSync> | undefined;
+  let storeTargets: Awaited<ReturnType<typeof resolveAllAgentSessionStoreTargetsAsync>>;
+  try {
+    storeTargets = await resolveAllAgentSessionStoreTargetsAsync(cfg);
+  } catch {
+    return results;
+  }
   function prepareDeliveryLookup(sessionKey: string, baseSessionKey: string): DeliveryLookup {
     const { agentId, canonicalKey: canonicalBaseKey } = resolveSessionStoreIdentity({
       cfg,
       sessionKey: baseSessionKey,
     });
     const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: agentId });
-    const storePaths = new Set([resolveSessionStorePathCore(cfg.session?.store, { agentId })]);
-    // Share only successful discovery within this synchronous batch. A later request
-    // can retry a failure; every new batch discovers fresh targets, primary path first.
-    for (const target of (storeTargets ??= resolveAllAgentSessionStoreTargetsSync(cfg))) {
+    const incognito = isIncognitoSessionKey(sessionKey)
+      ? captureIncognitoSessionBinding({ agentId, sessionKey })
+      : undefined;
+    const storePaths = new Set([
+      incognito?.actor.path ?? resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+    ]);
+    for (const target of incognito ? [] : storeTargets) {
       if (target.agentId === agentId) {
         storePaths.add(target.storePath);
       }
     }
     return {
+      agentId,
       sessionKeys: [sessionKey, canonicalKey],
       baseKeys: [baseSessionKey, canonicalBaseKey],
       storePaths: [...storePaths],
     };
   }
-  const reads: Array<{
-    storePath: string;
-    sessionKeys: string[];
-    source?: SessionEntryReadSource;
-  }> = [];
   const lookups = parsed.flatMap(({ sessionKey, baseSessionKey }, index) => {
     if (!sessionKey || !baseSessionKey) {
       return [];
     }
     try {
-      const lookup = prepareDeliveryLookup(sessionKey, baseSessionKey);
-      // Incognito keyed reads retain their existing process-owned handle lifetime.
-      const readIndexes = isIncognitoSessionKey(sessionKey)
-        ? undefined
-        : lookup.storePaths.map((storePath) => {
-            reads.push({
-              storePath,
-              sessionKeys: deliveryLookupExactKeys([...lookup.sessionKeys, ...lookup.baseKeys]),
-            });
-            return reads.length - 1;
-          });
-      return [{ index, sessionKey, baseSessionKey, lookup, readIndexes }];
+      return [
+        {
+          index,
+          sessionKey,
+          baseSessionKey,
+          lookup: prepareDeliveryLookup(sessionKey, baseSessionKey),
+        },
+      ];
     } catch {
       return [];
     }
   });
-  const readGroups = new Map<string, number[]>();
-  for (const [index, read] of reads.entries()) {
-    const group = readGroups.get(read.storePath) ?? [];
-    group.push(index);
-    readGroups.set(read.storePath, group);
-  }
-  const exactResults = new Map<
-    number,
-    ReturnType<typeof loadExactSessionEntryCandidatesReadOnlyBatch>[number]
+  const exactReads = new Map<
+    string,
+    Promise<{ entries: SessionEntrySummary[]; source?: { agentId: string; path: string } }>
   >();
-  const readExact = (index: number) => {
-    const cached = exactResults.get(index);
-    if (cached) {
-      return cached;
+  const readExact = (storePath: string, lookup: DeliveryLookup) => {
+    const candidateKeys = deliveryLookupExactKeys([...lookup.sessionKeys, ...lookup.baseKeys]);
+    const cacheKey = JSON.stringify([storePath, candidateKeys]);
+    let read = exactReads.get(cacheKey);
+    if (!read) {
+      read = lookup.sessionKeys.some(isIncognitoSessionKey)
+        ? Promise.all(
+            candidateKeys.map(async (sessionKey) => {
+              const entry = await readSessionEntryReadOnlyInWorker({
+                agentId: lookup.agentId,
+                storePath,
+                sessionKey,
+                projection: "list",
+              });
+              return entry ? [{ sessionKey, entry }] : [];
+            }),
+          ).then((rows) => ({ entries: rows.flat() }))
+        : readSessionEntriesFromStoreInWorker({
+            agentId: lookup.agentId,
+            storePath,
+            sessionKeys: candidateKeys,
+            projection: "list",
+            snapshotFields: [],
+          });
+      exactReads.set(cacheKey, read);
     }
-    // Admit a fallback store only when a lookup reaches it. Requests that share
-    // that store still share one synchronous batch and retain individual errors.
-    const group = readGroups.get(reads[index]!.storePath)!;
-    const loaded = loadExactSessionEntryCandidatesReadOnlyBatch(
-      group.map((readIndex) => {
-        const read = reads[readIndex]!;
-        return {
-          storePath: read.storePath,
-          sessionKeys: read.sessionKeys,
-          projection: "delivery",
-          onReadSource: (source) => {
-            read.source = source;
-          },
-        };
-      }),
-    );
-    for (const [offset, readIndex] of group.entries()) {
-      exactResults.set(readIndex, loaded[offset]!);
-    }
-    return exactResults.get(index)!;
+    return read;
   };
   const indexes = new Map<string, DeliveryStoreRead["normalizedIndex"]>();
-  for (const { index, sessionKey, baseSessionKey, lookup, readIndexes } of lookups) {
+  for (const { index, sessionKey, baseSessionKey, lookup } of lookups) {
     try {
-      const selected = loadDeliverySessionEntry(lookup, (storePath, storeIndex) => {
-        const readIndex = readIndexes?.[storeIndex];
-        const read = readIndex === undefined ? undefined : reads[readIndex];
-        const exact = readIndex === undefined ? undefined : readExact(readIndex);
-        if (exact && !exact.ok) {
-          throw exact.error;
-        }
-        const source = read?.source;
+      const selected = await loadDeliverySessionEntry(lookup, async (storePath) => {
+        const read = await readExact(storePath, lookup);
+        const source = read.source;
         const indexKey = source ? `${source.agentId}\u0000${source.path}` : storePath;
         let normalizedIndex = indexes.get(indexKey);
         if (!normalizedIndex) {
@@ -209,13 +202,8 @@ export function extractDeliveryInfoBatch(
           );
           indexes.set(indexKey, normalizedIndex);
         }
-        const entries = exact?.ok
-          ? new Map(exact.value.map(({ sessionKey: key, entry }) => [key, entry]))
-          : undefined;
-        const store = entries
-          ? { get: (key: string) => entries.get(key) }
-          : openSessionEntryReadView({ storePath, projection: "list" });
-        return { get: store.get, normalizedIndex };
+        const entries = new Map(read.entries.map(({ sessionKey: key, entry }) => [key, entry]));
+        return { get: (key) => entries.get(key), normalizedIndex };
       });
       let context = deliveryContextFromSession(selected.entry);
       if (!hasDeliveryTargetFields(context) && baseSessionKey !== sessionKey) {
@@ -251,27 +239,12 @@ function lazyDeliveryIndex(scope: {
   storePath: string;
   agentId?: string;
 }): DeliveryStoreRead["normalizedIndex"] {
-  let result: { index: Map<string, SessionEntry> } | { error: unknown } | undefined;
-  return () => {
-    if (!result) {
-      try {
-        result = {
-          index: buildFreshestSessionEntryIndex(
-            openSessionEntryReadView({ ...scope, projection: "list" }),
-          ),
-        };
-      } catch (error) {
-        result = { error };
-      }
-    }
-    if ("error" in result) {
-      throw result.error;
-    }
-    return result.index;
-  };
+  let result: Promise<Map<string, SessionEntry>> | undefined;
+  return () =>
+    (result ??= readSessionEntrySummariesInWorker(scope).then(buildFreshestSessionEntryIndex));
 }
 
-function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string[]) {
+async function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string[]) {
   let bestEntry: SessionEntry | undefined;
   let bestUpdatedAt = 0;
   let bestRoutable = false;
@@ -329,7 +302,7 @@ function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string
     if (trimmed !== normalized || !foundRoutableCandidate) {
       // Build the normalized index only after direct/exact probes fail; large session stores can
       // stay on the cheap path when the queried key already has routable delivery context.
-      const normalizedIndex = store.normalizedIndex();
+      const normalizedIndex = await store.normalizedIndex();
       const freshest = normalizedIndex.get(normalized);
       if (!hasMismatchedCaseSensitiveDeliveryProof(freshest, normalized)) {
         acceptCandidate(freshest);
@@ -345,7 +318,9 @@ function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string
   return bestEntry;
 }
 
-function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string, SessionEntry> {
+function buildFreshestSessionEntryIndex(
+  entries: readonly SessionEntrySummary[],
+): Map<string, SessionEntry> {
   const index = new Map<string, SessionEntry>();
   const indexEntry = (key: string, entry: SessionEntry) => {
     const existing = index.get(key);
@@ -359,7 +334,7 @@ function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string
       index.set(key, entry);
     }
   };
-  for (const { sessionKey: key, entry } of store.entries()) {
+  for (const { sessionKey: key, entry } of entries) {
     if (!entry) {
       continue;
     }
@@ -376,20 +351,20 @@ function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string
   return index;
 }
 
-function loadDeliverySessionEntry(
+async function loadDeliverySessionEntry(
   lookup: DeliveryLookup,
-  readStore: (storePath: string, storeIndex: number) => DeliveryStoreRead,
+  readStore: (storePath: string, storeIndex: number) => Promise<DeliveryStoreRead>,
 ) {
   let fallback:
     | {
-        entry: ReturnType<typeof findSessionEntryInStore>;
-        baseEntry: ReturnType<typeof findSessionEntryInStore>;
+        entry: Awaited<ReturnType<typeof findSessionEntryInStore>>;
+        baseEntry: Awaited<ReturnType<typeof findSessionEntryInStore>>;
       }
     | undefined;
   for (const [storeIndex, storePath] of lookup.storePaths.entries()) {
-    const store = readStore(storePath, storeIndex);
-    const entry = findSessionEntryInStore(store, lookup.sessionKeys);
-    const baseEntry = findSessionEntryInStore(store, lookup.baseKeys);
+    const store = await readStore(storePath, storeIndex);
+    const entry = await findSessionEntryInStore(store, lookup.sessionKeys);
+    const baseEntry = await findSessionEntryInStore(store, lookup.baseKeys);
     if (!entry && !baseEntry) {
       continue;
     }

@@ -430,6 +430,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           cfg,
           key: parentSessionKey,
           agentId: parentRequestedAgent.agentId,
+          assertActive: commitGuard,
         });
         const parentAgentId = parentRequestedAgent.agentId;
         if (

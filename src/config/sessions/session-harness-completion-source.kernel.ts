@@ -15,7 +15,7 @@ import { SessionTranscriptProjectionUnavailableError } from "./session-transcrip
 import type { SessionEntry } from "./types.js";
 
 /** Exact source lookup is independent of the display tail used to choose recovery policy. */
-export function readAdmittedHarnessCompletionInput(params: {
+export function readAdmittedHarnessCompletionInputFromSqlite(params: {
   claim: HarnessCompletionRecovery;
   entry: SessionEntry;
   storePath: string;
@@ -64,7 +64,7 @@ export function readHarnessCompletionSourceInDatabase(
     try {
       const snapshot = readCurrentProjectionSnapshot(database, resolved, (projection) => ({
         entry,
-        validInput: readAdmittedHarnessCompletionInput({
+        validInput: readAdmittedHarnessCompletionInputFromSqlite({
           claim,
           entry,
           storePath: database.path,

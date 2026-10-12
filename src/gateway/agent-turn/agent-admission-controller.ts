@@ -211,6 +211,7 @@ export function createAgentAdmissionController(params: {
         getAbortReason,
       }) ??
       (await beginSessionWorkAdmission({
+        agentId: params.getResolvedSessionAgentId() ?? params.getAgentId(),
         scope,
         isSettling,
         getAbortReason,

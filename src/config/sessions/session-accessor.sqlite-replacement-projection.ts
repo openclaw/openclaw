@@ -2,7 +2,10 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  readOpenClawAgentDatabaseIdentity,
+  type OpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
 import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
@@ -15,6 +18,7 @@ import type {
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,
 } from "./session-accessor.sqlite-contract.js";
+import type { SessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
 import {
   hasPreparedNativeSessionDeletion,
   runPreparedSqliteSessionWrite,
@@ -22,7 +26,10 @@ import {
 } from "./session-accessor.sqlite-deletion.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
-import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
+import {
+  readSessionEntryReplacementState,
+  type SessionEntryReplacementState,
+} from "./session-accessor.sqlite-replacement-read.js";
 import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
 import type {
   SqliteSessionEntryReplacement,
@@ -46,6 +53,8 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
   SessionEntryReplacement,
 } from "./session-accessor.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import {
   captureIncognitoSessionOperation,
   publishIncognitoSessionEntry,
@@ -94,6 +103,7 @@ type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions
 type CreationProjection = {
   scope: ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
   sessionKey: string;
+  creationSnapshot: SessionCreationSnapshot & { databaseIdentity: string };
   initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };
   onWriterAdmitted?: () => void;
 };
@@ -110,6 +120,79 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     storePath: params.storePath,
     env: params.env,
   };
+  const memory = getSessionActorStorageBinding({ ...target, sessionKey: undefined });
+  if (memory) {
+    const snapshots = await memory.actor.storage.read(
+      {
+        type: "session.entries.read",
+        input: {
+          sessionKeys: params.sessionKeys,
+          includeSessionWindowOwner: params.includeSessionWindowOwner,
+          includeLabelOwners: params.includeLabelOwners,
+        },
+      },
+      memory.authority,
+    );
+    const prepared = new Map(snapshots.map(({ sessionKey, entry }) => [sessionKey, entry]));
+    const updated = await params.update(structuredClone(snapshots));
+    const replacements = normalize(updated.replacements).flatMap((replacement) => {
+      if (replacement.previousSessionKeys?.some((key) => key !== replacement.sessionKey)) {
+        throw new Error("Memory session replacement cannot retain legacy aliases");
+      }
+      const transcript =
+        params.preparedTranscript?.sessionKey === replacement.sessionKey
+          ? params.preparedTranscript.events
+          : undefined;
+      return [
+        {
+          sessionKey: replacement.sessionKey,
+          expected: prepared.get(replacement.sessionKey),
+          entry: replacement.entry,
+          label:
+            params.labelClaim?.sessionKey === replacement.sessionKey
+              ? params.labelClaim.label
+              : undefined,
+          owner:
+            params.ownerAssignment?.sessionKey === replacement.sessionKey
+              ? params.ownerAssignment.owner
+              : undefined,
+          transcriptEvents: transcript,
+        },
+      ];
+    });
+    const commit = async (assertSourceCurrent?: () => void) => {
+      readSessionActorStorageResult(
+        await memory.actor.storage.mutate(
+          { type: "session.entry.replacements", input: { replacements } },
+          {
+            ...memory.authority,
+            assertCurrent() {
+              memory.authority.assertCurrent();
+              params.assertCommitAllowed?.();
+              assertSourceCurrent?.();
+            },
+          },
+          { committed: () => params.onLifecycleCommitted?.(false) },
+        ),
+      );
+      if (params.afterCommitted) {
+        const handle = await memory.actor.storage.acquire(memory.actor.target.sessionKey);
+        try {
+          await params.afterCommitted(updated.result, {
+            env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(memory.path, "../../../..") },
+            assertCurrent() {
+              handle.assertCurrent();
+              memory.authority.assertCurrent();
+            },
+          });
+        } finally {
+          await handle.release();
+        }
+      }
+      return updated.result;
+    };
+    return params.withCommit ? params.withCommit(commit) : commit();
+  }
   const incognito = retainedIncognito ?? captureIncognitoSessionOperation(target);
   const env = cloneEnvWithPlatformSemantics(
     params.env ??
@@ -159,68 +242,84 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
           ...readSessionEntryReplacementState(database, params),
           databaseIdentity: readOpenClawAgentDatabaseIdentity(database).identity,
         }));
-      const snapshot = incognito
+      const absentCreation =
+        creation &&
+        creation.creationSnapshot.existingEntry === undefined &&
+        creation.creationSnapshot.targetEntry === undefined &&
+        creation.creationSnapshot.legacyKeys.length === 0;
+      // Carry the prepared absence into the commit's existing conflict check.
+      const snapshot: SessionEntryReplacementState & {
+        databaseIdentity?: OpenClawAgentDatabaseIdentity;
+      } = absentCreation
         ? {
-            ...(await incognito.actor.sessions.entry(
-              {
-                assertCurrent() {
-                  incognito.authority.assertCurrent();
-                  params.assertCommitAllowed?.();
-                },
-              },
-              {
-                type: "session.entry.replacements.prepare",
-                input: {
-                  sessionKeys: params.sessionKeys,
-                  includeSessionWindowOwner: params.includeSessionWindowOwner,
-                  includeLabelOwners: params.includeLabelOwners,
-                },
-              },
-              incognito.admissionSignal,
-            )),
-            databaseIdentity: incognito.actor.identity.incarnation,
+            entries: [],
+            expectedRows: new Map(),
+            labelOwnerKeys: [],
+            selectedSessionKeys: [creation.sessionKey],
+            databaseIdentity: creation.creationSnapshot.databaseIdentity,
           }
-        : useWorker
-          ? await withSessionHistoryWorkerDatabase(
-              databaseOptions,
-              async (owner) => {
-                const read = () =>
-                  owner.readExactEntries({
-                    sessionKeys: params.sessionKeys ?? [],
-                    projection: "replacement",
-                    replacementSelection: {
-                      sessionKeys: params.sessionKeys,
-                      includeSessionWindowOwner: params.includeSessionWindowOwner,
-                      includeLabelOwners: params.includeLabelOwners,
-                    },
-                    env: { ...resolved.env },
-                  });
-                let result = await read();
-                if (!result.replacement) {
-                  await prepareSessionEntryReplacementDatabase(
-                    databaseOptions,
-                    () => {
-                      owner.assertCurrent();
-                      params.assertCommitAllowed?.();
-                    },
-                    params.retainedExecution,
-                  );
-                  result = await read();
-                }
-                if (!result.replacement) {
-                  throw new Error("Session replacement snapshot lost its initialized database");
-                }
-                return result.replacement;
-              },
-              // Label owners can expand a keyed selection beyond the foreground read budget.
-              params.sessionKeys &&
-                params.sessionKeys.length + (params.includeSessionWindowOwner ? 1 : 0) <=
-                  MAX_SESSION_ROW_FACTS_KEYS &&
-                params.includeLabelOwners === undefined
-                ? projectionLane
-                : maintenanceLane,
-            )
-          : await readNative();
+        : incognito
+          ? {
+              ...(await incognito.actor.sessions.entry(
+                {
+                  assertCurrent() {
+                    incognito.authority.assertCurrent();
+                    params.assertCommitAllowed?.();
+                  },
+                },
+                {
+                  type: "session.entry.replacements.prepare",
+                  input: {
+                    sessionKeys: params.sessionKeys,
+                    includeSessionWindowOwner: params.includeSessionWindowOwner,
+                    includeLabelOwners: params.includeLabelOwners,
+                  },
+                },
+                incognito.admissionSignal,
+              )),
+              databaseIdentity: incognito.actor.identity.incarnation,
+            }
+          : useWorker
+            ? await withSessionHistoryWorkerDatabase(
+                databaseOptions,
+                async (owner) => {
+                  const read = () =>
+                    owner.readExactEntries({
+                      sessionKeys: params.sessionKeys ?? [],
+                      projection: "replacement",
+                      replacementSelection: {
+                        sessionKeys: params.sessionKeys,
+                        includeSessionWindowOwner: params.includeSessionWindowOwner,
+                        includeLabelOwners: params.includeLabelOwners,
+                      },
+                      env: { ...resolved.env },
+                    });
+                  let result = await read();
+                  if (!result.replacement) {
+                    await prepareSessionEntryReplacementDatabase(
+                      databaseOptions,
+                      () => {
+                        owner.assertCurrent();
+                        params.assertCommitAllowed?.();
+                      },
+                      params.retainedExecution,
+                    );
+                    result = await read();
+                  }
+                  if (!result.replacement) {
+                    throw new Error("Session replacement snapshot lost its initialized database");
+                  }
+                  return result.replacement;
+                },
+                // Label owners can expand a keyed selection beyond the foreground read budget.
+                params.sessionKeys &&
+                  params.sessionKeys.length + (params.includeSessionWindowOwner ? 1 : 0) <=
+                    MAX_SESSION_ROW_FACTS_KEYS &&
+                  params.includeLabelOwners === undefined
+                  ? projectionLane
+                  : maintenanceLane,
+              )
+            : await readNative();
       const { entries, expectedRows, labelOwnerKeys } = snapshot;
       const selectedKeys = snapshot.selectedSessionKeys
         ? new Set(snapshot.selectedSessionKeys)

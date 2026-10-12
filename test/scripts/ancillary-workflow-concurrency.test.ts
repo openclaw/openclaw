@@ -597,14 +597,7 @@ describe("PR context admission", () => {
 });
 
 describe("Auto response admission", () => {
-  // Barnacle shares the ClawSweeper Dispatch listener; judge its job alone.
-  const listener = parse(
-    readFileSync(".github/workflows/clawsweeper-dispatch.yml", "utf8"),
-  ) as Workflow;
-  const workflow: Workflow = {
-    ...listener,
-    jobs: { "auto-response": listener.jobs["auto-response"]! },
-  };
+  const workflow = parse(readFileSync(".github/workflows/auto-response.yml", "utf8")) as Workflow;
   const event = (runId: number, action: string, changes?: Github["event"]["changes"]): Github => ({
     ...pr(workflow, runId, action),
     event_name: "pull_request_target",
@@ -663,20 +656,6 @@ describe("Auto response admission", () => {
       }
     },
   );
-
-  it("stays off the listener events Barnacle never handled", async () => {
-    expect(
-      (await eligibleJobs(workflow, event(104, "ready_for_review"))).jobs["auto-response"],
-    ).toBe(false);
-    for (const action of ["reopened", "unlabeled"]) {
-      const github = event(105, action);
-      github.event_name = "issues";
-      github.event = { action, issue: { number: 123, author_association: "NONE" } };
-      expect((await eligibleJobs(workflow, github)).jobs["auto-response"]).toBe(false);
-    }
-    const push = refEvent(workflow, "push", 106);
-    expect((await eligibleJobs(workflow, push)).jobs["auto-response"]).toBe(false);
-  });
 });
 
 it("isolates supported useful, passive, manual and push events across all nine workflows", () => {

@@ -998,22 +998,15 @@ describe("MatrixClient request hardening", () => {
       content: {},
     }));
     matrixJsClient.decryptEventIfNeeded = vi.fn(async (event: FakeMatrixEvent) => {
-      event.emit(
-        "decrypted",
-        new FakeMatrixEvent({
-          roomId: "!room:example.org",
-          eventId: "$poll",
-          sender: "@alice:example.org",
-          type: "m.poll.start",
-          ts: 1,
-          content: {
-            "m.poll.start": {
-              question: { "m.text": "Lunch?" },
-              answers: [{ id: "a1", "m.text": "Pizza" }],
-            },
+      event.markDecrypted({
+        type: "m.poll.start",
+        content: {
+          "m.poll.start": {
+            question: { "m.text": "Lunch?" },
+            answers: [{ id: "a1", "m.text": "Pizza" }],
           },
-        }),
-      );
+        },
+      });
     });
 
     const event = await client.getEvent("!room:example.org", "$poll");

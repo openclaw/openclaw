@@ -5,7 +5,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabaseScopedWriteToken,
-  readSqliteDatabaseWriteRevision,
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
@@ -17,8 +16,10 @@ import {
   type SqliteWorkerCommand,
 } from "../../infra/sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { projectSessionActorAuthority } from "./session-actor-command.js";
 import type {
   SessionActorOperations,
@@ -27,6 +28,7 @@ import type {
   SessionActorTarget,
 } from "./session-actor-contract.js";
 import { observeSessionActorCommand } from "./session-actor-diagnostics.js";
+import { registerSessionActorEntryPatchOwner } from "./session-actor-entry-publication.worker.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import {
   hydrateSessionActorState,
@@ -41,6 +43,7 @@ import {
   cloneSessionActorStoredState,
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
 import { prepareVoiceTranscriptCommit } from "./session-turn.worker.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -94,6 +97,64 @@ export function createSessionActorWorker(
     target: SessionActorTarget,
     sessionIds?: readonly string[],
   ) => readSqliteDatabaseScopedWriteToken(database.db, scopes(target, sessionIds));
+  const prepareEntryPatch = (database: OpenClawAgentDatabase, sessionKey: string) => {
+    const before = residents.get(sessionKey)?.state;
+    if (
+      closed ||
+      !before?.hot.entry ||
+      before.hot.writeToken !== token(database, before.hot.target, before.hot.dependencySessionIds)
+    ) {
+      return undefined;
+    }
+    const previousEntry = before.hot.entry;
+    return (
+      postimages: SessionEntryWritePostimages,
+      publication: SessionEntryReplacementPublication,
+    ) => {
+      const postimage = postimages.get(sessionKey);
+      if (
+        !postimage ||
+        postimage.entry.sessionId !== previousEntry.sessionId ||
+        postimage.entry.lifecycleRevision !== previousEntry.lifecycleRevision
+      ) {
+        return;
+      }
+      const working = cloneSessionActorStoredState(before);
+      working.hot.entry = structuredClone(postimage.entry);
+      working.entryRows.set(sessionKey, {
+        entry: structuredClone(postimage.entry),
+        row: {
+          ...postimage.row,
+          member_ids_json: postimage.sideTables.memberIdsJson,
+          board_present: postimage.sideTables.hasBoard ? 1 : 0,
+        },
+      });
+      working.window = postimage.window;
+      working.hasBoard = postimage.sideTables.hasBoard;
+      working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
+      working.hot = projectSessionActorHotState(working);
+      const pendingToken = readSqliteDatabasePendingScopedWriteToken(
+        database.db,
+        scopes(working.hot.target, working.hot.dependencySessionIds),
+      );
+      if (pendingToken === undefined) {
+        return;
+      }
+      working.hot.writeToken = pendingToken;
+      if (
+        stageSqliteTransactionState(database.db, {
+          stage() {},
+          rollback() {},
+          commit: () => remember(working),
+          invalidate: () => drop(sessionKey),
+        })
+      ) {
+        publication.actorPostimages = new Map([
+          [sessionKey, freezeJsonSnapshot(structuredClone(working.hot))],
+        ]);
+      }
+    };
+  };
   const requireTarget = (target: SessionActorTarget) => {
     const current = physicalIdentity();
     const requested = target.database;
@@ -113,9 +174,7 @@ export function createSessionActorWorker(
   const read = (
     database: OpenClawAgentDatabase,
     target: SessionActorTarget,
-    retry = true,
   ): SessionActorStoredState => {
-    requireTarget(target);
     const resident = residents.get(target.sessionKey)?.state;
     const currentToken = token(database, target, resident?.hot.dependencySessionIds);
     if (!currentToken) {
@@ -129,7 +188,6 @@ export function createSessionActorWorker(
       return resident;
     }
     drop(target.sessionKey);
-    const revision = readSqliteDatabaseWriteRevision(database.db);
     const hydrated = hydrateSessionActorState(
       database,
       target,
@@ -137,18 +195,8 @@ export function createSessionActorWorker(
       currentToken,
     );
     const hydratedToken = token(database, target, hydrated.hot.dependencySessionIds);
-    if (
-      !hydratedToken ||
-      revision === undefined ||
-      readSqliteDatabaseWriteRevision(database.db) !== revision
-    ) {
-      // Worker retirement can invalidate every database while this snapshot is being read.
-      if (retry) {
-        return read(database, target, false);
-      }
-      throw new Error("Session actor changed while hydrating");
-    }
-    hydrated.hot.writeToken = hydratedToken;
+    // Hydration is synchronous in the serialized execution owner.
+    hydrated.hot.writeToken = hydratedToken!;
     remember(hydrated);
     return hydrated;
   };
@@ -177,6 +225,7 @@ export function createSessionActorWorker(
       let stale: Extract<SessionActorOutcome<never>, { kind: "stale-version" }> | undefined;
       try {
         database = context.open();
+        registerSessionActorEntryPatchOwner(database, prepareEntryPatch);
         requireTarget(target);
         const opened = database;
         if (command.type === "session.actor.read") {

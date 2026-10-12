@@ -1,1 +1,1 @@
-export { WorkingPhrase } from "./working-phrase-solid.tsx";
+import "./working-phrase-solid.tsx";

@@ -19,11 +19,13 @@ vi.mock("./native-auth.js", () => ({ probeCodexNativeAuth: vi.fn() }));
 const profiles = vi.hoisted((): { store: AuthProfileStore } => ({
   store: { version: 1, profiles: {} },
 }));
+// mock-isolation: Exercise real profile selection against the catalog fixture, without host credential storage.
 vi.mock("./auth-profile.js", async () => {
   const { resolveAuthProfileOrder } = await import("openclaw/plugin-sdk/provider-auth");
   const { createCodexAuthProfileSelection } = await import("./auth-profile-selection.js");
   return createCodexAuthProfileSelection({
     ensureAuthProfileStore: () => profiles.store,
+    ensureAuthProfileStoreAsync: async () => profiles.store,
     resolveAuthProfileOrder,
   });
 });

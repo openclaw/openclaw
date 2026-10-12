@@ -422,26 +422,6 @@ describe("handleGatewayExtensionUpgrade", () => {
     },
   );
 
-  it("attaches the socket to the bridge on a valid token", async () => {
-    getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());
-    primeProfile();
-    const bridge = { id: "bridge" };
-    ensureExtensionRelayForProfileMock.mockResolvedValue({ bridge });
-    // Real handleUpgrade would need a live socket; stub it to fire the callback.
-    await mockSuccessfulUpgrade();
-    const { socket } = fakeSocket();
-    const handled = await handleGatewayExtensionUpgrade(
-      relayReq("/browser/extension"),
-      socket,
-      Buffer.alloc(0),
-    );
-    expect(handled).toBe(true);
-    expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
-    await expect
-      .poll(() => attachExtensionWebSocketMock.mock.calls)
-      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
-  });
-
   it("authenticates against the live relay secret when Browser state is stale", async () => {
     readExtensionRelayTokenMock.mockReturnValue(ROTATED_TOKEN);
     getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());

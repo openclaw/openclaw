@@ -96,7 +96,9 @@ export function handleCompactionStart(
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
   // cannot be delayed by plugin work.
-  runBestEffortCompactionHook(ctx, "before");
+  if (!evt.hooksHandled) {
+    runBestEffortCompactionHook(ctx, "before");
+  }
 }
 
 export function handleCompactionEnd(
@@ -212,7 +214,7 @@ export function handleCompactionEnd(
 
   // after_compaction runs only once the run will not retry, matching the visible
   // post-compaction session state plugin authors observe.
-  if (completed && !willRetry) {
+  if (completed && !willRetry && !evt.hooksHandled) {
     runBestEffortCompactionHook(ctx, "after");
   }
   return recording;

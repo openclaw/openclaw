@@ -28,7 +28,7 @@ import {
 import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
 import {
   extractQaMessageText,
-  readQaMessageFunctionCalls,
+  readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
@@ -298,32 +298,11 @@ function extractToolCalls(message: Record<string, unknown>): Array<{
   tool: string;
   args: unknown;
 }> {
-  const calls: Array<{ id?: string; tool: string; args: unknown }> = [];
-  const rawContent = message.content;
-  if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (!isMessageRecord(block)) {
-        continue;
-      }
-      const type = readNonEmptyString(block.type)?.toLowerCase();
-      if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
-        continue;
-      }
-      const tool = readNonEmptyString(block.name) ?? "unknown";
-      calls.push({
-        id:
-          readNonEmptyString(block.id) ??
-          readNonEmptyString(block.toolCallId) ??
-          readNonEmptyString(block.toolUseId),
-        tool,
-        args: block.input ?? block.arguments ?? block.args ?? block.payload ?? null,
-      });
-    }
-  }
-  for (const call of readQaMessageFunctionCalls(message)) {
-    calls.push({ ...call, tool: call.tool ?? "unknown" });
-  }
-  return calls;
+  return Array.from(readQaMessageToolCalls(message), ({ id, tool, args }) => ({
+    id,
+    tool: tool ?? "unknown",
+    args,
+  }));
 }
 
 function extractToolResults(message: Record<string, unknown>): Array<{

@@ -1901,7 +1901,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-parent");
     const threadRequests = request.mock.calls.filter(([method]) => method === "thread/start");
     expect(threadRequests).toHaveLength(2);
-    const resumeRequest = buildThreadResumeParams(params, {
+    const resumeRequest = await buildThreadResumeParams(params, {
       threadId: first.threadId,
       appServer: common.appServer,
       dynamicTools: common.dynamicTools,

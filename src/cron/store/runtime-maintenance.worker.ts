@@ -109,7 +109,11 @@ export function scheduleUnownedCronJobsInWorker(
       };
       for (const row of rows) {
         const job = jobsById.get(row.job_id);
-        if (!job || activeJobIds.has(row.job_id)) {
+        if (
+          !job ||
+          activeJobIds.has(row.job_id) ||
+          (input.options?.preserveExpiredPacedNextRunJobId === row.job_id && !job.enabled)
+        ) {
           continue;
         }
         const previousEnabled = job.enabled ?? true;

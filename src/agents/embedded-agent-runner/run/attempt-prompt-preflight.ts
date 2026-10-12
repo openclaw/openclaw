@@ -138,6 +138,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   attempt: AttemptPromptPreflightParams &
     Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
   compactionReplayEnabled: boolean;
+  providerCompactionAtRequestBoundary?: boolean;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
   contextTokenBudget: number;
   hookMessagesForCurrentPrompt: AgentMessage[];
@@ -170,6 +171,11 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     return { ...input.state };
   }
   if ((input.pendingInputTokens ?? 0) >= input.contextTokenBudget) {
+    if (input.providerCompactionAtRequestBoundary) {
+      log.warn(
+        "ChatGPT V2 compaction unavailable; falling back to client compaction: pending input exceeds the context budget",
+      );
+    }
     return {
       ...input.state,
       preflightRecovery: { route: "compact_only" },
@@ -228,7 +234,11 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     }),
   );
   const checkpointPressure = preemptiveCompaction.compactionReplay;
-  if (checkpointPressure && checkpointPressure.route !== "fits") {
+  if (
+    checkpointPressure &&
+    checkpointPressure.route !== "fits" &&
+    !input.providerCompactionAtRequestBoundary
+  ) {
     // Only the actual canonical window can require recovery; the raw-history
     // maximum above remains diagnostic even when it exceeds this window.
     return {

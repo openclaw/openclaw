@@ -25,7 +25,10 @@ import {
   readTranscriptHeaderFromDatabase,
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
+import type {
+  SessionTranscriptAnchorEntry,
+  SessionTranscriptAnchorFacts,
+} from "./session-transcript-anchor-read.types.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
@@ -80,7 +83,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
   selection: SessionTranscriptAnchorSelection,
   readMessage?: AnchorMessageReader,
   projection?: CurrentTranscriptProjection,
-  preparedEntry?: InternalSessionEntry,
+  preparedEntry?: SessionTranscriptAnchorEntry,
 ): SessionTranscriptAnchorFacts {
   if (
     projection &&

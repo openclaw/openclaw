@@ -43,9 +43,7 @@ export function captureDurableSessionActor(params: {
       target: params.target,
       lifetime,
       currentGeneration() {
-        const generation = execution.capturePreparedGenerationClaim();
-        generation?.assertCurrent();
-        return generation?.incarnation;
+        return execution.capturePreparedGenerationClaim()?.incarnation;
       },
     }),
     transport: {

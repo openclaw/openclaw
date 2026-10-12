@@ -18,6 +18,7 @@ import { resolveStateDir } from "../state-dir.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
@@ -59,6 +60,26 @@ export async function setSessionReactionAsync(
   params: SetSessionReactionParams & { assertCurrent?: () => void },
 ): Promise<SessionReactionWrite> {
   const { assertCurrent = () => undefined, ...reaction } = params;
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    const outcome = await memory.actor.storage!.mutate(
+      { type: "session.reaction.set", input: { params: reaction } },
+      {
+        assertCurrent: () => {
+          assertCurrent();
+          memory.authority.assertCurrent();
+        },
+        authorize: (stage, facts, publication) =>
+          memory.authority.authorize(stage, facts, publication),
+      },
+    );
+    if (outcome.kind === "committed") {
+      return outcome.value;
+    }
+    const error = new Error(outcome.error.message);
+    error.name = outcome.error.name;
+    return restoreReactionError(error);
+  }
   assertCurrent();
   const input = structuredClone(reaction);
   const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);

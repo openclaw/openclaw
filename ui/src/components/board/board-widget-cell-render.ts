@@ -4,11 +4,7 @@ import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { icons } from "../icons.ts";
 import { BOARD_SIZE_PRESETS } from "./board-widget-cell-options.ts";
-export {
-  BOARD_SIZE_PRESETS,
-  closeBoardWidgetMenu,
-  type BoardWidgetPageMenu,
-} from "./board-widget-cell-options.ts";
+export type { BoardWidgetPageMenu } from "./board-widget-cell-options.ts";
 
 export function renderBoardWidgetMenuItems(options: {
   widget: BoardWidget;

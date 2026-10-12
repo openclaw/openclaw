@@ -49,7 +49,7 @@ export function devicePairingMutation<Input, Result>(
               },
             });
             if (!before) {
-              return { value: result };
+              return result;
             }
             const after = readPairedDevicePairingRecordsFromDatabase(database.db);
             const changed: DevicePairingCommitReceipt["changed"] = [];
@@ -58,16 +58,15 @@ export function devicePairingMutation<Input, Result>(
                 changed.push(prepareDevicePairingBinding(deviceId, after[deviceId] ?? null));
               }
             }
-            const receipt: DevicePairingCommitReceipt = {
+            deferSqliteWorkerCommitReceipt(database.db, {
               kind: "devicePairing",
               beforeRevision: resolveDevicePairingStoreRevision(before),
               revision: resolveDevicePairingStoreRevision(after),
               changed,
               ...(tokensReplaced ? { tokensReplaced } : {}),
               ...(workerEnvironment ? { workerEnvironment } : {}),
-            };
-            deferSqliteWorkerCommitReceipt(database.db, receipt);
-            return { value: result, receipt };
+            } satisfies DevicePairingCommitReceipt);
+            return result;
           }),
         ),
       { database, env: getSqliteWorkerStateContext().environment },

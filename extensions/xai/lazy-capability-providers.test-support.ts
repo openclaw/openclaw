@@ -1,7 +1,8 @@
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
-  isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
@@ -101,8 +102,9 @@ vi.mock("./realtime-voice-provider.js", () => ({
 }));
 
 const capabilityHost = {
-  isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
   resolveAgentDir,
   resolveApiKeyForProvider,
   createRealtimeTranscriptionWebSocketSession,

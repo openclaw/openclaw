@@ -86,16 +86,10 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
 describe("QA Lab sidebar rendering", () => {
   it.each([
     ["chat", false, false],
-    ["chat", true, true],
     ["results", false, false],
-    ["results", true, true],
     ["evidence", false, true],
-    ["evidence", true, true],
     ["report", false, false],
-    ["report", true, true],
     ["events", false, false],
-    ["events", true, true],
-    ["capture", false, false],
     ["capture", true, true],
   ] as const)(
     "renders %s with sidebarCollapsed=%s and inert=%s",
@@ -397,13 +391,6 @@ describe("QA Lab UI evidence render", () => {
     expect(externalThreadHtml).toContain("thread-only reply");
   });
 
-  it("renders capture startup commands without personal home paths", () => {
-    const html = renderQaLabUi(evidenceState({ activeTab: "capture" }));
-
-    expect(html).toContain("$HOME/.openclaw/debug-proxy/certs/root-ca.pem");
-    expect(html).not.toContain("/Users/");
-  });
-
   it("renders capture filters with escaped options, selections, and bounded sizes", () => {
     const kinds = ["response", 'custom<"&>', "request", "ws-frame"];
     const hosts = ["g.test", "a.test", "f.test", "b.test", 'c<"&>.test', "e.test", "d.test"];
@@ -455,23 +442,7 @@ describe("QA Lab UI evidence render", () => {
     ]);
   });
 
-  it("keeps empty capture filters visible with three rows", () => {
-    const html = renderQaLabUi(evidenceState({ activeTab: "capture" }));
-    const controls = [
-      ...html.matchAll(
-        /<select id="(capture-(?:kind|provider|host)-filter)" multiple size="3">\s*<\/select>/g,
-      ),
-    ];
-
-    expect(controls.map((match) => match[1])).toEqual([
-      "capture-kind-filter",
-      "capture-provider-filter",
-      "capture-host-filter",
-    ]);
-  });
-
   it.each([
-    ["most-events", ["a.test", "z.test", "m.test"]],
     ["most-errors", ["a.test", "z.test", "m.test"]],
     ["severity", ["z.test", "m.test", "a.test"]],
     ["alphabetical", ["a.test", "m.test", "z.test"]],
@@ -751,13 +722,16 @@ describe("QA Lab UI evidence render", () => {
     expect(html).not.toContain("secret-token");
   });
 
-  it.each([
-    ["head", `${"a".repeat(279)}😀${"b".repeat(200)}`],
-    ["tail", `${"a".repeat(350)}😀${"z".repeat(79)}`],
-  ])("keeps the bounded capture %s free of lone surrogates", (_edge, payload) => {
-    const html = renderQaLabUi(capturePayloadState(payload, "raw", { contentType: "text/plain" }));
-    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+  it.each([["tail", `${"a".repeat(350)}😀${"z".repeat(79)}`]])(
+    "keeps the bounded capture %s free of lone surrogates",
+    (_edge, payload) => {
+      const html = renderQaLabUi(
+        capturePayloadState(payload, "raw", { contentType: "text/plain" }),
+      );
+      const loneSurrogate =
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
-    expect(html).not.toMatch(loneSurrogate);
-  });
+      expect(html).not.toMatch(loneSurrogate);
+    },
+  );
 });

@@ -1,6 +1,5 @@
-import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { ContextNotFoundError, createErrorBoundary } from "@solidjs/signals";
-import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
@@ -18,13 +17,11 @@ import {
   isOptionalElementDefined,
   LazyCustomElementRequestController,
 } from "../../app/lazy-custom-element.ts";
-import { t } from "../../i18n/index.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardChromeRowPx,
   exactBoardWidgetHeightPx,
 } from "../../lib/board/grid.ts";
-import type { BoardWidget } from "../../lib/board/types.ts";
 import {
   CORE_BOARD_WIDGET_ELEMENTS,
   getPluginWidgetKindContribution,
@@ -32,6 +29,7 @@ import {
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
@@ -53,6 +51,7 @@ import {
 } from "./board-widget-cell-options.ts";
 import {
   BoardDisabledPlugin,
+  BoardCoreWidget,
   BoardWidgetError,
   BoardWidgetMenu,
   BoardWidgetRejected,
@@ -125,7 +124,7 @@ function BoardWidgetCellContent(
   const frame = new BoardWidgetFrameLifecycle({
     active: () => untrack(active),
     connected: () => connected,
-    loadingCovered: () => untrack(() => props.loadingCovered ?? false),
+    loadingCovered: () => props.loadingCovered ?? false,
     bridgeEnabled: () => untrack(() => props.bridgeEnabled !== false),
     context: () => context,
     refreshFrame: () => untrack(() => props.callbacks?.frameLoadFailed),
@@ -134,13 +133,15 @@ function BoardWidgetCellContent(
     scrollBy: (deltaY) =>
       host.closest("openclaw-board-view")?.scrollBy({ top: deltaY, behavior: "auto" }),
     requestUpdate,
-    resolveFrameUrl: () => untrack(() => props.widgetFrameUrl),
+    resolveFrameUrl: () => props.widgetFrameUrl,
     root: () => host,
     widget: () => untrack(() => props.widget),
   });
   const state = createMemo(() => {
     revision();
     return {
+      // Publish activity with observed visibility, not ahead of the lifecycle effects.
+      active: untrack(active),
       error: actionError,
       pending: actionPending,
       frameError: frame.error,
@@ -154,29 +155,6 @@ function BoardWidgetCellContent(
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
       ? getPluginWidgetKindContribution(props.widget.pluginKind, activeKinds())
       : null;
-  const CoreElement = dynamic(() => contribution()?.tagName);
-  const CoreWidget = () => {
-    let element!: HTMLElement & {
-      widget?: BoardWidget;
-      session?: BoardGetParams;
-      active?: boolean;
-    };
-    createEffect(
-      () => ({ widget: props.widget, session: props.session, active: active() }),
-      (value) => {
-        element.widget = value.widget;
-        element.session = value.session ?? { sessionKey: "" };
-        element.active = value.active;
-      },
-    );
-    return (
-      <CoreElement
-        ref={(node: typeof element) => {
-          element = node;
-        }}
-      />
-    );
-  };
 
   async function runAction(action: () => Promise<void>, failureMessage?: string) {
     if (actionPending || props.busy) {
@@ -287,7 +265,15 @@ function BoardWidgetCellContent(
       }),
   );
   createEffect(
-    () => [revision(), props.widget, active(), props.loadingCovered, props.bridgeEnabled] as const,
+    () =>
+      [
+        revision(),
+        props.widget,
+        active(),
+        props.loadingCovered,
+        props.bridgeEnabled,
+        props.widgetFrameUrl,
+      ] as const,
     () =>
       untrack(() => {
         appView.observe(
@@ -425,7 +411,12 @@ function BoardWidgetCellContent(
                 when={(revision(), isOptionalElementDefined(contribution()!))}
                 fallback={<Loading />}
               >
-                <CoreWidget />
+                <BoardCoreWidget
+                  tagName={contribution()?.tagName}
+                  widget={props.widget}
+                  session={props.session}
+                  active={active()}
+                />
               </Show>
             }
           >
@@ -477,7 +468,7 @@ function BoardWidgetCellContent(
       <Match when={renderedMcp()}>
         <BoardMcpAppContent
           accessNotice={<AccessNotice />}
-          active={active()}
+          active={state().active}
           appView={state().appView}
           busy={unavailable()}
           loading={state().loading}
@@ -640,8 +631,11 @@ function BoardWidgetCellContent(
             ),
             (error, reset) => {
               resetBodyError = reset;
-              bodyErrored = true;
-              requestUpdate();
+              // Publishing the same failure retriggers the frame that produced it.
+              if (!bodyErrored) {
+                bodyErrored = true;
+                requestUpdate();
+              }
               return <BoardWidgetError error={error()} />;
             },
           )}

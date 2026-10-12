@@ -4,6 +4,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 
+// Unit tests run in worker threads, where shared auth state requires the Gateway host broker.
+// An empty store keeps the real credential precedence and falls through to configured keys.
+vi.mock("../../../../src/agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../../src/agents/auth-profiles/store-runtime.js")
+  >()),
+  ensureAuthProfileStoreAsync: vi.fn(async () => ({ version: 1, profiles: {} })),
+}));
+
 const configuredProvider = {
   baseUrl: "https://provider.example.test/v1",
   apiKey: "provider-key",

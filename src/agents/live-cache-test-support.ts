@@ -189,7 +189,7 @@ export async function resolveLiveDirectModelPool(params: {
   const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
   const cfg = getRuntimeConfig();
   const agentDir = resolveDefaultAgentDir(cfg);
-  const { authStorage } = discoverAuthStorageFacts(agentDir);
+  const { authStorage } = await discoverAuthStorageFacts(agentDir);
   const modelRegistry = discoverModels(authStorage, agentDir, { config: cfg });
   const rawModel = process.env[params.envVar]?.trim();
   const parsed = rawModel ? parseModelRef(rawModel, params.provider) : null;

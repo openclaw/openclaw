@@ -1,4 +1,28 @@
 import {
+  readSessionActorBoardQuery,
+  executeSessionActorBoardCommand,
+} from "../../boards/session-actor-board-memory.js";
+import {
+  readSessionActorProgressCard,
+  executeSessionActorProgressCardCommand,
+} from "../../session-cards/session-actor-progress-card-memory.js";
+import { SessionGoalOperationError } from "./goals-operations.types.js";
+import {
+  readSessionActorMemoryCollaboration,
+  mutateSessionActorMemoryCollaboration,
+} from "./session-actor-memory-collaboration.js";
+import { readSessionActorMemoryCompletion } from "./session-actor-memory-completion.js";
+import {
+  readSessionActorMemoryConversationDelivery,
+  beginSessionActorMemoryConversationDelivery,
+  transitionSessionActorMemoryConversationDelivery,
+} from "./session-actor-memory-conversation-delivery.js";
+import {
+  readSessionActorMemoryConversation,
+  writeSessionActorMemoryConversation,
+} from "./session-actor-memory-conversation.js";
+import { readSessionActorMemoryCorpus } from "./session-actor-memory-corpus.js";
+import {
   readSessionActorMemoryEntryQuery,
   executeSessionActorMemoryEntryCommand,
 } from "./session-actor-memory-entry.js";
@@ -10,11 +34,22 @@ import { createSessionActorMemoryGoals } from "./session-actor-memory-goals.js";
 import { readSessionActorMemoryHistoryQuery } from "./session-actor-memory-history-read.js";
 import { createSessionActorMemoryMetadata } from "./session-actor-memory-metadata.js";
 import { createSessionActorMemoryPending } from "./session-actor-memory-pending.js";
+import { executeSessionActorMemoryReportCommand } from "./session-actor-memory-reports.js";
+import { readSessionActorMemorySearch } from "./session-actor-memory-search.js";
+import {
+  readSessionActorMemorySideEffects,
+  mutateSessionActorMemorySideEffects,
+} from "./session-actor-memory-side-effects.js";
 import {
   resolveSessionActorMemoryWindow,
   type SessionActorMemoryWindow,
 } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
+import { prepareSessionActorMemoryTurn } from "./session-actor-memory-turn-prepare.js";
+import {
+  readSessionActorMemoryUsage,
+  mutateSessionActorMemoryUsage,
+} from "./session-actor-memory-usage.js";
 import type {
   SessionActorStorageAuthority,
   SessionActorStorageCommand,
@@ -26,6 +61,45 @@ export function readSessionActorMemoryStorage(
   query: SessionActorStorageQuery,
 ) {
   switch (query.type) {
+    case "session.conversation.read":
+    case "session.conversation.authority":
+      return readSessionActorMemoryConversation(context, query);
+    case "session.conversation.delivery.read":
+      return readSessionActorMemoryConversationDelivery(context, query.input);
+    case "session.members.read":
+    case "session.participants.read":
+    case "session.suggestions.read":
+    case "session.reactions.read":
+      return readSessionActorMemoryCollaboration(context, query);
+    case "session.outbox.listPendingSessions":
+    case "session.outbox.readNextPending":
+    case "session.outbox.hasPending":
+    case "session.trajectory.read":
+    case "session.trajectory.rows":
+      return readSessionActorMemorySideEffects(context, query);
+    case "boards.snapshot":
+    case "boards.document":
+      return readSessionActorBoardQuery(context, query);
+    case "progressCard.get":
+      return readSessionActorProgressCard(context, query.input.sessionKey);
+    case "session.report.prepare":
+    case "session.correction.prepare":
+    case "session.transcript.messageFacts":
+      return executeSessionActorMemoryReportCommand(context, query);
+    case "session.memory.targets":
+    case "session.corpus.list":
+    case "session.usage.snapshot":
+      return readSessionActorMemoryUsage(context, query);
+    case "session.memory.entry":
+    case "session.memory.resetRecall":
+      return readSessionActorMemoryCorpus(context, query);
+    case "session.history.search":
+      return readSessionActorMemorySearch(context, query.input);
+    case "session.completion.read":
+      return readSessionActorMemoryCompletion(context.state, query.input, context);
+    case "session.turn.prepare":
+      return prepareSessionActorMemoryTurn(context, query.input);
+    case "session.entry.creation":
     case "session.entry.read":
     case "session.entry.readById":
     case "session.entries.read":
@@ -55,13 +129,19 @@ export function readSessionActorMemoryStorage(
         throw new Error("Goal receipt does not target this session actor");
       }
       const window = resolveSessionActorMemoryWindow(context.state, query.input.expectedSessionId);
-      return (
+      const receipt =
         window &&
         createSessionActorMemoryGoals({ ...context, state: window }).readReceipt(
           query.input.expectedSessionId,
           query.input.operation,
-        )
-      );
+        );
+      if (receipt && query.input.expectedSessionId !== context.state.hot.entry?.sessionId) {
+        throw new SessionGoalOperationError(
+          "session-rebound",
+          "Session changed after the Goal operation",
+        );
+      }
+      return receipt;
     }
     default:
       return readSessionActorMemoryHistoryQuery(context.state, query, context);
@@ -95,6 +175,51 @@ export function mutateSessionActorMemoryStorage(
   authority: SessionActorStorageAuthority,
 ) {
   switch (command.type) {
+    case "session.conversation.register":
+      return writeSessionActorMemoryConversation(context, command);
+    case "session.conversation.delivery.begin":
+      return beginSessionActorMemoryConversationDelivery(context, command.input);
+    case "session.conversation.delivery.transition":
+      return transitionSessionActorMemoryConversationDelivery(context, command.input);
+    case "session.collaboration.add":
+    case "session.collaboration.remove":
+    case "session.collaboration.participant":
+    case "session.collaboration.owner.assign":
+    case "session.collaboration.suggestion.add":
+    case "session.collaboration.suggestion.claim":
+    case "session.collaboration.suggestion.release":
+    case "session.collaboration.suggestion.finalize":
+    case "session.collaboration.involvement":
+    case "session.category.apply":
+    case "session.reaction.set":
+      return mutateSessionActorMemoryCollaboration(context, command);
+    case "session.outbox.prepareRun":
+    case "session.outbox.enqueueIntent":
+    case "session.outbox.acceptIntent":
+    case "session.outbox.publishClosedTurn":
+    case "session.outbox.complete":
+    case "session.outbox.recordFailure":
+    case "session.outbox.discardIntent":
+    case "session.heartbeat.persist":
+    case "session.heartbeat.claim":
+    case "session.messageToolOutcome.record":
+    case "session.trajectory.append":
+      return mutateSessionActorMemorySideEffects(context, command);
+    case "boards.applyOps":
+    case "boards.putWidget":
+    case "boards.grant":
+      return executeSessionActorBoardCommand(context, command);
+    case "progressCard.put":
+    case "progressCard.clearForReset":
+      return executeSessionActorProgressCardCommand(context, command);
+    case "session.report.assistant":
+    case "session.report.abortedPartial":
+    case "session.report.append":
+    case "session.correction.commit":
+    case "session.workerTranscript.commit":
+      return executeSessionActorMemoryReportCommand(context, command);
+    case "session.usage.write":
+      return mutateSessionActorMemoryUsage(context, command);
     case "session.entry.create":
     case "session.entry.patch":
     case "session.entry.replace":

@@ -33,7 +33,7 @@ it("shares immutable persisted rows across cache hits", async () => {
     cacheable: true,
   };
   const read = vi.fn(async () => rows);
-  const cache = createRuntimeAuthProfileRowsCache(() => ({ rows: "1", selection: "1" }));
+  const cache = createRuntimeAuthProfileRowsCache(() => "1");
   const resolve = () => cache.prepare(databasePath, { read, assertCurrent: () => {} }).read();
   const first = await resolve();
   expect(await resolve()).toBe(first);
@@ -64,7 +64,7 @@ it("invalidates credential rows on writer-worker receipts without runtime freshn
   `);
   admitSqliteSchema(database);
   const broker = new SqliteWorkerBroker();
-  const cache = createRuntimeAuthProfileRowsCache(() => ({ rows: "1", selection: "1" }));
+  const cache = createRuntimeAuthProfileRowsCache(() => "1");
   const read = vi.fn(async () => readAuthProfileRows(database, databasePath, "agent"));
   const resolve = () => cache.prepare(databasePath, { read, assertCurrent() {} }).read();
   const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);

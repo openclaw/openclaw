@@ -1,6 +1,7 @@
 // Serves channel-owned conversation images without exposing media-store paths.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   captureIncognitoSessionSource,
   withIncognitoSessionEntry,
@@ -39,7 +40,9 @@ const channelAvatarLoads = new Map<
   }
 >();
 
-const getSessionStoreModule = createLazyRuntimeModule(() => import("./session-utils-store.js"));
+const getSessionStoreModule = createLazyRuntimeModule(
+  () => import("./session-utils-store-worker.js"),
+);
 
 async function loadChannelAvatar(
   sessionKey: string,
@@ -177,10 +180,13 @@ export async function handleChannelAvatarHttpRequest(
   }
   let reference: string | undefined;
   try {
-    const { entry } = (await getSessionStoreModule()).loadGatewaySessionEntryReadOnly(
-      requestedKey,
-      { clone: false },
-    );
+    const { entry } = await (
+      await getSessionStoreModule()
+    ).loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: requestedKey,
+      assertActive: requestAuth.assertCurrent,
+    });
     reference = sessionDeliveryOrigin(entry)?.avatar;
   } catch {
     // Invalid or missing session keys are ordinary route misses.

@@ -32,7 +32,7 @@ import {
 } from "./session-accessor.sqlite-message-cut.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
-type NativeBindingTestApi = {
+export type NativeBindingTestApi = {
   createNativeBindingDeletionFixture(
     this: void,
     runtime: PluginRuntime,

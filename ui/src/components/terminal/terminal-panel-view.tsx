@@ -400,11 +400,11 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             </div>
           )}
         </Show>
-        <wa-tab-panel
+        <div
           id={viewportId}
           class="tp-viewport"
-          name={props.view().activeId ?? "terminal"}
-          prop:active={true}
+          role="tabpanel"
+          aria-hidden="false"
           aria-labelledby={
             props.view().activeId && !props.view().hosted
               ? `${idPrefix}-tab-${props.view().activeId}`
@@ -439,7 +439,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             />
           </Show>
           <UploadLayer state={props.view()} />
-        </wa-tab-panel>
+        </div>
       </section>
     </Show>
   );
