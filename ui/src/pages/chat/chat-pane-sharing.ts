@@ -81,8 +81,9 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     this.sessionSharingHydrationTargets.set(cacheKey, sessionId);
     const states = new Map(this.sessionSharingStates);
-    states.delete(cacheKey);
-    this.sessionSharingStates = states;
+    if (states.delete(cacheKey)) {
+      this.sessionSharingStates = states;
+    }
     // Selecting a new generation under the same key must supersede an older
     // in-flight read. loadSessionSharing owns the connection and instance guards.
     void this.loadSessionSharing(session, true);
