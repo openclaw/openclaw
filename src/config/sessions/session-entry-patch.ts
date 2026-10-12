@@ -42,10 +42,8 @@ import {
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
-import {
-  retainSessionTranscriptWorkerPublication,
-  type SessionTranscriptAuthorityReceipt,
-} from "./session-transcript-authority.js";
+import { retainSessionTranscriptWorkerPublication } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export async function patchSessionEntryInWorker(params: {

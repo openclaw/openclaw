@@ -47,6 +47,7 @@ import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
+import { isCommandStyleCronMessage } from "./command-style-prompt.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
 import { assertCronRuntimeAuthorityCandidate } from "./run-admission.js";
@@ -89,14 +90,6 @@ const cronSubagentRegistryRuntimeLoader = createLazyImportLoader<CronSubagentReg
 
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
-}
-
-const COMMAND_STYLE_CRON_PREFIX =
-  /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
-
-/** Detects single-line cron prompts that look like shell commands or command invocations. */
-function isCommandStyleCronMessage(message: string): boolean {
-  return !message.trim().includes("\n") && COMMAND_STYLE_CRON_PREFIX.test(message.trim());
 }
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
@@ -268,6 +261,7 @@ function createCronPromptExecutor(
         lane: resolveCronAgentLane(params.lane),
         agentId: params.agentId,
         sessionKey: params.runSessionKey,
+        sessionLifecycleRevision: params.cronSession.sessionEntry.lifecycleRevision ?? null,
       },
       harness: {
         workspaceDir: params.workspaceDir,

@@ -1,5 +1,6 @@
 import {
   openOpenClawAgentDatabaseReadOnly,
+  retainOpenClawAgentDatabaseReadOnly,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
@@ -129,13 +130,11 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   if (request.kind === "source-state") {
     assertMemoryShadowIdentity(request.databasePath, request.fileIdentity);
   }
-  const opened = openOpenClawAgentDatabaseReadOnly(
-    {
-      agentId: request.agentId,
-      path: request.databasePath,
-    },
-    request.kind === "vector-load" ? { allowExtension: true } : {},
-  );
+  const target = { agentId: request.agentId, path: request.databasePath };
+  const opened =
+    request.kind === "vector-load"
+      ? openOpenClawAgentDatabaseReadOnly(target, { allowExtension: true })
+      : retainOpenClawAgentDatabaseReadOnly(target);
   if (!opened.found) {
     if (
       opened.reason === "database-missing" &&
@@ -212,8 +211,12 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       ...(recallData ? { recallData } : {}),
     };
   } finally {
-    // The caller retains its published-generation lease until this close and reply,
-    // or until the pool confirms worker termination after cancellation.
-    opened.database.close();
+    // Release this request's borrow; the database owner retains the idle reader.
+    // Extension loading needs its own connection and must not change that reader.
+    if ("claim" in opened) {
+      opened.claim.release();
+    } else {
+      opened.database.close();
+    }
   }
 });

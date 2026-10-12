@@ -1997,6 +1997,7 @@ src/config/sessions/transcript-message-identity.ts
 src/config/sessions/transcript-navigation-fields.ts
 src/config/sessions/transcript-tree.ts
 src/shared/chat-message-content.ts
+src/shared/model-fallback-notice.ts
 src/shared/transcript-only-openclaw-assistant.ts
 src/state/openclaw-agent-execution-work.ts
 packages/gateway-protocol/src/schema/session-participant.ts

@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
-  type SqliteCommitReceipt,
   type SqliteCommittedFact,
 } from "../../infra/sqlite-commit-receipt.js";
 import {
@@ -25,24 +24,11 @@ import {
   readPreparedSessionEntryPublicationSource,
   preparedSharingChanges,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
-
-/** Context postimage; exact anchor membership still belongs to the native projection reader. */
-export type SessionTranscriptAuthority = SessionTranscriptContextVersion & {
-  sessionId: string;
-  sessionKey: string;
-  leafEventId: string | null;
-  indexedSeq: number | null;
-  activeMessageCount: number | null;
-  needsRebuild: number | null;
-  /** Absent needs a tail lookup; null is a known empty bounded preview. */
-  lastMessagePreview?: string | null;
-};
-export type SessionTranscriptAuthorityReceipt = SqliteCommitReceipt<
+import { prepareSessionActorTranscriptAuthority } from "./session-actor-transaction.js";
+import type {
   SessionTranscriptAuthority,
-  SessionEntryPublicationSource
->;
+  SessionTranscriptAuthorityReceipt,
+} from "./session-transcript-authority.types.js";
 
 const staged = resolveGlobalSingleton(
   Symbol.for("openclaw.transcriptAuthorityStaged"),
@@ -140,7 +126,7 @@ export function publishSessionTranscriptAuthority(
 ): void {
   publishTranscriptFact(database, context.sessionKey, {
     kind: "postimage",
-    value: Object.freeze(context),
+    value: Object.freeze(prepareSessionActorTranscriptAuthority(database, context)),
   });
 }
 

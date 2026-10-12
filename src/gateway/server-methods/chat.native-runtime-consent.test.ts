@@ -7,7 +7,6 @@ import {
   registerNative,
   useNativeProcessFixture,
 } from "../../agents/harness/acp-native-process.test-support.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as replyInitialization from "../../config/sessions/session-accessor.reset.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSessionEntries, upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
@@ -73,7 +72,6 @@ it.each([false, true])(
     await withOpenClawTestState({ label: "chat-native-consent" }, async (state) => {
       const config = nativeConfig(state.workspaceDir);
       await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const target = {
         agentId: "main",
@@ -193,7 +191,6 @@ it.each([
         };
       }
       await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const respond = vi.fn<RespondFn>();
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
@@ -238,7 +235,6 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
     await withOpenClawTestState({ label: "chat-native-creation-race" }, async (state) => {
       const config = nativeConfig(state.workspaceDir);
       await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const client = nativeClient();
       const respond = vi.fn<RespondFn>();
@@ -319,7 +315,6 @@ it.runIf(process.platform !== "win32")(
     await withOpenClawTestState({ label: "chat-native-database-replacement" }, async (state) => {
       const config = nativeConfig(state.workspaceDir);
       await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const client = nativeClient();
       const respond = vi.fn<RespondFn>();

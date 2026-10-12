@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -92,7 +93,7 @@ it(
   {
     timeout: 180_000,
   },
-  async () => {
+  async ({ signal }) => {
     const root = tempDirs.make("openclaw-xai-fallback-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
@@ -125,6 +126,7 @@ it(
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
     const events: ChatEvent[] = [];
+    const terminalEvents = new Map<string, ReturnType<typeof createDeferred<void>>>();
     const publishedMessages = new Map<string, unknown[]>();
     const fallbackEvents: unknown[] = [];
     const provider = createServer((request, response) => {
@@ -293,7 +295,15 @@ it(
         token: "xai-fallback-test",
         onEvent: (event) => {
           if (event.event === "chat") {
-            events.push(event.payload as ChatEvent);
+            const chatEvent = event.payload as ChatEvent;
+            events.push(chatEvent);
+            if (
+              chatEvent.state === "final" ||
+              chatEvent.state === "error" ||
+              chatEvent.state === "aborted"
+            ) {
+              terminalEvents.get(chatEvent.sessionKey)?.resolve();
+            }
           }
           if (
             event.event === "session.message" &&
@@ -326,6 +336,8 @@ it(
         requests = [];
         const rejection = rejections.get(scenario);
         const sessionKey = `agent:${scenario}:xai-fallback`;
+        const terminalReceived = createDeferred();
+        terminalEvents.set(sessionKey, terminalReceived);
         await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
         const started = await gateway.client.request<{ runId: string }>("chat.send", {
           sessionKey,
@@ -345,6 +357,8 @@ it(
           { timeoutMs: 65_000 },
         );
         expect(completed.status, scenario).not.toBe("timeout");
+        // Run completion can precede transcript-gated WebSocket publication.
+        await withinTest(terminalReceived.promise, signal);
         const history = await gateway.client.request<{
           messages: Array<{ role: string; content: unknown; stopReason?: string }>;
         }>("chat.history", { sessionKey, limit: 20 });

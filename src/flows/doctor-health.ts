@@ -121,8 +121,12 @@ async function runDoctorHealthFlowWithResult(
   resumeCapture?: () => void,
   preCaptureRehearsalRoot?: string,
 ) {
-  const { prepareDoctorHealthFlow, prepareDoctorInteractiveMaintenance } =
-    await import("./doctor-health-startup.js");
+  const {
+    prepareDoctorHealthFlow,
+    prepareDoctorInteractiveMaintenance,
+    prepareDoctorMaintenanceArchives,
+    prepareDoctorStateSchema,
+  } = await import("./doctor-health-startup.js");
   const { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root } =
     await prepareDoctorHealthFlow(runtime, options, showDoctorIntro);
   let maintenance: Awaited<
@@ -182,24 +186,14 @@ async function runDoctorHealthFlowWithResult(
   await using resources = new AsyncDisposableStack();
   resources.defer(async () => maintenance?.release());
   try {
+    const { assertDoctorRetiredStateAdmission } =
+      await import("../commands/doctor-retired-state-admission.js");
+    assertDoctorRetiredStateAdmission();
     if (options.repair === true || options.yes === true || interactiveRepair) {
-      try {
-        const { prepareDoctorDatabasePreflight } =
-          await import("../commands/doctor-database-preflight.js");
-        preparedArchiveDiscovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight()))
-          .agentDatabaseMigrationDiscovery;
-        if (preparedArchiveDiscovery) {
-          const { prepareCanonicalTranscriptArchiveMigrations } =
-            await import("../infra/state-migrations.transcript-directives-archives.js");
-          await prepareCanonicalTranscriptArchiveMigrations(preparedArchiveDiscovery);
-        }
-      } catch (error) {
-        // Offline admission still owns repairable schema and discovery failures.
-        effectiveRuntime.log(`Archive verification preparation deferred: ${String(error)}`);
-      }
-      const { waitForCliSignalExit } = await import("../cli/signal-exit-barrier.js");
-      // Keep an accepted signal during preparation ahead of service custody.
-      await waitForCliSignalExit();
+      preparedArchiveDiscovery = await prepareDoctorMaintenanceArchives(
+        databasePreflight,
+        effectiveRuntime,
+      );
     }
     const [{ beginDoctorMaintenance }, { createDoctorOriginalCaptureHook }] = await Promise.all([
       import("../commands/doctor-maintenance.js"),
@@ -337,6 +331,7 @@ async function runDoctorHealthFlowWithResult(
         }
       }
 
+      const stateSchemaPreparation = await prepareDoctorStateSchema(schemas, prompter.shouldRepair);
       const { repairDoctorAgentDeletionJournal } =
         await import("../commands/doctor-agent-deletion-journal.js");
       const deletionJournal = await repairDoctorAgentDeletionJournal({
@@ -385,6 +380,8 @@ async function runDoctorHealthFlowWithResult(
       const configResult = await measureGatewayBootstrapStep("doctor.config-flow", () =>
         loadAndMaybeMigrateDoctorConfig({
           options,
+          retiredStateAdmitted: true,
+          stateSchemaPreparation,
           agentDatabaseMigrationDiscovery: schemas.agentDatabaseMigrationDiscovery,
           confirm: (p) => prompter.confirm(p),
           runtime: doctorRuntime,
