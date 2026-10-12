@@ -57,6 +57,8 @@ type ToolPluginToolDefinitionBase<TParamsSchema extends TSchema> = {
   parameters: TParamsSchema;
   /** Register as optional so runtimes may omit it when unsupported. */
   optional?: boolean;
+  /** False is workspace-independent; execute defers workspace access until execution. */
+  workspaceAccess?: boolean | "execute";
 };
 
 /** Static tool declaration accepted by the tool-plugin factory callback. */
@@ -94,6 +96,7 @@ type DefinedToolPluginTool = {
   parameters: TSchema;
   outputSchema?: TSchema;
   optional: boolean;
+  workspaceAccess?: boolean | "execute";
   execute?: (params: unknown, config: unknown, context: ToolPluginExecutionContext) => unknown;
   factory?: (
     context: ToolPluginFactoryContext<unknown>,
@@ -108,6 +111,7 @@ export type ToolPluginStaticToolMetadata = {
   parameters: JsonSchemaObject;
   outputSchema?: JsonSchemaObject;
   optional?: boolean;
+  workspaceAccess?: boolean | "execute";
 };
 
 /** Metadata attached to a defined tool plugin for manifest/catalog generation. */
@@ -158,6 +162,7 @@ function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> 
     parameters: definition.parameters,
     outputSchema: definition.outputSchema,
     optional: definition.optional === true,
+    workspaceAccess: definition.workspaceAccess,
     execute: definition.execute as DefinedToolPluginTool["execute"],
     factory: definition.factory as DefinedToolPluginTool["factory"],
   })) as ToolPluginToolFactory<TConfig>;
@@ -188,6 +193,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
       parameters: tool.parameters as JsonSchemaObject,
       ...(tool.outputSchema ? { outputSchema: tool.outputSchema as JsonSchemaObject } : {}),
       ...(tool.optional ? { optional: true } : {}),
+      ...(tool.workspaceAccess !== undefined ? { workspaceAccess: tool.workspaceAccess } : {}),
     })),
   };
 
@@ -200,8 +206,8 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
       const config = (api.pluginConfig ?? {}) as ToolPluginConfig<TConfigSchema>;
       for (const tool of tools) {
         const opts = {
-          name: tool.name,
           ...(tool.optional ? { optional: true } : {}),
+          ...(tool.workspaceAccess !== undefined ? { workspaceAccess: tool.workspaceAccess } : {}),
         };
         if (tool.factory) {
           api.registerTool(
@@ -211,7 +217,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
                 config,
                 toolContext,
               }),
-            opts,
+            { name: tool.name, ...opts },
           );
           continue;
         }
@@ -236,7 +242,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
                 }),
               ),
           },
-          tool.optional ? { optional: true } : undefined,
+          tool.optional || tool.workspaceAccess !== undefined ? opts : undefined,
         );
       }
     },

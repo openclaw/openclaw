@@ -46,13 +46,12 @@ export function isWorkspaceTool(tool: AnyAgentTool): boolean {
   if (isCodeModeControlTool(tool)) {
     return false;
   }
+  const plugin = getPluginToolMeta(tool);
+  if (plugin) {
+    return plugin.workspaceAccess !== false;
+  }
   const operation = getAgentToolActionDescriptor(tool)?.operation;
-  return (
-    getPluginToolMeta(tool)?.workspaceAccess === true ||
-    operation === "filesystem" ||
-    operation === "process" ||
-    isWorkspaceToolName(tool.name)
-  );
+  return operation === "filesystem" || operation === "process" || isWorkspaceToolName(tool.name);
 }
 
 /** Bind one captured workspace owner to native admission and the host tool surface. */

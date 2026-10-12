@@ -29,6 +29,7 @@ import { withChannelReadAuthority } from "../../shared/channel-read-authority.js
 import { resolveSessionAgentId } from "../agent-scope.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
+import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import {
@@ -104,6 +105,9 @@ function* createMessageToolSteps(
   AnyAgentTool,
   Awaited<ReturnType<typeof resolveMessageToolDiscoveryAsync>>
 > {
+  const workspaceReadiness = captureAgentWorkspaceReadiness(
+    options?.runSessionKey ?? options?.agentSessionKey,
+  );
   const loadConfigForTool = options?.getRuntimeConfig ?? getRuntimeConfig;
   const getScopedSecretTargetsForTool =
     options?.getScopedChannelsCommandSecretTargets ?? getScopedChannelsCommandSecretTargets;
@@ -578,6 +582,7 @@ function* createMessageToolSteps(
                 senderIsOwner: options?.senderIsOwner,
                 conversationReadOrigin: options?.conversationReadOrigin,
                 workspaceDir: options?.workspaceDir,
+                workspaceReadiness,
                 broadcastAccountPlan,
                 gateway,
                 toolContext,

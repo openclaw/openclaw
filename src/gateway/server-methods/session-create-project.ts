@@ -278,6 +278,7 @@ export function prepareSessionWorkspace(params: {
   };
   const promptReady = createDeferredCore();
   let preparationFailure: Error | undefined;
+  let workspaceReady = false;
   const preparation = prepareSessionWorkspaceForRun({
     ...session,
     entry,
@@ -305,6 +306,7 @@ export function prepareSessionWorkspace(params: {
         storePath: session.storePath,
       });
       assertRunOwnership();
+      workspaceReady = true;
       promptReady.resolve();
     })
     .catch((error: unknown) => {
@@ -328,6 +330,7 @@ export function prepareSessionWorkspace(params: {
     sessionKey,
     assertCurrent: assertRunOwnership,
     promptReady: promptReady.promise,
+    isReady: () => workspaceReady,
     waitUntilReady: () => ready,
     getFailure: () => preparationFailure,
   };

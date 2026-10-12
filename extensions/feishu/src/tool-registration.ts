@@ -13,7 +13,7 @@ export function registerFeishuTool<TSchemaType extends TSchema>(
     label: string;
     description: string;
     family: keyof FeishuToolsConfig;
-    workspaceAccess?: boolean;
+    workspaceAccess?: boolean | "execute";
     parameters: TSchemaType;
     createExecute: (
       ctx: OpenClawPluginToolContext,
@@ -47,6 +47,9 @@ export function registerFeishuTool<TSchemaType extends TSchema>(
         },
       };
     },
-    { name: tool.name, ...(tool.workspaceAccess ? { workspaceAccess: true } : {}) },
+    {
+      name: tool.name,
+      ...(tool.workspaceAccess !== undefined ? { workspaceAccess: tool.workspaceAccess } : {}),
+    },
   );
 }

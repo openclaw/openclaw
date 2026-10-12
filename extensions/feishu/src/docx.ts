@@ -788,7 +788,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   registerFeishuTool(api, {
     family: "doc",
     name: "feishu_doc",
-    workspaceAccess: true,
+    workspaceAccess: "execute",
     label: "Feishu Doc",
     description:
       "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text",

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,6 +17,8 @@ import type { SandboxFsBridge } from "../sandbox/fs-bridge.types.js";
 import { createRemoteShellSandboxFsBridge } from "../sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "../sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
+import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";
+import { jsonResult } from "./common.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
 const channel = "sandboxchat" as ChannelPlugin["id"];
@@ -200,4 +203,151 @@ describe("message tool sandbox attachments", () => {
       expect(bridgeReadFile).not.toHaveBeenCalled();
     });
   });
+});
+
+describe("message tool captured workspace readiness", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    vi.unstubAllEnvs();
+  });
+
+  function registerAttachmentActions(delivered: Record<string, unknown>[]) {
+    const id = "readinesschat" as ChannelPlugin["id"];
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id,
+        capabilities: { chatTypes: ["direct"], media: true },
+        config: { isConfigured: () => true, resolveAccount: () => ({ enabled: true }) },
+      }),
+      messaging: {
+        normalizeTarget: (raw) => raw.trim() || undefined,
+        targetResolver: { looksLikeId: (raw) => raw.trim().length > 0 },
+      },
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) => ({ ok: true, to: to ?? "recipient" }),
+        sendText: async () => ({ channel: id, messageId: "readiness-text" }),
+      },
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["send", "sendAttachment"],
+          mediaSourceParams: ["asset"],
+        }),
+        supportsAction: ({ action }) => action === "send" || action === "sendAttachment",
+        handleAction: async ({ params }) => {
+          delivered.push({
+            ...params,
+            ...(typeof params.asset === "string"
+              ? { buffer: (await fs.readFile(params.asset)).toString("base64") }
+              : {}),
+          });
+          return jsonResult({ ok: true });
+        },
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
+    return id;
+  }
+
+  it.each([
+    { outcome: "ready", mediaKey: "media" },
+    { outcome: "ready", mediaKey: "asset" },
+    { outcome: "revoked", mediaKey: "media" },
+  ] as const)(
+    "gates $mediaKey on a retained execute callback and rechecks its $outcome owner",
+    async ({ outcome, mediaKey }) => {
+      await withTempDir("message-tool-workspace-ready-", async (tempDir) => {
+        const workspaceDir = await fs.realpath(tempDir);
+        vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
+        const delivered: Record<string, unknown>[] = [];
+        const messageChannel = registerAttachmentActions(delivered);
+        const config: OpenClawConfig = {
+          agents: { defaults: { workspace: workspaceDir } },
+          channels: { readinesschat: { enabled: true } },
+        };
+        const waiting = createDeferred();
+        const ready = createDeferred();
+        let active = true;
+        const assertCurrent = () => {
+          if (!active) {
+            throw new Error("workspace owner revoked");
+          }
+        };
+        const waitUntilReady = vi.fn(() => {
+          waiting.resolve();
+          return ready.promise;
+        });
+        const tool = await runWithAgentWorkspaceReadiness(
+          {
+            sessionKey: "agent:main:attachment-readiness",
+            waitUntilReady,
+            assertCurrent,
+          },
+          async () =>
+            createMessageTool({
+              config,
+              getRuntimeConfig: () => config,
+              agentSessionKey:
+                mediaKey === "asset"
+                  ? "agent:main:source-policy"
+                  : "agent:main:attachment-readiness",
+              runSessionKey: mediaKey === "asset" ? "agent:main:attachment-readiness" : undefined,
+              workspaceDir,
+              conversationReadOrigin: "direct-operator",
+              runMessageAction: (input) => runMessageAction({ ...input, skipQueue: true }),
+            }),
+        );
+        const media = path.join(workspaceDir, "assets/report.pdf");
+        const pending = tool.execute("local-attachment", {
+          action: "sendAttachment",
+          channel: messageChannel,
+          target: "recipient",
+          [mediaKey]: media,
+        });
+        void pending.catch(() => {});
+        try {
+          await awaitGateBeforeSettlement(
+            waiting.promise,
+            pending,
+            "Local attachment read did not wait for workspace preparation",
+          );
+          expect(delivered).toEqual([]);
+          if (outcome === "ready") {
+            for (const args of [
+              { action: "send", message: "Text while checkout is pending." },
+              { action: "send", media: "https://example.com/remote.pdf" },
+              {
+                action: "sendAttachment",
+                buffer: Buffer.from("inline bytes").toString("base64"),
+                filename: "inline.txt",
+              },
+            ]) {
+              await tool.execute("independent-attachment", {
+                channel: messageChannel,
+                target: "recipient",
+                ...args,
+              });
+            }
+            expect(delivered).toHaveLength(3);
+            expect(waitUntilReady).toHaveBeenCalledOnce();
+            await fs.mkdir(path.dirname(media), { recursive: true });
+            await fs.writeFile(media, "%PDF-1.4\nsynthetic report\n%%EOF");
+            ready.resolve();
+            await pending;
+            expect(Buffer.from(String(delivered[3]?.buffer), "base64").toString()).toBe(
+              "%PDF-1.4\nsynthetic report\n%%EOF",
+            );
+          } else {
+            active = false;
+            ready.resolve();
+            await expect(pending).rejects.toThrow("workspace owner revoked");
+            expect(delivered).toEqual([]);
+          }
+        } finally {
+          ready.resolve();
+          await pending.catch(() => {});
+        }
+      });
+    },
+  );
 });

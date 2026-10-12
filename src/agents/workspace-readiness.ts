@@ -5,6 +5,7 @@ export type AgentWorkspaceReadiness = Readonly<{
   sessionKey: string;
   waitUntilReady: () => Promise<void>;
   assertCurrent: () => void;
+  isReady?: () => boolean;
   getFailure?: () => Error | undefined;
 }>;
 
