@@ -14,6 +14,7 @@ import {
 } from "../../plugin-sdk/session-transcript-runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
@@ -45,12 +46,14 @@ describe("selected transcript turn cold restoration", () => {
     }
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
   });
 
   async function createFixture() {
     const root = tempDirs.make("openclaw-cold-turn-");
     const storePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
     databasePaths.push(storePath);
+    setRuntimeConfigSnapshot({ session: { store: storePath } });
     const fixture = await createSessionColdStorageFixture(storePath, "global");
     expect(
       await runSessionColdStorageMaintenance({ config: maintenanceConfig(storePath) }),

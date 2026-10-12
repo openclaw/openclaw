@@ -31,6 +31,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.js";
 import { copySqliteSessionOwnedStateForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
@@ -72,6 +73,7 @@ let seed:
 beforeAll(async () => {
   const state = await createOpenClawTestState({ label: "cold-read-seed" });
   try {
+    await captureRuntimeConfigAsyncReader()();
     const prepared = await createHotRaceSeed(state);
     await state.restoreEnv();
     seed = { ...prepared, state };
@@ -260,6 +262,7 @@ async function withRace(
   run: (race: Race, state: OpenClawTestState) => Promise<void>,
 ) {
   await withOpenClawTestState({ label }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const race = await prepareRace(state);
     try {
       await run(race, state);
@@ -334,6 +337,7 @@ it("joins a caller's hot read snapshot without a savepoint and observes the next
 
 it("identifies a slow transcript matcher while retaining its hot read snapshot", async () => {
   await withOpenClawTestState({ label: "hot-read-attribution" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const race = await prepareRace(state);
     const file = state.path("hot-read.log");
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });
@@ -381,6 +385,7 @@ it("identifies a slow transcript matcher while retaining its hot read snapshot",
 
 it("counts a header at seq zero as transcript presence", async () => {
   await withOpenClawTestState({ label: "transcript-presence" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       env: state.env,
@@ -483,6 +488,7 @@ it.each(["batch stats", "search", "mutation"] as const)(
 
 it("preserves partial-store statistics, UTF-8 bytes, and scope-cache freshness in batches", async () => {
   await withOpenClawTestState({ label: "stats-batch-partial-store" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const options = { agentId: "main", env: state.env, path: state.statePath("shared.sqlite") };
     const database = openOpenClawAgentDatabase(options);
     const rawId = "orphan-\ud800";
@@ -539,6 +545,7 @@ it("preserves partial-store statistics, UTF-8 bytes, and scope-cache freshness i
 
 it("reads only process-held incognito statistics and keeps each store's batch results separate", async () => {
   await withOpenClawTestState({ label: "stats-batch-incognito" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       env: state.env,

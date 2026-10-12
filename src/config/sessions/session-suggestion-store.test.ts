@@ -40,12 +40,12 @@ async function resolvePendingSuggestion(params: {
     : null;
 }
 
+afterAll(clearRuntimeConfigSnapshot);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-suggestions-");
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
 });
-afterAll(clearRuntimeConfigSnapshot);
 
 describe("session suggestion store", () => {
   it("keeps deterministic rows and resolves only pending suggestions", async () => {

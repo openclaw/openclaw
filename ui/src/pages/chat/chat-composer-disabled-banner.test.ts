@@ -34,6 +34,7 @@ describe("archived session composer banner", () => {
         ...props,
         disabledBanner: {
           ...props.disabledBanner!,
+          kind: "composer-replacement",
           text: "This session is still archived.",
           onAction: refreshedAction,
         },

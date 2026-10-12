@@ -18,8 +18,8 @@ import {
   type PreparedSessionTranscriptProjection,
 } from "./session-transcript-projection-rebuild.js";
 
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-projection-catchup-");
 afterAll(clearRuntimeConfigSnapshot);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-projection-catchup-");
 
 async function prepareDirtyProjection(label: string) {
   setRuntimeConfigSnapshot({});
