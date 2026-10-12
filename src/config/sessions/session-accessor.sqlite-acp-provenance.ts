@@ -125,6 +125,35 @@ export function retainLegacyAcpMigrationSourcesJson(
       : null;
 }
 
+export function prepareLegacyAcpMigrationSourcesForEntryWrite(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  entry: SessionEntry,
+  previousEntry: SessionEntry | undefined,
+  previousRow: { legacy_acp_migration_json?: string | null } | undefined,
+): { legacy_acp_migration_json?: string | null } {
+  if (
+    !previousEntry ||
+    (previousEntry.sessionId === entry.sessionId &&
+      previousEntry.lifecycleRevision === entry.lifecycleRevision) ||
+    !hasLegacyAcpMigrationProvenanceColumn(database.db)
+  ) {
+    return {};
+  }
+  // Full snapshots carry provenance; partial legacy snapshots need one column read.
+  const value =
+    previousRow && "legacy_acp_migration_json" in previousRow
+      ? previousRow.legacy_acp_migration_json
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("session_nodes")
+            .select("legacy_acp_migration_json")
+            .where("session_key", "=", sessionKey),
+        )?.legacy_acp_migration_json;
+  return { legacy_acp_migration_json: retainLegacyAcpMigrationSourcesJson(value, entry) };
+}
+
 export function copyLegacyAcpMigrationSourcesForRepair(
   source: Pick<OpenClawAgentDatabase, "db">,
   destination: OpenClawAgentDatabase,
