@@ -355,8 +355,9 @@ it("revalidates the update owner after integrity work before committing an agent
         active = false;
       }
     });
-    await withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
-      const result = await Promise.allSettled([
+    let result: PromiseSettledResult<void>[] = [];
+    const settled = withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
+      result = await Promise.allSettled([
         maintenance.run(() =>
           withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
             migrateOpenClawAgentDatabaseForMaintenance(
@@ -366,13 +367,16 @@ it("revalidates the update owner after integrity work before committing an agent
           ),
         ),
       ]);
-      const outcome = expectDefined(result[0], "migration outcome");
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status !== "rejected") {
-        throw new Error("Expected retired owner refusal");
-      }
-      expect(collectNestedErrorCandidates(outcome.reason)).toContain(retired);
     });
+    await expect(settled).rejects.toSatisfy((error: unknown) =>
+      collectNestedErrorCandidates(error).includes(retired),
+    );
+    const outcome = expectDefined(result[0], "migration outcome");
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status !== "rejected") {
+      throw new Error("Expected retired owner refusal");
+    }
+    expect(collectNestedErrorCandidates(outcome.reason)).toContain(retired);
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });
@@ -403,7 +407,7 @@ it("refuses early unregistered WAL state and admits post-core repair after verif
       const before = files.map((file) => fs.readFileSync(file));
       const schemas = await prepareDoctorDatabasePreflight();
       await expect(guardUpdateDoctorSchemaUpgrade({ schemas })).rejects.toThrow(
-        "Missing recoverable canonical backup coverage",
+        "Missing recoverable database backup coverage",
       );
       expect(
         files.map((file) => fs.readFileSync(file)),
@@ -501,13 +505,13 @@ it("requires the captured agent path and owner to be verified canonical archive 
         archive.archivePath,
         agents.map((fact) => Object.assign({}, fact, { sourcePath: `${fact.sourcePath}.missing` })),
       ),
-    ).rejects.toThrow("lacks verified canonical SQLite coverage");
+    ).rejects.toThrow("lacks verified SQLite database coverage");
     await expect(
       backupVerify.verifyBackupArchive(
         archive.archivePath,
         agents.map((fact) => Object.assign({}, fact, { agentId: "another-agent" })),
       ),
-    ).rejects.toThrow("lacks verified canonical SQLite coverage");
+    ).rejects.toThrow("lacks verified SQLite database coverage");
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });

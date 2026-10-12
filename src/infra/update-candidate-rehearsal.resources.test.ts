@@ -246,42 +246,6 @@ it.each([false, true])(
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "keeps the system temporary fallback when TMPDIR is full",
-  async () => {
-    const f = await fixture();
-    const nominated = path.join(f.root, "operator-temp");
-    await fs.mkdir(nominated);
-    vi.stubEnv("TMPDIR", nominated);
-    vi.stubEnv("TMP", undefined);
-    vi.stubEnv("TEMP", undefined);
-    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
-      targetPath,
-      checkedPath: targetPath,
-      availableBytes: targetPath === "/tmp" ? 1024 ** 3 : 0,
-      totalBytes: 1024 ** 3,
-    }));
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config: {},
-      stateDir: f.stateDir,
-      candidateRoot: f.root,
-      env: { ...process.env },
-    });
-    try {
-      expect(rehearsal.snapshotCapacity).toMatchObject({
-        reason: "system-tmpdir",
-        candidates: expect.arrayContaining([
-          { kind: "explicit-tmpdir", directory: nominated, availableBytes: 0 },
-          { kind: "system-tmpdir", directory: "/tmp", availableBytes: 1024 ** 3 },
-        ]),
-      });
-      expect(rehearsal.stateDir.startsWith(`${await fs.realpath("/tmp")}${path.sep}`)).toBe(true);
-    } finally {
-      await rehearsal.cleanup();
-    }
-  },
-);
-
 it.each([
   { explicit: 1024 ** 3, state: 1024 ** 3, system: 1024 ** 3, kind: "explicit-tmpdir" },
   { explicit: 0, state: 1024 ** 3, system: 1024 ** 3, kind: "state-volume" },

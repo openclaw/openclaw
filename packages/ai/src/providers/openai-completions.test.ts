@@ -1124,14 +1124,11 @@ describe("openai-completions stop-reason tool-call guard", () => {
       {
         type: "text",
         text: "following text",
-        textSignature: expect.stringMatching(
-          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-        ),
       },
     ]);
   });
 
-  it("rolls back provisional commentary when an unfinished tool stream is interrupted", async () => {
+  it("preserves narration when an unfinished tool stream is interrupted", async () => {
     mockChunksRef.chunks = [
       makeTextChunk("ordinary narration"),
       makeToolCallChunk("call_1", "lookup", '{"value":1}'),
@@ -1166,9 +1163,6 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content[0]).toEqual({
       type: "text",
       text: "Use <",
-      textSignature: expect.stringMatching(
-        /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
-      ),
     });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
   });

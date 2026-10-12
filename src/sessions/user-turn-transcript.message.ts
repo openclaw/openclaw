@@ -103,33 +103,20 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     const media: PersistedUserTurnMediaInput = {
       contentType: fact.contentType ?? mimeTypeFromFilePath(mediaPath ?? url),
     };
-    if (mediaPath) {
-      media.path = mediaPath;
-    }
-    if (url) {
-      media.url = url;
-    }
-    if (fact.kind) {
-      media.kind = fact.kind;
-    }
-    if (fact.fileName) {
-      media.fileName = fact.fileName;
-    }
-    if (fact.origin) {
-      media.origin = fact.origin;
-    }
-    if (fact.sizeBytes !== undefined) {
-      media.sizeBytes = fact.sizeBytes;
-    }
-    if (fact.durationMs !== undefined) {
-      media.durationMs = fact.durationMs;
-    }
-    if (fact.width !== undefined) {
-      media.width = fact.width;
-    }
-    if (fact.height !== undefined) {
-      media.height = fact.height;
-    }
+    const set = <K extends keyof typeof media>(key: K, value: (typeof media)[K]) => {
+      if (value !== undefined) {
+        media[key] = value;
+      }
+    };
+    set("path", mediaPath);
+    set("url", url);
+    set("kind", fact.kind);
+    set("fileName", fact.fileName);
+    set("origin", fact.origin);
+    set("sizeBytes", fact.sizeBytes);
+    set("durationMs", fact.durationMs);
+    set("width", fact.width);
+    set("height", fact.height);
     return media;
   });
   return normalizedMedia.some((entry) => entry.path || entry.url) ? normalizedMedia : [];

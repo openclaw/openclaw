@@ -13,11 +13,11 @@ import * as clawOwnership from "../claws/provenance-async.js";
 import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
+import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
+} from "../cron/store/run-receipt-store.test-support.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import * as deletionJournal from "../state/agent-deletion-journal.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";

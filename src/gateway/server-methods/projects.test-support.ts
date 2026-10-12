@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -80,7 +81,7 @@ export async function invokeProjectMethod(
         capture.result = { ok, payload, error };
       },
       context: bindSessionRowProjection(
-        { getRuntimeConfig: getConfig },
+        { getRuntimeConfig: getConfig, trackExecution: trackAsyncWork },
         () => projection ?? ownedProjection,
       ) as never,
       client: {

@@ -138,7 +138,7 @@ export async function resolveCommandAppServerContext(
   const authProfileId =
     binding?.connectionScope === "supervision"
       ? undefined
-      : resolveCodexAppServerAuthProfileIdForAgent({
+      : await resolveCodexAppServerAuthProfileIdForAgent({
           authProfileId: binding?.authProfileId ?? target?.requestedAuthProfileId,
           agentDir,
           config: ctx.config,

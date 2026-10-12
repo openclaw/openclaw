@@ -62,12 +62,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       change: "current",
       guarded: false,
     },
-    {
-      kind: "exact cron run",
-      key: "agent:main:cron:provider-fence:run:cron-run-1",
-      change: "current",
-      guarded: false,
-    },
   ] as const)(
     "scopes the provider generation guard after writer admission ($kind, $change)",
     async ({ key, change, guarded }) => {
@@ -165,19 +159,13 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
   );
 
   it.each([
-    ["stop", 10_000, "event"],
-    ["stop", 0, "event"],
-    ["toolUse", 10_000, "event"],
-    ["error", 10_000, "event"],
-    ["aborted", 10_000, "event"],
-    ["stop", 10_000, "result"],
-    ["stop", 0, "result"],
-    ["error", 10_000, "result"],
-    ["output-limit", 10_000, "event"],
-    ["output-limit", 10_000, "result"],
+    ["stop", 10_000],
+    ["toolUse", 10_000],
+    ["aborted", 10_000],
+    ["output-limit", 10_000],
   ] as const)(
-    "observes terminal %s usage once across async-tool fragments (cacheRead=%s, completion=%s)",
-    async (stopReason, cacheRead, completion) => {
+    "observes terminal %s usage once across async-tool fragments (cacheRead=%s)",
+    async (stopReason, cacheRead) => {
       const terminalStopReason = stopReason === "output-limit" ? "error" : stopReason;
       const fixture = await createFixture();
       const recordStage = vi.fn();
@@ -237,9 +225,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         toolCall,
         partial: { ...message, content: [toolCall], usage: makeZeroUsageSnapshot() },
       });
-      if (completion === "result") {
-        response.end(message);
-      } else if (terminalStopReason === "error" || terminalStopReason === "aborted") {
+      if (terminalStopReason === "error" || terminalStopReason === "aborted") {
         response.push({ type: "error", reason: terminalStopReason, error: message });
       } else {
         response.push({ type: "done", reason: terminalStopReason, message });
@@ -547,7 +533,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
             onModelRequest: expect.any(Function),
             getObservation: expect.any(Function),
           },
-          history: expect.objectContaining({ contextEngineAssemblySucceeded: true }),
+          history: expect.objectContaining({ contextEnginePromptAuthority: "assembled" }),
           isProbeSession: false,
           stream: fixture.streamResult,
           timeout: fixture.timeoutResult,

@@ -12,7 +12,6 @@ import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
-  maybeEmitFailureAlert,
   resolveFailureIncident,
   resolveFailureAlert,
 } from "./failure-alerts.js";
@@ -169,7 +168,7 @@ export function applyJobResult(
     );
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
-  // separate counter so opt-in skip alerts do not affect retry behavior.
+  // separate counter so skip alerts do not affect retry behavior.
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
   const computeNaturalNext = (restartInterval: boolean) => {
     try {
@@ -201,17 +200,6 @@ export function applyJobResult(
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
-    if (alertConfig?.includeSkipped && !opts.replay) {
-      maybeEmitFailureAlert(state, {
-        job,
-        alertConfig,
-        status: "skipped",
-        error: result.error,
-        runAtMs: result.startedAt,
-        consecutiveCount: job.state.consecutiveSkipped,
-        deferredNotifications: opts.deferredNotifications,
-      });
-    }
   } else {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = 0;

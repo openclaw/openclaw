@@ -286,7 +286,7 @@ suite.define(() => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const collapseButton = page.locator(".sidebar-brand__collapse");
+      const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
       const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")

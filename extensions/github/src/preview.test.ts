@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ControlUiGitHubError, formatControlUiGitHubPreviewError } from "./github-api.js";
 import {
@@ -287,32 +288,60 @@ describe("loadControlUiGitHubPreview", () => {
     },
   );
 
-  it("shares in-flight previews across readers and expires them after one minute", async () => {
+  it("returns expired previews while one refresh runs and revalidates every reader", async ({
+    signal,
+  }) => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    const started = createDeferred<void>();
-    const item = createDeferred<Response>();
-    const identity = managedIdentity("concurrent-preview");
+    const refresh = createDeferred<Response>();
+    const refreshStarted = createDeferred<void>();
+    const identity = managedIdentity("stale-preview");
     const target = previewTarget(88126);
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       if (requestUrl(input).includes("/issues/")) {
-        started.resolve();
-        return item.promise.then((response) => response.clone());
+        return githubJson(previewPayload({ user: { login: "octocat" } }));
       }
       return publicRepository();
     });
-    const first = loadControlUiGitHubPreview(target, identity, fetchMock);
-    await started.promise;
-    const second = loadControlUiGitHubPreview(target, { ...identity }, fetchMock);
-    item.resolve(githubJson(previewPayload({ user: { login: "octocat" } })));
-    expect(await first).toEqual(await second);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    now += 59_999;
-    await loadControlUiGitHubPreview(target, identity, fetchMock);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    now += 1;
-    await loadControlUiGitHubPreview(target, identity, fetchMock);
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    const first = await loadControlUiGitHubPreview(target, identity, fetchMock);
+    // Expire only metadata; a deferred response proves request delivery never joins its refresh.
+    now += 60_000;
+    const expired = now;
+    fetchMock.mockImplementation(async (input) => {
+      if (requestUrl(input).includes("/issues/")) {
+        refreshStarted.resolve();
+        return refresh.promise.then((response) => response.clone());
+      }
+      return publicRepository();
+    });
+    try {
+      expect(
+        await withinTest(loadControlUiGitHubPreview(target, identity, fetchMock), signal),
+      ).toEqual({ ...first, stale: true });
+      expect(await loadControlUiGitHubPreview(target, identity, fetchMock)).toEqual({
+        ...first,
+        stale: true,
+      });
+      await withinTest(refreshStarted.promise, signal);
+      expect(
+        fetchMock.mock.calls.filter(([input]) => requestUrl(input).includes("/issues/")),
+      ).toHaveLength(2);
+      const forced = loadControlUiGitHubPreview(target, identity, fetchMock, true);
+      refresh.resolve(
+        githubJson(previewPayload({ title: "Refreshed", user: { login: "octocat" } })),
+      );
+      await expect(forced).resolves.toMatchObject({ title: "Refreshed" });
+      now = expired + 1;
+      await expect(loadControlUiGitHubPreview(target, identity, fetchMock)).resolves.toMatchObject({
+        title: "Refreshed",
+      });
+      identity.revalidate.mockRejectedValue(new Error("identity retired"));
+      await expect(loadControlUiGitHubPreview(target, identity, fetchMock)).rejects.toThrow(
+        "identity retired",
+      );
+    } finally {
+      refresh.resolve(githubJson(previewPayload()));
+    }
   });
 
   it("starts PR metadata and commits together after public admission", async () => {

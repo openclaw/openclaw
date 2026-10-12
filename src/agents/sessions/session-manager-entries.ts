@@ -5,6 +5,7 @@ import type { ImageContent, TextContent } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
@@ -31,12 +32,12 @@ type LeafControlSelection = {
 };
 
 export class SessionManagerEntries extends SessionManagerAppend {
-  private createEntry<T extends { type: SessionEntry["type"] }>(data: T) {
+  private createEntry<T extends { type: SessionEntry["type"] }>(data: T, timestamp = Date.now()) {
     return {
       ...data,
       id: generateSessionEntryId(),
       parentId: this.appendParentId,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(timestamp).toISOString(),
     };
   }
 
@@ -163,15 +164,13 @@ export class SessionManagerEntries extends SessionManagerAppend {
     content: string | (TextContent | ImageContent)[],
     display: boolean,
     details?: unknown,
+    timestamp?: number,
   ): Promise<string> {
-    const entry: CustomMessageEntry = this.createEntry({
-      type: "custom_message",
-      customType,
-      content,
-      display,
-      details,
-      timestamp: new Date().toISOString(),
-    });
+    // Runtime context replays as user input, including its original timestamp.
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
     await this.appendEntryAsync(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
@@ -182,28 +181,27 @@ export class SessionManagerEntries extends SessionManagerAppend {
     content: string | (TextContent | ImageContent)[],
     display: boolean,
     details?: unknown,
+    timestamp?: number,
   ): string {
     prepareSessionManagerSync("appendCustomMessageEntry", this.persistenceTarget, this);
-    const entry: CustomMessageEntry = this.createEntry({
-      type: "custom_message",
-      customType,
-      content,
-      display,
-      details,
-      timestamp: new Date().toISOString(),
-    });
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
     this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
   async appendLeafControlAsync(params: LeafControlSelection): Promise<SessionLeafControl> {
     const captured = { ...params };
-    return await withSessionManagerWrite(this, async (admission) => {
+    return await withSessionManagerAppend(this, async (admission) => {
       this.assertTranscriptWriteActive();
       this.validateLeafControl(captured);
       if (
         !admission ||
-        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) && "db" in admission.database)
+        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
+          !("actor" in admission) &&
+          "db" in admission.database)
       ) {
         return this.appendLeafControlSync(captured);
       }

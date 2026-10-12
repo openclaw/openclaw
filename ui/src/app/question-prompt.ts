@@ -367,7 +367,7 @@ function parseQuestionListResult(value: unknown): QuestionRecord[] | null {
   return questions.every((question) => question !== null) ? questions : null;
 }
 
-function isQuestionNotFoundError(error: unknown): boolean {
+export function isQuestionNotFoundError(error: unknown): boolean {
   return (
     error instanceof GatewayRequestError &&
     isRecord(error.details) &&

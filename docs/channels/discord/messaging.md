@@ -12,7 +12,7 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
 ## Runtime model
 
 - Gateway owns the Discord connection.
-- Reply routing is deterministic: Discord inbound replies back to Discord.
+- Replies to Discord messages go back to Discord.
 - Bot replies and thread-bound persona replies share Markdown formatting, including CommonMark bold and configured table conversion.
 - Both delivery paths reapply caller-supplied character limits after formatting and mention expansion.
 - Forwarded message snapshots reach the agent together with any accompanying caption. Forwarded text is not treated as a typed command; command classification uses only the sender’s own message text.
@@ -74,7 +74,7 @@ Messages in the same channel continue reaching the [reply queue](/concepts/queue
   </Accordion>
 
   <Accordion title="Live stream preview">
-    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. Discord preview streaming defaults to `off`; set `channels.discord.streaming.mode` to `partial`, `block`, or `progress` to opt in. `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the canonical nested `streaming` shape.
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. Discord preview streaming defaults to `off`; set `channels.discord.streaming.mode` to `partial`, `block`, or `progress` to opt in. `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the current nested `streaming` format.
 
 ```json5
 {
@@ -154,7 +154,7 @@ Messages in the same channel continue reaching the [reply queue](/concepts/queue
   </Accordion>
 
   <Accordion title="Outbound mention aliases">
-    Use `mentionAliases` when agents need deterministic outbound mentions for known Discord users. Keys are handles without the leading `@`; values are Discord user IDs. Unknown handles, `@everyone`, `@here`, and mentions inside Markdown code spans are left unchanged.
+    Use `mentionAliases` when agents need to mention known Discord users by handle. Keys are handles without the leading `@`; values are Discord user IDs. Unknown handles, `@everyone`, `@here`, and mentions inside Markdown code spans are left unchanged.
 
 ```json5
 {

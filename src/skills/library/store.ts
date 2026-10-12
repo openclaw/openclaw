@@ -120,13 +120,33 @@ export function resolveSkillLibraryActor(db: DatabaseSync, authority: SkillLibra
   if (profile) {
     authority.profileDependencies?.add(profile.id);
   }
+  return resolveSkillLibraryActorFromProfile(
+    authority,
+    config,
+    profile
+      ? {
+          id: profile.id,
+          role: profile.role ?? null,
+          githubLogin: config.gateway?.roles?.assignments?.byGithubLogin
+            ? (selectStoredGitHubIdentities(db, [profile.id]).get(profile.id)?.primary?.login ??
+              null)
+            : null,
+        }
+      : undefined,
+  );
+}
+
+/** Apply the same role ceiling to current worker rows or the Gateway's committed profile facts. */
+export function resolveSkillLibraryActorFromProfile(
+  authority: Pick<SkillLibraryAuthority, "scopes">,
+  config: OpenClawConfig,
+  profile: { id: string; role: string | null; githubLogin: string | null } | undefined,
+) {
   const ceiling = resolveOperatorRolePolicyForAssignment(
     profile?.id,
     profile?.role ?? null,
     config,
-    profile && config.gateway?.roles?.assignments?.byGithubLogin
-      ? (selectStoredGitHubIdentities(db, [profile.id]).get(profile.id)?.primary?.login ?? null)
-      : null,
+    profile?.githubLogin ?? null,
   )?.scopes;
   const permits = (scope: "operator.read" | "operator.write" | "operator.admin") =>
     authorizeOperatorScopesForRequiredScope(scope, [...authority.scopes]).allowed &&

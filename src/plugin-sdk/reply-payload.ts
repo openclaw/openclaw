@@ -1,5 +1,6 @@
 // Reply payload helpers normalize plugin reply targets, text, media, and approval metadata.
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import { normalizeOutboundReplyPayloadCore as normalizeCoreOutboundReplyPayload } from "../infra/outbound/reply-payload-normalize.js";
@@ -20,6 +21,11 @@ export type { MediaPayload } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 /** Plugin-facing reply payload without core-only trusted local media internals. */
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
+
+/** The shared dispatcher will persist confirmed delivery; channel adapters must not mirror it. */
+export function hasReplyPayloadFinalDeliveryCapture(payload: ReplyPayload): boolean {
+  return getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== undefined;
+}
 
 export type AskUserQuestionOptionIndices = ReadonlyMap<string, ReadonlyMap<string, number>>;
 
@@ -81,6 +87,7 @@ export {
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
+  stripReplyPayloadResponsePrefix,
 } from "../auto-reply/reply-payload.js";
 
 /** Normalized outbound reply payload accepted by channel send helpers. */

@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe("Codex app-server cancellation diagnostics", () => {
-  it.each(["before request", "pending request", "overload backoff", "config fence"] as const)(
+  it.each(["before request", "pending request", "overload backoff"] as const)(
     "preserves the cancellation cause and write certainty during %s",
     async (phase) => {
       vi.useFakeTimers();
@@ -35,19 +35,8 @@ describe("Codex app-server cancellation diagnostics", () => {
       if (phase === "before request") {
         controller.abort(reason);
       }
-      if (phase === "config fence") {
-        harness.client.setThreadSessionRequestGuard(
-          ({ abortMessage }) =>
-            new Promise((_resolve, reject) => {
-              controller.signal.addEventListener("abort", () => reject(new Error(abortMessage)), {
-                once: true,
-              });
-            }),
-        );
-      }
-      const method = phase === "config fence" ? "thread/resume" : "turn/start";
       const result = harness.client
-        .request(method, { threadId: "receiver" }, { signal: controller.signal })
+        .request("turn/start", { threadId: "receiver" }, { signal: controller.signal })
         .catch((error: unknown) => error);
       if (phase === "overload backoff") {
         const sent = JSON.parse(await harness.waitForWrite(0));

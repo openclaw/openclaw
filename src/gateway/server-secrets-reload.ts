@@ -125,8 +125,11 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
       const touchedTargets: Array<{ target: ReloadChannelTarget; restarted: boolean }> = [];
       const startTarget = ({ channel, accountId }: ReloadChannelTarget) =>
         accountId
-          ? manager.startChannel(channel, accountId, { preserveManualStop: true })
-          : manager.startChannel(channel);
+          ? manager.startChannel(channel, accountId, {
+              reason: "secrets-reload",
+              preserveManualStop: true,
+            })
+          : manager.startChannel(channel, undefined, { reason: "secrets-reload" });
       const stopTarget = ({ channel, accountId }: ReloadChannelTarget) =>
         accountId
           ? manager.stopChannel(channel, accountId, { manual: false })

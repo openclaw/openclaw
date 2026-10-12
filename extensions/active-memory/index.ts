@@ -235,18 +235,19 @@ export default definePluginEntry({
                 modelId: ctx.modelId,
               })
             : { provider: ctx.modelProviderId, model: ctx.modelId }) ?? {};
-        const cliDispatchEligibility = api.runtime.agent.resolveCliBackendDispatchEligibility({
-          provider: timeoutModelRef.provider,
-          model: timeoutModelRef.model,
-          config: liveConfig,
-          ...(timeoutAgentId
-            ? {
-                agentId: timeoutAgentId,
-                agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
-                workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
-              }
-            : {}),
-        });
+        const cliDispatchEligibility =
+          await api.runtime.agent.resolveCliBackendDispatchEligibilityAsync({
+            provider: timeoutModelRef.provider,
+            model: timeoutModelRef.model,
+            config: liveConfig,
+            ...(timeoutAgentId
+              ? {
+                  agentId: timeoutAgentId,
+                  agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
+                  workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
+                }
+              : {}),
+          });
         const invocationConfig = applyCliRuntimeRecallTimeoutDefault(
           config,
           cliDispatchEligibility !== undefined,

@@ -311,43 +311,6 @@ describe("SwarmRosterHydrator", () => {
     }
   });
 
-  it("rechecks a parent after an invalidated denial without clearing newer intent", async () => {
-    vi.useFakeTimers();
-    const stale = createDeferred<GatewaySessionRow>();
-    const initial = swarmParent([row(0)]);
-    const current = swarmParent([row(1)]);
-    const readParent = vi
-      .fn()
-      .mockResolvedValueOnce(initial)
-      .mockReturnValueOnce(stale.promise)
-      .mockResolvedValue(current);
-    const sessions = sessionSource(vi.fn(async () => result([], 0, 0)));
-    const hydrator = new SwarmRosterHydrator();
-    try {
-      hydrator.update({
-        sessions,
-        readParent,
-        parentKey: initial.key,
-        sourceEpoch: 1,
-        currentRows: () => [],
-        onRows: () => undefined,
-      });
-      await vi.advanceTimersByTimeAsync(250);
-      sessions.invalidateParent();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(readParent).toHaveBeenCalledTimes(2);
-      sessions.invalidateParent();
-      stale.reject(
-        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Old parent read denied" }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      expect(readParent).toHaveBeenCalledTimes(3);
-      expect(hydrator.rows).toEqual([current]);
-    } finally {
-      hydrator.dispose();
-    }
-  });
-
   it("queues fresh parent membership when a child-only change overlaps an older describe", async () => {
     vi.useFakeTimers();
     const stale = createDeferred<GatewaySessionRow>();

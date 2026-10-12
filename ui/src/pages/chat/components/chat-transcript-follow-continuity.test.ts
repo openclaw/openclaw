@@ -249,8 +249,8 @@ describe("transcript follow continuity", () => {
         ),
       );
       try {
-        const total = transcriptSize(container);
-        let scrollHeight = total + (nativePending ? 88 : 84);
+        const padding = nativePending ? 88 : 84;
+        let scrollHeight = transcriptSize(container) + padding;
         Object.defineProperties(container, {
           clientHeight: { configurable: true, value: 600 },
           scrollHeight: { configurable: true, get: () => scrollHeight },
@@ -258,6 +258,15 @@ describe("transcript follow continuity", () => {
         for (const observer of resizeObservers) {
           observer.emitTarget(container, 800, 600);
         }
+        // Measure the initial range before isolating the typing row's growth.
+        container.scrollTop = 0;
+        container.dispatchEvent(new Event("scroll"));
+        renderRows(rows);
+        await flushDeferredRowPrune();
+        renderRows(rows);
+        flushFrames();
+        const total = transcriptSize(container);
+        scrollHeight = total + padding;
         container.scrollTop = container.scrollHeight - container.clientHeight - distance;
         container.dispatchEvent(new Event("scroll"));
         if (nativePending) {

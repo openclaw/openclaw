@@ -31,8 +31,7 @@ export function createCronMutationCompletion(method: string): CronMutationComple
     method,
     open: true,
     committed: false,
-    // Gateway dispatch installs its own work scope. Keep the originating tool's
-    // resource owner on this exact receipt, without capturing authorization.
+    // Gateway dispatch installs its own scope; admission retains the originating tool.
     ...(method === "cron.run" ? { trackAdmission: captureAsyncWorkTracker() } : {}),
   };
   return {
@@ -50,7 +49,7 @@ export function createCronMutationCompletion(method: string): CronMutationComple
   };
 }
 
-/** Capture before acceptance; late callbacks cannot retain a settled or successor invocation. */
+/** Capture resource ownership before acknowledgement, independently of authorization. */
 export function captureCronRunAdmissionTracker():
   | ReturnType<typeof captureAsyncWorkTracker>
   | undefined {

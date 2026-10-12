@@ -37,6 +37,7 @@ export function linkPrWrapperDependencies(destination: string): void {
   // Use installed third-party packages only, never workspace source or loader mocks.
   for (const dependency of [
     "@openclaw/fs-safe",
+    "@openclaw/proc-safe",
     "@openclaw/proxyline",
     "acorn",
     "chalk",
@@ -48,10 +49,10 @@ export function linkPrWrapperDependencies(destination: string): void {
     "ipaddr.js",
     "jiti",
     "json5",
-    "koffi",
     "kysely",
     "minimatch",
     "p-map",
+    "partial-json",
     "semver",
     "string-width",
     "tsdown",
@@ -73,5 +74,20 @@ export function linkPrWrapperDependencies(destination: string): void {
       linkedDependency,
       process.platform === "win32" ? "junction" : "dir",
     );
+  }
+  for (const dependency of [
+    "mdast-util-from-markdown",
+    "mdast-util-gfm-table",
+    "micromark-extension-gfm-table",
+  ]) {
+    const linkedDependency = join(destination, "packages/markdown-core/node_modules", dependency);
+    mkdirSync(dirname(linkedDependency), { recursive: true });
+    if (!lstatSync(linkedDependency, { throwIfNoEntry: false })) {
+      symlinkSync(
+        realpathSync(join("packages/markdown-core/node_modules", dependency)),
+        linkedDependency,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
   }
 }

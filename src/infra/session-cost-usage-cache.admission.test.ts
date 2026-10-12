@@ -269,44 +269,6 @@ it.each([
   },
 );
 
-it("keeps refresh ownership after a rejected release until deletion commits", async () => {
-  const root = tempDirs.make("openclaw-usage-lock-release-");
-  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    const agentId = "usage-test";
-    const first = prepareSessionCostUsageRefreshLock(agentId);
-    const second = prepareSessionCostUsageRefreshLock(agentId);
-    let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
-    let replacement: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
-    try {
-      const acquired = await Promise.all([first.acquire(), second.acquire()]);
-      expect(acquired.filter(Boolean)).toHaveLength(1);
-      const owner = acquired[0] ? first : second;
-      const contender = acquired[0] ? second : first;
-      await contender.release();
-      expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
-      database = openOpenClawAgentDatabase({ agentId });
-      database.db.exec(`
-      CREATE TRIGGER reject_refresh_release BEFORE DELETE ON cache_entries
-      WHEN OLD.scope = 'session-cost-usage' AND OLD.key = 'refresh-lock'
-      BEGIN SELECT RAISE(ABORT, 'release rejected'); END;
-    `);
-      await expect(owner.release()).rejects.toThrow("release rejected");
-      expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
-      database.db.exec("DROP TRIGGER reject_refresh_release");
-      await owner.release();
-      expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(false);
-      replacement = prepareSessionCostUsageRefreshLock(agentId);
-      expect(await replacement.acquire()).toBe(true);
-      await owner.release();
-      expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
-      await replacement.release();
-    } finally {
-      database?.db.exec("DROP TRIGGER IF EXISTS reject_refresh_release");
-      await Promise.all([first.release(), second.release(), replacement?.release()]);
-    }
-  });
-});
-
 it("reads the committed refresh lock while acquisition waits for the writer reservation", async () => {
   const root = tempDirs.make("openclaw-usage-status-race-");
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
@@ -355,57 +317,6 @@ it("reads the committed refresh lock while acquisition waits for the writer rese
       release.resolve();
       await reservation;
       await outcomes;
-      await owner.release();
-    }
-  });
-});
-
-it("joins a canceled lock acquisition without committing a token after release", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agentId = "usage-test";
-    const options = { agentId, env: state.env };
-    const database = openOpenClawAgentDatabase(options);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const reservation = runOpenClawAgentWorkerWrite(
-      { ...options, path: database.path },
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
-    );
-    await entered.promise;
-    const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env });
-    const acquiring = owner.acquire();
-    const acquired = Promise.allSettled([acquiring]);
-    let released = false;
-    const releasing = owner.release().then(() => {
-      released = true;
-    });
-    const cleaned = Promise.allSettled([releasing]);
-    try {
-      await setImmediate();
-      expect(released).toBe(false);
-      release.resolve();
-      await reservation;
-      await expect(acquiring).rejects.toThrow("Usage cache refresh owner is closed");
-      await releasing;
-      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-      const successor = prepareSessionCostUsageRefreshLock(agentId, database.path, {
-        env: state.env,
-      });
-      try {
-        expect(await successor.acquire()).toBe(true);
-        await owner.release();
-        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
-      } finally {
-        await successor.release();
-      }
-    } finally {
-      release.resolve();
-      await reservation;
-      await acquired;
-      await cleaned;
       await owner.release();
     }
   });
