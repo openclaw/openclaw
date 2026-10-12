@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
+import { cleanupEmbeddedAttemptSessionPhase } from "../agents/embedded-agent-runner/run/attempt-session-settle.js";
+import { createEmbeddedAttemptDeferredLifecycleOwner } from "../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import {
+  loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
+import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -164,6 +168,73 @@ it("persists identical serialized events separately with accurate queued bytes",
     await sink.flush();
     expect(sink.describeFlushState()).toBeUndefined();
     expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([event, event]);
+  });
+});
+
+it("rolls back the successful attempt's diagnostic prefix with its terminal event and retries once", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "trajectory-terminal-batch",
+      sessionKey: "agent:main:trajectory-terminal-batch",
+      storePath: state.statePath("agents", "main", "agent.sqlite"),
+    };
+    const original = {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+      activeWriterRunId: "trajectory-run",
+    };
+    await replaceSessionEntry(target, original);
+    const recorder = await createTrajectoryRuntimeRecorder({
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+    });
+    assert(recorder);
+    const owner = createEmbeddedAttemptDeferredLifecycleOwner({
+      runId: "trajectory-run",
+      sessionId: target.sessionId,
+      diagnosticOwner: createDiagnosticEmbeddedRunOwner({
+        runId: "trajectory-run",
+        sessionId: target.sessionId,
+      }),
+      isCurrent: () => true,
+      onRetryWaitCompleted: () => {},
+      trajectoryRecorder: recorder,
+      clearActiveRun: () => {},
+    });
+    recorder.recordEvent("model.completed");
+    recorder.recordEvent("trace.artifacts");
+    owner.recordSessionEnd({ status: "success" });
+    await cleanupEmbeddedAttemptSessionPhase({
+      attempt: { sessionId: target.sessionId, runId: "trajectory-run" },
+      trajectoryRecorder: recorder,
+      trajectoryEndRecorded: true,
+      deferredLifecycleOwner: owner,
+      buildAbortSettlePromise: () => null,
+      state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
+      transcriptLifecycle: { beginCleanup: async () => {}, dispose: async () => {} },
+    });
+    const database = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
+    database.db.exec(`CREATE TRIGGER reject_trajectory_terminal
+      BEFORE INSERT ON trajectory_runtime_events
+      WHEN NEW.event_json LIKE '%"type":"session.ended"%'
+      BEGIN SELECT RAISE(ABORT, 'synthetic terminal append failure'); END`);
+    try {
+      await owner.complete();
+      expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([]);
+      expect(loadSessionEntry(target)).toMatchObject(original);
+      expect(recorder.describeFlushState()).toContain("pendingRows=3");
+    } finally {
+      database.db.exec("DROP TRIGGER reject_trajectory_terminal");
+    }
+    await recorder.flush();
+    expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
+      "model.completed",
+      "trace.artifacts",
+      "session.ended",
+    ]);
+    expect(recorder.describeFlushState()).toBeUndefined();
   });
 });
 

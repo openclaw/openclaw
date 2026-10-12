@@ -3374,6 +3374,11 @@ contracts. No schema, retention, durability, or update migration is required.
 
 Embedded writer claims, live-model-switch consolidation, and pending-final delivery
 preparation, settlement, and cleanup explicitly select that worker patch path.
+After the reply dispatcher finishes delivery, terminal settlement and pending-final
+cleanup reduce the same entry in one worker transaction. Suppression uses the same
+combined operation. The lower-level delivery receipt still commits before queue
+acknowledgment; it does not clear recovery custody. Custom delivery paths retain
+their existing cleanup operation.
 Callback-based reducers prepare outside the transaction; the worker rereads the selected
 rows before applying the patch and publishes acknowledged results before releasing
 the existing writer queue. Uncertain writes never replay. Durable lifecycle start
@@ -4962,6 +4967,14 @@ leaves it retryable, and an unknown outcome fences replay. Events recorded durin
 the write remain queued for the next flush. Incognito and maintenance scopes and
 already executing workers keep their native kernel. Event bytes, ordering,
 retention limits, schemas, and update behavior are unchanged.
+
+Successful embedded attempts defer their final diagnostic flush to the logical-turn
+lifecycle owner, which appends the accepted `session.ended` event to the same batch.
+Failed attempts and retry boundaries still flush diagnostic progress; replacing an
+attempt flushes its diagnostics without a terminal event. Final lifecycle completion
+joins those discarded-attempt flushes. A rolled-back batch remains retryable as a
+whole, using the existing recorder receipt and rollback handling. Transcript
+persistence remains a separate durable checkpoint.
 
 Disk-budget historical discovery reads reference, recent-history, and admitted-key
 protection in the existing maintenance read worker. It returns candidate IDs;

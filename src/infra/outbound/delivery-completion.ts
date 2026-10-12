@@ -142,6 +142,8 @@ export async function settlePendingFinalDelivery(
     preserveActivity?: boolean;
     stateContext?: DeliveryQueueStateContext;
     identifiedResult?: OutboundDeliveryResult;
+    /** Delivery has settled; durable queue owners must retain their receipt until ACK. */
+    clearAfterSettled?: { recoveryRunId?: string };
   } = {},
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
@@ -158,6 +160,16 @@ export async function settlePendingFinalDelivery(
     deliveryId: completion.deliveryId,
     state,
     expectedStates: expectedStates?.slice(),
+    ...(options.clearAfterSettled
+      ? {
+          cleanup: {
+            sessionKey: completion.sessionKey,
+            recoveryRunId: options.clearAfterSettled.recoveryRunId,
+            now: Date.now(),
+            preserveActivity: options.preserveActivity,
+          },
+        }
+      : {}),
   };
   const authority = completion.sessionWriterDeliveryAuthority;
   const claim = authority?.harnessCompletion;

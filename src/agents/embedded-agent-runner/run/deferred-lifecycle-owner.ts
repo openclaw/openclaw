@@ -27,7 +27,7 @@ export type DeferredEmbeddedRunLifecycleOwner = {
     signal: AbortSignal,
   ) => ((completed?: boolean) => void) | undefined;
   complete: () => Promise<void>;
-  discard: () => void;
+  discard: () => void | Promise<void>;
 };
 
 export type EmbeddedAttemptDeferredLifecycleOwner = DeferredEmbeddedRunLifecycleOwner & {
@@ -60,11 +60,22 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
       );
     }
   };
+  const flushTrajectory = () =>
+    params.trajectoryRecorder
+      ? flushEmbeddedAttemptTrajectoryRecorder({
+          runId: params.runId,
+          sessionId: params.sessionId,
+          trajectoryRecorder: params.trajectoryRecorder,
+          log,
+        })
+      : Promise.resolve();
   return {
     beginRetryWait: (deadlineAtMs, signal) => {
       if (!pending) {
         return undefined;
       }
+      // Preserve diagnostic progress before a potentially long retry backoff.
+      void flushTrajectory();
       releaseRetryWait();
       const close = beginDiagnosticRetryWait({
         owner: params.diagnosticOwner,
@@ -96,7 +107,9 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
         pending = false;
         releaseRetryWait();
         releaseActiveRun();
+        return flushTrajectory();
       }
+      return undefined;
     },
     complete: async () => {
       if (!pending) {
@@ -107,13 +120,9 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
       try {
         if (params.trajectoryRecorder && sessionEndData) {
           params.trajectoryRecorder.recordEvent("session.ended", sessionEndData);
-          await flushEmbeddedAttemptTrajectoryRecorder({
-            runId: params.runId,
-            sessionId: params.sessionId,
-            trajectoryRecorder: params.trajectoryRecorder,
-            log,
-          });
         }
+        // Successful attempts keep their diagnostic prefix for this terminal batch.
+        await flushTrajectory();
       } finally {
         releaseActiveRun();
       }
@@ -148,10 +157,15 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
     ? AbortSignal.any([params.abortSignal, controller.signal])
     : controller.signal;
   let current: DeferredEmbeddedRunLifecycleOwner | undefined;
+  const discarded: Promise<void>[] = [];
   const replaceOwner = (owner?: DeferredEmbeddedRunLifecycleOwner) => {
     const previous = current;
     current = owner;
-    previous?.discard();
+    const cleanup = previous?.discard();
+    if (cleanup) {
+      void cleanup.catch(() => {});
+      discarded.push(cleanup);
+    }
   };
   const abort = (reason?: "user_abort" | "restart" | "superseded") => {
     if (controller.signal.aborted) {
@@ -210,7 +224,7 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
       const owner = current;
       current = undefined;
       try {
-        await owner?.complete();
+        await Promise.all([...discarded, owner?.complete()]);
       } finally {
         if (cliOwner) {
           clearActiveEmbeddedRun(params.sessionId, cliOwner, params.sessionKey, params.sessionFile);

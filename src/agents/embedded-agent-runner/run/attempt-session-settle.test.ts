@@ -1,5 +1,6 @@
 import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
+import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
@@ -11,6 +12,7 @@ import {
   createEmbeddedAttemptSessionResources,
   createEmbeddedAttemptSessionSettleTracker,
 } from "./attempt-session-settle.js";
+import { createEmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -91,6 +93,45 @@ it.each([false, true])(
     }
   },
 );
+
+it.each([
+  { kind: "failed", source: "prompt", error: new Error("provider failed") } as const,
+  { kind: "aborted", source: "external" } as const,
+])("keeps the $kind attempt's diagnostic checkpoint before teardown", async (terminal) => {
+  const sessionId = `trajectory-checkpoint-${terminal.kind}`;
+  const recorder = {
+    enabled: true as const,
+    recordEvent: vi.fn(),
+    describeFlushState: () => undefined,
+    flush: vi.fn(async () => {}),
+  };
+  const owner = createEmbeddedAttemptDeferredLifecycleOwner({
+    runId: sessionId,
+    sessionId,
+    diagnosticOwner: createDiagnosticEmbeddedRunOwner({ runId: sessionId, sessionId }),
+    isCurrent: () => true,
+    onRetryWaitCompleted: () => {},
+    trajectoryRecorder: recorder,
+    clearActiveRun: () => {},
+  });
+  await cleanupEmbeddedAttemptSessionPhase({
+    attempt: { sessionId, runId: sessionId },
+    trajectoryRecorder: recorder,
+    trajectoryEndRecorded: false,
+    deferredLifecycleOwner: owner,
+    buildAbortSettlePromise: () => null,
+    state: { terminal, beforeAgentRunBlockedBy: undefined },
+    transcriptLifecycle: {
+      beginCleanup: async () => {
+        expect(recorder.flush).toHaveBeenCalledOnce();
+      },
+      dispose: async () => {},
+    },
+  });
+  expect(recorder.recordEvent).not.toHaveBeenCalled();
+  await owner.complete();
+  expect(recorder.recordEvent).toHaveBeenCalledWith("session.ended", expect.any(Object));
+});
 
 describe("createEmbeddedAttemptSessionSettleTracker", () => {
   it("preserves a teardown failure raised outside the caller async context", async () => {

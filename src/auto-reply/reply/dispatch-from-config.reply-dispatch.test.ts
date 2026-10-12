@@ -407,40 +407,48 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
   });
 
-  it("clears pending final delivery after intentional pre-delivery cancellation", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "session-1",
-      sessionKey: "agent:test:session",
-      pendingFinalDelivery: pendingFinalDelivery("policy-suppressed reply"),
-    };
-    const deliver = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = createReplyDispatcher({
-      deliver,
-      beforeDeliver: () => null,
-    });
+  it.each(["prepared", "delivered"] as const)(
+    "clears %s final custody after pre-delivery cancellation",
+    async (state) => {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      sessionStoreMocks.currentEntry = {
+        sessionId: "session-1",
+        sessionKey: "agent:test:session",
+        pendingFinalDelivery: pendingFinalDelivery("policy-suppressed reply", {
+          deliveries: [{ id: "delivery-1", state }],
+        }),
+      };
+      const deliver = vi.fn().mockResolvedValue(undefined);
+      const dispatcher = createReplyDispatcher({
+        deliver,
+        beforeDeliver: (payload) =>
+          state === "delivered" && payload.text === "policy-suppressed reply" ? payload : null,
+      });
 
-    const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => pendingFinalReply("policy-suppressed reply"),
-    });
-    const receipt = await dispatcher.waitForIdle();
-    await vi.waitFor(() => {
+      const result = await withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyResolver: async () => pendingFinalReply("policy-suppressed reply"),
+          }),
+      });
+      const receipt = await dispatcher.waitForIdle();
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
-    });
 
-    expect(result.queuedFinal).toBe(true);
-    expect(deliver).not.toHaveBeenCalled();
-    expect(receipt?.counts.final).toMatchObject({
-      delivered: 0,
-      cancelled: 2,
-      failedBeforeSend: 0,
-    });
-    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
-    expect(result.noVisibleReplyFallbackEligible).toBe(true);
-  });
+      expect(result.queuedFinal).toBe(true);
+      expect(deliver).not.toHaveBeenCalled();
+      expect(receipt?.counts.final).toMatchObject({
+        delivered: 0,
+        cancelled: 2,
+        failedBeforeSend: 0,
+      });
+      expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+      expect(result.noVisibleReplyFallbackEligible).toBe(true);
+    },
+  );
 
   it("delivers a generated final reply before queued follow-up admission", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);

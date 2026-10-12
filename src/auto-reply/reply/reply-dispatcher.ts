@@ -373,14 +373,25 @@ export function createReplyDispatcher(
     let deliveryInput: ReplyDispatchOperation | null = input;
     let deliveryStarted = false;
     let pendingDelivery = false;
-    const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
+    const metadata = getReplyPayloadMetadata(payload);
+    const custody = metadata?.pendingFinalDeliveryCompletion;
     const settleCustody =
       custody &&
       ((
         state: Parameters<typeof settlePendingFinalDelivery>[1],
         expectedStates: Parameters<typeof settlePendingFinalDelivery>[2] = ["queued"],
       ) =>
-        settlePendingFinalDelivery({ kind: "pending-final", ...custody }, state, expectedStates));
+        settlePendingFinalDelivery(
+          { kind: "pending-final", ...custody },
+          state,
+          expectedStates,
+          metadata?.pendingFinalDeliveryCleanup && (state === "delivered" || state === "suppressed")
+            ? {
+                preserveActivity: metadata.pendingFinalDeliveryCleanup.preserveActivity,
+                clearAfterSettled: { recoveryRunId: custody.recoveryRunId },
+              }
+            : undefined,
+        ));
     const settleFailure = async (error: unknown): Promise<ReplyDispatchDeliveryOutcome> => {
       const retryableNoSend = isRetryableDeliveryNotSentError(error);
       const queueHeld = isDeliveryRecoveryOwnedRetry(error);
