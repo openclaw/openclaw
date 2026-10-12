@@ -34,23 +34,33 @@ describe("isProviderModelRerouted", () => {
     ).toBeUndefined();
   });
 
-  it("keeps a provider-declared equivalent response model from producing a model-switch fact", () => {
-    const requested = { provider: "openai", model: "gpt-5.6" };
-    const effective = { provider: "openai", model: "gpt-5.6", responseModel: "gpt-5.6-sol" };
-    expect(isProviderModelRerouted(requested, effective)).toBe(false);
-  });
-
   it.each([
-    { provider: "openai", model: "gpt-5.6", responseModel: "gpt-5.6-luna" },
-    { provider: "openai", model: "gpt-5.6-sol", responseModel: "gpt-5.6-sol" },
+    { requested: "gpt-5.6", response: "gpt-5.6-sol", rerouted: false },
+    { requested: "gpt-5.6", response: "gpt-5.6-sol-2026-08-01", rerouted: false },
+    { requested: "gpt-5.6-luna", response: "gpt-5.6-luna-2026-08-02", rerouted: false },
+    { requested: "gpt-5.6", response: "gpt-5.6-luna", rerouted: true },
+    { requested: "gpt-5.6", response: "gpt-5.6-luna-2026-08-02", rerouted: true },
+    { requested: "gpt-5.6", response: "gpt-5.6", rerouted: false },
   ])(
-    "retains a change the provider does not declare equivalent: $model with response $responseModel",
-    (effective) => {
-      expect(isProviderModelRerouted({ provider: "openai", model: "gpt-5.6" }, effective)).toBe(
-        true,
-      );
+    "classifies an OpenAI $requested run answered as $response as rerouted=$rerouted",
+    ({ requested, response, rerouted }) => {
+      expect(
+        isProviderModelRerouted(
+          { provider: "openai", model: requested },
+          { provider: "openai", model: requested, responseModel: response },
+        ),
+      ).toBe(rerouted);
     },
   );
+
+  it("retains a change of effective model even when its response is declared equivalent", () => {
+    expect(
+      isProviderModelRerouted(
+        { provider: "openai", model: "gpt-5.6" },
+        { provider: "openai", model: "gpt-5.6-sol", responseModel: "gpt-5.6-sol" },
+      ),
+    ).toBe(true);
+  });
 
   it.each([
     {
