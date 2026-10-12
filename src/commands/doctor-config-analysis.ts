@@ -13,6 +13,7 @@ import { CONFIG_PATH } from "../config/config.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { getAuthoredConfigSecretRef, hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -111,6 +112,21 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
 }
 
 export function noteDoctorHookConfigWarnings(cfg: OpenClawConfig, configPath: string): void {
+  if (
+    cfg.hooks?.enabled === true &&
+    (hasUnresolvedConfigPath(cfg, "hooks.token") || getAuthoredConfigSecretRef(cfg, "hooks.token"))
+  ) {
+    note(
+      [
+        "hooks.token has an unresolved environment reference in the current Doctor environment.",
+        "External HTTP hooks are disabled on Gateway startup if its environment cannot resolve the secret; an invalid hot reload keeps the previous valid hooks configuration.",
+        "Supply the configured secret to the Gateway service environment, then reload or restart. The CLI and service environments may differ.",
+        `To leave hooks disabled explicitly, run ${formatCliCommand("openclaw config set hooks.enabled false")}.`,
+        "Doctor does not generate a replacement secret or overwrite the configured reference.",
+      ].join("\n"),
+      "Doctor warnings",
+    );
+  }
   for (const warnings of [
     collectInvalidHookTransformsDirWarnings(cfg, configPath),
     collectUnsupportedInternalHookEntryWarnings(cfg),
