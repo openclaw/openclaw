@@ -34,6 +34,7 @@ type SettingsRowProps = {
   carapace?: boolean;
   stacked?: boolean;
   stackedOnNarrow?: boolean;
+  nested?: boolean;
 };
 
 export function SettingsPage(props: {
@@ -209,6 +210,7 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
         {
           "settings-row--stacked": props.stacked,
           "settings-row--stacked-on-narrow": props.stackedOnNarrow,
+          "settings-row--nested": props.nested,
           "oc-settings-row": props.carapace,
           "oc-settings-row-stacked": props.carapace && props.stacked,
         },

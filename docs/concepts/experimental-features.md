@@ -246,7 +246,9 @@ config:
     entries: {
       "progress-review": {
         enabled: true,
-        config: { everyTurns: 10, everyMinutes: 20 },
+        config: { everyTurns: 10, everyMinutes: 20, model: "openai/gpt-6.1-sol" },
+        // Lets the background reviewer use only this model.
+        subagent: { allowModelOverride: true, allowedModels: ["openai/gpt-6.1-sol"] },
       },
     },
   },
@@ -257,6 +259,11 @@ config:
   conversation.
 - `everyMinutes` (default `20`): review after this many minutes of accumulated
   agent run time in a conversation. Long tool-heavy turns reach this first.
+- `model` (optional): the `provider/model` that runs reviews. Leave it unset to
+  use the agent's own model. A different model also needs the plugin's
+  `subagent.allowModelOverride` trust entry; choosing a model in Labs writes it,
+  limited to that one model through `subagent.allowedModels`, and choosing
+  **Agent's model** removes it.
 
 A review starts when either trigger is reached, and both counters restart after
 each review. Set a trigger to `0` to turn it off. With both at `0`, no reviews
@@ -272,8 +279,8 @@ Behavior and limits:
   and the next review waits a full interval.
 - The correction arrives on the conversation's next turn and expires after
   24 hours. It is labeled as advice that the agent must check before acting.
-- Each review is one extra model call with the agent's own model and
-  credentials. It sends a bounded excerpt of the conversation to that provider:
+- Each review is one extra model call with the reviewer model (the agent's own
+  model unless you choose one) and the agent's credentials. It sends a bounded excerpt of the conversation to that provider:
   recent user requests, assistant replies, and tool calls with short result
   previews.
 - Counters live in memory, so they restart when the Gateway restarts.

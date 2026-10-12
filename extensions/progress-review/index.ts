@@ -28,6 +28,8 @@ export default definePluginEntry({
     "Experimental: periodically reviews a conversation's recent agent work and gives the agent one short correction on its next turn.",
   register(api) {
     const schedule = resolveSchedule(api.pluginConfig);
+    // Absent means the agent's own model. The host enforces subagent.allowModelOverride.
+    const model = typeof api.pluginConfig?.model === "string" ? api.pluginConfig.model : undefined;
     if (schedule.everyTurns === 0 && schedule.everyMinutes === 0) {
       api.logger.warn(
         "progress-review: both everyTurns and everyMinutes are 0, so no reviews will run. Set either to a positive value.",
@@ -53,6 +55,7 @@ export default definePluginEntry({
           message: buildReviewMessage({ evidence, previousAdvice }),
           extraSystemPrompt: REVIEW_SYSTEM_PROMPT,
           timeoutMs: REVIEW_TIMEOUT_MS,
+          ...(model ? { model } : {}),
           signal: scheduler ? AbortSignal.any([signal, scheduler.signal]) : signal,
         });
         return parseReviewOutput(result.text);

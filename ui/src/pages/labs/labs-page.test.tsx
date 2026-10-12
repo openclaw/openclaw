@@ -5,9 +5,11 @@ import { applyMergePatch } from "../../../../src/config/merge-patch.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { i18n } from "../../i18n/index.ts";
 import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { LabsPage } from "./labs-page.tsx";
@@ -26,7 +28,11 @@ type RuntimeConfigState = {
 };
 
 function createGateway() {
-  const client = {} as GatewayBrowserClient;
+  const client = {
+    request: vi.fn(async () => ({
+      models: [{ provider: "test", id: "reviewer", name: "Test reviewer", available: true }],
+    })),
+  } as unknown as GatewayBrowserClient;
   let snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   return {
@@ -40,6 +46,7 @@ function createGateway() {
           listeners.delete(listener);
         };
       },
+      subscribeEvents: () => () => {},
     } as unknown as ApplicationContext["gateway"],
     setPhase(phase: ApplicationGatewaySnapshot["phase"]) {
       snapshot = { ...snapshot, phase };
@@ -65,7 +72,10 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
     },
     ensureLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
-    patch: vi.fn(async (_input: { raw: Record<string, unknown>; note: string }) => true),
+    patch: vi.fn(
+      async (_input: { raw: Record<string, unknown>; note: string; replacePaths?: string[] }) =>
+        true,
+    ),
     subscribe(listener: (state: RuntimeConfigState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -85,6 +95,10 @@ async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
     basePath: "",
     gateway: gateway.gateway,
     runtimeConfig,
+    settingsAgentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => {},
+    },
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
   const { container: page, unmount } = mountSolid(() => <LabsPage />, {
@@ -163,6 +177,7 @@ describe("LabsPage", () => {
     expect(page.textContent).toContain("Progress review");
     expect(labToggle(page, "Progress review").checked).toBe(false);
     expect(page.querySelector('input[aria-label="Review every N turns"]')).toBeNull();
+    expect(page.querySelector("openclaw-select-picker")).toBeNull();
     expect(codeModeToggle(page).checked).toBe(true);
 
     const docs = LAB_FEATURES.map((feature) => labDocsLink(page, feature.title()));
@@ -393,6 +408,72 @@ describe("LabsPage", () => {
           "progress-review": {
             enabled: true,
             config: { ...sibling, [testCase.key]: testCase.value },
+          },
+        },
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "a catalog model",
+      value: "test/reviewer",
+      model: "test/reviewer",
+      subagent: { allowModelOverride: true, allowedModels: ["test/reviewer"] },
+    },
+    { name: "the agent's model", value: "", model: null, subagent: null },
+  ])("saves $name and its exact model trust in one patch", async (testCase) => {
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          "progress-review": {
+            enabled: true,
+            config: { everyTurns: 7, everyMinutes: 15, model: "test/previous" },
+            subagent: { allowModelOverride: true, allowedModels: ["test/previous"] },
+          },
+        },
+      },
+    };
+    const { page, runtimeConfig } = await mountPage(sourceConfig);
+    await updatePickers(page);
+    const picker = labRow(page, "Reviewer model").querySelector<SelectPicker>(
+      "openclaw-select-picker",
+    )!;
+    expect(picker.querySelector('[role="option"]')?.textContent).toContain("Agent's model");
+    expect(labRow(page, "Reviewer model").classList.contains("settings-row--nested")).toBe(true);
+    expect(labRow(page, "Code Mode executor").classList.contains("settings-row--nested")).toBe(
+      true,
+    );
+    await choosePickerValue(picker, testCase.value);
+
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    const request = runtimeConfig.patch.mock.calls[0]![0];
+    // Replacing an existing trust list must name it; the Gateway rejects silent array shrinks.
+    expect(request.replacePaths).toEqual([
+      "plugins.entries.progress-review.subagent.allowedModels",
+    ]);
+    const patch = request.raw;
+    expect(patch).toEqual({
+      plugins: {
+        entries: {
+          "progress-review": {
+            config: { model: testCase.model },
+            subagent: testCase.subagent,
+          },
+        },
+      },
+    });
+    expect(applyMergePatch(sourceConfig, patch)).toEqual({
+      plugins: {
+        entries: {
+          "progress-review": {
+            enabled: true,
+            config: {
+              everyTurns: 7,
+              everyMinutes: 15,
+              ...(testCase.model ? { model: testCase.model } : {}),
+            },
+            ...(testCase.subagent ? { subagent: testCase.subagent } : {}),
           },
         },
       },

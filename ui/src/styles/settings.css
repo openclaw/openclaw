@@ -531,6 +531,11 @@ openclaw-appearance-background .settings-background-preview .session-background_
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
+.settings-row--nested {
+  margin-inline-start: var(--space-4);
+  border-inline-start: 2px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
 .settings-row__text {
   display: flex;
   flex-direction: column;

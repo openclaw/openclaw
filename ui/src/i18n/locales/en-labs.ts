@@ -30,11 +30,17 @@ const enLabs = {
     progressReview: {
       title: "Progress review",
       description:
-        "Every few turns or minutes of agent work, a reviewer model reads the conversation's recent work and, if it spots avoidable work (drifting from the request, repeated or stalled tool calls), gives the agent one short correction on its next turn. Uses the agent's model and adds model calls.",
+        "Every few turns or minutes of agent work, a reviewer model reads the conversation's recent work and, if it spots avoidable work (drifting from the request, repeated or stalled tool calls), gives the agent one short correction on its next turn. Adds model calls.",
       everyTurns: "Review every N turns",
       everyMinutes: "Review every N minutes",
       triggerHelp: "Set to 0 to turn this trigger off. Review runs when either trigger is reached.",
       invalidValue: "{label} must be a whole number from 0 to {max}.",
+      model: "Reviewer model",
+      modelDescription:
+        "Model that reviews the work. Choosing a model also lets this plugin call only that model.",
+      agentModel: "Agent's model",
+      customModel: "Custom model",
+      customModelPlaceholder: "provider/model",
     },
     chatBubbles: {
       title: "Speech bubbles",

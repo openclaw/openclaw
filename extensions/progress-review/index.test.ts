@@ -147,6 +147,8 @@ describe("progress-review", () => {
     // The turn's own hook never calls the model; the service scheduler does.
     expect(run.complete).not.toHaveBeenCalled();
     const review = await run.dispatchReview();
+    // Without a configured reviewer model the host uses the agent's own model.
+    expect(run.complete.mock.calls[0]?.[0]).not.toHaveProperty("model");
     const evidence = JSON.parse(review.message);
     expect(evidence.requests[0].text).toContain("Fix the typo");
     expect(evidence.toolCalls[0]).toMatchObject({ tool: "edit", result: { text: "ok" } });
@@ -170,13 +172,15 @@ describe("progress-review", () => {
     expect(JSON.parse(next.message).previousAdvice).toContain("Stop editing CI");
   });
 
-  it("triggers on accumulated run minutes and stays silent on NO_CHANGE", async () => {
-    const run = setup({ everyTurns: 0, everyMinutes: 1 });
+  it("triggers on accumulated run minutes, uses the configured reviewer model, and stays silent on NO_CHANGE", async () => {
+    const run = setup({ everyTurns: 0, everyMinutes: 1, model: "example/reviewer" });
     await run.startService();
     run.endTurn({}, 40_000);
     run.endTurn({}, 25_000);
     const review = await run.dispatchReview();
-    expect(run.complete).toHaveBeenCalledOnce();
+    expect(run.complete).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ model: "example/reviewer" }),
+    );
     const done = run.finished();
     review.resolve("NO_CHANGE");
     await done;

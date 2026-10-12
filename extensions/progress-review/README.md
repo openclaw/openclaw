@@ -20,4 +20,20 @@ Enable it in **Settings → Agents & Tools → Labs → Progress review**, or:
 }
 ```
 
+To review with a different model, also set `config.model` and trust the plugin
+for that model only:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "progress-review": {
+        "config": { "model": "openai/gpt-6.1-sol" },
+        "subagent": { "allowModelOverride": true, "allowedModels": ["openai/gpt-6.1-sol"] }
+      }
+    }
+  }
+}
+```
+
 Docs: https://docs.openclaw.ai/concepts/experimental-features#progress-review
