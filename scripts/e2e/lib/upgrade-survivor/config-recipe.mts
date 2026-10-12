@@ -389,21 +389,15 @@ export function resolveUpgradeSurvivorOpenClawCommand(
   params: UpgradeSurvivorCommandParams = {},
 ) {
   const platform = params.platform ?? process.platform;
-  if (platform === "win32") {
-    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env);
-    return {
-      command: comSpec,
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine("openclaw.cmd", argv)],
-      commandLabel: ["openclaw", ...argv].join(" "),
-      shell: false,
-      windowsVerbatimArguments: true,
-    };
-  }
+  const windows = platform === "win32";
   return {
-    command: "openclaw",
-    args: argv,
+    command: windows
+      ? (params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env))
+      : "openclaw",
+    args: windows ? ["/d", "/s", "/c", buildCmdExeCommandLine("openclaw.cmd", argv)] : argv,
     commandLabel: ["openclaw", ...argv].join(" "),
     shell: false,
+    ...(windows ? { windowsVerbatimArguments: true } : {}),
   };
 }
 

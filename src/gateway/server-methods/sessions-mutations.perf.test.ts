@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { CronJob } from "../../cron/types.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -257,20 +258,15 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     const originalExec = database.db.exec.bind(database.db);
     const transactionCounts = { begin: 0, commit: 0 };
     const workerGrants: string[] = [];
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    const admissionSpy = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          callback(request, () => {
-            const granted = grant();
-            if (granted && (request.stage === "transaction" || request.stage === "commit")) {
-              workerGrants.push(request.stage);
-            }
-            return granted;
-          });
-        }, attachment),
-      );
+    const admissionSpy = probe.admission(admission, (request, grant, callback) => {
+      callback(request, () => {
+        const granted = grant();
+        if (granted && (request.stage === "transaction" || request.stage === "commit")) {
+          workerGrants.push(request.stage);
+        }
+        return granted;
+      });
+    });
     const execSpy = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
       const normalized = sql.trim().toUpperCase();
       if (normalized === "BEGIN IMMEDIATE") {

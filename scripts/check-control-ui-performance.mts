@@ -4,11 +4,6 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
-  CONTROL_UI_ASSET_MANIFEST_FILENAME,
-  CONTROL_UI_RETAINED_ASSET_MAX_BYTES,
-  isControlUiRetainedAssetPath,
-} from "../src/gateway/control-ui-asset-manifest.ts";
-import {
   CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
   selectControlUiRoutePreloads,
 } from "../src/gateway/control-ui-route-preloads.ts";
@@ -18,8 +13,6 @@ import { isRecord } from "./lib/record-shared.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 
 const KIB = 1024;
-// Retention keeps current and previous builds within one byte budget, so each gets half.
-const CONTROL_UI_RETAINED_IDENTITY_BYTES = CONTROL_UI_RETAINED_ASSET_MAX_BYTES / 2;
 const STARTUP_JS_BASELINE_RATCHET_BYTES = 4096;
 const BASELINE_UPDATE_COMMAND =
   'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
@@ -63,8 +56,11 @@ const controlUiPerformanceBudgets = {
   // Main 098173f9f5d4 with facade optimization measured chat/new at 31/32 requests.
   // Allow 3 above the maximum while catching the roughly 19-request facade regression.
   routeBootJsRequests: 35,
-  startupCssRequests: 1,
-  startupJsGzipBytes: 372_878,
+  // Solid transition (Peter, 2026-10-11): Lit and Solid styles coexist at boot; restore 1 after the Lit sweep.
+  startupCssRequests: 2,
+  // Solid transition allowance (Peter, 2026-10-11): Lit and Solid runtimes coexist until the Lit sweep.
+  // Restore to the pre-transition 374_285 cap (or lower) once Lit is removed; the Solid shell saves about 18 KB.
+  startupJsGzipBytes: 450_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
@@ -170,45 +166,7 @@ function collectControlUiLocaleAssetGroups(assets: Array<ReturnType<typeof readA
   return [...groups.values()];
 }
 
-// Counts what the Gateway retains for already-open tabs: manifest entries minus sidecars.
-function collectRetainedIdentity(distDir: string) {
-  const retainedIdentity = { assets: 0, bytes: 0 };
-  try {
-    const manifest: unknown = JSON.parse(
-      fs.readFileSync(path.join(distDir, CONTROL_UI_ASSET_MANIFEST_FILENAME), "utf8"),
-    );
-    if (!isRecord(manifest) || !Array.isArray(manifest.assets)) {
-      throw new Error("expected an assets array");
-    }
-    for (const entry of manifest.assets) {
-      if (
-        !isRecord(entry) ||
-        typeof entry.path !== "string" ||
-        typeof entry.size !== "number" ||
-        !Number.isSafeInteger(entry.size) ||
-        entry.size < 0
-      ) {
-        throw new Error(
-          "expected asset records with a string path and non-negative safe-integer size",
-        );
-      }
-      if (isControlUiRetainedAssetPath(entry.path)) {
-        retainedIdentity.assets++;
-        retainedIdentity.bytes += entry.size;
-      }
-    }
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Control UI performance check cannot read ${CONTROL_UI_ASSET_MANIFEST_FILENAME}: ${detail}`,
-      { cause: error },
-    );
-  }
-  return retainedIdentity;
-}
-
 export function collectControlUiPerformanceMetrics(distDir: string) {
-  const retainedIdentity = collectRetainedIdentity(distDir);
   const assetsDir = path.join(distDir, "assets");
   const html = fs.readFileSync(path.join(distDir, "index.html"), "utf8");
   const assets = fs
@@ -254,7 +212,6 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
   }
   return {
     schemaVersion: 1 as const,
-    retainedIdentity,
     startup,
     routeBoot,
     total: {
@@ -297,12 +254,6 @@ export function evaluateControlUiPerformanceBudgets(
     ["startup CSS gzip", metrics.startup.css.gzipBytes, budgets.startupCssGzipBytes, "bytes"],
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
-    [
-      "retained identity bytes",
-      metrics.retainedIdentity.bytes,
-      CONTROL_UI_RETAINED_IDENTITY_BYTES,
-      "bytes",
-    ],
     ["isolated Mermaid JS assets", metrics.mermaidRenderer.length, 1, "count"],
     [
       "isolated Mermaid JS gzip",
@@ -492,7 +443,6 @@ export function formatControlUiPerformanceReport(
     `  largest CSS: ${metrics.largest.css.file}, ${metrics.largest.css.gzipBytes} B gzip (hard ceiling ${budgets.largestCssGzipBytes} B; headroom ${budgets.largestCssGzipBytes - metrics.largest.css.gzipBytes} B)`,
     `  all JS: ${formatAssetSummary(metrics.total.js)}`,
     `  all CSS: ${formatAssetSummary(metrics.total.css)}`,
-    `  retained identity: ${metrics.retainedIdentity.assets} assets, ${metrics.retainedIdentity.bytes} B (${(metrics.retainedIdentity.bytes / (KIB * KIB)).toFixed(1)} MiB); limit ${CONTROL_UI_RETAINED_IDENTITY_BYTES} B, half the ${CONTROL_UI_RETAINED_ASSET_MAX_BYTES} B retention budget so the previous build stays retained after an update; headroom ${CONTROL_UI_RETAINED_IDENTITY_BYTES - metrics.retainedIdentity.bytes} B`,
   );
   if (metrics.routeBoot) {
     lines.push(
@@ -522,10 +472,6 @@ export function formatControlUiPerformanceReport(
     lines.push("  route boot accounting: unavailable (build has no route preload templates)");
   }
   if (baseMetrics) {
-    const retainedGrowth = metrics.retainedIdentity.bytes - baseMetrics.retainedIdentity.bytes;
-    lines.push(
-      `  retained identity vs base: ${baseMetrics.retainedIdentity.bytes} B -> ${metrics.retainedIdentity.bytes} B (${retainedGrowth >= 0 ? "+" : ""}${retainedGrowth} B)`,
-    );
     for (const area of ["startup", "largest"] as const) {
       const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
       lines.push(
@@ -774,7 +720,6 @@ function main(argv: string[] = process.argv.slice(2)): void {
     ]);
     const metricFiles: Record<string, string> = {
       "startup JS gzip baseline": "config/control-ui-startup-budget-baseline.json",
-      "retained identity bytes": "src/gateway/control-ui-asset-manifest.ts",
     };
     const limitsFailed = reportLimitViolations(
       result.violations

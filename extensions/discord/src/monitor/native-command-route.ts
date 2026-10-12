@@ -8,9 +8,8 @@ import {
 } from "./route-resolution.js";
 import type { ThreadBindingRecord } from "./thread-bindings.js";
 
-type ResolvedConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
 type ConfiguredBindingResolution = NonNullable<
-  NonNullable<ResolvedConfiguredBindingRoute>["bindingResolution"]
+  NonNullable<ReturnType<typeof resolveConfiguredBindingRoute>>["bindingResolution"]
 >;
 
 type DiscordNativeInteractionRouteState = {

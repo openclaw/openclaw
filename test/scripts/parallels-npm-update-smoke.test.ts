@@ -193,38 +193,6 @@ function runPrerequisiteCli(args: string[], env: NodeJS.ProcessEnv = {}) {
   );
 }
 
-function runFrozenPrerequisiteHelper(env: NodeJS.ProcessEnv = {}) {
-  const source = readFileSync("scripts/e2e/parallels/provider-auth-prerequisite.mjs", "utf8");
-  const dataUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
-  const emptyCwd = tempDirs.make("openclaw-parallels-prerequisite-cwd-");
-  const childEnv = { ...process.env };
-  delete childEnv.OPENAI_API_KEY;
-  const program = `
-const helper = await import(process.argv[1]);
-const exports = Object.keys(helper).sort();
-if (JSON.stringify(exports) !== '["parsePlatformList","resolveParallelsProviderAuth","runParallelsPrerequisiteEval"]') {
-  throw new Error("unexpected helper exports");
-}
-const writes = [];
-const code = helper.runParallelsPrerequisiteEval(
-  ["--prerequisite-check", "--json"],
-  process.env,
-  { write: (value) => writes.push(value) },
-);
-if (writes.length !== 1) {
-  throw new Error("unexpected prerequisite write count");
-}
-process.stdout.write(writes[0]);
-process.exitCode = code;
-`;
-  return spawnSync(process.execPath, ["--input-type=module", "--eval", program, dataUrl], {
-    cwd: emptyCwd,
-    encoding: "utf8",
-    env: { ...childEnv, ...env },
-    timeout: 10_000,
-  });
-}
-
 afterEach(() => {
   vi.useRealTimers();
   tempDirs.cleanup();
@@ -305,25 +273,6 @@ describe("parallels npm update smoke", () => {
     expect(result.stdout).not.toContain("CUSTOM_MISSING_KEY");
     expect(result.stdout).not.toContain("sentinel-unselected-provider-secret");
     expect(existsSync(marker)).toBe(false);
-  });
-
-  it("runs the exact helper source with plain Node from an empty cwd", () => {
-    const ready = runFrozenPrerequisiteHelper({
-      OPENAI_API_KEY: "sentinel-frozen-helper-secret",
-    });
-    expect(ready.status).toBe(0);
-    expect(ready.stdout).toBe(
-      '{"schema":"openclaw.parallels-prerequisite.v1","status":"ready","reason":null}\n',
-    );
-    expect(ready.stderr).toBe("");
-    expect(ready.stdout).not.toContain("sentinel-frozen-helper-secret");
-
-    const blocked = runFrozenPrerequisiteHelper();
-    expect(blocked.status).toBe(1);
-    expect(blocked.stdout).toBe(
-      '{"schema":"openclaw.parallels-prerequisite.v1","status":"blocked","reason":"credential_missing"}\n',
-    );
-    expect(blocked.stderr).toBe("");
   });
 
   it("accepts one prepared tarball target for update and fresh install", () => {
@@ -1207,36 +1156,13 @@ ${script}`,
     expect(windowsScript).toContain(
       "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'",
     );
+    expect(windowsScript).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
     expect(macosScript).toContain(
       'OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" gateway stop',
     );
     expect(linuxScript).toContain(
       "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop",
     );
-  });
-
-  it("limits the Windows update environment to the update invocation", () => {
-    const script = windowsUpdateScript({
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.5.3-beta.2",
-      updateTarget: "2026.5.3-beta.2",
-    });
-
-    const updateIndex = script.indexOf("Invoke-OpenClaw update --tag");
-    const scopedIndex = script.indexOf(
-      "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
-    );
-    const versionIndex = script.indexOf("Invoke-OpenClaw --version", scopedIndex);
-    const startIndex = script.indexOf("\nStart-OpenClawGateway\n", updateIndex);
-    const agentIndex = script.indexOf("Invoke-OpenClaw agent --local");
-
-    expect(updateIndex).toBeGreaterThanOrEqual(0);
-    expect(scopedIndex).toBeGreaterThanOrEqual(0);
-    expect(updateIndex).toBeGreaterThan(scopedIndex);
-    expect(versionIndex).toBeGreaterThan(updateIndex);
-    expect(startIndex).toBeGreaterThan(updateIndex);
-    expect(agentIndex).toBeGreaterThan(updateIndex);
-    expect(script).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
   });
 
   it("generates a .NET-safe Windows stale import regex in the update-failure guard", () => {

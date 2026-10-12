@@ -119,7 +119,7 @@ Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restar
 
 Full configuration: [Configuration](/gateway/configuration)
 
-WebChat has no persisted config section. Gateway uses the built-in `chat.history` display limit. API clients can send per-request `maxChars` to override it for a single call. Legacy `channels.webchat` and `gateway.webchat` config is retired. Run `openclaw doctor --fix` to remove it.
+WebChat has no persisted config section. Gateway uses the built-in `chat.history` display limit. API clients can send per-request `maxChars` to override it for a single call. Clients that can expand tool output with `chat.message.get` may also send `toolResultMaxChars` to request shorter tool-result text previews without reducing user or assistant text. Complete JSON objects and arrays that fit the existing display limit retain that limit because clients use them for source cards and embedded views. This optional limit applies to `chat.history` and `chat.startup`, including history pages and delta catch-up; omit it to retain the default behavior. Repeat it on each page request. Legacy `channels.webchat` and `gateway.webchat` config is retired. Run `openclaw doctor --fix` to remove it.
 
 Related global options:
 

@@ -3,6 +3,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { waitForAgentDatabasePreparation } from "./agent-database-preparation-context.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -17,10 +18,11 @@ import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
 
 /** Admit a synchronous mutation without blocking a reclamation worker's parent callback. */
-export function withOpenClawAgentDatabaseWrite<T>(
+export async function withOpenClawAgentDatabaseWrite<T>(
   inputOptions: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T,
   expectedDatabase?: DatabaseSync,
+  signal?: AbortSignal,
 ): Promise<T> {
   const options = {
     ...inputOptions,
@@ -30,6 +32,13 @@ export function withOpenClawAgentDatabaseWrite<T>(
   options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
   const pathname = resolveOpenClawAgentSqlitePath(options);
   options.path = pathname;
+  const preparation = waitForAgentDatabasePreparation(options.agentId, {
+    env: options.env,
+    signal,
+  });
+  if (preparation) {
+    await preparation;
+  }
   const run = async (database: OpenClawAgentDatabase): Promise<T> => {
     const { identity, birthtime } = readOpenClawAgentDatabaseIdentity(database);
     if (typeof identity === "string") {
@@ -64,5 +73,7 @@ export function withOpenClawAgentDatabaseWrite<T>(
       }
     },
     true,
+    undefined,
+    signal,
   );
 }

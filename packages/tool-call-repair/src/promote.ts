@@ -44,7 +44,6 @@ export function createPromotedPlainTextToolCallBlock(
     id: `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
     name,
     arguments: block.arguments,
-    partialArgs: JSON.stringify(block.arguments),
   };
 }
 
@@ -58,13 +57,18 @@ export function createPromotedPlainTextToolCallEvents(
     if (toolCall?.type !== "toolCall") {
       return [];
     }
+    const partialJson = JSON.stringify(toolCall.arguments ?? {});
+    const streamingCall = { ...toolCall, partialJson };
     return [
       { type: "toolcall_start", contentIndex, partial: message },
       {
         type: "toolcall_delta",
         contentIndex,
-        delta: typeof toolCall.partialArgs === "string" ? toolCall.partialArgs : "{}",
-        partial: message,
+        delta: partialJson,
+        partial: {
+          ...message,
+          content: content.map((item, index) => (index === contentIndex ? streamingCall : item)),
+        },
       },
       { type: "toolcall_end", contentIndex, toolCall, partial: message },
     ];

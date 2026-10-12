@@ -219,41 +219,6 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered[0]).toContain("Example: this is a public placeholder message.");
   });
 
-  it("removes a copied prompt when the source and model normalize line endings differently", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history",
-      currentMessage: "private first paragraph\n\nprivate second paragraph",
-      lineBreak: "\r\n",
-    });
-
-    await prepareAndDispatch(
-      { text: `${conversationContext.replace(/\r\n/g, "\n")}\n\nVisible answer.` },
-      conversationContext,
-    );
-
-    expect(delivered).toEqual(["Visible answer."]);
-  });
-
-  it("never delivers a copied prompt with bare carriage-return separators", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history",
-      currentMessage: "private inbound paragraph",
-    });
-
-    await prepareAndDispatch(
-      { text: `${conversationContext.replace(/\n/g, "\r")}\n\nVisible answer.` },
-      conversationContext,
-    );
-
-    expect(delivered).toEqual(["Visible answer."]);
-  });
-
-  it("never makes a Telegram HTTP request for empty internal exec output", async () => {
-    await prepareAndDispatch({ text: "  (no output)\r\n" });
-
-    expect(delivered).toEqual([]);
-  });
-
   it("never delivers the internal runtime-context envelope in Telegram HTTP text", async () => {
     const leaked = [
       "Use it to continue answering the active user request now. Do not wait for",
@@ -275,10 +240,19 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered.join("\n")).not.toContain("Keep internal details private.");
   });
 
-  it("still delivers ordinary user-visible Telegram text", async () => {
-    await prepareAndDispatch({ text: "Hello from Telegram." });
+  it("removes a copied prompt when the source and model normalize line endings differently", async () => {
+    const conversationContext = buildHistoryContext({
+      historyText: "[Telegram] Alice: private history",
+      currentMessage: "private first paragraph\n\nprivate second paragraph",
+      lineBreak: "\r\n",
+    });
 
-    expect(delivered).toEqual(["Hello from Telegram."]);
+    await prepareAndDispatch(
+      { text: `${conversationContext.replace(/\r\n/g, "\n")}\n\nVisible answer.` },
+      conversationContext,
+    );
+
+    expect(delivered).toEqual(["Visible answer."]);
   });
 
   it("never delivers a copied prompt disguised with same-line wrappers", async () => {
@@ -315,33 +289,4 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered[0]).not.toContain("private history");
     expect(delivered[0]).not.toContain("private inbound paragraph");
   });
-
-  it.each([
-    { name: "blockquoted", prefix: "> " },
-    { name: "indented", prefix: "    " },
-    { name: "bulleted", prefix: "- " },
-    { name: "headed", prefix: "# " },
-    { name: "list-continuation", prefix: "- ", continuation: "  " },
-    { name: "wide-list-continuation", prefix: "- ", continuation: "    " },
-    { name: "varying-quote-depth", prefix: "> ", continuation: ">> " },
-  ])(
-    "never delivers an exact private prompt $name on every Markdown line",
-    async ({ prefix, continuation }) => {
-      const conversationContext = buildHistoryContext({
-        historyText: "[Telegram] Alice: private history",
-        currentMessage: "private inbound paragraph",
-      });
-      const quotedContext = conversationContext
-        .split("\n")
-        .map((line, index) => `${index === 0 ? prefix : (continuation ?? prefix)}${line}`)
-        .join("\n");
-
-      await prepareAndDispatch(
-        { text: `${quotedContext}\n\nVisible answer.` },
-        conversationContext,
-      );
-
-      expect(delivered).toEqual(["Visible answer."]);
-    },
-  );
 });

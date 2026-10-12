@@ -2,7 +2,6 @@
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
@@ -12,7 +11,6 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import {
-  readSessionUpstreamLinkInDatabase,
   upsertSessionUpstreamLinkInDatabase,
   deleteSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
@@ -37,10 +35,7 @@ export function upsertSessionUpstreamLink(
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       options.assertCommitAllowed?.();
-      const written = upsertSessionUpstreamLinkInDatabase(db, input, now, options.ifAbsent);
-      // Revalidate before COMMIT: a lifecycle change must roll back this link write.
-      options.assertCommitAllowed?.();
-      return written;
+      return upsertSessionUpstreamLinkInDatabase(db, input, now, options.ifAbsent);
     }, options);
   } catch (error) {
     if (options.ifAbsent) {
@@ -48,20 +43,6 @@ export function upsertSessionUpstreamLink(
     }
     log.warn(`failed to upsert session upstream link: ${String(error)}`);
     return false;
-  }
-}
-
-export function readSessionUpstreamLink(
-  sessionKey: string,
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): SessionUpstreamLink | undefined {
-  try {
-    const { db } = openOpenClawStateDatabase(options);
-    return readSessionUpstreamLinkInDatabase(db, sessionKey, agentId);
-  } catch (error) {
-    log.warn(`failed to read session upstream link: ${String(error)}`);
-    return undefined;
   }
 }
 
@@ -77,11 +58,7 @@ export function deleteSessionUpstreamLink(
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       options.assertCommitAllowed?.();
-      const result = deleteSessionUpstreamLinkInDatabase(db, sessionKey, agentId, options.expected);
-      if (result === "deleted") {
-        options.assertCommitAllowed?.();
-      }
-      return result;
+      return deleteSessionUpstreamLinkInDatabase(db, sessionKey, agentId, options.expected);
     }, options);
   } catch (error) {
     // Exact creation compensation must report an unverified cleanup, not claim success.

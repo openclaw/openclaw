@@ -142,13 +142,18 @@ function createSharedResultObserver(
         .then(() => resultFn.call(stream))
         .then(
           (resolved) => {
-            lifecycle.observer.observeFinalResult(
-              lifecycle.eventBase,
-              lifecycle.startedAt,
-              resolved,
-            );
-            lifecycle.emitCompleted();
-            return resolved;
+            try {
+              lifecycle.observer.observeFinalResult(
+                lifecycle.eventBase,
+                lifecycle.startedAt,
+                resolved,
+              );
+              lifecycle.emitCompleted();
+              return resolved;
+            } catch (error) {
+              lifecycle.emitError(error);
+              throw error;
+            }
           },
           (err: unknown) => throwModelCallError(lifecycle, err),
         );
@@ -165,8 +170,14 @@ function observeModelCallStream(
   lifecycle: ModelCallLifecycle,
 ): AsyncIterable<unknown> {
   const observedResult = createSharedResultObserver(stream, lifecycle);
-  const observedIterator = () =>
-    observeModelCallIterator(createIterator(), lifecycle, observedResult);
+  const observedIterator = () => {
+    try {
+      return observeModelCallIterator(createIterator(), lifecycle, observedResult);
+    } catch (error) {
+      lifecycle.emitError(error);
+      throw error;
+    }
+  };
   let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =
@@ -195,12 +206,17 @@ function observeModelCallStream(
 }
 
 function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle): unknown {
-  const createIterator = asyncIteratorFactory(result);
-  if (createIterator) {
-    return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
+  try {
+    const createIterator = asyncIteratorFactory(result);
+    if (createIterator) {
+      return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
+    }
+    lifecycle.emitCompleted();
+    return result;
+  } catch (error) {
+    lifecycle.emitError(error);
+    throw error;
   }
-  lifecycle.emitCompleted();
-  return result;
 }
 
 export function wrapStreamFnWithDiagnosticModelCallEvents(

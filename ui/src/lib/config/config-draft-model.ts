@@ -17,11 +17,7 @@ import {
 } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
-import {
-  configContentConflicts,
-  configFormContentConflicts,
-  replayConfigDraftEdits,
-} from "./config-draft-replay.ts";
+import { configContentConflicts, replayConfigDraftEdits } from "./config-draft-replay.ts";
 import {
   resolveAgentConfigEntryTarget,
   resolveEditableSnapshotConfig,
@@ -312,6 +308,11 @@ export type ConfigSubmittedDraft = {
 
 export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
 
+// Gateway writes return persisted hashes; only a no-op patch omits one.
+export type ConfigPatchAck =
+  | { noop: true; config: Record<string, unknown> }
+  | (ConfigWriteAck & { noop?: false });
+
 export function isConfigWriteAck(value: unknown): value is ConfigWriteAck {
   return (
     isRecord(value) &&
@@ -354,7 +355,7 @@ export function adoptConfigWriteAck(
     currentForm &&
     state.configFormOriginal &&
     previous &&
-    configFormContentConflicts(state.configFormOriginal, currentForm, previous),
+    configContentConflicts(state.configFormOriginal, currentForm, previous, "form"),
   );
   const draft =
     currentRaw === submitted.raw
@@ -519,12 +520,6 @@ function mutateConfigForm(
   syncConfigDraft(state, base);
 }
 
-function trackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
-  const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
-  pluginIds.add(pluginId);
-  autoAllowlistedPluginIdsByState.set(state, pluginIds);
-}
-
 function untrackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
   const pluginIds = autoAllowlistedPluginIdsByState.get(state);
   if (!pluginIds) {
@@ -567,7 +562,9 @@ function syncEnabledPluginAllowlist(
       return;
     }
     setPathValue(draft, ["plugins", "allow"], [...allow, pluginId]);
-    trackAutoAllowlistedPluginId(state, pluginId);
+    const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
+    pluginIds.add(pluginId);
+    autoAllowlistedPluginIdsByState.set(state, pluginIds);
     return;
   }
   const autoAllowlistedPluginIds = autoAllowlistedPluginIdsByState.get(state);
@@ -679,7 +676,7 @@ export function discardConfigFormValue(state: RuntimeConfigState, path: Array<st
   // Restore absence with the submission owner's existing empty-container rules;
   // otherwise Cancel alone leaves a dirty draft and schedules a redundant write.
   current = pruneEmptyConfigForm(current, original);
-  if (configFormContentConflicts(original, current, canonical)) {
+  if (configContentConflicts(original, current, canonical, "form")) {
     state.configAutoSaveStatus = "conflict";
     state.lastError = "config changed since last load; re-run config.get and retry";
     return false;

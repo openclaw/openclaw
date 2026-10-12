@@ -92,6 +92,15 @@ function closeSlashMenuIfNeeded(state: SlashMenuState, requestUpdate: () => void
   }
 }
 
+function openSlashArgumentMenu(state: SlashMenuState, command: SlashCommandDef, args: string[]) {
+  state.slashMenuMode = "args";
+  state.slashMenuCommand = command;
+  state.slashMenuArgItems = args;
+  state.slashMenuOpen = true;
+  state.slashMenuIndex = 0;
+  state.slashMenuItems = [];
+}
+
 function requestSlashCommandRefresh(
   state: SlashMenuState,
   host: SlashMenuHost,
@@ -160,12 +169,7 @@ export function updateSlashMenu(
         ? argOptions.filter((arg) => arg.toLowerCase().startsWith(argFilter))
         : argOptions;
       if (filtered.length > 0) {
-        state.slashMenuMode = "args";
-        state.slashMenuCommand = cmd;
-        state.slashMenuArgItems = filtered;
-        state.slashMenuOpen = true;
-        state.slashMenuIndex = 0;
-        state.slashMenuItems = [];
+        openSlashArgumentMenu(state, cmd, filtered);
         state.slashMenuCompletion = null;
         requestUpdate();
         return;
@@ -286,12 +290,7 @@ function selectSlashCommand(
   const argOptions = host.resolveArgOptions(cmd);
   if (argOptions.length > 0) {
     host.commitDraft(`/${cmd.name} `);
-    state.slashMenuMode = "args";
-    state.slashMenuCommand = cmd;
-    state.slashMenuArgItems = argOptions;
-    state.slashMenuOpen = true;
-    state.slashMenuIndex = 0;
-    state.slashMenuItems = [];
+    openSlashArgumentMenu(state, cmd, argOptions);
     requestUpdate();
     return;
   }

@@ -439,14 +439,9 @@ async function publishSqliteFile(
         );
       }
       if (details?.targetCreated) {
-        if (stagedPathChanged) {
-          throw new Error(
-            `SQLite snapshot staging file changed during publication: ${options.targetPath}`,
-            { cause: error },
-          );
-        }
+        const changed = stagedPathChanged ? "staging file" : "target";
         throw new Error(
-          `SQLite snapshot target changed during publication: ${options.targetPath}`,
+          `SQLite snapshot ${changed} changed during publication: ${options.targetPath}`,
           { cause: error },
         );
       }

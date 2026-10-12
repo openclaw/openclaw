@@ -47,6 +47,102 @@ const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorke
 const createStaticSnapshot = createStaticCatalogSnapshotFixture({ makeTempDir, retireAfterTest });
 
 describe("prepared model catalog worker plugin scope", () => {
+  it("admits deferred discovery using manifest-only synthetic auth", async () => {
+    const root = makeTempDir("openclaw-manifest-synthetic-auth-");
+    const provider = "manifest-local-fixture";
+    const pluginDir = path.join(root, "extensions", provider);
+    const agentDir = path.join(root, "state", "agents", "main", "agent");
+    const workspaceDir = path.join(root, "workspace");
+    for (const directory of [pluginDir, agentDir, workspaceDir]) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: provider,
+        version: "1.0.0",
+        type: "commonjs",
+        openclaw: {
+          extensions: ["./index.cjs"],
+          build: { bundledDist: false, runtimeFormat: "cjs" },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = {
+        id: "${provider}",
+        register(api) { api.registerProvider(require("./discovery.cjs")); },
+      };`,
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "discovery.cjs"),
+      `module.exports = {
+        id: "${provider}", label: "Local fixture", auth: [],
+        resolveSyntheticAuth: ({ providerConfig }) => providerConfig
+          ? { apiKey: "local-fixture-not-real", source: "local fixture", mode: "api-key" }
+          : undefined,
+        catalog: { run: () => ({ provider: {
+          baseUrl: "http://127.0.0.1:1234/v1", api: "openai-completions",
+          models: [{
+            id: "discovered", name: "Discovered model", input: ["text"], reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 32768, maxTokens: 8192,
+          }],
+        } }) },
+      };`,
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: provider,
+        providers: [provider],
+        syntheticAuthRefs: [provider],
+        activation: { onStartup: false },
+        providerCatalogEntry: "./discovery.cjs",
+        modelCatalog: { discovery: { [provider]: "refreshable" } },
+        configSchema: { type: "object", properties: {} },
+      }),
+    );
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+      plugins: {
+        allow: [provider],
+        entries: { [provider]: { enabled: true } },
+      },
+    };
+    const env = {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "extensions"),
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+    };
+    retireAfterTest(() => {
+      unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
+    });
+    const snapshot = await publishPreparedModelRuntimeSnapshot(
+      { agentId: "main", agentDir, inheritedAuthDir: agentDir, workspaceDir, config, env },
+      { provenance: "configured", catalogMode: "static" },
+    );
+
+    const catalog = expectDefined(
+      await snapshot.loadFullModelCatalog?.({ refresh: true, providerIds: [provider], wait: true }),
+      "expected a completed catalog",
+    );
+
+    expect(catalog.entries).toContainEqual(expect.objectContaining({ provider, id: "discovered" }));
+    expect(getPreparedModelFullCatalogAuth(catalog)?.authModes[provider]).toBe("api_key");
+  });
+
   it("retains refreshed CLI auth while acquiring an unrelated provider catalog", async () => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
     const cliHome = makeTempDir("openclaw-catalog-cli-auth-home-");
@@ -82,6 +178,7 @@ describe("prepared model catalog worker plugin scope", () => {
     const refreshed = await fixture.snapshot.loadFullModelCatalog!({
       refresh: true,
       providerIds: [provider],
+      wait: true,
     });
     const expected = getPreparedModelFullCatalogAuth(refreshed)!;
     expect(expected.credentials?.[provider]).toMatchObject({
@@ -97,6 +194,7 @@ describe("prepared model catalog worker plugin scope", () => {
     const unrelated = await fixture.snapshot.loadFullModelCatalog!({
       refresh: true,
       providerIds: [PROVIDER_ID],
+      wait: true,
     });
     expect(unrelated.entries).toContainEqual(
       expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
@@ -117,7 +215,7 @@ describe("prepared model catalog worker plugin scope", () => {
   it("captures runtime synthetic auth for credential-only providers before full refresh", async () => {
     const fixture = await createStaticSnapshot(0, {}, { credentialOnlySyntheticAuth: true });
 
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true, wait: true });
 
     // The provider's catalog emits this row only when its stored token resolves.
     expect(catalog?.entries).toContainEqual(

@@ -73,14 +73,13 @@ export function createBlockReplyCoalescer(params: {
   const canMergeBufferedTextWithMedia = (payload: ReplyPayload) =>
     Boolean(bufferText) &&
     bufferedPayload !== undefined &&
-    !bufferedPayload.audioAsVoice &&
-    !payload.audioAsVoice &&
-    !payload.isReasoning &&
-    !payload.isCommentary &&
-    !isReplyPayloadStatusNotice(payload) &&
-    !bufferedPayload.isReasoning &&
-    !bufferedPayload.isCommentary &&
-    !isReplyPayloadStatusNotice(bufferedPayload) &&
+    [bufferedPayload, payload].every(
+      (part) =>
+        !part.audioAsVoice &&
+        !part.isReasoning &&
+        !part.isCommentary &&
+        !isReplyPayloadStatusNotice(part),
+    ) &&
     (!payload.replyToId || bufferedPayload.replyToId === payload.replyToId);
 
   const mergeSource = (text: string, source: typeof bufferSource): typeof bufferSource => ({

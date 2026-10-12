@@ -107,7 +107,7 @@ export async function resolveComponentInteractionContext(params: {
   const isDirectMessage =
     channelType === ChannelType.DM || (!rawGuildId && !isGroupDm && channelType == null);
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
+    ? interaction.rawData.member.roles.slice()
     : [];
 
   return {

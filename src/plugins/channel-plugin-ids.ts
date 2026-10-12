@@ -1,12 +1,15 @@
 /** Channel presence and gateway startup plugin id helpers. */
 export {
   hasConfiguredChannelsForReadOnlyScope,
+  hasConfiguredChannelsForReadOnlyScopeAsync,
   hasExplicitChannelConfig,
   listAmbientOnlyConfiguredChannelIds,
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
+  listConfiguredChannelIdsForReadOnlyScopeAsync,
   listExplicitConfiguredChannelIdsForConfig,
   resolveConfiguredChannelPluginIds,
+  resolveConfiguredChannelPluginIdsAsync,
   resolveConfiguredChannelPresencePolicy,
   resolveDiscoverableScopedChannelPluginIds,
   type ConfiguredChannelBlockedReason,

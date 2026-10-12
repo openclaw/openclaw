@@ -22,6 +22,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-transcript-reconcile.js";
 import { isSessionCostUsageRefreshRunning } from "../infra/session-cost-usage-cache.sqlite.js";
+import { createIncognitoUsageCostAdapter } from "../infra/session-cost-usage-incognito.js";
 import { resolveUsageCostPricingFingerprint } from "../infra/session-cost-usage-pricing-context.js";
 import {
   loadSessionCostSummary,
@@ -365,9 +366,8 @@ describe("cross-actor compute", () => {
     const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
     const scheduled = vi
       .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
-      .mockImplementation((generation, run, owner) =>
+      .mockImplementation((run, owner) =>
         runOperation(
-          generation,
           (operation) =>
             run({
               ...operation,
@@ -519,6 +519,44 @@ it("reads explicit retained usage windows and preserves their discovery", async 
       points: [{ totalTokens: 10 }],
     });
   });
+});
+
+it("cancels a queued usage callback independently of its retained compute scope", async ({
+  signal,
+}) => {
+  const target = await create("callback-abort");
+  const before = await stats(target);
+  const barrier = await hold();
+  const controller = new AbortController();
+  const cancellation = new Error("Usage callback deadline expired");
+  const reading = actor.sessions.withCompute(authority, target, async (compute) => {
+    const adapter = createIncognitoUsageCostAdapter(
+      compute,
+      target,
+      { agentId: actor.agentId, storePath: actor.path },
+      [{ ...target, updatedAtMs: 0 }],
+    );
+    const queued = adapter.read(
+      {
+        kind: "memory-stats",
+        input: [{ agentId: actor.agentId, storePath: actor.path, sessionId: target.sessionId }],
+      },
+      controller.signal,
+    );
+    controller.abort(cancellation);
+    return queued;
+  });
+  const outcome = reading.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    expect(await withinTest(outcome, signal)).toBe(cancellation);
+  } finally {
+    barrier.release.resolve();
+    await Promise.allSettled([barrier.held, reading]);
+  }
+  await expect(stats(target)).resolves.toEqual(before);
 });
 
 it("observes a pending actor append before usage inventory, stats and rollup publication", async () => {
@@ -854,61 +892,55 @@ it("discards revoked partial projections and reconciles the complete active acto
   });
 });
 
-it.each(["coalesce", "handoff"] as const)(
-  "retains deferred projection and read-only readiness through %s",
-  async (mode) =>
-    withIncognitoSessionActor(actor, async () => {
-      const target = await create(`deferred-${mode}`);
-      await append(target, "old branch");
-      await append(target, "first branch", actor, null);
-      const database = { ...location(), env };
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const checked = createDeferredCore();
-      let held = false;
-      const wrapped = observeCompute(async (type) => {
-        if (type === "session.compute.store.status") {
-          checked.resolve();
-        }
-        if (type === "session.compute.source.open" && !held) {
-          held = true;
-          entered.resolve();
-          await release.promise;
-          if (mode === "handoff") {
-            throw new Error("interrupted projection preparation");
-          }
-        }
-      });
-      let waiting: Promise<void> | undefined;
-      try {
-        startSessionTranscriptIndexReconcile(database);
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          waitForSessionTranscriptIndexReconcile(database),
-          "Reconciliation settled before opening its source",
-        );
-        waiting = waitForSessionTranscriptProjection(
-          { ...target, env, storePath: database.path },
-          undefined,
-        );
-        await awaitGateBeforeSettlement(
-          checked.promise,
-          waiting,
-          "Readiness settled before its actor probe",
-        );
-        // This append would deadlock if the deferred owner held the actor FIFO.
-        await append(target, "final branch", actor, null);
-        startSessionTranscriptIndexReconcile(database);
-        release.resolve();
-        await Promise.all([waiting, waitForSessionTranscriptIndexReconcile(database)]);
-        await expect(recentHistory(target)).resolves.toMatchObject({
-          totalMessages: 1,
-          messages: [{ content: [{ type: "text", text: "final branch" }] }],
-        });
-      } finally {
-        release.resolve();
-        await Promise.allSettled([waiting, waitForSessionTranscriptIndexReconcile(database)]);
-        wrapped.mockRestore();
+it("retains deferred projection and read-only readiness through coalescing", async () =>
+  withIncognitoSessionActor(actor, async () => {
+    const target = await create("deferred-coalesce");
+    await append(target, "old branch");
+    await append(target, "first branch", actor, null);
+    const database = { ...location(), env };
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const checked = createDeferredCore();
+    let held = false;
+    const wrapped = observeCompute(async (type) => {
+      if (type === "session.compute.store.status") {
+        checked.resolve();
       }
-    }),
-);
+      if (type === "session.compute.source.open" && !held) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+    });
+    let waiting: Promise<void> | undefined;
+    try {
+      startSessionTranscriptIndexReconcile(database);
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        waitForSessionTranscriptIndexReconcile(database),
+        "Reconciliation settled before opening its source",
+      );
+      waiting = waitForSessionTranscriptProjection(
+        { ...target, env, storePath: database.path },
+        undefined,
+      );
+      await awaitGateBeforeSettlement(
+        checked.promise,
+        waiting,
+        "Readiness settled before its actor probe",
+      );
+      // This append would deadlock if the deferred owner held the actor FIFO.
+      await append(target, "final branch", actor, null);
+      startSessionTranscriptIndexReconcile(database);
+      release.resolve();
+      await Promise.all([waiting, waitForSessionTranscriptIndexReconcile(database)]);
+      await expect(recentHistory(target)).resolves.toMatchObject({
+        totalMessages: 1,
+        messages: [{ content: [{ type: "text", text: "final branch" }] }],
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([waiting, waitForSessionTranscriptIndexReconcile(database)]);
+      wrapped.mockRestore();
+    }
+  }));

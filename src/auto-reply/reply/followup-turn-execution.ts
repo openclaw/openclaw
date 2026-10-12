@@ -29,7 +29,7 @@ import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
 import { captureReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
@@ -87,15 +87,7 @@ export async function executeFollowupTurn(params: {
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
-  const terminalReplyExpectation =
-    turn.queued.run.terminalReplyExpectation ??
-    resolveSourceReplyExpectation({
-      ctx: {
-        InboundEventKind: turn.queued.currentInboundEventKind,
-        InputProvenance: turn.queued.run.inputProvenance,
-      },
-      cfg: turn.config,
-    });
+  const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
   // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
   const isHeartbeat = false;
@@ -341,9 +333,14 @@ export async function executeFollowupTurn(params: {
         if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
           return false;
         }
-        const fastModeAutoProgress = isFastModeAutoProgressPayload(payload);
-        if (fastModeAutoProgress && !requiresDurableToolResult) {
-          const verboseToolResult = shouldEmitVerboseToolResult();
+        const fastModeAutoProgress =
+          isFastModeAutoProgressPayload(payload) && !requiresDurableToolResult;
+        const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
+        const transientToolResultProgress = requiresDurableToolResult
+          ? undefined
+          : channelToolResultProgress;
+        let callback = verboseToolResult ? undefined : transientToolResultProgress;
+        if (fastModeAutoProgress) {
           const lifecycleToolResult = sourceOpts?.allowToolLifecycleWhenProgressHidden === true;
           const sourceDeliverySuppressed =
             turn.queued.run.sourceReplyDeliveryMode === "message_tool_only";
@@ -353,36 +350,27 @@ export async function executeFollowupTurn(params: {
           const callbackAllowed =
             callbackAllowedBySource &&
             (forceToolResultProgress || verboseToolResult || lifecycleToolResult);
-          const callback = callbackAllowed ? sourceOpts?.onToolResult : undefined;
-          if (callback) {
-            const visible = (await settleProgressVisibilityCallbackResult(callback(payload)))
-              .visible;
-            if (visible) {
-              return true;
-            }
-          }
-          if (!forceToolResultProgress && !verboseToolResult) {
-            return false;
-          }
-          await params.onToolResult(payload);
-          return true;
-        }
-        const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
-        const transientToolResultProgress = requiresDurableToolResult
-          ? undefined
-          : channelToolResultProgress;
-        const toolResultDeliveryAvailable =
-          Boolean(transientToolResultProgress) || verboseToolResult || requiresDurableToolResult;
-        if (
+          callback = callbackAllowed ? sourceOpts?.onToolResult : undefined;
+        } else if (
           turn.queued.run.sourceReplyDeliveryMode === "message_tool_only" &&
-          !toolResultDeliveryAvailable
+          !transientToolResultProgress &&
+          !verboseToolResult &&
+          !requiresDurableToolResult
         ) {
           return false;
         }
-        return transientToolResultProgress && !verboseToolResult
-          ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
-              .visible
-          : await params.onToolResult(payload).then(() => true);
+        if (callback) {
+          const visible = (await settleProgressVisibilityCallbackResult(callback(payload))).visible;
+          // Ordinary progress delegates completely; fast-mode hints retain a durable fallback.
+          if (visible || !fastModeAutoProgress) {
+            return visible;
+          }
+        }
+        if (fastModeAutoProgress && !forceToolResultProgress && !verboseToolResult) {
+          return false;
+        }
+        await params.onToolResult(payload);
+        return true;
       });
     },
   };

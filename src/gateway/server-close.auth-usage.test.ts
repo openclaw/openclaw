@@ -1,12 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { markAuthProfileSuccess } from "../agents/auth-profiles/profiles.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { markAuthProfileFailure } from "../agents/auth-profiles/usage.js";
 import { markEmbeddedRunAuthProfileSuccess } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -35,25 +36,13 @@ it("settles accepted auth bookkeeping across the close prelude and refuses new u
     };
     saveAuthProfileStore(store, undefined, { syncExternalCli: false });
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const recording = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "authProfiles.usage") {
-                  recordingEntered.resolve();
-                  await releaseRecording.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
+    const recording = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "authProfiles.usage") {
+        recordingEntered.resolve();
+        await releaseRecording.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     restoreRecording = () => recording.mockRestore();
     const inGateway = <T>(operation: () => T) =>
       withPluginRuntimeGatewayContextResolver(kernel.resolvePluginGatewayContext, operation);

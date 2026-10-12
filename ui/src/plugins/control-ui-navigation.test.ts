@@ -1,4 +1,4 @@
-import { render, type LitElement } from "lit";
+import { render } from "lit";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
@@ -6,7 +6,8 @@ import { icons } from "../components/icons.ts";
 import { SidebarMenusController } from "../components/sidebar-menus-controller.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
-import "./control-ui-view.runtime.ts";
+import "./control-ui-view.solid.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 const originalLocation = window.location.href;
 afterEach(() => {
@@ -51,7 +52,7 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
   await controller.preloadMenuRenderer();
   const menuRoot = document.createElement("div");
   const contributions = ["boards", "child", "plain"].map((id) =>
-    Object.assign(document.createElement("openclaw-plugin-contributions") as LitElement, {
+    Object.assign(document.createElement("openclaw-plugin-contributions"), {
       kind: "navigation",
       navigationKey: `example/${id}`,
       navigationMenus: controller,
@@ -187,7 +188,7 @@ it("shows the active plugin section's ordered children and leaves pinned childre
     router: { subscribe },
   } as unknown as ApplicationContext);
   const contribution = (key: string) =>
-    Object.assign(document.createElement("openclaw-plugin-contributions") as LitElement, {
+    Object.assign(document.createElement("openclaw-plugin-contributions"), {
       kind: "navigation",
       navigationKey: key,
     });
@@ -204,10 +205,13 @@ it("shows the active plugin section's ordered children and leaves pinned childre
   expect(children.map((child) => child.getAttribute("aria-current"))).toEqual(["page", null, null]);
   const icon = document.createElement("div");
   render(icons.activity, icon);
-  expect(children[0]?.querySelector("svg")?.outerHTML).toBe(icon.querySelector("svg")?.outerHTML);
-  expect(children[1]?.querySelector("svg")?.outerHTML).toBe(
-    parent.querySelector(".nav-item__icon svg")?.outerHTML,
-  );
+  expect(
+    [...children[0]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
+  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
+  render(icons.layers, icon);
+  expect(
+    [...children[1]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
+  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
   expect(pinned.querySelectorAll("a")).toHaveLength(1);
   expect(pinned.querySelector(".nav-item--child")).toBeNull();
   expect(pinned.querySelector("a")?.getAttribute("aria-current")).toBe("page");

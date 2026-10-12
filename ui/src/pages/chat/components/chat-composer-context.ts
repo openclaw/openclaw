@@ -68,15 +68,9 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
   return null;
 }
 
-function getContextNoticeViewModel(
-  session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
-) {
+function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
   const used = asNonNegativeFiniteNumber(session?.totalTokens);
-  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(
-    session,
-    defaultContextTokens,
-  );
+  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   if (used === undefined || !limit) {
     return null;
   }
@@ -232,12 +226,18 @@ function renderQuotaGroup(group: ProviderQuotaGroup, usageHref: string) {
   `;
 }
 
+function renderContextStat(label: string, value: string) {
+  return html`<div>
+    <dt>${label}</dt>
+    <dd>${value}</dd>
+  </div>`;
+}
+
 export function renderContextNotice(
   session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
 ) {
-  const model = getContextNoticeViewModel(session, defaultContextTokens);
+  const model = getContextNoticeViewModel(session);
   const quotaGroups = options.providerUsage
     ? collectProviderQuotaGroups(
         options.providerUsage.modelAuthStatusResult ?? null,
@@ -276,14 +276,7 @@ export function renderContextNotice(
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   const renderCostStat = (label: string, value: number | undefined) =>
-    value === undefined || value <= 0
-      ? nothing
-      : html`
-          <div>
-            <dt>${label}</dt>
-            <dd>${formatCost(value)}</dd>
-          </div>
-        `;
+    value === undefined || value <= 0 ? nothing : renderContextStat(label, formatCost(value));
   const hasProviderCosts = providerCosts && Object.values(providerCosts).some((value) => value > 0);
   return html`
     <div
@@ -358,23 +351,15 @@ export function renderContextNotice(
                       ${t("chat.composer.contextUsage.latestRunTokens")}
                     </div>
                     <dl class="context-usage__stats">
-                      <div>
-                        <dt>${t("usage.breakdown.input")}</dt>
-                        <dd>${formatStat(model.input)}</dd>
-                      </div>
-                      <div>
-                        <dt>${t("usage.breakdown.output")}</dt>
-                        <dd>${formatStat(model.output)}</dd>
-                      </div>
+                      ${renderContextStat(t("usage.breakdown.input"), formatStat(model.input))}
+                      ${renderContextStat(t("usage.breakdown.output"), formatStat(model.output))}
                       ${
                         !showCosts || model.cost === null
                           ? nothing
-                          : html`
-                              <div>
-                                <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
-                                <dd>${formatCost(model.cost)}</dd>
-                              </div>
-                            `
+                          : renderContextStat(
+                              t("chat.composer.contextUsage.estimatedCost"),
+                              formatCost(model.cost),
+                            )
                       }
                     </dl>
                   `

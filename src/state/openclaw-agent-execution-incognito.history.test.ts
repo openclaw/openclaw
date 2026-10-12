@@ -23,6 +23,7 @@ import {
   readSessionTranscriptBoundedMessageTailPageAsync,
 } from "../gateway/session-transcript-readers.js";
 import {
+  readLatestAssistantTextByIdentity,
   readSessionTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDelta,
 } from "../plugin-sdk/session-transcript-runtime.js";
@@ -43,9 +44,9 @@ import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-executio
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 // Two retained private actors plus shared ACP state need three broker slots.
-vi.mock("node:os", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:os")>()),
-  availableParallelism: () => 24,
+vi.mock("../infra/worker-pool-sizing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/worker-pool-sizing.js")>()),
+  resolveSqliteBrokerWorkerCount: () => 3,
 }));
 
 const probe = useIncognitoActorProbe();
@@ -965,6 +966,7 @@ it("ends queued history reads with the typed error when their actor is lost", as
       reader.memoryEntry("actor-memory"),
       reader.memoryResetRecall(),
       reader.nativeContext(scope, () => "private result"),
+      withIncognitoSessionActor(lossActor, () => readLatestAssistantTextByIdentity(scope)),
     ].map((result) => expect(result).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" })),
   );
   let replacing: Promise<IncognitoAgentDatabaseExecution | undefined> | undefined;

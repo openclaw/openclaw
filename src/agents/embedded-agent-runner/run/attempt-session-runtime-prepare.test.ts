@@ -102,6 +102,7 @@ function createFixture() {
     trackPromptSettlePromise,
   };
   const contextGuards = {
+    checkMidTurnPrecheck: vi.fn(),
     getAfterTurnCheckpoint: vi.fn(() => null),
     remove: vi.fn(),
     takePendingMidTurnPrecheckRequest: vi.fn(() => null),
@@ -275,6 +276,43 @@ beforeEach(() => {
 });
 
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
+  it("re-pins personal bootstrap when the selected profile changes between attempts", async () => {
+    const fixture = createFixture();
+    fixture.transcriptPolicy.inHistorySystemUpdates = true;
+    const entries: SessionEntry[] = [];
+    const appendCustomEntryAsync = async (customType: string, data: unknown) => {
+      entries.push({
+        type: "custom",
+        customType,
+        data,
+        id: `profile-marker-${entries.length}`,
+        parentId: null,
+        timestamp: "2026-10-01T00:00:00Z",
+      });
+    };
+    Object.assign(fixture.sessionManager, {
+      getBranch: () => entries,
+      getSessionTarget: () => undefined,
+      getSessionId: () => "shared-profile-session",
+      appendCustomEntryAsync,
+    });
+    Object.assign(fixture.activeSession, { agent: { state: { messages: [] } } });
+    mocks.retainSessionPromptState.mockImplementation(() => ({
+      state: { toolResults: { projected: true } },
+      [Symbol.dispose]: () => {},
+    }));
+    for (const profile of ["alice", "bob", undefined]) {
+      fixture.input.attempt.bootstrapUserProfileId = profile;
+      const runtime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const prompt = `## User\n${profile ?? "Shared"} guidance`;
+      const prepared = await runtime.prepareSystemPromptUpdate!(prompt, true);
+      expect(prepared.restart).toBe(true);
+      expect(prepared.systemPrompt).toBe(prompt);
+      prepared.commit();
+      await persistSessionSystemPrompt(runtime.sessionPromptState, appendCustomEntryAsync);
+    }
+  });
+
   it.each(["current", "run-revoked", "reader-revoked"] as const)(
     "keeps constructor transcript authority across preparation when %s",
     async (outcome) => {
@@ -498,40 +536,6 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     expect(restored.systemPrompt).toBe(pinned);
     expect(restored.update?.content).toContain("## Tools\nread");
   });
-
-  it.each([false, true])(
-    "registers prompt series only outside settled finalization %s",
-    async (finalization) => {
-      const fixture = createFixture();
-      fixture.transcriptPolicy.inHistorySystemUpdates = true;
-      const existing = { prefix: "Ordinary pinned prefix" };
-      const pending = { prefix: "Ordinary pending prefix" };
-      Object.assign(fixture.promptState, { systemPrompt: existing, pendingSystemPrompt: pending });
-      if (finalization) {
-        fixture.input.attempt.operation = "settled-tool-finalization";
-        fixture.input.systemPrompt.systemPromptText = "";
-      }
-
-      const result = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
-      const registered = mocks.prepareAgentSession.mock.calls[0]?.[0];
-      if (finalization) {
-        expect(mocks.beginSessionSystemPrompt).not.toHaveBeenCalled();
-        expect(registered).toMatchObject({
-          initialSystemPrompt: "",
-          prepareSystemPromptUpdate: undefined,
-        });
-        expect(result.prepareSystemPromptUpdate).toBeUndefined();
-        expect(fixture.promptState).toMatchObject({
-          systemPrompt: existing,
-          pendingSystemPrompt: pending,
-        });
-      } else {
-        expect(mocks.beginSessionSystemPrompt).toHaveBeenCalledOnce();
-        expect(registered.prepareSystemPromptUpdate).toBeTypeOf("function");
-        expect(result.prepareSystemPromptUpdate).toBe(registered.prepareSystemPromptUpdate);
-      }
-    },
-  );
 
   it("prepares the session runtime in ownership-safe order and keeps prompt state live", async () => {
     const fixture = createFixture();

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import * as recovery from "../app/stale-chunk-reload.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "./login-gate.ts";
 
 type LoginGateElement = HTMLElement & {
@@ -32,7 +33,7 @@ async function mountFailure() {
     onToggleGatewaySecret: vi.fn(),
     onConnect: vi.fn(),
   };
-  document.body.append(element);
+  mountSolid(() => element);
   await element.updateComplete;
   return element;
 }
@@ -91,7 +92,7 @@ describe("login refresh ownership", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(probe).toHaveBeenCalledTimes(2);
     expect(probe).toHaveBeenCalledWith(
-      window.location.href,
+      new URL("/index.html", window.location.href).href,
       expect.objectContaining({
         method: "HEAD",
         cache: "no-store",
@@ -137,7 +138,7 @@ describe("login refresh ownership", () => {
     const element = await mountFailure();
     refresh(element).click();
     element.props = { ...element.props, ...props };
-    // Final navigation must see changed properties before Lit renders them.
+    // Final navigation must see changed properties before Solid renders them.
     finish();
     await vi.waitFor(() =>
       expect(recovery.retryStaleChunkReloadWhenReachable).toHaveResolvedWith(false),
@@ -161,11 +162,11 @@ describe("login refresh ownership", () => {
           action === "target input" ? "#login-gate-url" : "#login-gate-credential",
         )!;
         if (action === "Enter") {
-          input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+          input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
           expect(element.props.onConnect).toHaveBeenCalledOnce();
         } else {
           input.value = "new-value";
-          input.dispatchEvent(new Event("input"));
+          input.dispatchEvent(new Event("input", { bubbles: true }));
         }
       }
       finish();

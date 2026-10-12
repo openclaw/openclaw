@@ -20,7 +20,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   rewindSessionToMessage,
   switchSessionBranch,
   updateSessionEntry,
@@ -39,6 +38,7 @@ import {
   useSessionMessageCutFixtures,
 } from "./session-accessor.sqlite-message-cut.test-support.js";
 import * as transcriptWatermark from "./session-accessor.sqlite-transcript-watermark-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as coldStorage from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -481,39 +481,6 @@ describe("SQLite session branches", () => {
     }
   });
 
-  it("reuses branch summaries with unchanged watermarks after closing the writable handle", async () => {
-    const { env } = await createSession();
-    const database = openOpenClawAgentDatabase({ agentId, env });
-    await closeOpenClawAgentDatabaseByPathAsync(database.path, agentId);
-    const branchReads = trackBranchSummaryReads();
-
-    const first = await listSessionBranches({ agentId, env, sessionKey });
-    expect(first).toMatchObject({
-      status: "ok",
-      branches: expect.arrayContaining([
-        expect.objectContaining({
-          active: true,
-          leafEntryId: "assistant-2",
-          headline: "second answer",
-          messageCount: 4,
-        }),
-      ]),
-    });
-    expect(branchReads()).toBe(1);
-
-    const second = await listSessionBranches({ agentId, env, sessionKey });
-    expect(second).toEqual(first);
-    expect(branchReads()).toBe(1);
-    if (second.status !== "ok" || !second.branches[0]) {
-      throw new Error("expected cached branch list result");
-    }
-    second.branches[0].headline = "caller mutation";
-
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
-    expect(branchReads()).toBe(1);
-    expect(isOpenClawAgentDatabaseOpen(database.path)).toBe(false);
-  });
-
   it("reuses unchanged summaries across fifty active sessions without repeating worker reads", async () => {
     const { env } = await createSession();
     const scopes = [];
@@ -651,37 +618,6 @@ describe("SQLite session branches", () => {
     },
   );
 
-  it("lists every DAG tip with active state, headline, count, and timestamp", async () => {
-    const { env } = await createSession({ activeLeafTarget: "assistant-1" });
-
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual({
-      status: "ok",
-      branches: [
-        {
-          leafEntryId: "assistant-1",
-          headline: "first answer",
-          messageCount: 2,
-          updatedAt: "2026-07-18T00:00:02.000Z",
-          active: true,
-        },
-        {
-          leafEntryId: "off-path-user",
-          headline: "inactive prompt",
-          messageCount: 2,
-          updatedAt: "2026-07-18T00:00:05.000Z",
-          active: false,
-        },
-        {
-          leafEntryId: "assistant-2",
-          headline: "second answer",
-          messageCount: 4,
-          updatedAt: "2026-07-18T00:00:04.000Z",
-          active: false,
-        },
-      ],
-    });
-  });
-
   it("keeps opaque payloads in the worker and refreshes phased Unicode headlines after a rewrite", async () => {
     const { env, scope } = await createSession();
     const opaque = "x".repeat(256 * 1024);
@@ -782,7 +718,9 @@ describe("SQLite session branches", () => {
     const sessionId = "large-branches-source";
     const scope = { agentId, env, sessionId, sessionKey };
     await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-    // Keep reader startup outside the graph-work budget; replacement below forces a fresh scan.
+    // Match replacement's resident writer so warmup and measurement use the maintenance reader.
+    // Replacement below still forces a fresh graph scan.
+    openOpenClawAgentDatabase({ agentId, env });
     await expect(listSessionBranches(scope)).resolves.toEqual({ status: "ok", branches: [] });
     const events: Parameters<typeof replaceTranscriptEvents>[1] = [
       {

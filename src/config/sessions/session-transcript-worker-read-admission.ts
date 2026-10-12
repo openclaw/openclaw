@@ -1,10 +1,7 @@
+import { hasSqliteDatabaseSchemaAdmissionForPath } from "../../infra/sqlite-database-admission.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
-import { captureExistingOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import {
   armDatabaseWorkerIdleRetirement,
   historyClearTimeout,
@@ -31,11 +28,9 @@ export async function withSessionHistoryReadAdmission<T>(
     timeoutMs: number;
     signal?: AbortSignal;
     aborters: Set<() => void>;
-    assertCurrent: () => void;
   },
   run: (admit: ReadAdmission, lane: SessionHistoryWorkerLane) => Promise<T>,
 ): Promise<T> {
-  request.assertCurrent();
   const deadline = performance.now() + request.timeoutMs;
   const remainingTime = () => {
     const remaining = deadline - performance.now();
@@ -44,16 +39,9 @@ export async function withSessionHistoryReadAdmission<T>(
     }
     return remaining;
   };
-  let execution: OpenClawAgentDatabaseExecution | undefined;
   let additionalLane: SessionHistoryWorkerLane | undefined;
-  let outcome: { value: T } | { error: unknown };
   try {
-    const admittedNative = getOpenClawAgentDatabaseIfOpen(options);
-    if (!request.knownSource && !admittedNative) {
-      execution = captureExistingOpenClawAgentDatabaseExecution(options);
-    }
-    const prepared = execution?.capturePreparedGenerationClaim();
-    const cold = !request.knownSource && !admittedNative && !prepared;
+    const cold = !request.knownSource && !hasSqliteDatabaseSchemaAdmissionForPath(options.path);
     const lane = cold ? targetDiscoveryLane : requestedLane;
     if (lane !== requestedLane) {
       historyClearTimeout(lane.idleTimer);
@@ -63,8 +51,6 @@ export async function withSessionHistoryReadAdmission<T>(
     }
     const admit: ReadAdmission = async (dispatch) => {
       const start = (signal: AbortSignal | undefined) => {
-        request.assertCurrent();
-        prepared?.assertCurrent();
         return dispatch(signal, remainingTime());
       };
       const dispatchCold = async () => {
@@ -101,40 +87,13 @@ export async function withSessionHistoryReadAdmission<T>(
       };
       // Cold reads and first creation share admission, so no reader opens a
       // half-created schema. Release the reservation before consumer effects.
-      const reply = await (cold ? dispatchCold() : start(request.signal));
-      request.assertCurrent();
-      prepared?.assertCurrent();
-      return reply;
+      return cold ? dispatchCold() : start(request.signal);
     };
-    outcome = { value: await run(admit, lane) };
-  } catch (error) {
-    outcome = { error };
-  }
-  let cleanupFailure: { error: unknown } | undefined;
-  try {
-    await execution?.release();
-  } catch (error) {
-    cleanupFailure = { error };
-  }
-  try {
+    return await run(admit, lane);
+  } finally {
     if (additionalLane) {
       additionalLane.pending--;
       armDatabaseWorkerIdleRetirement(additionalLane);
     }
-  } catch (error) {
-    cleanupFailure = {
-      error: cleanupFailure
-        ? sessionHistoryCleanupError(cleanupFailure.error, error, "worker retirement")
-        : error,
-    };
   }
-  if (cleanupFailure) {
-    throw "error" in outcome
-      ? sessionHistoryCleanupError(outcome.error, cleanupFailure.error, "worker retirement")
-      : cleanupFailure.error;
-  }
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return outcome.value;
 }

@@ -136,47 +136,24 @@ function disableElevatedTools(
   ) {
     return { config: cfg, changes: [] };
   }
-  const next = cloneConfig(cfg);
-  const tools = ensureRecord(next, "tools");
-  const elevated = ensureRecord(tools, "elevated");
-  if (elevated.enabled === false) {
-    return { config: cfg, changes: [] };
-  }
-  elevated.enabled = false;
-  return {
-    config: next as OpenClawConfig,
-    changes: ["Set tools.elevated.enabled=false for policy conformance."],
-  };
+  return setFixedConfigFields(cfg, ["tools", "elevated"], { enabled: false });
 }
 
 function disableInsecureControlUi(
   cfg: OpenClawConfig,
   findings: readonly HealthFinding[],
 ): RepairPatch {
-  const next = cloneConfig(cfg);
-  const gateway = ensureRecord(next, "gateway");
-  const controlUi = ensureRecord(gateway, "controlUi");
-  const changes: string[] = [];
-  const fields = [
-    [
-      "dangerouslyDisableDeviceAuth",
-      "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",
-    ],
-    [
-      "dangerouslyAllowHostHeaderOriginFallback",
-      "oc://openclaw.config/gateway/controlUi/dangerouslyAllowHostHeaderOriginFallback",
-    ],
-  ] as const;
+  const fields = ["dangerouslyDisableDeviceAuth", "dangerouslyAllowHostHeaderOriginFallback"];
   const findingPaths = new Set(findings.map((finding) => finding.ocPath));
-  for (const [field, ocPath] of fields) {
-    if (findingPaths.has(ocPath) && controlUi[field] !== false) {
-      controlUi[field] = false;
-      changes.push(`Set gateway.controlUi.${field}=false for policy conformance.`);
-    }
-  }
-  return changes.length > 0
-    ? { config: next as OpenClawConfig, changes }
-    : { config: cfg, changes };
+  return setFixedConfigFields(
+    cfg,
+    ["gateway", "controlUi"],
+    Object.fromEntries(
+      fields
+        .filter((field) => findingPaths.has(`oc://openclaw.config/gateway/controlUi/${field}`))
+        .map((field) => [field, false]),
+    ),
+  );
 }
 
 function disableRemoteGatewayMode(
@@ -186,16 +163,7 @@ function disableRemoteGatewayMode(
   if (!findings.some((finding) => finding.ocPath === "oc://openclaw.config/gateway/mode")) {
     return { config: cfg, changes: [] };
   }
-  const next = cloneConfig(cfg);
-  const gateway = ensureRecord(next, "gateway");
-  const changes: string[] = [];
-  if (gateway.mode === "remote") {
-    gateway.mode = "local";
-    changes.push("Set gateway.mode=local for policy conformance.");
-  }
-  return changes.length > 0
-    ? { config: next as OpenClawConfig, changes }
-    : { config: cfg, changes };
+  return setFixedConfigFields(cfg, ["gateway"], { mode: "local" }, "remote");
 }
 
 function disableTelemetryContentCapture(
@@ -208,17 +176,29 @@ function disableTelemetryContentCapture(
       "Skipped scoped data-handling repair. The finding reports shared telemetry config, so changing it would affect more than the scoped policy target.",
     );
   }
+  return setFixedConfigFields(cfg, ["diagnostics", "otel"], { captureContent: false });
+}
+
+function setFixedConfigFields(
+  cfg: OpenClawConfig,
+  path: readonly string[],
+  values: Readonly<Record<string, unknown>>,
+  requiredCurrentValue?: string,
+): RepairPatch {
   const next = cloneConfig(cfg);
-  const diagnostics = ensureRecord(next, "diagnostics");
-  const otel = ensureRecord(diagnostics, "otel");
-  if (otel.captureContent === false) {
-    return { config: cfg, changes: [] };
+  const parent = path.reduce(ensureRecord, next);
+  const changes: string[] = [];
+  for (const [field, value] of Object.entries(values)) {
+    if (
+      parent[field] === value ||
+      (requiredCurrentValue !== undefined && parent[field] !== requiredCurrentValue)
+    ) {
+      continue;
+    }
+    parent[field] = value;
+    changes.push(`Set ${[...path, field].join(".")}=${String(value)} for policy conformance.`);
   }
-  otel.captureContent = false;
-  return {
-    config: next as OpenClawConfig,
-    changes: ["Set diagnostics.otel.captureContent=false for policy conformance."],
-  };
+  return { config: changes.length > 0 ? (next as OpenClawConfig) : cfg, changes };
 }
 
 function setFindingConfigValues(

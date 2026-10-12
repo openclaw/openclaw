@@ -55,6 +55,7 @@ type ChatHistoryDeltaParams = {
   agentId: string;
   cursor: string;
   maxBytes?: number;
+  toolResultMaxChars?: number;
   scope: SessionTranscriptReadScope;
   sessionKey: string;
   sessionSnapshot: Record<string, unknown>;
@@ -194,6 +195,7 @@ async function projectChatHistoryDelta(
     const projected = projectSessionMessagePayload({
       agentId: params.agentId,
       historyDelta: true,
+      toolResultMaxChars: params.toolResultMaxChars,
       message: entryMessage,
       ...(typeof messageId === "string" && messageId ? { messageId } : {}),
       messageSeq: row.messageSeq,

@@ -153,7 +153,10 @@ export async function releaseCodexBoundLiveThread(
 ): Promise<boolean> {
   const changedClient = options.ownerClientId && options.ownerClientId !== options.clientId;
   const previous = changedClient
-    ? await retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!)
+    ? await retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!, {
+        signal: options.signal,
+        createAbortError: codexThreadLifecycleAbortError,
+      })
     : undefined;
   if (changedClient && !previous) {
     return false;
@@ -281,10 +284,9 @@ export async function tryReuseCodexLiveThread(
         // This read-only preflight cannot change native configuration. Direct-input
         // refusals and failed reads preserve it too, but revocation or cancellation cannot.
         assertWarmOwner();
-        preserveSubscription = isSameCodexAppServerThreadOwner(
-          params.bindingStore.read(bindingIdentity),
-          binding,
-        );
+        const currentBinding = await params.bindingStore.readAsync(bindingIdentity);
+        assertWarmOwner();
+        preserveSubscription = isSameCodexAppServerThreadOwner(currentBinding, binding);
         throw error;
       }
       assertWarmOwner();
@@ -321,7 +323,7 @@ export async function tryReuseCodexLiveThread(
       pluginAppsConfigPatch,
       prebuiltFinalConfigPatch.configPatch,
     );
-    const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
+    const resumeParams = await lifecycleTiming.measure("warm-thread-resume-params", () =>
       options.buildResumeParams(binding, resumeAuthProfileId, resumeConfig),
     );
     options.assertInferenceConfig(

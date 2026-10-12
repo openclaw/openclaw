@@ -17,7 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -121,7 +121,7 @@ export function resolveTurnModelOverride(
  * derive the same session-stable delivery mode or CLI session bindings
  * ping-pong across turn kinds (#121485).
  */
-export function resolveVisibleRepliesPolicy(params: {
+export async function resolveVisibleRepliesPolicy(params: {
   cfg: OpenClawConfig;
   chatType?: string;
   ctx: FinalizedMsgContext;
@@ -130,22 +130,22 @@ export function resolveVisibleRepliesPolicy(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): {
+}): Promise<{
   configuredVisibleReplies?: "automatic" | "message_tool";
   harnessDefaultVisibleReplies?: "automatic" | "message_tool";
-} {
+}> {
   const isGroup = params.chatType === "group" || params.chatType === "channel";
   const configuredVisibleReplies = isGroup
     ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
     : params.cfg.messages?.visibleReplies;
   const harnessDefaultVisibleReplies =
     configuredVisibleReplies === undefined && !isGroup
-      ? resolveHarnessSourceVisibleRepliesDefault(params)
+      ? await resolveHarnessSourceVisibleRepliesDefault(params)
       : undefined;
   return { configuredVisibleReplies, harnessDefaultVisibleReplies };
 }
 
-function resolveHarnessSourceVisibleRepliesDefault(params: {
+async function resolveHarnessSourceVisibleRepliesDefault(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;
@@ -153,7 +153,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): HarnessSourceVisibleRepliesDefault | undefined {
+}): Promise<HarnessSourceVisibleRepliesDefault | undefined> {
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return undefined;
   }
@@ -199,7 +199,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     const channelModelCandidate = channelModelOverride
       ? resolveModelCandidate(channelModelOverride.model)
       : undefined;
-    const storedModelRef = resolveStoredModelOverride({
+    const storedModelRef = await resolveStoredModelOverrideAsync({
       loadSessionEntry: (sessionKey) => {
         const agentId = resolveSessionAgentId({
           sessionKey,
@@ -207,12 +207,11 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
           fallbackAgentId: params.sessionAgentId,
         });
         const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-        return loadSessionEntryReadOnly({
+        return readSessionEntryReadOnlyInWorker({
           agentId,
           storePath,
           sessionKey,
           readConsistency: "latest",
-          clone: false,
         });
       },
       sessionEntry: params.entry,

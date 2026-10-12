@@ -1,4 +1,5 @@
 import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
@@ -25,6 +26,11 @@ export async function resolveRepositoryWorkspaceAccess(
   if (!workspaceId) {
     return undefined;
   }
+  const metadata = captureSessionEntryMetadataRead({
+    agentId: loaded.agentId,
+    sessionKey: loaded.canonicalKey,
+    storePath: loaded.storePath,
+  });
   const store = getSessionRepositoryWorkspaceStore();
   const prepared = await store.prepare(workspaceId);
   const repository = prepared.current();
@@ -39,7 +45,9 @@ export async function resolveRepositoryWorkspaceAccess(
     throw new Error("The cloud repository session is unavailable.");
   }
   const sessionId = entry.sessionId;
-  const assertRoutingCurrent = captureSessionMutationRouting(loaded.cfg);
+  const assertRoutingCurrent = captureSessionMutationRouting(loaded.cfg, undefined, [
+    { agentId: loaded.agentId, sessionKey: loaded.canonicalKey },
+  ]);
   const assertSessionFacts = (
     current: SessionEntryCurrentFacts | undefined,
     expectedRevision?: number,
@@ -59,7 +67,10 @@ export async function resolveRepositoryWorkspaceAccess(
   };
   const assertSession = (expectedRevision?: number) =>
     assertSessionFacts(
-      loadGatewaySessionEntryReadOnly(loaded.canonicalKey, { agentId: repository.agentId }).entry,
+      metadata
+        ? metadata.readCurrent()
+        : loadGatewaySessionEntryReadOnly(loaded.canonicalKey, { agentId: repository.agentId })
+            .entry,
       expectedRevision,
     );
   const placements = context?.workerSessionPlacementService;

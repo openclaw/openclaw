@@ -16,6 +16,7 @@ import {
 import { getLastHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import {
   enqueueSystemEvent,
@@ -65,7 +66,8 @@ import {
 } from "./session-state-events.test-support.js";
 import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-acknowledgment.js";
 import * as notices from "./session-state-notices.js";
-import { readSessionUpstreamLink, upsertSessionUpstreamLink } from "./session-upstream-links.js";
+import { upsertSessionUpstreamLink } from "./session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -127,9 +129,11 @@ it("keeps queued signal cleanup on its captured store and removes newly committe
     await withinTest(Promise.all([blocking, resetting, deleting]), signal);
     expect(readCursor(database, watcher, "late-target")).toBeUndefined();
     expect(await getSessionStateVersion(child, "main", database)).toBe(0);
-    expect(readSessionUpstreamLink(child, "main", database)).toBeUndefined();
+    expect(readSessionUpstreamLinkInDatabase(db, child, "main")).toBeUndefined();
     expect(readCursor(replacement, watcher, "late-target")).toBeDefined();
-    expect(readSessionUpstreamLink(child, "main", replacement)?.threadId).toBe("late-link");
+    expect(readSessionUpstreamLinkInDatabase(replacementDb, child, "main")?.threadId).toBe(
+      "late-link",
+    );
   } finally {
     read.release();
     release.resolve();
@@ -150,19 +154,14 @@ it("revokes ambient reads through signal cleanup and overlapping pruning", async
         : undefined;
     const during: ReturnType<typeof prepareAmbientGroupWatchTargetsRead>[] = [];
     const stages: string[] = [];
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          stages.push(request.stage);
-          expect(before.isCurrent()).toBe(false);
-          const read = prepareAmbientGroupWatchTargetsRead(watcher, database);
-          during.push(read);
-          expect(read.isCurrent()).toBe(false);
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+      stages.push(request.stage);
+      expect(before.isCurrent()).toBe(false);
+      const read = prepareAmbientGroupWatchTargetsRead(watcher, database);
+      during.push(read);
+      expect(read.isCurrent()).toBe(false);
+      admit(request, grant);
+    });
     try {
       if (operation !== "delete") {
         await handleSessionStateSessionReset(watcher, database);
@@ -727,7 +726,6 @@ it("rolls back watch writes when the system-event store changes at transaction o
   });
   let currentStore = originalStore;
   publishSystemEventStoreResolver(() => currentStore);
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   for (const operation of ["register", "acknowledge", "spawn"] as const) {
     for (const stage of ["transaction", "commit"] as const) {
       currentStore = originalStore;
@@ -749,17 +747,13 @@ it("rolls back watch writes when the system-event store changes at transaction o
       const before = readCursor(database, nestedWatcher, targetSessionKey);
       const notice = vi.spyOn(notices, "enqueueSessionStateNotice");
       let witnessed = false;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              witnessed = true;
-              currentStore = `${originalStore}.replacement`;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          witnessed = true;
+          currentStore = `${originalStore}.replacement`;
+        }
+        admit(request, grant);
+      });
       try {
         if (operation === "register") {
           expect(
@@ -805,19 +799,14 @@ it("refuses a replaced owner before invoking its cold store discovery at commit"
   const replacementDiscovery = vi.fn(() => {
     throw new Error("A retired admission must not invoke replacement store discovery");
   });
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   let witnessed = false;
-  const admission = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          witnessed = true;
-          publishSystemEventStoreResolver(replacementDiscovery);
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      witnessed = true;
+      publishSystemEventStoreResolver(replacementDiscovery);
+    }
+    admit(request, grant);
+  });
   try {
     expect(
       await registerSessionStateWatch(

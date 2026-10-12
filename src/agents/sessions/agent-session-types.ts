@@ -17,7 +17,13 @@ import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
 type AgentSessionCompactionOutcome =
-  | { status: "completed"; tokensBefore: number; tokensAfter: number; willRetry: boolean }
+  | {
+      status: "completed";
+      tokensBefore: number;
+      tokensAfter: number;
+      willRetry: boolean;
+      qualityDegraded?: true;
+    }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string }
   | { status: "aborted" };

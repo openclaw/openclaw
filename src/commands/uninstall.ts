@@ -42,7 +42,6 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   const scopes = new Set(
     (["service", "state", "workspace", "app"] as const).filter((scope) => opts.all || opts[scope]),
   );
-  const hadExplicit = scopes.size > 0;
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
     runtime.error(
@@ -52,7 +51,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     return;
   }
 
-  if (!hadExplicit) {
+  if (scopes.size === 0) {
     if (!interactive) {
       runtime.error(
         `Non-interactive uninstall requires explicit scopes. Use --all, or choose scopes such as --service --state.`,
@@ -153,8 +152,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   if (scopes.has("state") && cleanupPlan) {
-    const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-      cleanupPlan;
+    const { workspaceDirs } = cleanupPlan;
     if (!scopes.has("workspace")) {
       const retiredWorkspace = await attemptCleanup("Retired workspace state cleanup failed", () =>
         removeWorkspaceDirs(workspaceDirs, runtime, { dryRun, preserveWorkspace: true }),
@@ -166,11 +164,10 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     }
     // Preserve workspaces when state-only uninstall is requested; workspace scope removes them explicitly.
     const state = await attemptCleanup("State cleanup failed", () =>
-      removeStateAndLinkedPaths(
-        { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
-        runtime,
-        { dryRun, preservePaths: scopes.has("workspace") ? [] : workspaceDirs },
-      ),
+      removeStateAndLinkedPaths(cleanupPlan, runtime, {
+        dryRun,
+        preservePaths: scopes.has("workspace") ? [] : workspaceDirs,
+      }),
     );
     stateRemoved = state ?? false;
     workspaceBlocked = state === undefined;

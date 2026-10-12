@@ -1,6 +1,5 @@
 import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
-import { assertDatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
@@ -9,10 +8,7 @@ import {
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  executeOpenClawStateWorker,
-  runOpenClawStateWorkerOperation,
-} from "../state/openclaw-state-worker-store.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   readSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
@@ -31,7 +27,6 @@ export function captureSessionUpstreamLinkReadSource(
     present: identity.key.startsWith("file:"),
     assertCurrent() {
       context.admission.assertCurrent();
-      assertDatabasePathIdentity(context.admission.databasePath, identity);
     },
   };
 }
@@ -78,16 +73,6 @@ export function readCurrentSessionUpstreamLink(
     throw new Error("Session upstream source is unavailable");
   }
   return result.link;
-}
-
-export function isSessionUpstreamLinkCurrent(
-  expected: SessionUpstreamLink,
-  options: OpenClawStateDatabaseOptions,
-): Promise<boolean> {
-  return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
-    type: "sessionUpstream.current",
-    input: expected,
-  });
 }
 
 export function settleSessionUpstreamLink(

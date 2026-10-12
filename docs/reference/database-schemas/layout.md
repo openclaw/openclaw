@@ -45,6 +45,9 @@ After readiness, the Gateway samples Linux file-cache residency and checks it ag
 every 15 minutes. The sample observes up to 256 file pages without reading their
 contents; it estimates whole-file residency, not the residency of every hot query.
 Other platforms do not run this maintenance.
+Sampling requires effective write permission to the file; Linux can otherwise mask
+residency as fully cached. A denied or unavailable sample produces a maintenance
+warning instead of a residency estimate.
 
 A cold sample (below 80%) or a slow bounded session-projection read starts background
 warming through an independent read-only SQLite worker. Shared state is read
@@ -121,6 +124,33 @@ session node owns their retention and deletion; no migration is required.
 Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the cache format. Revision 2 introduced the current prose (one to three concise sentences); revision 3 keeps that prose and certifies that the oversized-omission flag counts only skipped user or assistant messages, not oversized tool results such as screenshots. Missing or pre-revision-2 records retain their text and coverage while the existing queue refreshes the prose with a model call. Revision-2 records are rechecked once without a model call unless new messages arrived: the stale omission notice is removed when only tool results were skipped, and kept when an earlier user or assistant message was genuinely omitted. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
+
+### User-turn model prompt projections
+
+Canonical user messages may include the optional private field
+`__openclaw.modelPromptProjection: { version: 1, text: string }`. The user-turn
+transcript recorder stores the first model-facing text, including prompt-hook
+prepend/append context or a model-prompt replacement, before provider dispatch.
+The ordinary `content` remains the original user transcript. Projection text is
+stored after transcript redaction and before deterministic timestamp and sender
+normalization. Both the first dispatch and replay use that recorded text, then
+apply the same normalization.
+
+The existing transcript writer binds capture to the exact active user message
+and rechecks live authority before committing. Capture is immutable: repeats
+can only confirm identical text. Later media cannot change a sent projection
+or copy it onto the media's new user message. Compaction retires the projection
+with its source message, and reset or replacement cannot transfer it to another
+turn. No separate table, cache, sidecar, or configuration option is added.
+
+Messages without the field retain legacy replay behavior. The version-1 reader
+rejects malformed or unsupported projection formats before provider dispatch
+and asks for a compatible OpenClaw version or a new session. This stored-shape
+addition leaves the numeric database schema version unchanged. Older builds
+that do not understand the optional field can still read the original user
+content, but cannot reproduce the recorded model prompt and may lose prompt
+cache reuse. Downgrading therefore does not preserve this replay guarantee;
+resume affected sessions with a compatible build or start a new session.
 
 ### Transcript search row ownership
 
@@ -592,22 +622,110 @@ with one `immutable_installation` row instead of a package operation. The accept
 [immutable update design](/reference/team-immutable-update-design#detect-and-adopt-an-immutable-installation)
 binds explicit adoption to the physical installation and current generation,
 system service and account, state/config/profile, pinned external runtime, and
-official source. Its strict version-1 descriptor is canonical adoption state;
-the revision and optional prepared-generation receipt record verified preparation.
-No pointer publication, service change, migration, or recovery authority is implied.
+official source. Its strict descriptor is canonical adoption state: version 1
+records preparation-only adoption, and version 2 records explicitly enabled
+activation. The revision and optional prepared-generation receipt record verified
+preparation. The activation record owns pointer publication, service effects,
+verification, and recovery; preparation alone grants none of that authority.
 
-Adoption refuses any existing control rather than migrating or replacing package
-journals. Existing package descriptors and permissions stay unchanged. Immutable
-controls are root-owned directories with mode `0755` and a root-owned `0644`
-database: the service account may read these non-secret facts, but only the
+Initial adoption refuses existing package control rather than migrating or
+replacing package journals. Existing package descriptors and permissions stay
+unchanged. Immutable controls are root-owned directories with mode `0755` and a
+root-owned `0644` database: the service account may read these non-secret facts, but only the
 updater may write. Runtime observations use the existing read-only worker;
 CLI adoption and preparation use synchronous, revision-checked transactions with
 current executor checks at admission and commit. The existing rollback-journal
 durability and directory-sync owners publish the completed adoption record.
 
-Slice 1 retains all release generations. A prepared receipt can be replaced only
-at the observed revision; this does not delete its previously referenced tree.
-Future collection protects current, previous, and journal-referenced generations.
-Older runtimes do not understand this descriptor and cannot update the adopted
-installation; rollback of runtime bytes does not authorize pointer or state
-changes. Activation and independent recovery remain a later slice.
+A prepared receipt can be replaced only at the observed revision; this does not
+delete its previously referenced tree. Rollback of runtime bytes does not
+authorize pointer or state changes. Retained recovery runtimes consume the same
+strict control record, so a descriptor upgrade must preserve their ability to
+read it before the new owner writes that format.
+
+### Immutable release-retention inventory
+
+Release-retention inspection requires a compatible serving bridge. This
+foundation supplies the reader and storage contract but does not advertise the
+version-3 capability in its package manifest, so installing it alone does not
+enable inspection. Until the combined build, migration, and retained-recovery
+contracts qualify that bridge, inspection is exercised only with synthetic
+bridge fixtures.
+
+Descriptor version 3 may include this explicit, inspection-only policy:
+
+```json
+{
+  "releaseRetention": {
+    "version": 1,
+    "mode": "inspect",
+    "keepVerifiedGenerations": 3,
+    "pins": []
+  }
+}
+```
+
+Each pin is an object with a full commit `sha` and the recorded directory
+`identity`. The count records the intended retention of the three most recently
+successfully verified native generations, ordered by owner-recorded verification
+revision; it includes the current generation when that generation has successful
+verification evidence. A future collector must additionally protect current,
+previous, live, prepared, journal-referenced, pinned, and recovery-runtime roots;
+a changed pin identity must not release its protection. This policy records
+future collection intent: `inspect` is the only supported mode, and no release
+directory is deleted.
+
+The installation's existing control database owns the normalized inventory:
+
+```sql
+CREATE TABLE immutable_release_generations (
+  sha TEXT PRIMARY KEY NOT NULL,
+  path TEXT NOT NULL,
+  identity TEXT NOT NULL,
+  build_digest TEXT NOT NULL,
+  published_revision INTEGER NOT NULL,
+  verified_revision INTEGER
+) STRICT;
+```
+
+`path` is the canonical contained release path; `identity` binds it to the physical
+directory, and `build_digest` identifies the verified sealed build. Preparation
+records ownership and `published_revision` in the same transaction as a changed
+prepared-generation receipt. Successful activation records `verified_revision`
+for an existing inventory row in the transaction that completes acceptance.
+Accepting a legacy prepared generation does not backfill an ownership row.
+Moving current, previous, or prepared references does not remove inventory rows.
+A built or sealed generation alone does not establish successful activation
+verification.
+
+The immutable installation owner admits this table and validates stored paths,
+identities, digests, and revision ordering. There is no filename scan or implicit
+backfill: earlier and unknown directories remain outside the inventory. Backup
+and migration snapshots stay with their existing recovery owners and are not
+release inventory entries.
+
+The inventory is bounded to 4,096 rows, and the combined control record and
+inventory projection is limited to 1 MiB. A write that exceeds either limit
+rolls back; it does not evict ownership evidence or remove artifacts. Status
+includes the policy and a `generations` list with `publishedRevision` and nullable
+`verifiedRevision` for inspection.
+
+Existing version-1 and version-2 descriptors remain unchanged. Future explicit
+adoption requires a qualified bridge whose installed `package.json` declares
+`openclaw.immutableInstallDescriptorVersion: 3`, activated through the existing
+version-2 owner. After that bridge and any recovery have settled, the adoption
+interface accepts `--inspect-release-retention` together with
+`--enable-activation --previous-updater-stopped` and the original installation
+bindings. New adoption with inspection requires the same marker on the installed
+current generation. A candidate's marker alone does not qualify the installed
+runtime. Do not add the marker manually to enable the option.
+
+Adoption verifies the serving bridge, refuses pending operations, and checks the
+installed format marker before metadata admission. It upgrades only the known
+version-2 standalone launcher through the existing backup owner, retaining
+`openclaw-gateway.v2` before writing the version-3 descriptor. The installed
+updater and retained recovery runtimes must understand version 3 before it is
+written. Subsequent preparation, activation, and recovery reject unsupported
+generations before drain. Status and preview do not adopt the policy or migrate
+the control database. The inventory does not enable collection, disk-space
+reclamation, or host-maintenance deletion.

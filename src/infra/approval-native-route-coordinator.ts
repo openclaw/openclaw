@@ -33,7 +33,7 @@ type ApprovalRouteRuntimeRecord = {
   channelLabel?: string;
   accountId?: string | null;
   requestGateway: GatewayRequestFn;
-  shouldHandle: (request: ApprovalRequest) => boolean;
+  shouldHandle: (request: ApprovalRequest) => boolean | Promise<boolean>;
   classifyRoute: (request: ApprovalRequest) => ApprovalRequestChannelRouteClass;
 };
 
@@ -63,6 +63,7 @@ type ApprovalRouteSelectionVerdict =
   | { kind: "selector-error"; error: unknown };
 
 type ApprovalRouteSelection = {
+  ready: Promise<void>;
   verdicts: Map<string, ApprovalRouteSelectionVerdict>;
   cleanupTimeout: NodeJS.Timeout;
 };
@@ -104,67 +105,16 @@ function clearApprovalRouteEntry<T extends { cleanupTimeout: NodeJS.Timeout }>(
   clearTimeout(entry.cleanupTimeout);
 }
 
-function resolveApprovalRouteSelection(
+async function resolveApprovalRouteSelection(
   state: ApprovalNativeRouteCoordinatorState,
   params: { request: ApprovalRequest; approvalKind: ChannelApprovalKind },
-): ApprovalRouteSelection {
+): Promise<ApprovalRouteSelection> {
   const existing = state.selections.get(params.request.id);
   if (existing) {
+    await existing.ready;
     return existing;
   }
-  const runtimes = Array.from(state.activeRuntimes.values()).filter((runtime) =>
-    runtime.handledKinds.has(params.approvalKind),
-  );
   const verdicts = new Map<string, ApprovalRouteSelectionVerdict>();
-  const groups = new Map<string, ApprovalRouteRuntimeRecord[]>();
-  for (const runtime of runtimes) {
-    const key = normalizeLowercaseStringOrEmpty(runtime.channel) || runtime.runtimeId;
-    groups.set(key, [...(groups.get(key) ?? []), runtime]);
-  }
-
-  for (const group of groups.values()) {
-    const candidates: ApprovalRouteRuntimeRecord[] = [];
-    for (const runtime of group) {
-      try {
-        if (runtime.shouldHandle(params.request)) {
-          candidates.push(runtime);
-        }
-      } catch (error) {
-        verdicts.set(runtime.runtimeId, { kind: "selector-error", error });
-      }
-    }
-    let routeClass: ApprovalRequestChannelRouteClass;
-    try {
-      routeClass = group[0]?.classifyRoute(params.request) ?? "unbound";
-    } catch (error) {
-      for (const runtime of group) {
-        verdicts.set(runtime.runtimeId, { kind: "selector-error", error });
-      }
-      continue;
-    }
-    if (routeClass === "bound-or-explicit" && candidates.length === 0) {
-      for (const runtime of group) {
-        if (!verdicts.has(runtime.runtimeId)) {
-          verdicts.set(runtime.runtimeId, { kind: "owner-unavailable" });
-        }
-      }
-    } else if (routeClass === "bound-or-explicit" || routeClass === "unbound") {
-      const kind =
-        routeClass === "bound-or-explicit" || candidates.length === 1
-          ? "selected"
-          : "ambiguous-owner";
-      for (const runtime of candidates) {
-        verdicts.set(runtime.runtimeId, { kind });
-      }
-    }
-  }
-
-  for (const runtime of runtimes) {
-    if (!verdicts.has(runtime.runtimeId)) {
-      verdicts.set(runtime.runtimeId, { kind: "ineligible" });
-    }
-  }
-
   const timeoutMs = Math.min(Math.max(0, params.request.expiresAtMs - Date.now()), 0x7fffffff);
   const cleanupTimeout = setTimeout(() => {
     clearApprovalRouteEntry(state.selections, params.request.id);
@@ -172,9 +122,71 @@ function resolveApprovalRouteSelection(
   cleanupTimeout.unref?.();
   const selection: ApprovalRouteSelection = {
     verdicts,
+    ready: Promise.resolve(),
     cleanupTimeout,
   };
   state.selections.set(params.request.id, selection);
+  selection.ready = (async () => {
+    const runtimes = Array.from(state.activeRuntimes.values()).filter((runtime) =>
+      runtime.handledKinds.has(params.approvalKind),
+    );
+    const groups = new Map<string, ApprovalRouteRuntimeRecord[]>();
+    for (const runtime of runtimes) {
+      const key = normalizeLowercaseStringOrEmpty(runtime.channel) || runtime.runtimeId;
+      groups.set(key, [...(groups.get(key) ?? []), runtime]);
+    }
+
+    for (const group of groups.values()) {
+      const eligible: ApprovalRouteRuntimeRecord[] = [];
+      for (const runtime of group) {
+        try {
+          if (
+            (await runtime.shouldHandle(params.request)) &&
+            !state.closed &&
+            state.activeRuntimes.get(runtime.runtimeId) === runtime
+          ) {
+            eligible.push(runtime);
+          }
+        } catch (error) {
+          verdicts.set(runtime.runtimeId, { kind: "selector-error", error });
+        }
+      }
+      const candidates = eligible.filter(
+        (runtime) => !state.closed && state.activeRuntimes.get(runtime.runtimeId) === runtime,
+      );
+      let routeClass: ApprovalRequestChannelRouteClass;
+      try {
+        routeClass = group[0]?.classifyRoute(params.request) ?? "unbound";
+      } catch (error) {
+        for (const runtime of group) {
+          verdicts.set(runtime.runtimeId, { kind: "selector-error", error });
+        }
+        continue;
+      }
+      if (routeClass === "bound-or-explicit" && candidates.length === 0) {
+        for (const runtime of group) {
+          if (!verdicts.has(runtime.runtimeId)) {
+            verdicts.set(runtime.runtimeId, { kind: "owner-unavailable" });
+          }
+        }
+      } else if (routeClass === "bound-or-explicit" || routeClass === "unbound") {
+        const kind =
+          routeClass === "bound-or-explicit" || candidates.length === 1
+            ? "selected"
+            : "ambiguous-owner";
+        for (const runtime of candidates) {
+          verdicts.set(runtime.runtimeId, { kind });
+        }
+      }
+    }
+
+    for (const runtime of runtimes) {
+      if (!verdicts.has(runtime.runtimeId)) {
+        verdicts.set(runtime.runtimeId, { kind: "ineligible" });
+      }
+    }
+  })();
+  await selection.ready;
   return selection;
 }
 
@@ -297,6 +309,16 @@ function resolveApprovalRouteNotice(params: {
   if (!target) {
     return null;
   }
+  const buildNotice = (buildText: () => string, allowActiveRuntimeFallback = false) => {
+    const requestGateway =
+      params.reports.find((report) => params.state.activeRuntimes.has(report.runtimeId))
+        ?.requestGateway ??
+      params.reports[0]?.requestGateway ??
+      (allowActiveRuntimeFallback
+        ? Array.from(params.state.activeRuntimes.values())[0]?.requestGateway
+        : undefined);
+    return requestGateway ? { requestGateway, target, text: buildText() } : null;
+  };
   const originAccountId = normalizeOptionalString(target.accountId);
   const deliveredAnyTarget = params.reports.some((report) => report.deliveredTargets.length > 0);
   const ambiguousOwner = params.reports.some((report) => report.skipReason === "ambiguous-owner");
@@ -308,25 +330,17 @@ function resolveApprovalRouteNotice(params: {
       requiresManualFallback ||
       params.missingSelectedRuntime)
   ) {
-    const requestGateway =
-      params.reports.find((report) => params.state.activeRuntimes.has(report.runtimeId))
-        ?.requestGateway ??
-      params.reports[0]?.requestGateway ??
-      Array.from(params.state.activeRuntimes.values())[0]?.requestGateway;
-    if (!requestGateway) {
-      return null;
-    }
-    return {
-      requestGateway,
-      target,
-      text: ambiguousOwner
-        ? resolveAmbiguousApprovalRouteNoticeText(params.approvalKind)
-        : resolveApprovalDeliveryFailedNoticeText({
-            approvalId: params.request.id,
-            approvalKind: params.approvalKind,
-            allowedDecisions: readAllowedDecisionStrings(params.request),
-          }),
-    };
+    return buildNotice(
+      () =>
+        ambiguousOwner
+          ? resolveAmbiguousApprovalRouteNoticeText(params.approvalKind)
+          : resolveApprovalDeliveryFailedNoticeText({
+              approvalId: params.request.id,
+              approvalKind: params.approvalKind,
+              allowedDecisions: readAllowedDecisionStrings(params.request),
+            }),
+      true,
+    );
   }
 
   // If any same-channel runtime already delivered into the origin chat, every
@@ -375,18 +389,7 @@ function resolveApprovalRouteNotice(params: {
     return null;
   }
 
-  const requestGateway =
-    params.reports.find((report) => params.state.activeRuntimes.has(report.runtimeId))
-      ?.requestGateway ?? params.reports[0]?.requestGateway;
-  if (!requestGateway) {
-    return null;
-  }
-
-  return {
-    requestGateway,
-    target,
-    text,
-  };
+  return buildNotice(() => text);
 }
 
 /** Returns whether a native approval runtime is active for the requested channel/account scope. */
@@ -498,8 +501,13 @@ function createApprovalNativeRouteReporterForState(
     if (state.closed || !registered || !params.handledKinds.has(payload.approvalKind)) {
       return;
     }
-    const selection = resolveApprovalRouteSelection(state, payload);
-    if (!selection.verdicts.has(runtimeId)) {
+    const selection = await resolveApprovalRouteSelection(state, payload);
+    if (
+      state.closed ||
+      !registered ||
+      state.selections.get(payload.request.id) !== selection ||
+      !selection.verdicts.has(runtimeId)
+    ) {
       return;
     }
     const entry = resolvePendingApprovalRouteNotice(state, payload);
@@ -517,23 +525,26 @@ function createApprovalNativeRouteReporterForState(
   };
 
   return {
-    selectRequest(payload: {
+    async selectRequest(payload: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
-    }): ApprovalRouteSelectionVerdict {
+    }): Promise<ApprovalRouteSelectionVerdict> {
       if (state.closed || !params.handledKinds.has(payload.approvalKind)) {
         return { kind: "ineligible" };
       }
       if (!registered) {
         try {
-          return params.shouldHandle(payload.request)
+          return (await params.shouldHandle(payload.request)) && !state.closed
             ? { kind: "selected" }
             : { kind: "ineligible" };
         } catch (error) {
           return { kind: "selector-error", error };
         }
       }
-      const selection = resolveApprovalRouteSelection(state, payload);
+      const selection = await resolveApprovalRouteSelection(state, payload);
+      if (state.closed || !registered || state.selections.get(payload.request.id) !== selection) {
+        return { kind: "ineligible" };
+      }
       resolvePendingApprovalRouteNotice(state, payload);
       return selection.verdicts.get(runtimeId) ?? { kind: "ineligible" };
     },
@@ -586,6 +597,7 @@ function createApprovalNativeRouteReporterForState(
       if (!registered) {
         return;
       }
+      state.activeRuntimes.delete(runtimeId);
       for (const entry of Array.from(state.pendingNotices.values())) {
         const selection = state.selections.get(entry.request.id);
         if (selection?.verdicts.has(runtimeId) && !entry.reports.has(runtimeId)) {

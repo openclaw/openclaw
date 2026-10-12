@@ -129,6 +129,45 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     await testState.cleanup();
   });
 
+  it("reads recap metadata and bounded messages in one snapshot after a committed append", async () => {
+    const target = await addSession(1);
+    const transcript = scope(target);
+    const first = readActivitySummaryBatch({ scope: transcript })!;
+    await appendWork(target);
+    const commands = vi.spyOn(DatabaseSync.prototype, "exec");
+    const refreshed = readActivitySummaryBatch({
+      scope: transcript,
+      previous: {
+        version: 1,
+        formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+        text: "The request was recorded.",
+        updatedAt: 1,
+        sessionId: transcript.sessionId,
+        generation: first.watermark.generation,
+        maxSeq: first.watermark.maxSeq,
+        leafEntryId: first.snapshot.activeLeafEntryId ?? null,
+        coveredMessages: 1,
+        totalMessages: 1,
+        omittedContent: false,
+      },
+    });
+
+    expect(refreshed).toMatchObject({
+      covered: 1,
+      snapshot: { totalMessages: 2 },
+      watermark: { generation: first.watermark.generation, maxSeq: 2 },
+      page: {
+        scannedMessages: 1,
+        events: [{ event: { id: "new-work" } }],
+      },
+    });
+    expect(
+      commands.mock.calls
+        .map(([sql]) => sql)
+        .filter((sql) => /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE)\b/u.test(sql)),
+    ).toEqual(["BEGIN", "COMMIT"]);
+  });
+
   it("uses the patch watermark for concurrent messages and rereads a foreign rewrite on the next request", async ({
     signal,
   }) => {
@@ -182,6 +221,41 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       "assistant: Verified additional work.",
     ]);
     expect(readWatermark).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the bounded recap source after a committed append", async () => {
+    const target = await addSession(1);
+    const transcript = scope(target);
+    const initial = readActivitySummaryBatch({ scope: transcript })!;
+    expect(initial.snapshot.totalMessages).toBe(1);
+    expect(initial.page.events).toMatchObject([
+      { event: { message: { role: "user", content: "Request 1" } } },
+    ]);
+    const previous = {
+      version: 1 as const,
+      formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+      text: result.text,
+      updatedAt: 1,
+      sessionId: transcript.sessionId,
+      ...initial.watermark,
+      leafEntryId: initial.snapshot.activeLeafEntryId ?? null,
+      coveredMessages: 1,
+      totalMessages: 1,
+      omittedContent: false,
+    };
+
+    await appendWork(target);
+
+    const appended = readActivitySummaryBatch({ scope: transcript, previous })!;
+    expect(appended.covered).toBe(1);
+    expect(appended.snapshot.totalMessages).toBe(2);
+    expect(appended.page.scannedMessages).toBe(1);
+    expect(appended.page.events).toMatchObject([
+      { event: { message: { role: "assistant", content: "Verified additional work." } } },
+    ]);
+    expect(appended.watermark.generation).toBe(initial.watermark.generation);
+    expect(appended.watermark.maxSeq).toBeGreaterThan(initial.watermark.maxSeq!);
+    expect(appended.omitted).toBe(false);
   });
 
   it("rebuilds a dirty imported projection before retrying the recap", async () => {
@@ -803,32 +877,49 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     }
   });
 
-  it.each(["ensure", "new transcript"] as const)(
+  it.for(["ensure", "new transcript"] as const)(
     "stops after bounded retries and starts a fresh retry chain for %s after cooldown",
-    async (trigger) => {
+    async (trigger, { signal }) => {
+      await service.dispose();
+      await scheduler.stop();
+      const time = createGatewaySchedulerClock(Date.now());
+      let retryArmed = createDeferred();
+      scheduler = createTestGatewayScheduler({
+        ...time.clock,
+        arm(run, delayMs) {
+          const cancel = time.clock.arm(run, delayMs);
+          retryArmed.resolve();
+          return cancel;
+        },
+      });
+      service = createService();
       const target = await addSession(1);
       fakeTime();
       complete.mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
       service.ensure(target);
+      await withinTest(retryArmed.promise, signal);
       for (let attempt = 1; attempt <= 4; attempt += 1) {
-        await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(attempt));
-        await vi.advanceTimersByTimeAsync(attempt < 4 ? 30_000 * 2 ** (attempt - 1) : 0);
+        expect(complete).toHaveBeenCalledTimes(attempt);
+        // Join each scheduled attempt through retry admission before moving the clock.
+        await time.advanceBy(attempt < 4 ? 30_000 * 2 ** (attempt - 1) : 0);
       }
       expect(view(target)?.state).toBe("unavailable");
-      await vi.advanceTimersByTimeAsync(3_600_000);
+      await time.advanceBy(3_600_000);
       expect(complete).toHaveBeenCalledTimes(4);
       complete
         .mockResolvedValue(result)
         .mockRejectedValueOnce(Object.assign(new Error("Overloaded again"), { status: 529 }));
+      retryArmed = createDeferred();
       if (trigger === "ensure") {
         service.ensure(target);
       } else {
         await appendWork(target);
         service.handleTranscript({ target: scope(target) });
       }
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(5));
-      await vi.advanceTimersByTimeAsync(120_000);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
+      await withinTest(retryArmed.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(5);
+      await time.advanceBy(120_000);
+      expect(view(target)?.state).toBe("current");
       expect(complete).toHaveBeenCalledTimes(6);
     },
   );

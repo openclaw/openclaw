@@ -107,16 +107,14 @@ export function createSlackProgressRuntime(runtimeParams: {
   // out (plan shrinks, summary <-> plan source switches).
   let nativeStreamSnapshot: SlackNativeStreamSnapshot = EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT;
   let nativeSnapshotSession = delivery.streamSession;
-  let appendRenderedText = "";
-  let appendSourceText = "";
+  let appendState = { rendered: "", source: "" };
   let nativeProgressCompletionSent = false;
   // A requested card post may still be queued or in flight without a message id.
   let cardPostRequested = false;
   // Terminal status of the turn's final payload; completion retries and
   // queued rotation must not repaint an errored turn as complete.
   let nativeProgressTerminalStatus: "complete" | "error" = "complete";
-  let nativeNarrationRenderedText = "";
-  let nativeNarrationSourceText = "";
+  let nativeNarration = { rendered: "", source: "" };
   // Native streaming appends; overlapping updates would re-append identical
   // narration/chunks because delta state commits only after network success.
   // One chain keeps each update's compute -> append -> commit atomic.
@@ -178,8 +176,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     try {
       await appendSlackStream({ session, chunks });
       if (narrationUpdate.next.changed) {
-        nativeNarrationRenderedText = narrationUpdate.next.rendered;
-        nativeNarrationSourceText = narrationUpdate.next.source;
+        nativeNarration = narrationUpdate.next;
       }
       nativeProgressCompletionSent = true;
       delivery.observedReplyDelivery ||= session.delivered;
@@ -200,12 +197,11 @@ export function createSlackProgressRuntime(runtimeParams: {
   const resolveNarrationUpdate = (incoming: string | undefined) => {
     const next = applyAppendOnlyStreamUpdate({
       incoming: incoming ?? "",
-      rendered: nativeNarrationRenderedText,
-      source: nativeNarrationSourceText,
+      ...nativeNarration,
     });
     return {
       next,
-      delta: next.changed ? next.rendered.slice(nativeNarrationRenderedText.length) : "",
+      delta: next.changed ? next.rendered.slice(nativeNarration.rendered.length) : "",
     };
   };
 
@@ -262,8 +258,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       }
       nativeSnapshotSession = delivery.streamSession;
       if (narrationUpdate.next.changed) {
-        nativeNarrationRenderedText = narrationUpdate.next.rendered;
-        nativeNarrationSourceText = narrationUpdate.next.source;
+        nativeNarration = narrationUpdate.next;
       }
       if (chunks?.length) {
         nativeStreamSnapshot = reconciled.snapshot;
@@ -324,8 +319,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         taskDisplayMode: "plan",
       });
       if (result.visibleReplySent && !delivery.streamFailed) {
-        nativeNarrationRenderedText = narrationUpdate.next.rendered;
-        nativeNarrationSourceText = narrationUpdate.next.source;
+        nativeNarration = narrationUpdate.next;
       }
       return result;
     });
@@ -333,8 +327,7 @@ export function createSlackProgressRuntime(runtimeParams: {
   const resetProgressTurnState = () => {
     progressWorkCounter.reset();
     cardPostRequested = false;
-    nativeNarrationRenderedText = "";
-    nativeNarrationSourceText = "";
+    nativeNarration = { rendered: "", source: "" };
   };
 
   const progressDraft = createChannelProgressDraftCompositor({
@@ -352,7 +345,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     update: async (previewText, options) => {
       if (useNativeProgressStreaming) {
         const priorSnapshot = nativeStreamSnapshot;
-        const priorNarration = nativeNarrationRenderedText;
+        const priorNarration = nativeNarration.rendered;
         nativeUpdates.update(true);
         if (options?.flush) {
           await nativeUpdates.flush();
@@ -360,7 +353,7 @@ export function createSlackProgressRuntime(runtimeParams: {
           await nativeUpdates.waitForInFlight();
         }
         return (
-          priorSnapshot !== nativeStreamSnapshot || priorNarration !== nativeNarrationRenderedText
+          priorSnapshot !== nativeStreamSnapshot || priorNarration !== nativeNarration.rendered
         );
       }
       if (!draftStream) {
@@ -562,11 +555,9 @@ export function createSlackProgressRuntime(runtimeParams: {
       progressDraft.resetActivity({ suppressed: true });
       const next = applyAppendOnlyStreamUpdate({
         incoming: trimmed,
-        rendered: appendRenderedText,
-        source: appendSourceText,
+        ...appendState,
       });
-      appendRenderedText = next.rendered;
-      appendSourceText = next.source;
+      appendState = next;
       if (!next.changed) {
         return false;
       }
@@ -614,8 +605,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     });
   };
   const resetDraftDeliveryState = () => {
-    appendRenderedText = "";
-    appendSourceText = "";
+    appendState = { rendered: "", source: "" };
   };
   const beginNewProgressTurn = async (options?: { force?: boolean }) => {
     if (useNativeProgressStreaming) {

@@ -30,40 +30,23 @@ let compiledCoreSecretTargetRegistryState: CompiledSecretTargetRegistryState | n
 // Channel contract entries are process-stable; plugin install/reload is the owner of freshness.
 const compiledChannelOpenClawTargets = new Map<string, CompiledTargetRegistryEntry[] | null>();
 
-function buildTargetTypeIndex(
-  compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],
-): Map<string, CompiledTargetRegistryEntry[]> {
-  const byType = new Map<string, CompiledTargetRegistryEntry[]>();
-  const append = (type: string, entry: CompiledTargetRegistryEntry) => {
-    const existing = byType.get(type);
-    if (existing) {
-      existing.push(entry);
-      return;
-    }
-    byType.set(type, [entry]);
-  };
-  for (const entry of compiledSecretTargetRegistry) {
-    append(entry.targetType, entry);
-    for (const alias of entry.targetTypeAliases ?? []) {
-      append(alias, entry);
-    }
-  }
-  return byType;
-}
-
-function buildConfigTargetIdIndex(
+function indexSecretTargets(
   entries: CompiledTargetRegistryEntry[],
+  key: "id" | "targetType",
 ): Map<string, CompiledTargetRegistryEntry[]> {
-  const byId = new Map<string, CompiledTargetRegistryEntry[]>();
+  const index = new Map<string, CompiledTargetRegistryEntry[]>();
   for (const entry of entries) {
-    const existing = byId.get(entry.id);
-    if (existing) {
-      existing.push(entry);
-      continue;
+    const keys = [entry[key], ...(key === "targetType" ? (entry.targetTypeAliases ?? []) : [])];
+    for (const value of keys) {
+      const existing = index.get(value);
+      if (existing) {
+        existing.push(entry);
+      } else {
+        index.set(value, [entry]);
+      }
     }
-    byId.set(entry.id, [entry]);
   }
-  return byId;
+  return index;
 }
 
 function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[]) {
@@ -76,12 +59,12 @@ function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[])
   );
   return {
     authProfilesCompiledSecretTargets,
-    authProfilesTargetsById: buildConfigTargetIdIndex(authProfilesCompiledSecretTargets),
+    authProfilesTargetsById: indexSecretTargets(authProfilesCompiledSecretTargets, "id"),
     compiledSecretTargetRegistry,
     knownTargetIds: new Set(compiledSecretTargetRegistry.map((entry) => entry.id)),
     openClawCompiledSecretTargets,
-    openClawTargetsById: buildConfigTargetIdIndex(openClawCompiledSecretTargets),
-    targetsByType: buildTargetTypeIndex(compiledSecretTargetRegistry),
+    openClawTargetsById: indexSecretTargets(openClawCompiledSecretTargets, "id"),
+    targetsByType: indexSecretTargets(compiledSecretTargetRegistry, "targetType"),
   };
 }
 
@@ -337,7 +320,7 @@ export function resolvePlanTargetAgainstRegistry(candidate: {
       return null;
     }
     const channelEntries = getCompiledChannelOpenClawTargets(explicitChannelId) ?? [];
-    const channelTypeEntries = buildTargetTypeIndex(channelEntries).get(candidate.type);
+    const channelTypeEntries = indexSecretTargets(channelEntries, "targetType").get(candidate.type);
     if (channelTypeEntries) {
       return resolvePlanTargetAgainstEntries(candidate, channelTypeEntries);
     }
@@ -468,7 +451,7 @@ export function discoverConfigSecretTargetsByIds(
       ? [...coreState.openClawCompiledSecretTargets, ...configuredChannelEntries]
       : null;
   const configuredEntriesById = configuredEntries
-    ? buildConfigTargetIdIndex(configuredEntries)
+    ? indexSecretTargets(configuredEntries, "id")
     : null;
   const canUseConfiguredEntries =
     configuredEntries !== null &&

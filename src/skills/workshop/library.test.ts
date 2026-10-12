@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -46,6 +47,27 @@ async function readLive(name: string) {
 }
 
 describe("workshop library", () => {
+  it("reuses retained changes across runs and refreshes after a workshop write", async () => {
+    const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+    try {
+      expect(await listWorkshopChanges("main", { runId: "before" })).toEqual([]);
+      const count = reads.mock.calls.length;
+      expect(await listWorkshopChanges("main", { runId: "another" })).toEqual([]);
+      expect(reads.mock.calls).toHaveLength(count);
+
+      await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "1. Deploy.") });
+      const changes = await listWorkshopChanges("main", { runId: "run-1" });
+      expect(changes).toMatchObject([{ action: "create", skillName: "deploy" }]);
+      changes[0]!.summary = "caller mutation";
+      expect(await listWorkshopChanges("main", { beforeMs: changes[0]!.createdAtMs })).toEqual([]);
+      expect(await listWorkshopChanges("main", { runId: "run-1" })).toMatchObject([
+        { summary: "created: Deploy staging builds" },
+      ]);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   it("versions every mutation so restore undoes it, and undoing the undo is possible", async () => {
     await createWorkshopSkill(ctx, {
       name: "deploy",
@@ -272,5 +294,26 @@ describe("workshop library", () => {
       "Learning is off.",
     );
     expect(await readLive("deploy")).toContain("step 1");
+  });
+
+  it("keeps a longer legacy skill manageable while new names stay within 63 characters", async () => {
+    // Earlier releases wrote learned skills under normalized names with no length cap.
+    const legacy = `deploy-${"staging-".repeat(8)}env`;
+    expect(legacy.length).toBeGreaterThan(63);
+    const skillDir = path.join(resolveWorkshopSkillsDir({}, "main"), legacy);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), skill(legacy, "step 0"));
+
+    expect((await listWorkshopSkills({}, "main")).map((live) => live.name)).toEqual([legacy]);
+    await patchWorkshopSkill(ctx, { name: legacy, oldText: "step 0", newText: "step 1" });
+    expect(await readLive(legacy)).toContain("step 1");
+    await archiveWorkshopSkill(ctx, { name: legacy, reason: "superseded" });
+    expect((await listWorkshopArchive({}, "main")).map((entry) => entry.name)).toEqual([legacy]);
+    await restoreWorkshopSkill(ctx, { name: legacy });
+    expect(await readLive(legacy)).toContain("step 1");
+
+    await expect(
+      createWorkshopSkill(ctx, { name: `${legacy}-copy`, content: skill(`${legacy}-copy`, "x") }),
+    ).rejects.toThrow(/use 1-63 lowercase letters/);
   });
 });

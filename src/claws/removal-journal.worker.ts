@@ -1,19 +1,20 @@
 import { isDeepStrictEqual } from "node:util";
-import { assertAgentSessionStoreDeletionSafe } from "../agents/agent-delete-databases.js";
+import { assertAgentSessionStoreDeletionBlocker } from "../agents/agent-delete-session-store-safety.js";
+import { findAgentSessionStoreDeletionBlocker } from "../agents/agent-delete-session-store-safety.kernel.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-import { prepareCronReceiptAuthorityPublication } from "../cron/store/receipt-authority-publication.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import {
-  beginAgentDeletionJournal,
+  beginAgentDeletionJournalInDatabase,
   readAgentDeletionJournalInDatabase,
-  removeAgentDeletionJournal,
+  deleteAgentDeletionJournalInDatabase,
   type AgentDeletionJournalEntry,
 } from "../state/agent-deletion-journal.js";
+import { ensureAgentProvenanceSchema } from "../state/agent-provenance.schema.js";
 import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -82,7 +83,20 @@ export function mutateClawRemovalJournalInWorker(
       const nativeOptions = { ...options, database };
       let journal: AgentDeletionJournalEntry | null;
       if (request.phase === "begin") {
-        assertAgentSessionStoreDeletionSafe(input.config, request.agentId, nativeOptions);
+        const safety = input.sessionStoreSafety;
+        if (!safety || safety.agentId !== request.agentId) {
+          throw new Error("Claw journal mutation lost its session-store preparation");
+        }
+        assertAgentSessionStoreDeletionBlocker(
+          request.agentId,
+          findAgentSessionStoreDeletionBlocker(
+            database,
+            safety.config,
+            safety.agentId,
+            safety.env,
+            safety.targets,
+          ),
+        );
         const fallbackWorkspace =
           install?.workspace ??
           readClawOrphanWorkspaceInDatabase(db, request.agentId)?.workspace ??
@@ -91,23 +105,26 @@ export function mutateClawRemovalJournalInWorker(
         const workspaceDir = agent?.workspace ?? fallbackWorkspace;
         const agentDir = resolveAgentDir(input.config, request.agentId, options.env);
         const sessionsDir = resolveSessionTranscriptsDirForAgent(request.agentId, options.env);
-        journal = beginAgentDeletionJournal(
-          {
-            agentId: request.agentId,
-            operationId: request.operationId,
-            workspaceDir,
-            agentDir,
-            sessionsDir,
-            deleteFiles: previous?.deleteFiles ?? false,
-          },
-          nativeOptions,
-        );
+        ensureAgentProvenanceSchema(nativeOptions);
+        journal = beginAgentDeletionJournalInDatabase(database, {
+          agentId: request.agentId,
+          operationId: request.operationId,
+          workspaceDir,
+          agentDir,
+          sessionsDir,
+          deleteFiles: previous?.deleteFiles ?? false,
+        }).entry;
       } else {
         if (
           !previous ||
           previous.operationId !== request.operationId ||
           previous.cleanupCompleted ||
-          !removeAgentDeletionJournal(request.agentId, request.operationId, nativeOptions)
+          !deleteAgentDeletionJournalInDatabase(
+            database,
+            request.agentId,
+            request.operationId,
+            false,
+          )
         ) {
           throw new Error("Claw rollback no longer owns its deletion journal.");
         }
@@ -116,7 +133,6 @@ export function mutateClawRemovalJournalInWorker(
       deferSqliteWorkerCommitReceipt(db, {
         nonce: input.nonce,
         journal,
-        receiptAuthority: prepareCronReceiptAuthorityPublication(db),
       });
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce: input.nonce } });
       assertLease();

@@ -11,9 +11,9 @@ import {
 } from "./chat-comment-preview.ts";
 import {
   needsAttachmentSourceAdmission,
-  renderChatAttachmentAdmission,
   type AttachmentAdmission,
-} from "./chat-message-attachment-admission.ts";
+} from "./chat-message-attachment-admission-model.ts";
+import { renderChatAttachmentAdmission } from "./chat-message-attachment-admission.ts";
 import type {
   AssistantAttachmentItem,
   AttachmentItem,

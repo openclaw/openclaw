@@ -9,6 +9,7 @@ import {
   sqliteTranscriptPayloadColumns,
   transcriptIdentity,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { hashFile as hashObservedFile } from "./fixture-files.mjs";
 import { readDatabase } from "./observations.mjs";
 
 const RESTORED_TRANSCRIPT = "agents/main/sessions/upgrade-restored-index-history.jsonl";
@@ -20,20 +21,7 @@ const quoteIdentifier = (value) => `"${value.replaceAll('"', '""')}"`;
 const compareSessionKeys = (left, right) =>
   left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
 
-function hashFile(file) {
-  const hash = createHash("sha256");
-  const descriptor = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(1024 * 1024);
-    let size;
-    while ((size = fs.readSync(descriptor, buffer, 0, buffer.length, null)) > 0) {
-      hash.update(buffer.subarray(0, size));
-    }
-    return hash.digest("hex");
-  } finally {
-    fs.closeSync(descriptor);
-  }
-}
+const hashFile = (file) => hashObservedFile(file, 1024 * 1024);
 
 function containedPath(root, relative) {
   assert(typeof relative === "string" && relative.length > 0, "missing inventory path");

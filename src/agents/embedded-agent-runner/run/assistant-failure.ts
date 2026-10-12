@@ -38,7 +38,7 @@ import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
-import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
+import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
 
@@ -146,7 +146,11 @@ export async function handleEmbeddedAssistantFailure(input: {
     },
   );
   const terminalAssistantError = isTerminalAssistantError(attemptAssistant);
-  if (terminalAssistantError || !isCurrentAttemptReplaySafe(attempt)) {
+  if (
+    terminalAssistantError ||
+    isEmbeddedRunTimeoutFinal(attempt) ||
+    !isCurrentAttemptReplaySafe(attempt)
+  ) {
     return buildOutcome(input, {
       action: "proceed",
       assistantProfileFailureReason: terminalAssistantError ? null : assistantProfileFailureReason,

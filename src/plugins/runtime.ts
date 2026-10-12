@@ -63,13 +63,13 @@ type RegistryOwnerClose = {
   }>;
   failure?: PluginRuntimeCloseRetainedError;
 };
-type RegistryOwner = PluginRegistrySnapshot & {
+type RegistryOwner = {
   activeRegistry: PluginRegistry;
   closing?: RegistryOwnerClose;
 };
-const registryOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.pluginRegistryOwners"),
-  () => new Set<RegistryOwner>(),
+const registryOwner = resolveGlobalSingleton<{ current?: RegistryOwner }>(
+  Symbol.for("openclaw.pluginRegistryOwner"),
+  () => ({}),
 );
 const loadMemoryRuntime = createLazyRuntimeModule(() => import("./memory-runtime.js"));
 
@@ -95,10 +95,7 @@ function registryHasPluginHostCleanupWork(registry: PluginRegistry): boolean {
 }
 
 function isRegistryLive(registry: PluginRegistry): boolean {
-  return (
-    state.activeRegistry === registry ||
-    [...registryOwners].some((owner) => owner.activeRegistry === registry)
-  );
+  return state.activeRegistry === registry || registryOwner.current?.activeRegistry === registry;
 }
 
 const loadPluginHostCleanupRuntime = createLazyRuntimeModule(
@@ -374,39 +371,28 @@ function installActivePluginRegistry(
     // Retained instances can return with this registry; its old retirement selection cannot.
     retirements.delete(registry);
   }
-  const isCurrent = () =>
-    state.activeRegistry === registry && state.activeVersion === installedVersion;
   try {
     if (params.activateRegistry !== false) {
       markPluginRegistryActive(registry);
     } else {
       adoptPluginRegistryRecords(registry);
     }
-    if (!isCurrent()) {
-      return installedVersion;
-    }
     if (registry) {
       publishPluginSessionSchedulerJobs(registry);
-      if (!isCurrent()) {
-        return installedVersion;
-      }
       settlePreparedMessageToolCatalog(registry, installedVersion);
     } else {
       settlePreparedMessageToolCatalog();
     }
-    if (!isCurrent()) {
-      return installedVersion;
-    }
     syncPluginAgentEventBridge();
     notifyPluginHttpRoutesChanged();
   } catch (error) {
-    if (params.retirePrevious === false && isCurrent()) {
+    if (params.retirePrevious === false) {
       rollbackStagedPluginRegistry(previousSnapshot);
     }
     throw error;
   } finally {
-    // A successful stage preserves the predecessor's epoch for rollback. Displacement does not.
-    if (params.retirePrevious === false && isCurrent()) {
+    // A stage preserves its predecessor for rollback. Recursive publication is best effort.
+    if (params.retirePrevious === false) {
       retirement?.release();
     } else {
       retirement?.retireIfUnused();
@@ -415,18 +401,14 @@ function installActivePluginRegistry(
   return installedVersion;
 }
 
-/** Each Gateway owns its current registry; the process default is only a lookup projection. */
+/** One Gateway owns the process registry; overlapping Gateways are best effort. */
 export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir?: string) {
-  const owner: RegistryOwner = {
-    key: null,
-    runtimeSubagentMode: "gateway-bindable",
-    workspaceDir: workspaceDir ?? null,
-    ...(state.activeRegistry === registry ? captureActivePluginRegistrySnapshot() : {}),
-    activeRegistry: registry,
-  };
-  registryOwners.add(owner);
+  void workspaceDir;
+  const owner: RegistryOwner = { activeRegistry: registry };
+  registryOwner.current = owner;
   const gatewayOwner: PluginRegistryGatewayOwner = {
-    current: () => (registryOwners.has(owner) && !owner.closing ? owner.activeRegistry : undefined),
+    current: () =>
+      registryOwner.current === owner && !owner.closing ? owner.activeRegistry : undefined,
   };
   bindPluginRegistryGatewayOwner(registry, gatewayOwner);
   const beginClose = (): RegistryOwnerClose => {
@@ -436,24 +418,6 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
     const closing: RegistryOwnerClose = {
       preparation: Promise.resolve().then(async () => {
         const previous = owner.activeRegistry;
-        // Closing custodians do not count as consumers of each other's memory runtime.
-        const retainedMemory = () => {
-          const openOwners = [...registryOwners].filter(
-            (candidate) => candidate !== owner && !candidate.closing,
-          );
-          return {
-            memoryCapabilities: [
-              ...new Set(
-                openOwners.flatMap(({ activeRegistry }) => activeRegistry.memoryCapabilities),
-              ),
-            ],
-            embeddingProviders: [
-              ...new Set(
-                openOwners.flatMap(({ activeRegistry }) => activeRegistry.embeddingProviders),
-              ),
-            ],
-          };
-        };
         try {
           if (
             !previous.memoryCapabilities.some(
@@ -463,9 +427,9 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
             return [];
           }
           const { prepareMemoryRuntimeReload } = await loadMemoryRuntime();
-          const memory = prepareMemoryRuntimeReload(previous, retainedMemory());
+          const memory = prepareMemoryRuntimeReload(previous, createEmptyPluginRegistry());
           const { errors } = await memory.close();
-          memory.commit(retainedMemory());
+          memory.commit();
           return errors;
         } catch (error) {
           closing.failure = new PluginRuntimeCloseRetainedError(error);
@@ -482,15 +446,15 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
       return owner.activeRegistry;
     },
     publish(next: PluginRegistry) {
-      if (owner.closing || !registryOwners.has(owner) || state.activeRegistry !== next) {
+      if (owner.closing || registryOwner.current !== owner || state.activeRegistry !== next) {
         throw new Error("Plugin registry publication requires a live owner and active candidate");
       }
       const previous = owner.activeRegistry;
-      Object.assign(owner, captureActivePluginRegistrySnapshot());
+      owner.activeRegistry = next;
       bindPluginRegistryGatewayOwner(next, gatewayOwner);
       notifyPluginHttpRoutesChanged();
       retirePluginRegistryIfUnused(previous, () =>
-        registryOwners.has(owner) ? owner.activeRegistry : null,
+        registryOwner.current === owner ? owner.activeRegistry : null,
       );
     },
     prepareClose() {
@@ -505,36 +469,14 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
       const closing = beginClose();
       closing.promise ??= closing.preparation.then(async (memoryErrors) => {
         const previous = owner.activeRegistry;
-        // Memory preparation can be retried. Once disposal is issued, its raw
-        // completion joins inventory cleanup without holding up independent owners.
+        // Memory preparation can be retried; disposal still joins inventory cleanup.
         let retirement: Promise<PluginHostCleanupResult> | undefined;
         const retire = () =>
           (retirement ??= Promise.resolve().then(async () => {
-            registryOwners.delete(owner);
-            const survivor = [...registryOwners].findLast((candidate) => !candidate.closing);
-            if (state.activeRegistry === previous) {
-              if (survivor) {
-                // A surviving Gateway never stopped: selection must not rotate its authority.
-                installActivePluginRegistry({
-                  ...survivor,
-                  activateRegistry: false,
-                  retirePrevious: false,
-                });
-              } else {
-                // Closing custodians still own cleanup, but cannot serve the process projection.
-                clearActivePluginRegistryState();
-              }
+            if (registryOwner.current === owner) {
+              registryOwner.current = undefined;
             }
-            if (registryOwners.size === 0 && state.activeRegistry === null) {
-              await clearActivePluginRegistry(previous);
-            } else {
-              const retainedRegistry = survivor?.activeRegistry ?? null;
-              preparePluginRegistryRetirement(
-                previous,
-                () => retainedRegistry,
-                false,
-              )?.retireIfUnused();
-            }
+            await clearActivePluginRegistry(previous);
             return await waitForPluginRegistryRetirement(previous);
           }));
         const cleanup = await onRetirement?.(retire);
@@ -738,7 +680,7 @@ export async function prepareActivePluginRegistryShutdown(): Promise<void> {
 
 export function resetPluginRuntimeStateForTest(): void {
   state.registrationContext = undefined;
-  registryOwners.clear();
+  registryOwner.current = undefined;
   markPluginRegistryRetired(clearActivePluginRegistryState());
   state.importedPluginIds.clear();
   void drainGlobalSingletonLifecycleState("plugin-registry");

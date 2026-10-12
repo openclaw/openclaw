@@ -8,7 +8,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 import { readPositiveIntEnv } from "../env-limits.mjs";
-import { inspectCronBackups, readDatabase } from "./observations.mjs";
+import {
+  findInstalledPackageRoot,
+  inspectCronBackups,
+  readDatabase,
+  recordProcessExitSnapshot,
+} from "./observations.mjs";
 import {
   assertWorkerCellPackageIdentity,
   readWorkerCellPackageIdentity,
@@ -386,31 +391,17 @@ function observeProcess() {
       fixture.databasePath,
       path.join(process.env.OPENCLAW_STATE_DIR, "state/openclaw.sqlite"),
     );
-    let root = path.dirname(fs.realpathSync(process.argv[1]));
-    for (let depth = 0; depth < 3; depth++, root = path.dirname(root)) {
-      if (
-        fs.existsSync(path.join(root, "package.json")) &&
-        readJson(path.join(root, "package.json")).name === "openclaw"
-      ) {
-        receipt.identity = installedIdentity(root);
-        receipt.entrypoint = path.relative(root, fs.realpathSync(process.argv[1]));
-        break;
-      }
+    const root = findInstalledPackageRoot(path.dirname(fs.realpathSync(process.argv[1])), 3);
+    if (root) {
+      receipt.identity = installedIdentity(root);
+      receipt.entrypoint = path.relative(root, fs.realpathSync(process.argv[1]));
     }
     receipt.before = snapshot(fixture);
   } catch (error) {
     receipt.observationError = String(error);
   }
   const file = path.join(observations, `dreaming-cron-${role}-${process.pid}.json`);
-  writeJson(file, receipt);
-  process.once("exit", (exitCode) => {
-    try {
-      receipt.after = snapshot(fixture);
-    } catch (error) {
-      receipt.observationError = String(error);
-    }
-    writeJson(file, { ...receipt, exitCode });
-  });
+  recordProcessExitSnapshot(file, receipt, () => snapshot(fixture));
 }
 
 function assertUpdated(artifacts, observations, packageRoot, candidateTarball) {

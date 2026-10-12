@@ -1,7 +1,8 @@
 // Document-owned selection toolbar and annotation editor. The transcript owner
 // tears both down together when its session or presentation changes.
-import { render } from "lit";
-import { icons } from "../../../components/icons.ts";
+import { render } from "@solidjs/web";
+import { createComponent } from "solid-js";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
@@ -108,6 +109,10 @@ function mountPopup(
   paneId: string,
   onEscape?: () => void,
   anchorElement?: HTMLElement,
+  // A layout-driven transcript scroll must not dismiss in-progress input. The
+  // annotation editor supplies its own policy; the selection toolbar keeps the
+  // default scroll dismissal.
+  shouldDismissOnScroll: () => boolean = () => true,
 ) {
   removeChatSelectionPopup();
   document.body.appendChild(popup);
@@ -141,7 +146,9 @@ function mountPopup(
     "scroll",
     (event) => {
       if (!(event.target instanceof Node) || !popup.contains(event.target)) {
-        removeChatSelectionPopup();
+        if (shouldDismissOnScroll()) {
+          removeChatSelectionPopup();
+        }
       }
     },
     { capture: true, passive: true, signal },
@@ -238,7 +245,7 @@ export function showChatAnnotationEditor(options: {
   const confirm = button(t("chat.messages.saveAnnotation"), save);
   confirm.className = "btn primary chat-annotation-editor__confirm";
   confirm.textContent = "";
-  render(icons.cornerDownLeft, confirm);
+  const disposeConfirm = render(() => createComponent(Icon, { name: "cornerDownLeft" }), confirm);
   const controls = document.createElement("div");
   controls.className = "chat-annotation-editor__controls";
   const remove = button(t("chat.messages.deleteAnnotation"), () => {
@@ -250,7 +257,7 @@ export function showChatAnnotationEditor(options: {
   remove.className = "btn btn--icon btn--ghost chat-annotation-editor__delete";
   remove.title = t("chat.messages.deleteAnnotation");
   remove.textContent = "";
-  render(icons.trash, remove);
+  const disposeRemove = render(() => createComponent(Icon, { name: "trash" }), remove);
   const cancelButton = button(t("common.cancel"), cancel);
   cancelButton.className = "btn";
   const saveButton = button(t("common.save"), save);
@@ -285,12 +292,26 @@ export function showChatAnnotationEditor(options: {
       }
     }
   });
+  // A width or height change repositions the editor and makes the transcript
+  // follow its end by scrolling. That layout compensation must not discard a
+  // comment the user is still writing, so an edited comment survives the
+  // scroll; an untouched editor still closes, keeping its existing behavior.
+  const originalComment = options.comment;
   const signal = mountPopup(
     popup,
     options.anchorRect,
     options.paneId,
     options.onCancel,
     options.anchorElement,
+    () => input.value === originalComment,
+  );
+  signal.addEventListener(
+    "abort",
+    () => {
+      disposeConfirm();
+      disposeRemove();
+    },
+    { once: true },
   );
   const resizeInput = () => {
     const scrollTop = input.scrollTop;

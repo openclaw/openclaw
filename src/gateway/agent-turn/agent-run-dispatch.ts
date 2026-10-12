@@ -38,6 +38,7 @@ import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
+import type { createAssistantCommentaryMediaCustody } from "../server-methods/chat-send-commentary-media.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -52,8 +53,16 @@ import {
   resolveGatewayAgentAbortStopReason,
   resolveResolvedAgentTimeoutStopReason,
 } from "./agent-run-dispatch-outcome.js";
-import type { createAgentRunMediaCustody } from "./agent-run-media-custody.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
+
+type AgentRunMediaCustody = Pick<
+  ReturnType<typeof createAssistantCommentaryMediaCustody>,
+  "run" | "prepareAssistantTranscriptMessage"
+> & {
+  finalize: NonNullable<
+    Parameters<typeof agentCommandFromGatewayIngress>[0]["beforeTerminalDelivery"]
+  >;
+};
 
 export function dispatchAgentRunFromGateway(params: {
   assertCurrent?: () => void;
@@ -61,7 +70,7 @@ export function dispatchAgentRunFromGateway(params: {
   followupCompletion?: FollowupCompletionOwner;
   admittedRunEntry: ChatAbortControllerEntry | undefined;
   ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
-  loadMedia?: () => Promise<ReturnType<typeof createAgentRunMediaCustody>>;
+  loadMedia?: () => Promise<AgentRunMediaCustody>;
   runId: string;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];
@@ -257,7 +266,7 @@ export function dispatchAgentRunFromGateway(params: {
       await joined;
     } while (joined !== terminalSettlement);
   };
-  const activateAgent = (media?: ReturnType<typeof createAgentRunMediaCustody>) => {
+  const activateAgent = (media?: AgentRunMediaCustody) => {
     assertCurrent();
     const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
       {
@@ -272,6 +281,7 @@ export function dispatchAgentRunFromGateway(params: {
             await completeTerminalProducer(producerError);
           }
         },
+        isTerminalOutcomeObserved: () => registeredRunEntry?.terminalOutcomeObserved === true,
       },
       readAgentRunDispatchExecutionIdentity(params),
     );

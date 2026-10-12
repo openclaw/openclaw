@@ -14,7 +14,7 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  resolveUserProfileAuthLink,
+  listUserProfileAuthLinks,
   setUserProfileAuthLink,
 } from "../../state/user-model-accounts.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
@@ -134,12 +134,9 @@ describe("Doctor auth alias preservation", () => {
           maybeRepairOpenAICodexAuthConfig(cfg, { profileIdMap: repaired.profileIdMap }).config
             .auth,
         ).toEqual(cfg.auth);
-        expect(
-          resolveUserProfileAuthLink(
-            { profileId: owner.id, providers: ["anthropic"] },
-            { env: fixture.env },
-          ),
-        ).toBe(legacyId);
+        expect(listUserProfileAuthLinks(owner.id, { env: fixture.env })).toMatchObject([
+          { provider: "anthropic", authProfileId: legacyId },
+        ]);
         if (invalid === "inherited rotation reference") {
           await fixture.writeJson("agents/main/agent/auth-profiles.json", {
             version: 1,
@@ -289,12 +286,9 @@ describe("Doctor auth alias preservation", () => {
           env: fixture.env,
           profileIdMap: recovered,
         });
-        expect(
-          resolveUserProfileAuthLink(
-            { profileId: owner.id, providers: ["anthropic"] },
-            { env: fixture.env },
-          ),
-        ).toBe(canonicalId);
+        expect(listUserProfileAuthLinks(owner.id, { env: fixture.env })).toMatchObject([
+          { provider: "anthropic", authProfileId: canonicalId },
+        ]);
         const receiptTimes = () =>
           runAuthProfileWriteTransaction(
             undefined,

@@ -1,12 +1,16 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 import { isReasoningConstraintErrorMessage } from "../failover/context-overflow-tables.js";
+import { isUnsupportedReasoningEffortParameterError } from "../failover/message-patterns.js";
 
 export function pickFallbackThinkingLevel(params: {
   message?: string;
   attempted: Set<ThinkLevel>;
 }): ThinkLevel | undefined {
   const raw = params.message?.trim() ?? "";
+  if (isUnsupportedReasoningEffortParameterError(raw)) {
+    return undefined;
+  }
   const requiresReasoning = isReasoningConstraintErrorMessage(raw);
   // Model identifiers can contain these words; require a parameter or reasoning constraint.
   if (

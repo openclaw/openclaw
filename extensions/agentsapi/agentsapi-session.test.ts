@@ -20,6 +20,79 @@ afterEach(() => {
 });
 
 describe("Agents API native session receipts", () => {
+  it.each(["idle", "disconnect"] as const)(
+    "reconciles late terminal records after %s without another native event or input",
+    async (boundary) => {
+      const controller = new AbortController();
+      const stream = createEventStream();
+      const submitted = deferred<void>();
+      const refresh = deferred<void>();
+      let savedTurns: Turn[] = [];
+      let savedItems: AgentsApiItem[] = [];
+      let savedSession = createHostedSession("in_progress");
+      const inputTypes: string[] = [];
+      const waitForRecovery = vi.fn(async (ms: number) => {
+        if (ms === 1_000) {
+          await refresh.promise;
+        }
+      });
+      fetchWithSsrFGuardMock.mockImplementation(async (request) => {
+        request.beforeRequest?.();
+        if (request.init?.method === "POST") {
+          const body = z
+            .object({ events: z.array(z.object({ type: z.string() })) })
+            .parse(await new Request(request.url, request.init).json());
+          inputTypes.push(...body.events.map((event) => event.type));
+          return guardedResponse(request.url, Response.json({}));
+        }
+        if (new Headers(request.init?.headers).get("accept") === "text/event-stream") {
+          return guardedResponse(request.url, stream.response(request.signal));
+        }
+        return guardedResponse(
+          request.url,
+          savedStateResponse(request.url, savedTurns, savedItems, savedSession),
+        );
+      });
+      const session = createSession(controller.signal, (event) => stream.observe(event), {
+        waitForRecovery,
+      });
+      const result = session.run(
+        "Fixture prompt",
+        async () => {},
+        () => submitted.resolve(),
+      );
+      void result.catch(() => {});
+      try {
+        await submitted.promise;
+        await stream.send({ type: "agent.session.in_progress" });
+        expect(waitForRecovery).not.toHaveBeenCalled();
+        if (boundary === "idle") {
+          await stream.send({ type: "agent.session.idle" });
+        } else {
+          const reconnected = stream.nextSubscription();
+          stream.disconnect();
+          await reconnected;
+        }
+        // A later consumed event fences the preceding saved-state read. It is
+        // not a terminal signal and cannot repair late REST records on its own.
+        await stream.send({ type: "fixture.recovery_barrier" });
+        expect(waitForRecovery).toHaveBeenCalledWith(1_000, expect.any(AbortSignal));
+        expect(session.isSettled()).toBe(false);
+        savedSession = createHostedSession("idle");
+        savedTurns = [createTurn()];
+        savedItems = [createSavedMessage("input-fixture", "user", "Fixture prompt")];
+        refresh.resolve();
+        await expect(result).resolves.toMatchObject({ turn: { id: "turn-fixture" } });
+        expect(inputTypes).toEqual(["agent.session.input.message"]);
+      } finally {
+        savedSession = createHostedSession("idle");
+        controller.abort();
+        refresh.resolve();
+        await result.catch(() => {});
+        await session.close();
+      }
+    },
+  );
   it("waits for session idle and the admitted input receipt after the root turn completes", async () => {
     const controller = new AbortController();
     const stream = createEventStream();
@@ -608,6 +681,7 @@ function createSession(
   onEvent: (event: AgentsApiEvent) => void,
   lifecycle: Pick<
     Parameters<typeof createAgentsApiSession>[0],
+    | "waitForRecovery"
     | "connectEnvironment"
     | "onSessionFailed"
     | "executeFunction"
@@ -682,11 +756,21 @@ function createEventStream() {
   const waiters = new Map<string, Array<() => void>>();
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   let detachAbort = () => {};
+  let subscription: ReturnType<typeof deferred<void>> | undefined;
   return {
+    nextSubscription() {
+      subscription = deferred<void>();
+      return subscription.promise;
+    },
+    disconnect() {
+      detachAbort();
+      streamController?.close();
+    },
     response(signal?: AbortSignal) {
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           streamController = controller;
+          subscription?.resolve();
           const abort = () => controller.error(signal?.reason);
           signal?.addEventListener("abort", abort, { once: true });
           detachAbort = () => signal?.removeEventListener("abort", abort);

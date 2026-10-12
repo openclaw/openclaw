@@ -61,6 +61,7 @@ export class GatewayPendingRequests {
         probe?: { pending: GatewayPendingRequest; revision: number };
         retryAtMs: number;
         revision: number;
+        announced: boolean;
       }
     | undefined;
 
@@ -70,21 +71,30 @@ export class GatewayPendingRequests {
     if (phase === "accepting") {
       this.resumeBootstrapRequests();
     } else if (phase === "preparing" || phase === "draining" || phase === "prepared") {
-      this.pauseBootstrapRequests();
+      this.pauseBootstrapRequests(undefined, true);
     }
   }
 
-  private pauseBootstrapRequests(retryAfterMs = GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS): void {
+  private pauseBootstrapRequests(
+    retryAfterMs = GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
+    announced = false,
+  ): void {
     const nowMs = this.opts.nowMs();
     const delayMs = resolveSafeTimeoutDelayMs(
       Number.isFinite(retryAfterMs) && retryAfterMs > 0
         ? retryAfterMs
         : GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
     );
-    const pause = (this.bootstrapPause ??= { retryAtMs: nowMs, revision: 0 });
+    const pause = (this.bootstrapPause ??= { retryAtMs: nowMs, revision: 0, announced });
+    pause.announced ||= announced;
     pause.revision += 1;
     pause.retryAtMs = Math.max(pause.retryAtMs, nowMs + delayMs);
     clearTimeout(pause.timer);
+    pause.timer = undefined;
+    // An announced drain ends through readiness or connection retirement, not a read probe.
+    if (pause.announced) {
+      return;
+    }
     pause.timer = setTimeout(
       () => {
         // A rolled-back fence may not publish readiness. An expired empty
@@ -218,10 +228,12 @@ export class GatewayPendingRequests {
             return;
           }
           const pause = pending.resend ? this.bootstrapPause : undefined;
-          if (pause && !pause.timer && !pause.probe) {
+          if (pause && !pause.announced && !pause.timer && !pause.probe) {
             pause.probe = { pending, revision: pause.revision };
           }
-          pending.waitingForResume = Boolean(pause && pause.probe?.pending !== pending);
+          pending.waitingForResume = Boolean(
+            pause && (pause.announced || pause.probe?.pending !== pending),
+          );
           if (pending.waitingForResume) {
             return;
           }
@@ -285,7 +297,10 @@ export class GatewayPendingRequests {
       }
       this.pauseBootstrapRequests(
         isGatewayRestartUnavailableError(frame.error)
-          ? Math.ceil(Math.max(5_000, frame.error.retryAfterMs ?? 0) * (1 + Math.random() * 0.2))
+          ? Math.ceil(
+              Math.max(GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS, frame.error.retryAfterMs ?? 0) *
+                (1 + Math.random() * 0.2),
+            )
           : frame.error.retryAfterMs,
       );
       pending.waitingForResume = true;

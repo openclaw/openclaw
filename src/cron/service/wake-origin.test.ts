@@ -16,9 +16,9 @@ function makeStateWithMocks(): {
 }
 
 describe("cron service wake() origin capture", () => {
-  it("forwards sessionKey + agentId to enqueueSystemEvent so the event lands on the originating session", () => {
+  it("forwards sessionKey + agentId to enqueueSystemEvent so the event lands on the originating session", async () => {
     const { state, enqueueSystemEvent, requestHeartbeat } = makeStateWithMocks();
-    const result = wake(state, {
+    const result = await wake(state, {
       mode: "now",
       text: "follow up on the report",
       sessionKey: "agent:main:telegram:8661849123:topic:4052",
@@ -38,9 +38,9 @@ describe("cron service wake() origin capture", () => {
     });
   });
 
-  it("threads sessionKey + agentId into the targeted-immediate heartbeat for next-heartbeat+sessionKey too", () => {
+  it("threads sessionKey + agentId into the targeted-immediate heartbeat for next-heartbeat+sessionKey too", async () => {
     const { state, enqueueSystemEvent, requestHeartbeat } = makeStateWithMocks();
-    const result = wake(state, {
+    const result = await wake(state, {
       mode: "next-heartbeat",
       text: "check the queue",
       sessionKey: "agent:coding:discord:thread123",
@@ -60,10 +60,10 @@ describe("cron service wake() origin capture", () => {
     });
   });
 
-  it("forwards an agentId-only wake so the event reaches that agent's default lane", () => {
+  it("forwards an agentId-only wake so the event reaches that agent's default lane", async () => {
     // An agent-only origin must not fall back to the global default lane.
     const { state, enqueueSystemEvent, requestHeartbeat } = makeStateWithMocks();
-    const result = wake(state, { mode: "now", text: "agent only", agentId: "ops" });
+    const result = await wake(state, { mode: "now", text: "agent only", agentId: "ops" });
     expect(result).toEqual({ ok: true });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("agent only", {
       agentId: "ops",
@@ -76,9 +76,9 @@ describe("cron service wake() origin capture", () => {
     });
   });
 
-  it("drops whitespace-only sessionKey / agentId rather than routing to a meaningless lane", () => {
+  it("drops whitespace-only sessionKey / agentId rather than routing to a meaningless lane", async () => {
     const { state, enqueueSystemEvent, requestHeartbeat } = makeStateWithMocks();
-    wake(state, {
+    await wake(state, {
       mode: "now",
       text: "x",
       sessionKey: "   ",

@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -17,6 +16,7 @@ import { classifyCompactionReason } from "../../agents/embedded-agent-runner/com
 import {
   findCliTerminalStopError,
   findCliTimeoutError,
+  hasLocalWorkerTaskTimeout,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
@@ -32,6 +32,7 @@ import {
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderCodexAppServerFailureCopy,
   renderFailoverCodeUserCopy,
   renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
@@ -45,10 +46,8 @@ import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recove
 import type { ReplyCompletion, ReplyExpectation } from "../../agents/reply-completion.js";
 import {
   collectErrorGraphCandidates,
-  extractErrorCode,
   formatErrorMessage,
   readErrorCauses,
-  readErrorName,
 } from "../../infra/errors.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
@@ -152,31 +151,6 @@ export function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): 
   return level === "on" || level === "full";
 }
 
-const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
-  /\bcodex app-server client closed before turn completed\b/iu;
-const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
-  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
-const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
-  /\bcodex session generation is no longer current\b/iu;
-const CODEX_EXECUTION_NODE_DISCONNECTED_RE =
-  /^Codex execution node disconnected; start a fresh attempt\. \((?:execution node (?:failed|disconnected)|execution socket (?:closed|failed))(?:: [^\r\n]{1,240})?\)(?:\r?\n|$)/u;
-
-function buildCodexAppServerFailureText(normalizedMessage: string): string | null {
-  if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
-    return "⚠️ This Codex session changed before your message could run. Please send it again.";
-  }
-  if (CODEX_EXECUTION_NODE_DISCONNECTED_RE.test(normalizedMessage)) {
-    return "⚠️ Codex execution node disconnected. Start a fresh attempt.";
-  }
-  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
-    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
-  }
-  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
-    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
-  }
-  return null;
-}
-
 export function buildPreflightCompactionFailureText(
   message: string,
   options?: { includeDetails?: boolean },
@@ -226,23 +200,6 @@ function formatForwardedExternalRunFailureText(message: string): string {
   return detail
     ? `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
-}
-
-function hasLocalWorkerTimeoutCause(error: unknown): boolean {
-  let localTimeout = false;
-  for (const candidate of collectErrorGraphCandidates(error, readErrorCauses)) {
-    // Failover wrappers may synthesize HTTP-like statuses; original HTTP facts still win.
-    if (isFailoverError(candidate)) {
-      continue;
-    }
-    const original = asOptionalObjectRecord(candidate);
-    if (original?.status !== undefined || original?.statusCode !== undefined) {
-      return false;
-    }
-    localTimeout ||=
-      readErrorName(candidate) === "WorkerTaskError" && extractErrorCode(candidate) === "timeout";
-  }
-  return localTimeout;
 }
 
 export function buildExternalRunFailureReply(
@@ -395,18 +352,18 @@ export function buildExternalRunFailureReply(
     // Heartbeat-backed event turns remain visible even with generic wording.
     return buildUnclassifiedReply(options.includeDetails === true);
   }
-  const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
+  const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
-  if (failoverFacts.reason === "timeout" && hasLocalWorkerTimeoutCause(error)) {
+  if (failoverFacts.reason === "timeout" && hasLocalWorkerTaskTimeout(error)) {
     return {
       text: "A local worker task timed out. Please try again.",
       isGenericRunnerFailure: false,
     };
   }
   const classifiedFailure =
-    failoverFacts.formatFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
+    failoverFacts.requestFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
   if (classifiedFailure) {
     return { text: classifiedFailure, isGenericRunnerFailure: false };
   }

@@ -412,27 +412,13 @@ actor GatewayConnection: Observable {
         } catch {
             try Task.checkCancellation()
             if GatewayCompatibilityIssue(error: error) != nil { throw error }
-            if let tlsError = error as? GatewayTLSValidationError {
-                // A delayed TLS failure has no authority to repair credentials or
-                // a route that changed while the handshake was in flight.
-                let current = try await self.currentEndpoint()
-                try self.requireCurrentPreflightRoute(
-                    route, endpoint: current, shutdownGeneration: shutdownGeneration)
-                if GatewayTLSRepairCoordinator.repairOnCurrentExecutor(
-                    route: endpoint.tls,
-                    url: cfg.url,
-                    failure: tlsError.failure)
-                {
-                    let refreshed = try await self.currentEndpoint()
-                    try self.requireCurrentPreflightRoute(
-                        route, endpoint: refreshed, shutdownGeneration: shutdownGeneration)
-                    let replacement = try await self.configure(
-                        endpoint: refreshed,
-                        shutdownGeneration: shutdownGeneration)
-                    // The typed handshake failure precedes dispatch. Retry it once;
-                    // never recursively discover a different endpoint or repair again.
-                    return try await replacement.request(method: method, params: params, timeoutMs: timeoutMs)
-                }
+            if let tlsError = error as? GatewayTLSValidationError,
+               let replacement = try await self.renewLearnedPin(
+                   after: tlsError.failure, route: route, shutdownGeneration: shutdownGeneration)
+            {
+                // The typed handshake failure precedes dispatch. Retry it once;
+                // never recursively discover a different endpoint or repair again.
+                return try await replacement.request(method: method, params: params, timeoutMs: timeoutMs)
             }
             if !retryTransportFailures || error is GatewayResponseError || error is GatewayDecodingError {
                 throw error
@@ -509,6 +495,40 @@ actor GatewayConnection: Observable {
                 throw error
             }
         }
+    }
+
+    /// A delayed TLS failure has no authority to repair credentials or a route that
+    /// changed while the handshake was in flight. Returns the renewed route's client.
+    private func renewLearnedPin(
+        after failure: GatewayTLSValidationFailure,
+        route: Route,
+        shutdownGeneration: UInt64) async throws -> GatewayChannelActor?
+    {
+        let current = try await self.currentEndpoint()
+        try self.requireCurrentPreflightRoute(route, endpoint: current, shutdownGeneration: shutdownGeneration)
+        guard GatewayTLSRepairCoordinator.repairOnCurrentExecutor(route: route.tls, url: route.url, failure: failure)
+        else { return nil }
+        let refreshed = try await self.currentEndpoint()
+        try self.requireCurrentPreflightRoute(route, endpoint: refreshed, shutdownGeneration: shutdownGeneration)
+        return try await self.configure(endpoint: refreshed, shutdownGeneration: shutdownGeneration)
+    }
+
+    /// Automatic reconnects have no request to retry: renew through the same owner
+    /// checks, then reconnect only the replacement socket.
+    private func renewLearnedPinAfterReconnectFailure(
+        _ error: GatewayTLSValidationError,
+        routeGeneration: UInt64) async
+    {
+        guard routeGeneration == self.routeGeneration, let connection = self.configuredConnection else { return }
+        let route = Route(
+            endpoint: connection.endpoint,
+            generation: routeGeneration,
+            activationBindingKey: connection.activationBindingKey)
+        guard let replacement = try? await self.renewLearnedPin(
+            after: error.failure, route: route, shutdownGeneration: connection.shutdownGeneration)
+        else { return }
+        // Retiring the old channel cancels the task that reported this failure.
+        Task { try? await replacement.connect() }
     }
 
     /// Learned-pin renewal can be shared with another connection. Only that TLS
@@ -954,6 +974,10 @@ extension GatewayConnection {
         return await connection.client.authSource()
     }
 
+    func clearConnectFailureBackoff() async {
+        await self.configuredConnection?.client.clearConnectFailureBackoff()
+    }
+
     func shutdown(ifCurrent: @Sendable () -> Bool = { true }) async {
         // Revalidate at the socket owner, after the actor hop: a superseded
         // credential save must not disconnect a newer same-account renewal.
@@ -1040,6 +1064,9 @@ extension GatewayConnection {
             },
             extraHeadersProvider: browserSession.map { session in
                 { @Sendable in (try? session.headers(for: config.url)) ?? [:] }
+            },
+            reconnectTLSFailureHandler: { [weak self] error in
+                await self?.renewLearnedPinAfterReconnectFailure(error, routeGeneration: configuredRouteGeneration)
             })
         self.configuredConnection = ConfiguredConnection(
             client: client,

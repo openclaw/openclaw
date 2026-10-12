@@ -15,9 +15,9 @@ import type {
   HandleCommandsParams,
 } from "./commands-types.js";
 
-/** Builds the standard terminal text response shared by chat command handlers. */
-export function commandReply(text: string): CommandHandlerResult {
-  return { shouldContinue: false, reply: { text } };
+/** Builds the standard terminal response shared by chat command handlers. */
+export function commandReply(reply: string | ReplyPayload | undefined): CommandHandlerResult {
+  return { shouldContinue: false, reply: typeof reply === "string" ? { text: reply } : reply };
 }
 
 export function renderCommandJsonBlock(label: string, value: unknown): string {
@@ -25,11 +25,15 @@ export function renderCommandJsonBlock(label: string, value: unknown): string {
 }
 
 /** Returns command arguments only when the complete slash-command token matches. */
-export function matchCommandPrefix(body: string, command: string): string | null {
+export function matchCommandPrefix(
+  body: string,
+  command: string,
+  options: { allowColon?: boolean } = {},
+): string | null {
   return body === command
     ? ""
-    : body.startsWith(`${command} `)
-      ? body.slice(command.length).trim()
+    : body.startsWith(`${command} `) || (options.allowColon && body.startsWith(`${command}:`))
+      ? body.slice(command.length + 1).trim()
       : null;
 }
 

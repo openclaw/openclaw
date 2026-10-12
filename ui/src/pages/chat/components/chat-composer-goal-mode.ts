@@ -49,17 +49,20 @@ export function createGoalComposerController(
     }
   };
   const focus = () => queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
+  const clearMode = (mode: ChatGoalDraftMode) => {
+    state.goalComposer = null;
+    props.onGoalDraftModeChange?.(null);
+    // Editing borrows the composer; leaving it restores the conversation draft.
+    if (mode.action === "edit") {
+      replaceDraft(mode.previousDraft);
+    }
+  };
   const cancel = () => {
     const mode = current();
     if (!mode || mode.pending) {
       return;
     }
-    state.goalComposer = null;
-    props.onGoalDraftModeChange?.(null);
-    // Editing borrows the composer; cancelling returns its original conversation draft.
-    if (mode.action === "edit") {
-      replaceDraft(mode.previousDraft);
-    }
+    clearMode(mode);
     requestUpdate();
     focus();
   };
@@ -141,11 +144,7 @@ export function createGoalComposerController(
           submissionAction,
         );
         if (submitted && current() === mode) {
-          state.goalComposer = null;
-          props.onGoalDraftModeChange?.(null);
-          if (mode.action === "edit") {
-            replaceDraft(mode.previousDraft);
-          }
+          clearMode(mode);
         }
       } finally {
         mode.pending = false;

@@ -564,21 +564,19 @@ export async function promptSingleChannelSecretInput(params: {
     },
   });
 
-  if (selectedMode === "plaintext" && params.canUseEnv) {
-    const keepEnv = await params.prompter.confirm({
-      message: params.envPrompt,
-      initialValue: true,
-    });
-    if (keepEnv) {
-      return { action: "use-env" };
-    }
-  } else if (params.hasConfigToken && params.accountConfigured) {
+  const keepAction =
+    selectedMode === "plaintext" && params.canUseEnv
+      ? "use-env"
+      : params.hasConfigToken && params.accountConfigured
+        ? "keep"
+        : undefined;
+  if (keepAction) {
     const keep = await params.prompter.confirm({
-      message: params.keepPrompt,
+      message: keepAction === "use-env" ? params.envPrompt : params.keepPrompt,
       initialValue: true,
     });
     if (keep) {
-      return { action: "keep" };
+      return { action: keepAction };
     }
   }
 

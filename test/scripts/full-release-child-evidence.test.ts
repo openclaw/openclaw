@@ -87,7 +87,8 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
 } else if (endpoint.startsWith("repos/openclaw/openclaw/actions/runs/101/attempts/")) {
   const attempt = Number(endpoint.split("/").at(-2));
   const jobs = fixture.attempts[attempt - 1];
-  process.stdout.write(JSON.stringify([{total_count: jobs.length, jobs}]));
+  const page = Number(new URL("https://example.invalid/" + endpoint).searchParams.get("page") ?? 1);
+  process.stdout.write(JSON.stringify({total_count: jobs.length, jobs: jobs.slice((page - 1) * 100, page * 100)}));
 } else {
   throw new Error("Unexpected evidence read: " + endpoint);
 }
@@ -229,6 +230,19 @@ describe("full release child evidence producer", () => {
       );
     },
   );
+
+  it("seals a complete paginated attempt without a monolithic metadata response", () => {
+    const data = fixture();
+    for (let index = 0; index < 100; index++) {
+      data.jobs.push({ ...data.jobs[1]!, id: index + 10, name: `workload ${index}` });
+    }
+    const { result, receipt } = seal(data);
+    expect(result.status, result.stderr).toBe(0);
+    const evidence = JSON.parse(readFileSync(receipt, "utf8"));
+    expect(evidence.workloadConclusion).toBe("success");
+    expect(evidence.jobs).toHaveLength(102);
+    expect(evidence.observedRunAttempts).toEqual([1]);
+  });
 
   it.each(["pluginPrereleaseIndependent", "releaseChecksCandidate"])(
     "seals %s evidence at the exact target SHA",

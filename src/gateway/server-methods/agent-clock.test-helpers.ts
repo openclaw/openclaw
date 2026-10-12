@@ -72,16 +72,18 @@ export async function waitForAcceptedRunDispatch(params: {
   }
   // Keep clock ownership through delayed acknowledgement timers, but fail explicitly if
   // accepted work never settles; an unbounded microtask loop can starve the test timeout.
-  for (
-    let pumps = 0;
+  const isPending = () =>
     !params.hasDispatched() &&
     !params.hasTerminalResult?.() &&
     respond.mock.calls.length <= respondCallCount;
-    pumps++
-  ) {
+  for (let pumps = 0; isPending(); pumps++) {
     if (pumps === 1_000) {
       throw new Error("Accepted agent request did not dispatch or return a terminal response");
     }
     await flushScheduledDispatchStep();
+    if (isPending()) {
+      // Fake clock progress does not settle Vite's real module loading.
+      await vi.dynamicImportSettled();
+    }
   }
 }

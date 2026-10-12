@@ -156,7 +156,11 @@ describe("registered onboarding", () => {
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     if (args.startsWith("--json")) {
       expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-        JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+        JSON.stringify(
+          { ok: false, error: { type: "cli_error", message }, phase: "options", message },
+          null,
+          2,
+        ),
       );
     } else {
       expect(runtime.log).not.toHaveBeenCalled();
@@ -195,7 +199,11 @@ describe("registered onboarding", () => {
     expect(runtime.error).toHaveBeenCalledWith(message);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+      JSON.stringify(
+        { ok: false, error: { type: "cli_error", message }, phase: "options", message },
+        null,
+        2,
+      ),
     );
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
@@ -216,6 +224,7 @@ describe("registered onboarding", () => {
       expect(runtime.log).toHaveBeenCalledOnce();
       expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
         ok: false,
+        error: { type: "cli_error", message: expect.stringContaining(message) },
         phase: "options",
         message: expect.stringContaining(message),
       });

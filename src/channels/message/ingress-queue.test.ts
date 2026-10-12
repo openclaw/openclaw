@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -22,6 +23,7 @@ import {
   listChannelIngressQueueAccountIdsReadOnly,
 } from "./ingress-queue.js";
 import { createTestIngressQueue, useRetainedIngressState } from "./ingress-queue.test-helpers.js";
+import { channelIngressOperations } from "./ingress-queue.worker.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -39,6 +41,46 @@ function openIngressStateDatabase(stateDir: string) {
 }
 
 describe("channel ingress queue", () => {
+  it("reads committed claim states without a transaction for single-statement inspections", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue<{ text: string }>(stateDir);
+      await queue.enqueue("pending", { text: "waiting" });
+      await queue.enqueue("claimed", { text: "active" });
+      await queue.enqueue("failed", { text: "rejected" });
+      await queue.claim("claimed");
+      await queue.fail("failed", { reason: "rejected" });
+      const database = openIngressStateDatabase(stateDir);
+      const context = {
+        open: () => database,
+        stateOptions: () => ({ path: database.path, env: { OPENCLAW_STATE_DIR: stateDir } }),
+      };
+      const queueName = JSON.stringify(["test", "account"]);
+      const transactionSql = vi.spyOn(database.db, "exec");
+      try {
+        for (const [status, ids] of [
+          ["claimed", ["claimed"]],
+          ["failed", ["failed"]],
+          ["unsettled", ["claimed", "pending"]],
+        ] as const) {
+          const rows = channelIngressOperations["channelIngress.list"](
+            { queueName, status, readOnly: false, orderBy: "id" },
+            context,
+          );
+          expect(rows.map((row) => row.event_id)).toEqual(ids);
+        }
+        const snapshot = channelIngressOperations["channelIngress.claimSnapshot"](
+          { queueName, blockedLaneKeys: [], deriveLaneKey: false },
+          context,
+        );
+        expect(snapshot.pending.map((row) => row.event_id)).toEqual(["pending"]);
+        expect(snapshot.claimed).toEqual([]);
+        expect(transactionSql).not.toHaveBeenCalled();
+      } finally {
+        transactionSql.mockRestore();
+      }
+    });
+  });
+
   it("rejects empty claim IDs through its async result", async () => {
     const queue = createChannelIngressQueue({ channelId: "invalid-input" });
     const invalid = { id: " ", claim: { token: "fixture" } };
@@ -109,19 +151,14 @@ describe("channel ingress queue", () => {
       const pending = await queue.listPending();
       const claims = await queue.listClaims();
       const controller = new AbortController();
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       let reachedCommit = false;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              reachedCommit = true;
-              controller.abort(new Error("account task retired"));
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "commit") {
+          reachedCommit = true;
+          controller.abort(new Error("account task retired"));
+        }
+        admit(request, grant);
+      });
       try {
         await expect(queue.purge?.({ signal: controller.signal })).rejects.toThrow(
           "account task retired",

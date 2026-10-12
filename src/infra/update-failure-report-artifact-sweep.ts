@@ -1,5 +1,6 @@
 /** Fenced cleanup for non-authoritative update-report body artifacts. */
 import { randomUUID } from "node:crypto";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   claimUpdateFailureReportArtifactSweep,
   hasUpdateFailureReportArtifactSweepLease,
@@ -24,23 +25,25 @@ export type UpdateFailureReportSweepReceipt = Pick<
   "artifactSweep" | "previewDigest" | "replacementReady" | "reservationId"
 >;
 
-/** Deletes one immutable candidate set while the exact SQLite lease generation remains current. */
+/** A current lease authorizes captured retired paths; successor reservation paths are never reused. */
 export async function cleanRetiredUpdateFailureReportArtifacts(
   prepared: PreparedUpdateFailureReport,
   receipt: UpdateFailureReportSweepReceipt,
   stateEnv: NodeJS.ProcessEnv,
   keepCurrent = true,
   hooks: UpdateFailureReportSweepHooks = {},
+  context = captureOpenClawStateWorkerContext({ env: stateEnv }),
 ): Promise<boolean> {
   const sweepOwnerId = randomUUID();
   const sweepGeneration = randomUUID();
-  const claimed = retryUpdateReportStateWrite(() =>
+  const claimed = await retryUpdateReportStateWrite(() =>
     claimUpdateFailureReportArtifactSweep(
       prepared.attemptId,
       receipt.reservationId,
       sweepOwnerId,
       sweepGeneration,
       stateEnv,
+      context,
     ),
   );
   if (!claimed) {
@@ -57,30 +60,34 @@ export async function cleanRetiredUpdateFailureReportArtifacts(
       sweepOwnerId,
       sweepGeneration,
       stateEnv,
+      context,
     );
   let swept = false;
   try {
     await hooks.beforeList?.();
-    if (!hasSweepLease()) {
+    if (!(await hasSweepLease())) {
       return false;
     }
     const candidates = await (hooks.listCandidates ?? listRetiredUpdateFailureReportArtifacts)(
       prepared,
       keep,
     );
-    if (!hasSweepLease()) {
+    if (!(await hasSweepLease())) {
       return false;
     }
+    // A later takeover cannot add its new reservation paths to this already-captured set.
+    context.admission.assertCurrent();
     await removeRetiredUpdateFailureReportArtifacts(candidates);
     swept = true;
   } finally {
-    const released = retryUpdateReportStateWrite(() =>
+    const released = await retryUpdateReportStateWrite(() =>
       releaseUpdateFailureReportArtifactSweep(
         prepared.attemptId,
         receipt.reservationId,
         sweepOwnerId,
         sweepGeneration,
         stateEnv,
+        context,
       ),
     );
     swept &&= released;

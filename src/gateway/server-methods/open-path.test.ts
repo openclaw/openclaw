@@ -39,13 +39,6 @@ describe("resolveOpenPathCommand", () => {
     });
   });
 
-  it("uses xdg-open on Linux", () => {
-    expect(resolveOpenPathCommand("/tmp/openclaw.json", "linux")).toEqual({
-      command: "xdg-open",
-      args: ["/tmp/openclaw.json"],
-    });
-  });
-
   it("uses a quoted PowerShell FilePath on Windows", () => {
     expect(resolveOpenPathCommand(String.raw`C:\tmp\o'hai & calc.json`, "win32")).toEqual({
       command: "powershell.exe",
@@ -75,22 +68,6 @@ describe("execOpenPath", () => {
     });
   });
 
-  it("detaches xdg-open and preserves an immediate successful exit", async () => {
-    const spawned = fakeChild(Promise.resolve({ failed: false }));
-    spawnCommandMock.mockReturnValue(spawned.child);
-
-    await execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux");
-
-    expect(spawnCommandMock).toHaveBeenCalledWith(["xdg-open", "/tmp/workspace"], {
-      buffer: false,
-      cleanup: false,
-      detached: true,
-      reject: true,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    expect(spawned.unref).toHaveBeenCalledOnce();
-  });
-
   it("returns after startup observation without killing a foreground Linux handler", async () => {
     vi.useFakeTimers();
     const { promise: childResult, resolve: settleChild } = createDeferred<unknown>();
@@ -110,28 +87,20 @@ describe("execOpenPath", () => {
     await execution;
 
     expect(settled).toBe(true);
+    expect(spawnCommandMock).toHaveBeenCalledWith(["xdg-open", "/tmp/workspace"], {
+      buffer: false,
+      cleanup: false,
+      detached: true,
+      reject: true,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    expect(spawned.unref).toHaveBeenCalledOnce();
     expect(spawned.kill).not.toHaveBeenCalled();
     expect(spawned.stderr.destroyed).toBe(false);
     expect(spawned.stderr.write("foreground handler: delayed diagnostic")).toBe(true);
     settleChild({ failed: false });
     await Promise.resolve();
     expect(spawned.stderr.destroyed).toBe(true);
-  });
-
-  it("propagates an immediate Linux launcher failure with bounded stderr", async () => {
-    let rejectChild: (error: Error) => void = () => {};
-    const spawned = fakeChild(
-      new Promise((_, reject) => {
-        rejectChild = reject;
-      }),
-    );
-    spawnCommandMock.mockReturnValue(spawned.child);
-
-    const execution = execOpenPath({ command: "xdg-open", args: ["/tmp/workspace"] }, "linux");
-    spawned.stderr.write("xdg-open: no method available for opening '/tmp/workspace'");
-    rejectChild(new Error("Command failed with exit code 3: xdg-open"));
-
-    await expect(execution).rejects.toThrow("xdg-open: no method available");
   });
 
   it("keeps xdg-open stderr truncation surrogate-safe", async () => {

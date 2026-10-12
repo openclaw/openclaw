@@ -411,6 +411,47 @@ describe("attempt result projection", () => {
       },
       true,
     ],
+    ...["MEDIA:https://example.com/result.png", "[[audio_as_voice]]"].map(
+      (text): [string, ResultInput, boolean] => [
+        `assistant output ${text}`,
+        { ...truncated, assistantTexts: [text] },
+        false,
+      ],
+    ),
+    [
+      "snapshot-only media",
+      {
+        ...truncated,
+        messagesSnapshot: [
+          ...settledToolMessages(),
+          makeAssistantMessageFixture({
+            stopReason: "stop",
+            content: [{ type: "text", text: "MEDIA:https://example.com/result.png" }],
+          }),
+        ],
+      },
+      false,
+    ],
+    [
+      "media from a previous user turn",
+      {
+        ...truncated,
+        messagesSnapshot: [
+          makeAssistantMessageFixture({
+            stopReason: "stop",
+            content: [{ type: "text", text: "MEDIA:https://example.com/old.png" }],
+          }),
+          { role: "user", content: "Check again", timestamp: 1 },
+          ...settledToolMessages(),
+        ],
+      },
+      true,
+    ],
+    [
+      "reply target without output",
+      { ...truncated, assistantTexts: ["[[reply_to_current]]"] },
+      true,
+    ],
     ["unattributed visible text", { ...truncated, assistantTexts: ["here is the answer"] }, false],
     [
       "post-tool authored text",

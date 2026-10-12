@@ -7,6 +7,7 @@ import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import {
   captureOpenClawStateReadSource,
@@ -38,6 +39,36 @@ it("retires cached readers after independent custody joins and permits reuse", a
   );
   expect(mock.create).toHaveBeenCalledTimes(2);
 });
+
+it.each([true, false])(
+  "refuses writer-held reader retirement before cleanup (targeted close: %s)",
+  async (explicitSqliteCloseReleasesNativeResources) => {
+    const { options } = source();
+    mock.capabilities.mockReturnValue({
+      explicitSqliteCloseReleasesNativeResources,
+      decided: true,
+      reason: "test policy",
+    });
+    const nativeSource = captureRetainedNativeWorkerSource();
+    queueTask().result.resolve(emptyReply);
+    await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+
+    await expect(
+      runOpenClawAgentWriteAdmission({ agentId: "main", path: options.path }, () =>
+        retireIdleOpenClawStateReadWorkers(nativeSource),
+      ),
+    ).rejects.toThrow("while holding a store writer");
+    expect(mock.closeResources).not.toHaveBeenCalled();
+    expect(mock.rotate).not.toHaveBeenCalled();
+    expect(mock.closePool).not.toHaveBeenCalled();
+
+    await expect(retireIdleOpenClawStateReadWorkers(nativeSource)).resolves.toBe(true);
+    expect(
+      explicitSqliteCloseReleasesNativeResources ? mock.closeResources : mock.rotate,
+    ).toHaveBeenCalledOnce();
+    expect(mock.closePool).toHaveBeenCalledOnce();
+  },
+);
 
 it("keeps lazy reads with their captured generation when another generation dispatches them", async () => {
   const { options } = source();

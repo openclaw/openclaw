@@ -16,11 +16,11 @@ export type SqliteWalSplitBrainEvent = {
   targetInode?: string;
 };
 
-function statSqliteSidecarTarget(pathname: string): BigIntStats | undefined {
+function readUnlessMissing<T>(read: () => T, allowClosedDescriptor = false): T | undefined {
   try {
-    return fs.statSync(pathname, { bigint: true });
+    return read();
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
+    if ((allowClosedDescriptor && hasErrnoCode(error, "EBADF")) || hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -42,26 +42,13 @@ function isSqliteWalSidecarSplitBrain(
 export function detectSqliteWalSplitBrain(
   databasePath: string,
 ): SqliteWalSplitBrainEvent | undefined {
-  let descriptors: string[];
-  try {
-    descriptors = fs.readdirSync(PROC_SELF_FD_PATH);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
+  const descriptors = readUnlessMissing(() => fs.readdirSync(PROC_SELF_FD_PATH));
   const sidecarPaths = [`${databasePath}-wal`, `${databasePath}-shm`];
-  for (const descriptorName of descriptors) {
+  for (const descriptorName of descriptors ?? []) {
     const descriptorPath = path.join(PROC_SELF_FD_PATH, descriptorName);
-    let linkedPath: string;
-    try {
-      linkedPath = fs.readlinkSync(descriptorPath);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
+    const linkedPath = readUnlessMissing(() => fs.readlinkSync(descriptorPath));
+    if (linkedPath === undefined) {
+      continue;
     }
     const sidecarPath = sidecarPaths.find(
       (candidate) => linkedPath === candidate || linkedPath === `${candidate} (deleted)`,
@@ -69,26 +56,17 @@ export function detectSqliteWalSplitBrain(
     if (!sidecarPath) {
       continue;
     }
-    let descriptor: BigIntStats;
-    try {
-      descriptor = fs.fstatSync(Number(descriptorName), { bigint: true });
-    } catch (error) {
-      if (hasErrnoCode(error, "EBADF") || hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
+    const descriptor = readUnlessMissing(
+      () => fs.fstatSync(Number(descriptorName), { bigint: true }),
+      true,
+    );
+    if (
+      descriptor === undefined ||
+      readUnlessMissing(() => fs.readlinkSync(descriptorPath)) !== linkedPath
+    ) {
+      continue;
     }
-    try {
-      if (fs.readlinkSync(descriptorPath) !== linkedPath) {
-        continue;
-      }
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
-    }
-    const target = statSqliteSidecarTarget(sidecarPath);
+    const target = readUnlessMissing(() => fs.statSync(sidecarPath, { bigint: true }));
     if (!isSqliteWalSidecarSplitBrain(descriptor, target)) {
       continue;
     }

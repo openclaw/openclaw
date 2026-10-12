@@ -7,7 +7,10 @@ import {
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { AssistantTranscriptSource } from "../agents/sessions/assistant-transcript-source.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
-import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import type {
+  HarnessCompletionRecovery,
+  RestartRecoveryTerminalDeliveryEvidence,
+} from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
@@ -221,6 +224,16 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
+  /** Current facts from the original process-owned actor, never a replacement. */
+  readCurrentSession?: () =>
+    | {
+        sessionId: string;
+        lifecycleRevision?: string;
+        activeWriterRunId?: string;
+        restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
+        restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
+      }
+    | undefined;
   /** Captured admitted completion authority, retained by the durable queue. */
   harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;
@@ -264,12 +277,16 @@ export type ReplyPayloadMetadata = {
   assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** Exact decoration added by normalization, not model-authored text. */
+  responsePrefix?: string;
   /** Exact channel/account transform owner that already accepted this payload. */
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
   replyDispatcherNormalizationOwner?: object;
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
+  /** Inline acknowledgements accompany a model turn and do not own another command input. */
+  inlineCommandReply?: true;
   /** A read-only status command exchange belongs in history, not model context. */
   contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
@@ -318,9 +335,9 @@ export type ReplyPayloadMetadata = {
   independentDeliveryIntentId?: string;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
-   * still the live delivery vehicle; this mirror makes the reply durable for
-   * chat.history and page reloads without turning the internal UI into an
-   * outbound channel.
+   * the live delivery vehicle unless transcriptOwner identifies an already
+   * committed reply delivered through session.message/history. The mirror
+   * makes replies durable without turning the internal UI into an outbound channel.
    */
   sourceReplyTranscriptMirror?: {
     sessionKey: string;
@@ -370,6 +387,12 @@ export function setReplyPayloadMetadata<T extends object>(
 
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+/** Remove only recorded normalization decoration when appending a preview chunk. */
+export function stripReplyPayloadResponsePrefix(payload: object, text: string): string {
+  const prefix = getReplyPayloadMetadata(payload)?.responsePrefix;
+  return prefix && text.startsWith(prefix) ? text.slice(prefix.length) : text;
 }
 
 /** Records attachment failures after the ones the payload already carries. */

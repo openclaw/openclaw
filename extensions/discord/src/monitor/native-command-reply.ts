@@ -1,4 +1,4 @@
-import type { APIEmbed } from "discord-api-types/v10";
+import type { APIEmbed, APIMessageTopLevelComponent } from "discord-api-types/v10";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
@@ -30,6 +30,34 @@ import {
 import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 
 export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
+
+/** Retain visible component text, not interaction IDs or option values. */
+export function formatDiscordCommandComponents(
+  components: readonly (TopLevelComponents | APIMessageTopLevelComponent)[],
+): string {
+  const text: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    for (const [key, field] of Object.entries(value)) {
+      if (
+        (key === "content" || key === "label" || key === "description" || key === "placeholder") &&
+        typeof field === "string"
+      ) {
+        text.push(field);
+      } else if ((key === "components" || key === "options") && Array.isArray(field)) {
+        field.forEach(visit);
+      } else if (key === "accessory") {
+        visit(field);
+      }
+    }
+  };
+  components.forEach((component) =>
+    visit("serialize" in component ? component.serialize() : component),
+  );
+  return text.join("\n");
+}
 
 export function resolveDiscordInteractionReplyOptions(
   params: Pick<DiscordCommandArgContext, "cfg" | "discordConfig" | "accountId">,
@@ -116,6 +144,7 @@ export async function deliverDiscordInteractionReply(params: {
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   chunkMode: "length" | "newline";
+  onDelivered?: (text: string) => Promise<void>;
 }): Promise<boolean> {
   const { interaction, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
   const nativeParts = resolveDiscordInteractionMessageParts(params.payload);
@@ -151,6 +180,7 @@ export async function deliverDiscordInteractionReply(params: {
   // Interaction acknowledgement/defer state is not delivery for this payload. Only a
   // successful native send in this invocation can make a later expiry partial.
   let payloadDelivered = false;
+  const deliveredText: string[] | undefined = params.onDelivered ? [] : undefined;
   const sendMessage = async (content: string, files?: MessagePayloadFile[]) => {
     const firstMessage = !payloadDelivered;
     const components = firstMessage ? firstMessageComponents : undefined;
@@ -166,9 +196,9 @@ export async function deliverDiscordInteractionReply(params: {
     try {
       const result = await safeDiscordInteractionCall("interaction send", async () => {
         const sent =
-          !preferFollowUp && !payloadDelivered
-            ? await interaction.reply(payloadLocal)
-            : await interaction.followUp(payloadLocal);
+          await interaction[!preferFollowUp && !payloadDelivered ? "reply" : "followUp"](
+            payloadLocal,
+          );
         payloadDelivered = true;
         if (firstMessage && componentBuild) {
           // Initial callbacks need not return a message; callback input supplies its ID later.
@@ -188,6 +218,27 @@ export async function deliverDiscordInteractionReply(params: {
           "Discord interaction expired before message dispatch",
           { cause: new Error("Unknown interaction") },
         );
+      }
+      if (deliveredText) {
+        if (payloadLocal.content) {
+          deliveredText.push(payloadLocal.content);
+        }
+        if (payloadLocal.components) {
+          deliveredText.push(formatDiscordCommandComponents(payloadLocal.components));
+        }
+        for (const embed of payloadLocal.embeds ?? []) {
+          deliveredText.push(
+            [
+              embed.title,
+              embed.description,
+              embed.author?.name,
+              ...(embed.fields ?? []).flatMap((field) => [field.name, field.value]),
+              embed.footer?.text,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          );
+        }
       }
     } catch (error) {
       if (!payloadDelivered) {
@@ -232,6 +283,9 @@ export async function deliverDiscordInteractionReply(params: {
       continue;
     }
     await sendMessage(chunk, chunkFiles);
+  }
+  if (payloadDelivered && params.onDelivered) {
+    await params.onDelivered(deliveredText?.filter(Boolean).join("\n") ?? "");
   }
   return payloadDelivered;
 }

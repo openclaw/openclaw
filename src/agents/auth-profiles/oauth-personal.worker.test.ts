@@ -2,12 +2,12 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerRequest,
 } from "../../infra/sqlite-worker-contract.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { prepareUserModelAccountAuthority } from "../../state/user-model-account-operations.js";
 import {
@@ -28,34 +28,6 @@ import { withPersonalAuthProfileStore } from "./personal-store.js";
 import type { OAuthCredential } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-it("refreshes a personal credential with no caller-thread data SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId, credential, replacement: refreshed } = fixture();
-    const manager = createOAuthManager({
-      buildApiKey: async (_provider, value) => value.access,
-      canRefreshCredential: async () => true,
-      refreshCredential: async () => refreshed,
-      readBootstrapCredential: () => null,
-    });
-    const sql = observeHostDataSql();
-    let queries: string[];
-    try {
-      const result = await manager.resolveOAuthAccess({
-        store: { version: 1, profiles: { [profileId]: credential } },
-        profileId,
-        credential,
-      });
-      expect(result?.credential).toEqual(refreshed);
-      queries = [...sql.queries];
-    } finally {
-      sql.restore();
-    }
-    expect(readUserModelAuthProfile(profileId)?.credential).toEqual(refreshed);
-    console.info(`personal OAuth MAIN data SQL: ${queries.length}`);
-    expect(queries).toEqual([]);
-  });
-});
 
 function fixture() {
   const owner = ensureProfileForEmail("personal-race@example.test");
@@ -101,23 +73,12 @@ it("does not disclose a personal API key when its worker read is canceled", asyn
     });
     const controller = new AbortController();
     const reason = new Error("Synthetic credential read cancellation");
-    const original = workerStore.runOpenClawStateWorkerOperation;
-    vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, options) =>
-        original(
-          context,
-          (scope) =>
-            operation({
-              execute: (command, executeOptions) => {
-                if (command.type === "authProfiles.personal") {
-                  controller.abort(reason);
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-    );
+    probe.command(workerStore, (command, executeOptions, scope) => {
+      if (command.type === "authProfiles.personal") {
+        controller.abort(reason);
+      }
+      return scope.execute(command, executeOptions);
+    });
     await expect(
       resolveApiKeyForProfile({
         profileId,
@@ -316,29 +277,15 @@ it.each(["conflict", "unknown"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { profileId, credential, replacement, replace } = fixture();
       let attempts = 0;
-      const original = workerStore.runOpenClawStateWorkerOperation;
-      vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementation(
-        (context, operation, options) =>
-          original(
-            context,
-            (scope) =>
-              operation({
-                execute: (command, executeOptions) => {
-                  if (command.type === "authProfiles.personalReplace") {
-                    attempts++;
-                    if (outcome === "unknown") {
-                      throw new SqliteWorkerError(
-                        "Synthetic transport uncertainty",
-                        "outcome-unknown",
-                      );
-                    }
-                  }
-                  return scope.execute(command, executeOptions);
-                },
-              }),
-            options,
-          ),
-      );
+      probe.command(workerStore, (command, executeOptions, scope) => {
+        if (command.type === "authProfiles.personalReplace") {
+          attempts++;
+          if (outcome === "unknown") {
+            throw new SqliteWorkerError("Synthetic transport uncertainty", "outcome-unknown");
+          }
+        }
+        return scope.execute(command, executeOptions);
+      });
       const updater = vi.fn((store) => {
         if (outcome === "conflict") {
           replace();

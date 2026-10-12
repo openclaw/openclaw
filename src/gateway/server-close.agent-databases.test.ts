@@ -36,14 +36,14 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { startPluginServices } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   OpenClawAgentDatabaseLeaseActiveError,
@@ -67,6 +67,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
@@ -549,13 +550,11 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   }
 }, 300_000);
 
-it("releases agent leases for Doctor after the final Gateway stops while its process stays alive", async () => {
+it("releases agent leases for Doctor after Gateway stops while its process stays alive", async () => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-agent-leases-stop");
   const ownerPid = process.pid;
   try {
-    const first = await fixture.start(await fixture.reservePort());
-    const siblingPort = await fixture.reservePort();
-    const sibling = await fixture.start(siblingPort);
+    const server = await fixture.start(await fixture.reservePort());
     const options = { agentId: "main", env: fixture.state.env };
     const agent = openOpenClawAgentDatabase(options);
     const incognito = openOpenClawAgentDatabase({
@@ -568,15 +567,7 @@ it("releases agent leases for Doctor after the final Gateway stops while its pro
     expect(inspectForDoctor).toThrow(OpenClawAgentDatabaseLeaseActiveError);
     const closeOptions = { reason: "gateway stopping" };
 
-    await first.close(closeOptions);
-    expect(agent.db.isOpen).toBe(true);
-    expect(incognito.db.isOpen).toBe(true);
-    expect(inspectForDoctor).toThrow(OpenClawAgentDatabaseLeaseActiveError);
-    const response = await fetch(`http://127.0.0.1:${siblingPort}/healthz`);
-    await response.body?.cancel();
-    expect(response.ok).toBe(true);
-
-    await sibling.close(closeOptions);
+    await server.close(closeOptions);
     expect(process.pid).toBe(ownerPid);
     expect(isPidAlive(ownerPid)).toBe(true);
     expect(inspectForDoctor).not.toThrow();
@@ -629,8 +620,9 @@ it.skipIf(process.platform !== "linux")(
           started.resolve(server);
           return server;
         },
-        runtime: { log() {}, error() {}, exit },
-      }).catch(started.reject);
+      })
+        .then(exit)
+        .catch(started.reject);
       const server = await started.promise;
       await nextTurn();
       stop = process.listeners("SIGTERM").find((listener) => !previousStops.has(listener));
@@ -700,6 +692,7 @@ it.skipIf(process.platform !== "linux")(
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       vi.spyOn(performance, "now").mockImplementation(() => Date.now());
       stop("SIGTERM");
+      await withinTest(waitForAbortSignal(getGatewayRestartDrainSignal()), signal);
       await vi.advanceTimersByTimeAsync(29_999);
       expect(operation.abortSignal.aborted).toBe(false);
       expect(close).not.toHaveBeenCalled();

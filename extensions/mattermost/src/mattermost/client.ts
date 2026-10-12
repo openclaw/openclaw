@@ -165,7 +165,7 @@ export async function readMattermostError(
     chunkTimeoutMs: 10_000,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`error body read stalled for ${chunkTimeoutMs}ms`),
-  });
+  }).catch(() => ({ text: "error response body unavailable", truncated: false }));
   let detail = text;
   if (contentType.includes("application/json")) {
     try {
@@ -517,20 +517,15 @@ export async function createMattermostDirectChannelWithRetry(
 
   return await retryAsync(
     async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
         return await client.request<MattermostChannel>("/channels/direct", {
           method: "POST",
           body: JSON.stringify(userIds),
-          signal: controller.signal,
           timeoutMs,
         });
       } catch (err) {
         // Normalize before rethrowing so shouldRetry/onRetry below always see Errors.
         throw err instanceof Error ? err : new Error(String(err));
-      } finally {
-        clearTimeout(timeoutId);
       }
     },
     {

@@ -252,11 +252,10 @@ export function canonicalizeTelegramPresentationPayload(
   );
   const buttons = existingButtons ?? presentationButtons;
 
+  const fallbackPresentation = { ...presentation, blocks: fallbackBlocks };
   const fallbackText = richTables
-    ? renderTelegramRichFallbackText({ ...presentation, blocks: fallbackBlocks })
-    : renderMessagePresentationFallbackText({
-        presentation: { ...presentation, blocks: fallbackBlocks },
-      });
+    ? renderTelegramRichFallbackText(fallbackPresentation)
+    : renderMessagePresentationFallbackText({ presentation: fallbackPresentation });
   const currentText =
     resolveLegacyInteractiveTextFallback({ text: payload.text, interactive })?.trim() ?? "";
   const textIsFallback = payload.presentationTextMode === "fallback";

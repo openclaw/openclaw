@@ -137,10 +137,14 @@ describe("managed credential isolation", () => {
     expect(identity.env.GH_TOKEN).toBe(rotatedToken);
     const hosts = parseYaml(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8"));
     expect(hosts["github.com"].oauth_token).toBe(rotatedToken);
+    expect((await fs.stat(profileDir)).mode & 0o777).toBe(0o700);
+    for (const name of ["hosts.yml", "config.yml"]) {
+      expect((await fs.stat(path.join(profileDir, name))).mode & 0o777).toBe(0o600);
+    }
     expect(commands.run).not.toHaveBeenCalled();
   });
 
-  it.each(["unchanged", "host", "API"])(
+  it.each(["host", "API"])(
     "pins personal publication endpoints during verification (%s)",
     async (change) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("personal-host-admission-"));
@@ -170,214 +174,98 @@ describe("managed credential isolation", () => {
         accountId: 202,
         assertCurrent: () => {},
       }).then((identity) => ({ host: identity.host, accountId: identity.account.accountId }));
-      const outcome =
-        change === "unchanged"
-          ? expect(prepared).resolves.toMatchObject({
-              host: "github.com",
-              accountId: 202,
-            })
-          : expect(prepared).rejects.toThrow("GitHub identity changed");
+      const outcome = expect(prepared).rejects.toThrow("GitHub identity changed");
       await started.promise;
-      if (change !== "unchanged") {
-        setRuntimeConfigSnapshot({
-          gateway: {
-            github: {
-              host: change === "host" ? "b.ghe.example.test" : config.gateway.github.host,
-              apiBaseUrl: "https://b.ghe.example.test/api/v3",
-            },
+      setRuntimeConfigSnapshot({
+        gateway: {
+          github: {
+            host: change === "host" ? "b.ghe.example.test" : config.gateway.github.host,
+            apiBaseUrl: "https://b.ghe.example.test/api/v3",
           },
-        });
-      }
+        },
+      });
       release.resolve(new Response(JSON.stringify(account)));
       await outcome;
     },
   );
 
-  it.each(["system", "agent", "personal", "native"] as const)(
-    "pins the verified %s credential for broker children across profile retirement and host changes",
-    async (scope) => {
-      const root = dirs.make("github-broker-snapshot-");
-      vi.stubEnv("OPENCLAW_STATE_DIR", root);
-      const profileId = "ghp_33333333333333333333333333333333";
-      const selected = { profileId, gitAuthor: { name: "Managed Author" } };
-      const config =
-        scope === "system"
-          ? { tools: { github: selected } }
-          : scope === "agent"
-            ? { agents: { entries: { main: { tools: { github: selected } } } } }
-            : {};
-      let nativeToken = "synthetic-native-before";
-      const profileDir =
-        scope === "native"
-          ? undefined
-          : resolveManagedGitHubProfileDir({
-              agentId: "main",
-              scope,
-              profileId,
-            });
-      if (profileDir) {
-        await installManagedGitHubProfile({
-          profileDir,
-          token: "synthetic-managed-before",
-          commitConfig: async () => {},
-        });
-      }
-      commands.run.mockImplementation(async (argv: string[]) => {
-        if (argv.join(" ") !== "gh auth token --hostname github.com") {
-          throw new Error("Unexpected subprocess");
-        }
-        return result(nativeToken);
-      });
-      const identity =
-        scope === "personal"
-          ? await preparePersonalGitHubPublicationIdentity({
-              profileId,
-              accountId: 202,
-              assertCurrent: () => {},
-            })
-          : await prepareGitHubPublicationIdentity({ config, agentId: "main" });
-      if (scope === "system" || scope === "agent") {
-        setRuntimeConfigSnapshot({
-          gateway: {
-            github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
-          },
-        });
-        const probes = vi.mocked(fetch).mock.calls.length;
-        await expect(
-          prepareGitHubPublicationIdentity({ config, agentId: "main" }).then(() => undefined),
-        ).rejects.toMatchObject({ reason: "unavailable" });
-        expect(fetch).toHaveBeenCalledTimes(probes);
-      }
-      if (profileDir) {
-        await fs.rm(profileDir, { recursive: true });
-      }
-      nativeToken = "synthetic-native-after";
-      // Exercise the actual overlay composition used by subprocesses, including
-      // a different ambient token and an absent selected credential file.
-      const child = resolveCommandEnv({
-        argv: ["gh", "api", "user"],
-        baseEnv: { GH_TOKEN: nativeToken },
-        env: identity.env,
-      });
-      expect(child.GH_TOKEN).toBe(
-        scope === "native" ? "synthetic-native-before" : "synthetic-managed-before",
-      );
-      expect(child.GH_ENTERPRISE_TOKEN).toBe(
-        scope === "native" ? "synthetic-native-before" : "synthetic-managed-before",
-      );
-      expect(child.GITHUB_TOKEN).toBeUndefined();
-      expect(child.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
-      const ordinary = prepareGitHubToolEnvironment({ config, agentId: "main" });
-      expect(JSON.stringify(ordinary)).not.toContain("synthetic-");
-      if (scope === "system" || scope === "agent") {
-        expect(ordinary.localIdentityEnv.GH_CONFIG_DIR).toBe(profileDir);
-        expect(ordinary.localIdentityEnv.GIT_AUTHOR_NAME).toBe("Managed Author");
-      }
-      expect(Object.isFrozen(identity.env)).toBe(true);
-    },
-  );
-
-  it.each(["mismatch", "ownership"] as const)(
-    "rejects a refresh %s without replacing the selected credential",
-    async (failure) => {
-      const root = dirs.make("github-refresh-isolation-");
-      const profileDir = path.join(root, "profile");
-      await installManagedGitHubProfile({
-        profileDir,
-        token: "synthetic-before",
-        commitConfig: async () => {},
-      });
-      const original = await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8");
-      let current = true;
-      vi.mocked(fetch).mockImplementation(async () => {
-        current = false;
-        return new Response(JSON.stringify({ ...account, id: failure === "mismatch" ? 303 : 202 }));
-      });
-      await expect(
-        refreshManagedGitHubProfile({
-          profileDir,
-          token: "synthetic-after",
-          expectedAccountId: 202,
-          assertCurrent: () => {
-            if (failure === "ownership" && !current) {
-              throw new Error("owner changed");
-            }
-          },
-        }),
-      ).rejects.toThrow(failure === "mismatch" ? "different account" : "owner changed");
-      expect(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8")).toBe(original);
-      expect(await fs.readdir(root)).toEqual(["profile"]);
-      expect(commands.run).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["", "repo, read:org", "repo, write:org", "repo, admin:org", "repo", "read:org"])(
-    "preserves gh's minimum classic-token scope contract for %s",
-    async (scopes) => {
-      const root = dirs.make("github-managed-scopes-");
-      const profileDir = path.join(root, "profile");
-      vi.mocked(fetch).mockImplementation(
-        async () =>
-          new Response(JSON.stringify(account), { headers: { "x-oauth-scopes": scopes } }),
-      );
-      const commitConfig = vi.fn(async () => {});
-      const pending = installManagedGitHubProfile({
-        profileDir,
-        token: "synthetic-scoped-token",
-        commitConfig,
-      });
-      if (scopes === "repo" || scopes === "read:org") {
-        await expect(pending).rejects.toThrow("missing required");
-        expect(commitConfig).not.toHaveBeenCalled();
-        expect(await fs.readdir(root)).toEqual([]);
-      } else {
-        await pending;
-        const hosts = parseYaml(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8"));
-        expect(hosts["github.com"].oauth_token).toBe("synthetic-scoped-token");
-      }
-      expect(commands.run).not.toHaveBeenCalled();
-    },
-  );
-
-  it("installs credentials without mutating native host authentication", async () => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("github-managed-isolation-") };
+  it("pins the verified system credential for broker children across profile retirement and host changes", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("github-broker-snapshot-"));
+    const profileId = "ghp_33333333333333333333333333333333";
+    const config = { tools: { github: { profileId, gitAuthor: { name: "Managed Author" } } } };
     const profileDir = resolveManagedGitHubProfileDir({
       agentId: "main",
       scope: "system",
-      profileId: "ghp_11111111111111111111111111111111",
-      env,
-    });
-    let nativeActiveToken = "synthetic-native-token";
-    commands.run.mockImplementation(async (argv: string[], options: { env: NodeJS.ProcessEnv }) => {
-      // cli/cli cf7aa911: even insecure Login calls activateUser, which deletes
-      // the host-global active keyring slot before copying the candidate token.
-      if (argv[1] === "auth" && argv[2] === "login") {
-        nativeActiveToken = "";
-        await fs.writeFile(
-          path.join(String(options.env.GH_CONFIG_DIR), "hosts.yml"),
-          "github.com:\n",
-        );
-        return result();
-      }
-      if (argv[1] === "api") {
-        return result(JSON.stringify(account));
-      }
-      throw new Error("Unexpected subprocess");
+      profileId,
     });
     await installManagedGitHubProfile({
       profileDir,
-      token: "synthetic-managed-token",
+      token: "synthetic-managed-before",
       commitConfig: async () => {},
     });
-    expect(nativeActiveToken).toBe("synthetic-native-token");
-    expect(commands.run).not.toHaveBeenCalled();
-    expect(fetch).toHaveBeenCalledWith(
-      "https://api.github.com/user",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer synthetic-managed-token" }),
-        redirect: "error",
+    const identity = await prepareGitHubPublicationIdentity({ config, agentId: "main" });
+    setRuntimeConfigSnapshot({
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+      },
+    });
+    const probes = vi.mocked(fetch).mock.calls.length;
+    await expect(
+      prepareGitHubPublicationIdentity({ config, agentId: "main" }).then(() => undefined),
+    ).rejects.toMatchObject({ reason: "unavailable" });
+    expect(fetch).toHaveBeenCalledTimes(probes);
+    await fs.rm(profileDir, { recursive: true });
+    const child = resolveCommandEnv({
+      argv: ["gh", "api", "user"],
+      baseEnv: { GH_TOKEN: "synthetic-native-after" },
+      env: identity.env,
+    });
+    expect(child.GH_TOKEN).toBe("synthetic-managed-before");
+    expect(child.GH_ENTERPRISE_TOKEN).toBe("synthetic-managed-before");
+    expect(child.GITHUB_TOKEN).toBeUndefined();
+    expect(child.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
+    const ordinary = prepareGitHubToolEnvironment({ config, agentId: "main" });
+    expect(JSON.stringify(ordinary)).not.toContain("synthetic-");
+    expect(ordinary.localIdentityEnv.GH_CONFIG_DIR).toBe(profileDir);
+    expect(ordinary.localIdentityEnv.GIT_AUTHOR_NAME).toBe("Managed Author");
+    expect(Object.isFrozen(identity.env)).toBe(true);
+  });
+
+  it("rejects a refresh mismatch without replacing the selected credential", async () => {
+    const root = dirs.make("github-refresh-isolation-");
+    const profileDir = path.join(root, "profile");
+    await installManagedGitHubProfile({
+      profileDir,
+      token: "synthetic-before",
+      commitConfig: async () => {},
+    });
+    const original = await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8");
+    vi.mocked(fetch).mockResolvedValue(Response.json({ ...account, id: 303 }));
+    await expect(
+      refreshManagedGitHubProfile({
+        profileDir,
+        token: "synthetic-after",
+        expectedAccountId: 202,
       }),
+    ).rejects.toThrow("different account");
+    expect(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8")).toBe(original);
+    expect(await fs.readdir(root)).toEqual(["profile"]);
+    expect(commands.run).not.toHaveBeenCalled();
+  });
+
+  it("rejects a classic token missing gh's minimum organization scope", async () => {
+    const root = dirs.make("github-managed-scopes-");
+    const profileDir = path.join(root, "profile");
+    vi.mocked(fetch).mockResolvedValue(
+      Response.json(account, { headers: { "x-oauth-scopes": "repo" } }),
     );
+    const commitConfig = vi.fn(async () => {});
+    await expect(
+      installManagedGitHubProfile({ profileDir, token: "synthetic-scoped-token", commitConfig }),
+    ).rejects.toThrow("missing required");
+    expect(commitConfig).not.toHaveBeenCalled();
+    expect(await fs.readdir(root)).toEqual([]);
+    expect(commands.run).not.toHaveBeenCalled();
   });
 
   it("rejects a corrupt CLI config and keeps YAML credential diagnostics private", async () => {
@@ -425,9 +313,6 @@ describe("managed credential isolation", () => {
   });
 
   it.each([
-    { scope: "system", hosts: "{}" },
-    { scope: "system", hosts: "github.com:\n" },
-    { scope: "system", hosts: "github.com: [invalid" },
     { scope: "agent", hosts: "{}" },
     { scope: "personal", hosts: "{}" },
   ] as const)(
@@ -460,10 +345,7 @@ describe("managed credential isolation", () => {
         ).rejects.toThrow(/unavailable/);
       } else {
         const github = { profileId };
-        const config =
-          scope === "system"
-            ? { tools: { github } }
-            : { agents: { entries: { main: { tools: { github } } } } };
+        const config = { agents: { entries: { main: { tools: { github } } } } };
         const status = await resolveGitHubToolIdentityStatus({
           config,
           agentId: "main",

@@ -32,7 +32,8 @@ const PR_RETRY_MS = 60_000;
 const PR_RETRY_MAX_MS = 15 * 60_000;
 export type SelectedFacts = RuntimeSessionFactsSelectionResult["sessions"][number];
 export type SelectedPrFacts = {
-  row: GatewaySessionRow;
+  generation: MaterializedRow["generation"];
+  databaseFactsRevision: number;
   redaction: ReturnType<typeof sessionFactsRedactionPolicy>;
   owner: ResolvedInProcessGatewayDispatch["context"]["controlUiSessionPullRequests"];
   facts: RuntimeSessionFacts;
@@ -165,6 +166,7 @@ export function prepareFactsRead(
       const previous =
         retained &&
         retained.owner === prOwner &&
+        retained.generation === record.generation &&
         retained.facts.sessionId === record.entry.sessionId &&
         retained.facts.lifecycleRevision === record.entry.lifecycleRevision
           ? retained
@@ -172,7 +174,7 @@ export function prepareFactsRead(
       const retryDue =
         !previous?.retry ||
         previous.retry.at <= now ||
-        previous.row !== row ||
+        previous.databaseFactsRevision !== record.databaseFactsRevision ||
         previous.facts.run !== run;
       const admitSelectedLoad = () => retryDue && admitPrLoad();
       const prs =
@@ -186,64 +188,64 @@ export function prepareFactsRead(
       }
       const previousFacts = rowFacts.get(row);
       const cached =
-        previousFacts?.preview === row.lastMessagePreview && previousFacts?.run === run
+        previousFacts &&
+        previousFacts.preview === row.lastMessagePreview &&
+        previousFacts.run === run &&
+        previousFacts.owner === prOwner &&
+        previousFacts.prs === prs
           ? previousFacts
           : undefined;
-      if (cached && cached.owner === prOwner && cached.prs === prs && (!prFacts || !prEligible)) {
+      if (cached && (!prFacts || !prEligible)) {
         return cached;
       }
       const digest = row.observerDigest ? record.entry.observerDigest : undefined;
       const facts: RuntimeSessionFacts =
-        cached && cached.owner === prOwner && cached.prs === prs
-          ? cached.facts
-          : freezeJsonSnapshot({
-              key: record.key,
-              sessionId: record.entry.sessionId,
-              ...(record.entry.lifecycleRevision
-                ? { lifecycleRevision: record.entry.lifecycleRevision }
-                : {}),
-              agentId: record.agentId,
-              label: safeText(row.label ?? row.displayName, 240),
-              derivedTitle: safeText(row.derivedTitle, 240),
-              lastMessagePreview: safeText(
-                row.lastMessagePreview
-                  ? stripMarkdown(row.lastMessagePreview, { linkStyle: "label", stripHtml: true })
-                      .replace(/\s+/gu, " ")
-                      .trim()
-                  : undefined,
-                400,
-              ),
-              run,
-              ...(digest
-                ? {
-                    observerDigest: {
-                      health: digest.health,
-                      headline: safeText(digest.headline, 120) ?? "",
-                      assessment: safeText(digest.assessment, 320),
-                      revision: digest.revision,
-                    },
-                  }
-                : {}),
-              pullRequests: projectPullRequests(prs?.pullRequests ?? []),
-              ...(prUnavailable ? { pullRequestsUnavailable: true } : {}),
-              ...(prs?.rateLimited || prs?.status === "rate-limited"
-                ? { pullRequestsRateLimited: true }
-                : {}),
-              archived: row.archived === true,
-              lastActivityAt: row.lastActivityAt ?? row.updatedAt ?? 0,
-            });
-      const result =
-        cached && cached.owner === prOwner && cached.prs === prs
-          ? cached
-          : {
-              owner: prOwner,
-              prs,
-              facts,
-              selected: Object.freeze({ ...facts, isMain: row.isMain }),
-              preview: row.lastMessagePreview,
-              run,
-            };
-      if (result !== cached) {
+        cached?.facts ??
+        freezeJsonSnapshot({
+          key: record.key,
+          sessionId: record.entry.sessionId,
+          ...(record.entry.lifecycleRevision
+            ? { lifecycleRevision: record.entry.lifecycleRevision }
+            : {}),
+          agentId: record.agentId,
+          label: safeText(row.label ?? row.displayName, 240),
+          derivedTitle: safeText(row.derivedTitle, 240),
+          lastMessagePreview: safeText(
+            row.lastMessagePreview
+              ? stripMarkdown(row.lastMessagePreview, { linkStyle: "label", stripHtml: true })
+                  .replace(/\s+/gu, " ")
+                  .trim()
+              : undefined,
+            400,
+          ),
+          run,
+          ...(digest
+            ? {
+                observerDigest: {
+                  health: digest.health,
+                  headline: safeText(digest.headline, 120) ?? "",
+                  assessment: safeText(digest.assessment, 320),
+                  revision: digest.revision,
+                },
+              }
+            : {}),
+          pullRequests: projectPullRequests(prs?.pullRequests ?? []),
+          ...(prUnavailable ? { pullRequestsUnavailable: true } : {}),
+          ...(prs?.rateLimited || prs?.status === "rate-limited"
+            ? { pullRequestsRateLimited: true }
+            : {}),
+          archived: row.archived === true,
+          lastActivityAt: row.lastActivityAt ?? row.updatedAt ?? 0,
+        });
+      const result = cached ?? {
+        owner: prOwner,
+        prs,
+        facts,
+        selected: Object.freeze({ ...facts, isMain: row.isMain }),
+        preview: row.lastMessagePreview,
+        run,
+      };
+      if (!cached) {
         rowFacts.set(row, result);
       }
       if (prFacts && prEligible) {
@@ -276,7 +278,15 @@ export function prepareFactsRead(
                       ),
                 pullRequestsStale: true as const,
               });
-        prFacts.set(record.key, { row, redaction, owner: prOwner, facts, selected, retry });
+        prFacts.set(record.key, {
+          generation: record.generation,
+          databaseFactsRevision: record.databaseFactsRevision,
+          redaction,
+          owner: prOwner,
+          facts,
+          selected,
+          retry,
+        });
         return { ...result, selected };
       }
       return result;

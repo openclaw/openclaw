@@ -298,7 +298,13 @@ export async function resolveOllamaDiscoveryResult(params: {
       return {
         provider: {
           ...provider,
-          models: provider.models.filter((model) => !configuredIds.has(model.id)),
+          models: provider.models
+            .filter((model) => !configuredIds.has(model.id))
+            .map((model) =>
+              api !== "ollama" && model.thinkingLevelMap
+                ? Object.assign({}, model, { thinkingLevelMap: undefined })
+                : model,
+            ),
           baseUrl: resolveOllamaRuntimeBaseUrl({
             api,
             configuredBaseUrl,

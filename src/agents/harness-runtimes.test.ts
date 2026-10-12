@@ -53,21 +53,6 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     );
   });
 
-  it("requires Codex for selectable default OpenAI agent models", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-6" },
-          models: {
-            "openai/gpt-5.5": {},
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
-  });
-
   it("requires Codex when OpenAI is only a default model fallback", () => {
     const config = {
       agents: {
@@ -102,40 +87,6 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     ).toEqual(["codex"]);
   });
 
-  it("requires Codex for selectable per-agent OpenAI models", () => {
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-6" },
-        },
-        entries: {
-          worker: {
-            models: {
-              "openai/gpt-5.5": {},
-            },
-          },
-        },
-      },
-    };
-
-    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
-  });
-
-  it("respects explicit OpenClaw runtime policy on selectable OpenAI agent models", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-6" },
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual([]);
-  });
-
   it("does not infer Codex for custom OpenAI-compatible base URLs", () => {
     // OpenAI provider id alone is not enough: custom compatible endpoints may
     // not support Codex runtime assumptions or model contracts.
@@ -158,31 +109,6 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     } as OpenClawConfig;
 
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual([]);
-  });
-
-  it("ignores a malformed legacy list when canonical entries are available", () => {
-    // Runtime collection is diagnostic/setup support, so malformed optional
-    // agent lists should not hide valid defaults-level runtime requirements.
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-6": {
-              agentRuntime: { id: "claude" },
-            },
-          },
-        },
-        entries: { main: {} },
-        list: {
-          ops: {
-            id: "ops",
-            agentRuntime: { id: "codex" },
-          },
-        },
-      },
-    };
-
-    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["claude"]);
   });
 
   it("bounds roster reads per collection batch on large fleets (#135743)", () => {

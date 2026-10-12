@@ -19,7 +19,11 @@ import {
   waitForUpdateCandidateReadiness,
 } from "./update-candidate-canary-readiness.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import { FakeChild, stubHealthyGateway } from "./update-candidate-canary.test-support.js";
+import {
+  canaryOutcomeStep,
+  FakeChild,
+  stubHealthyGateway,
+} from "./update-candidate-canary.test-support.js";
 import * as rehearsals from "./update-candidate-rehearsal.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -219,7 +223,7 @@ export function registerCanaryReadinessBudgetTests(
       }
       const result = await pending;
       expect(result).toMatchObject({ status: "error", phase: "startup" });
-      expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain(
+      expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
         outcome === "write-failed"
           ? "startup warning storage unavailable"
           : "candidate authority revoked",
@@ -462,8 +466,8 @@ export function registerCanaryReadinessBudgetTests(
           expect(proxyRequests).toEqual(["http://external.example/"]);
         } else if (loopbackMode === "proxy") {
           const message = `Readiness check http://127.0.0.1:${rehearsal.port}/startupz failed: HTTP 502 (via proxy http://127.0.0.1:${address.port}). Check Gateway logs and proxy.loopbackMode; rerun openclaw update.`;
-          expectCanaryReadinessWarning(result.steps.at(-1), "startupz", 502);
-          expect(result.steps.at(-1)).toMatchObject({
+          expectCanaryReadinessWarning(canaryOutcomeStep(result.steps), "startupz", 502);
+          expect(canaryOutcomeStep(result.steps)).toMatchObject({
             advisory: { kind: "candidate-runtime-unavailable", message },
           });
           expect(result.status).toBe("ok");
@@ -507,9 +511,9 @@ export function registerCanaryReadinessBudgetTests(
     const unavailable = await validateUpdateCandidateCanary(params);
     expect(unavailable.status).toBe("ok");
     expect(unavailable.logTail.join("\n")).toContain("Update checks reached their time limit");
-    expect(unavailable.steps.at(-1)?.advisory?.message).toContain("ECONNREFUSED");
-    expect(unavailable.steps.at(-1)?.advisory?.message).not.toContain("via proxy");
-    expect(unavailable.steps.at(-1)?.failureFacts).toEqual([
+    expect(canaryOutcomeStep(unavailable.steps)?.advisory?.message).toContain("ECONNREFUSED");
+    expect(canaryOutcomeStep(unavailable.steps)?.advisory?.message).not.toContain("via proxy");
+    expect(canaryOutcomeStep(unavailable.steps)?.failureFacts).toEqual([
       {
         check: "startupz",
         code: "candidate-readiness-probe-failed",
@@ -525,7 +529,7 @@ export function registerCanaryReadinessBudgetTests(
     );
     const cancelled = await validateUpdateCandidateCanary({ ...params, signal: controller.signal });
     expect(cancelled.status).toBe("error");
-    expect(cancelled.steps.at(-1)?.advisory).toBeUndefined();
+    expect(canaryOutcomeStep(cancelled.steps)?.advisory).toBeUndefined();
     expect(cancelled.logTail.join("\n")).toContain("operator cancelled");
   });
 
@@ -567,7 +571,7 @@ export function registerCanaryReadinessBudgetTests(
         },
       });
       if (phase === "config") {
-        const failed = result.steps.at(-1);
+        const failed = canaryOutcomeStep(result.steps);
         expect(result).toMatchObject({ status: "error", phase, durationMs: 425 });
         expect(failed).toMatchObject({ name, durationMs: 25, exitCode: 1 });
         expect(failed?.failureFacts?.[0]?.message).toContain("Configuration unavailable");

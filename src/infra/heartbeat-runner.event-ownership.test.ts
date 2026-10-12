@@ -8,7 +8,6 @@ import {
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
 import {
@@ -74,17 +73,14 @@ describe("Heartbeat cron and exec event ownership", () => {
     expect(ctx.Body).not.toContain("heartbeat poll");
   }
   const reminder = "Reminder: Send the nightly report";
-  function withCronOwner(
-    fn: (fixture: Fixture, marker?: CommandLaneTaskMarker) => Promise<void>,
-    marker?: CommandLaneTaskMarker,
-  ) {
+  function withCronOwner(fn: (fixture: Fixture) => Promise<void>) {
     return withHeartbeat(async (fixture) => {
       fixture.enqueue(reminder, "cron:nightly-report");
       fixture.replySpy.mockResolvedValue({ text: "Handled the reminder" });
       const owner = markCronJobActive("nightly-report");
-      const release = markCronJobWaitingForHeartbeat(owner, marker);
+      const release = markCronJobWaitingForHeartbeat(owner);
       try {
-        await fn(fixture, marker);
+        await fn(fixture);
       } finally {
         release();
         clearCronJobActive("nightly-report", owner);
@@ -162,39 +158,26 @@ describe("Heartbeat cron and exec event ownership", () => {
     },
   );
 
-  it("ignores only the exact current command lane task that owns the cron wake", async () => {
-    await enqueueCommandInLane(CommandLane.Cron, async (marker) => {
-      await withCronOwner(async (f) => {
-        expect((await runCron(f, 1)).status).toBe("ran");
-        expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
-        expect(peekSystemEvents(f.sessionKey)).toEqual([]);
-      }, marker);
-      await withCronOwner(async (f) => expectCronBusy(await runCron(f, 2), f.replySpy), marker);
+  it("executes a cron wake while its active owner waits for heartbeat settlement", async () => {
+    await withCronOwner(async (f) => {
+      expect((await runCron(f)).status).toBe("ran");
+      expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
+      expect(peekSystemEvents(f.sessionKey)).toEqual([]);
     });
   });
-  it.each(["nested lane", "stale task marker", "unowned job"])(
+  it.each(["cron lane", "nested lane", "unowned job"])(
     "blocks a cron wake under pressure from %s",
     async (busy) => {
-      let staleMarker: CommandLaneTaskMarker | undefined;
-      if (busy === "stale task marker") {
-        await enqueueCommandInLane(CommandLane.Cron, async (marker) => {
-          staleMarker = marker;
-        });
-        if (!staleMarker) {
-          throw new Error("expected command lane marker");
-        }
-      }
       await withHeartbeat(async (f) => {
         f.enqueue(reminder, "cron:nightly-report");
         const owner = markCronJobActive("nightly-report");
-        const release =
-          busy === "unowned job" ? undefined : markCronJobWaitingForHeartbeat(owner, staleMarker);
+        const release = busy === "unowned job" ? undefined : markCronJobWaitingForHeartbeat(owner);
         if (release) {
           f.replySpy.mockResolvedValue({ text: "Handled the reminder" });
         }
         try {
           expectCronBusy(
-            await runCron(f, busy === "stale task marker" ? 1 : 0, busy === "nested lane" ? 1 : 0),
+            await runCron(f, busy === "cron lane" ? 1 : 0, busy === "nested lane" ? 1 : 0),
             f.replySpy,
           );
         } finally {

@@ -139,10 +139,9 @@ async function sleepForFloodGate(waitMs: number, signal: TelegramApiSignal): Pro
 
 function callThroughFloodGate(
   gate: TelegramFloodGate,
-  scope: TelegramRequestScope | undefined,
+  replaceable: boolean,
   prev: TelegramApiCall,
 ): TelegramApiCall {
-  const replaceable = scope?.replaceable === true;
   return async (method, payload, signal) => {
     // The ingress worker owns getUpdates flood waits (and long polls must not stall here).
     if (method === "getUpdates") {
@@ -422,7 +421,7 @@ function createTelegramAccountThrottler(
     const admitted = admitAtNetwork(floodGate, scope, (...args) => effect.run(() => prev(...args)));
     const send = callThroughFloodGate(
       floodGate,
-      scope,
+      replaceable,
       (queuedMethod, queuedPayload, queuedSignal) =>
         scheduleRequest(replaceable)(admitted, queuedMethod, queuedPayload, queuedSignal),
     );

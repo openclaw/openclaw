@@ -162,7 +162,7 @@ vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
       }),
       ...slashCommandFixtures.specs,
     ],
-    listSkillCommandsForAgents: () => skillCommandFixtures.commands,
+    prepareSkillCommandsForAgents: async () => skillCommandFixtures.commands,
   };
 });
 

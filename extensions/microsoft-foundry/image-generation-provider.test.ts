@@ -8,7 +8,7 @@ import { PROVIDER_ID } from "./shared.js";
 const {
   assertOkOrThrowHttpErrorMock,
   createProviderOperationDeadlineMock,
-  isProviderApiKeyConfiguredMock,
+  isProviderApiKeyConfiguredAsyncMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   prepareFoundryRuntimeAuthMock,
@@ -19,7 +19,7 @@ const {
 } = vi.hoisted(() => ({
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => params),
-  isProviderApiKeyConfiguredMock: vi.fn(() => true),
+  isProviderApiKeyConfiguredAsyncMock: vi.fn(async () => true),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   prepareFoundryRuntimeAuthMock: vi.fn(),
@@ -42,8 +42,9 @@ const {
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
 }));
 
+// mock-isolation: Image request tests control credential availability independently of host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+  isProviderApiKeyConfiguredAsync: isProviderApiKeyConfiguredAsyncMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -158,7 +159,7 @@ describe("microsoft foundry image generation provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     createProviderOperationDeadlineMock.mockClear();
-    isProviderApiKeyConfiguredMock.mockClear();
+    isProviderApiKeyConfiguredAsyncMock.mockClear();
     postJsonRequestMock.mockReset();
     postMultipartRequestMock.mockReset();
     prepareFoundryRuntimeAuthMock.mockReset();
@@ -169,7 +170,7 @@ describe("microsoft foundry image generation provider", () => {
     vi.unstubAllEnvs();
   });
 
-  it("exposes MAI image provider metadata and capabilities", () => {
+  it("exposes MAI image provider metadata and capabilities", async () => {
     const provider = buildMicrosoftFoundryImageGenerationProvider();
     const cfg = buildConfig();
     expect(provider.id).toBe(PROVIDER_ID);
@@ -180,8 +181,8 @@ describe("microsoft foundry image generation provider", () => {
     expect(provider.capabilities.edit.maxInputImages).toBe(1);
     expect(provider.capabilities.geometry?.sizes).toBeUndefined();
     expect(provider.capabilities.output?.formats).toEqual(["png"]);
-    expect(provider.isConfigured?.({ agentDir: "/agent", cfg })).toBe(true);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
+    expect(await provider.isConfiguredAsync?.({ agentDir: "/agent", cfg })).toBe(true);
+    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith({
       provider: PROVIDER_ID,
       agentDir: "/agent",
       cfg,

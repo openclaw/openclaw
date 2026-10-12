@@ -12,6 +12,7 @@ import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
+import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
 import type { CronFailureRepairRequest } from "../cron/service/state.js";
@@ -447,31 +448,44 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
     // Release Gateway admission on deadline even when a transport ignores abort.
     const result = await withTimeout(
-      sendCronAnnouncePayloadStrict({
-        deps: params.deps,
-        cfg: runtimeConfig,
-        agentId,
-        jobId: params.job.id,
-        target: {
-          channel: params.channel,
-          to: params.to,
-          accountId: params.accountId,
-          threadId: params.threadId,
-          sessionKey: resolveCronDeliverySessionKey(params.job),
-          inheritSessionThread: params.inheritSessionThread,
-        },
-        payload: {
-          ...params.payload,
-          text: appendCronFailureAlertDetails(
-            params.payload.text ?? "",
-            params.job.id,
-            params.runAtMs,
-            runtimeConfig,
-          ),
-        },
-        abortSignal: abortController.signal,
-        onDeliveryAttempt,
-      }),
+      (async () => {
+        const resolved = await resolveDeliveryTarget(
+          runtimeConfig,
+          agentId,
+          {
+            channel: params.channel,
+            to: params.to,
+            accountId: params.accountId,
+            threadId: params.threadId,
+            sessionKey: resolveCronDeliverySessionKey(params.job),
+          },
+          { inheritSessionThread: params.inheritSessionThread },
+        );
+        if (!resolved.ok) {
+          throw resolved.error;
+        }
+        return await sendCronAnnouncePayloadStrict({
+          deps: params.deps,
+          cfg: runtimeConfig,
+          agentId,
+          jobId: params.job.id,
+          target: {
+            ...resolved,
+            sessionKey: resolveCronDeliverySessionKey(params.job),
+          },
+          payload: {
+            ...params.payload,
+            text: appendCronFailureAlertDetails(
+              params.payload.text ?? "",
+              params.job.id,
+              params.runAtMs,
+              runtimeConfig,
+            ),
+          },
+          abortSignal: abortController.signal,
+          onDeliveryAttempt,
+        });
+      })(),
       CRON_WEBHOOK_TIMEOUT_MS,
       {
         createError: () => {

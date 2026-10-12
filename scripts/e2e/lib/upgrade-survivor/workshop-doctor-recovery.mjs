@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { isMainThread } from "node:worker_threads";
-import { readDatabase } from "./observations.mjs";
+import { findInstalledPackageRoot, readDatabase } from "./observations.mjs";
 import {
   assertWorkshopProposalsRetired,
   captureWorkshopLegacyState,
@@ -95,25 +95,24 @@ export function captureWorkshopCandidate(tarball, artifactRoot, candidateVersion
 }
 
 function hasMalformedWorkshopIndex(filename) {
-  const database = new DatabaseSync(filename, { readOnly: true });
-  try {
-    database.prepare("SELECT review_id FROM skill_workshop_collection_reviews LIMIT 1").get();
-    return false;
-  } catch (error) {
-    if (!(error instanceof Error)) {
+  return readDatabase(filename, (database) => {
+    try {
+      database.prepare("SELECT review_id FROM skill_workshop_collection_reviews LIMIT 1").get();
+      return false;
+    } catch (error) {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      if (error.message.includes("malformed database schema") && error.message.includes(INDEX)) {
+        return true;
+      }
+      // Candidate Doctor retires the table that carries the malformed index.
+      if (error.message.includes("no such table: skill_workshop_collection_reviews")) {
+        return false;
+      }
       throw error;
     }
-    if (error.message.includes("malformed database schema") && error.message.includes(INDEX)) {
-      return true;
-    }
-    // Candidate Doctor retires the table that carries the malformed index.
-    if (error.message.includes("no such table: skill_workshop_collection_reviews")) {
-      return false;
-    }
-    throw error;
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function inspectMalformedState(filename) {
@@ -455,14 +454,9 @@ function observeProcess() {
   }
   let identity = null;
   try {
-    let directory = path.dirname(fs.realpathSync(process.argv[1]));
-    // Installed CLI entrypoints are at the package root or inside dist.
-    for (let depth = 0; depth < 3; depth++, directory = path.dirname(directory)) {
-      const manifest = path.join(directory, "package.json");
-      if (fs.existsSync(manifest) && readJson(manifest).name === "openclaw") {
-        identity = installedIdentity(directory);
-        break;
-      }
+    const root = findInstalledPackageRoot(path.dirname(fs.realpathSync(process.argv[1])), 3);
+    if (root) {
+      identity = installedIdentity(root);
     }
   } catch {
     // Missing identity rejects the evidence without changing the observed CLI.

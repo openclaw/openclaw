@@ -11,6 +11,7 @@ import {
   buildWhatsAppQuotedMessageKeyFromObservedMessage,
   requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
+  waitForWhatsAppQuotedMessage,
 } from "./whatsapp-live.observations.js";
 import { createWhatsAppMessageScenario } from "./whatsapp-live.scenario-builders.js";
 
@@ -234,22 +235,12 @@ export const whatsappConversationScenarios = {
             throw new Error("WhatsApp driver did not return a quoted trigger message id.");
           }
           const quotedTriggerMessageId = quotedTrigger.messageId;
-          await waitForScenarioObservedMessage(context, {
-            diagnosticChecks: [
-              {
-                label: "containsTriggerMarker",
-                match: (message) => message.text.includes(triggerMarker),
-              },
-              {
-                label: "quotesTrigger",
-                match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
-              },
-            ],
-            match: (message) =>
-              message.text.includes(triggerMarker) &&
-              message.quoted?.messageId === quotedTriggerMessageId,
+          await waitForWhatsAppQuotedMessage(context, {
             observedAfter: quotedStartedAt,
             timeoutMs: 60_000,
+            textMarker: triggerMarker,
+            quotedMessageId: quotedTriggerMessageId,
+            diagnosticLabels: ["containsTriggerMarker", "quotesTrigger"],
           });
           return "quoted reply to bot triggered a group response without an explicit mention";
         },

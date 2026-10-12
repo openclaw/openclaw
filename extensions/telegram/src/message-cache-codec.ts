@@ -78,18 +78,6 @@ export function isTelegramMessageFromCurrentBot(msg: Message, botUserId?: number
   return msg.from?.id === currentBotUserId || msg.sender_business_bot?.id === currentBotUserId;
 }
 
-function resolveMessageBody(msg: Message, preserveWhitespace: boolean): string | undefined {
-  const text = getTelegramTextParts(msg).text;
-  if (text.trim()) {
-    return preserveWhitespace ? text : text.trim();
-  }
-  const location = extractTelegramLocation(msg);
-  if (location) {
-    return formatLocationText(location);
-  }
-  return resolveTelegramRichMessageBody(msg);
-}
-
 function resolveMessageTimestamp(msg: MessageWithPromptContextTimestamp): number | undefined {
   return (
     asFiniteNumber(msg.openclaw_prompt_context_timestamp_ms) ??
@@ -111,7 +99,15 @@ export function normalizeMessageNode(
   const fileId = media?.fileRef.file_id;
   const forwardedFrom = normalizeForwardedContext(msg);
   const replyMessage = resolveReplyMessage(msg);
-  const body = resolveMessageBody(msg, params.promptContextProjectionMarker !== undefined);
+  const preserveWhitespace = params.promptContextProjectionMarker !== undefined;
+  const text = getTelegramTextParts(msg).text;
+  let body: string | undefined;
+  if (text.trim()) {
+    body = preserveWhitespace ? text : text.trim();
+  } else {
+    const location = extractTelegramLocation(msg);
+    body = location ? formatLocationText(location) : resolveTelegramRichMessageBody(msg);
+  }
   const threadBinding = normalizeTelegramMessageThreadBinding(params.threadBinding);
   const threadId =
     threadBinding?.threadSpec.scope === "none"

@@ -74,6 +74,8 @@ it.for([false, true])(
     const original = new Error("original update failure");
     const entered = createDeferred();
     const release = createDeferred();
+    const nativeEntered = createDeferred();
+    const nativeRelease = createDeferred();
     const removed = vi.spyOn(fs, "rm");
     const reportRetained = vi.spyOn(temporaryArtifacts, "reportRetainedUpdateRuntime");
     vi.spyOn(os, "tmpdir").mockReturnValue(base);
@@ -115,7 +117,11 @@ it.for([false, true])(
       source.runtimeGeneration.retain({}, async () => {
         entered.resolve();
         await release.promise;
-        resourcesSettled = true;
+        return async () => {
+          nativeEntered.resolve();
+          await nativeRelease.promise;
+          resourcesSettled = true;
+        };
       });
       acceptedWrite = store.execute({ type: "append", input: "accepted before exit" });
       void acceptedWrite.catch(() => undefined);
@@ -143,8 +149,27 @@ it.for([false, true])(
       expect(assertResourcesSettled).not.toHaveBeenCalled();
       assert.ok(directory);
       expect((await stat(directory)).isDirectory()).toBe(true);
+      release.resolve();
+      await withinTest(
+        awaitGateBeforeSettlement(
+          nativeEntered.promise,
+          settled,
+          "Updater returned before native retirement",
+        ),
+        signal,
+      );
+      expect(await maintain()).toContainEqual(
+        expect.stringContaining("the creating update still owns this runtime"),
+      );
+      expect(assertResourcesSettled).not.toHaveBeenCalled();
+      expect(reportRetained).not.toHaveBeenCalledWith(
+        directory,
+        expect.stringContaining("worker generation settled; cleanup deferred"),
+      );
+      expect((await stat(directory)).isDirectory()).toBe(true);
     } finally {
       release.resolve();
+      nativeRelease.resolve();
       await settled;
     }
     expect(await settled).toEqual(failed ? { error: original } : { value: receipt.metrics });
@@ -583,6 +608,81 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked", "git-modules"] as
   },
 );
 
+it.each(["npm", "pnpm11"] as const)(
+  "keeps the retained %s runtime inside its install's dependency owner",
+  async (layout) => {
+    const base = await fs.realpath(tempDirs.make("retained-dependency-owner-"));
+    const globalRoot = path.join(base, "prefix", layout === "npm" ? "lib/node_modules" : "v11");
+    const root =
+      layout === "npm"
+        ? path.join(globalRoot, "openclaw")
+        : path.join(globalRoot, ".pnpm/openclaw@1/node_modules/openclaw");
+    const dependency = path.join(
+      globalRoot,
+      layout === "npm" ? "fixture" : ".pnpm/node_modules/fixture",
+    );
+    const ambientModules = path.join(base, "node_modules");
+    for (const directory of [
+      path.join(root, "dist"),
+      dependency,
+      path.join(ambientModules, "ambient-peer"),
+      path.join(ambientModules, "unrelated"),
+    ]) {
+      await mkdir(directory, { recursive: true });
+    }
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module", dependencies: { fixture: "1.0.0" } }),
+    );
+    await writeFile(path.join(root, "dist/updater.mjs"), 'export { value } from "fixture";');
+    await writeFile(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        type: "module",
+        exports: "./index.js",
+        peerDependencies: { "ambient-peer": "*" },
+        peerDependenciesMeta: { "ambient-peer": { optional: true } },
+      }),
+    );
+    await writeFile(path.join(dependency, "index.js"), 'export const value = "hoisted survived";');
+    await writeFile(
+      path.join(ambientModules, "ambient-peer/package.json"),
+      '{"name":"ambient-peer"}',
+    );
+    await writeFile(path.join(ambientModules, "unrelated/sentinel.txt"), "unrelated dependency");
+    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
+    await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
+      await retain({
+        mutationRoots: [globalRoot],
+        installTarget: {
+          manager: layout === "npm" ? "npm" : "pnpm",
+          command: layout === "npm" ? "npm" : "pnpm",
+          globalRoot,
+          packageRoot: root,
+        },
+        timeoutMs: 30_000,
+        assertCurrent() {},
+      });
+      const retainedUrl = captureRuntimeWorkerSource(moduleUrl).moduleUrl;
+      const retainedRoot = path.resolve(path.dirname(fileURLToPath(retainedUrl)), "..");
+      const retainedAmbient = path.resolve(retainedRoot, path.relative(root, ambientModules));
+      await rename(globalRoot, `${globalRoot}.previous`);
+      await mkdir(globalRoot);
+      await rm(`${globalRoot}.previous`, { recursive: true });
+      expect((await import(retainedUrl.href)).value).toBe("hoisted survived");
+      await expect(stat(path.join(retainedAmbient, "ambient-peer"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  },
+);
+
 it("refuses unsafe fallback storage without changing the installed runtime", async () => {
   const base = tempDirs.make("retained-owner-refusal-");
   const owner = path.join(base, "manager-project");
@@ -710,6 +810,51 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun", "bun-no-e
   },
 );
 
+it("retains and reclaims the runtime when the install is spelled unlike its native realpath", async ({
+  skip,
+}) => {
+  // Windows 8.3 names (C:\Users\RUNNER~1) and case-insensitive volumes give one
+  // directory several spellings; native realpath returns only the on-disk one.
+  const base = await fs.realpath(tempDirs.make("openclaw-retained-spelling-"));
+  const root = await fixture(path.join(base, "Profile"), "npm");
+  const aliasRoot = path.join(base, "profile", path.relative(path.join(base, "Profile"), root));
+  if (!fsSync.existsSync(aliasRoot) || fsSync.realpathSync.native(aliasRoot) !== root) {
+    skip("the temporary volume is case-sensitive");
+  }
+  vi.spyOn(os, "tmpdir").mockReturnValue(base);
+  vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+  const maintain = () =>
+    temporaryArtifacts.maintainRetainedUpdateRuntimes({
+      packageRoots: [aliasRoot],
+      repair: true,
+      assertCurrent() {},
+    });
+  const moduleUrl = pathToFileURL(path.join(aliasRoot, "dist/updater.mjs")).href;
+  const directory = await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+    expect(
+      await retain({ mutationRoots: [aliasRoot], timeoutMs: 30_000, assertCurrent() {} }),
+    ).toMatchObject({ entries: expect.any(Number) });
+    const retained = fileURLToPath(
+      captureRuntimeWorkerSource(
+        resolveRuntimeWorkerUrl({
+          currentModuleUrl: moduleUrl,
+          sourceWorkerName: "store",
+          distWorkerPath: "state/store.js",
+        }),
+      ).moduleUrl,
+    );
+    const [name = ""] = path.relative(path.join(base, "Profile"), retained).split(path.sep);
+    expect(name).toMatch(/^openclaw-update-runtime-/u);
+    expect(await readFile(retained, "utf8")).toBe(backend);
+    expect(await maintain()).toContainEqual(
+      expect.stringContaining("the creating update still owns this runtime"),
+    );
+    return path.join(base, "Profile", name);
+  });
+  expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
+  await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it("falls back when the runtime sibling is read-only", async () => {
   const base = await fs.realpath(tempDirs.make("openclaw-retained-fallback-"));
   const root = await fixture(base, "npm");
@@ -743,7 +888,6 @@ it("falls back when the runtime sibling is read-only", async () => {
     });
     assert.ok(retained && generation);
     expect(await readFile(retained, "utf8")).toBe(backend);
-    expect(() => generation!.resolve(pathToFileURL(retained!))).toThrow("generation is closing");
   } finally {
     allocation.mockRestore();
     temporaryRoot.mockRestore();

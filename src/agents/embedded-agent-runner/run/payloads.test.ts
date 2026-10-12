@@ -228,7 +228,38 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Current room event reply.");
   });
 
-  it.each(["Second answer.", "NO_REPLY"])(
+  it.each([
+    { stopReason: "stop", thinking: false, keepAnswer: false },
+    { stopReason: "length", thinking: true, keepAnswer: false },
+    { stopReason: "stop", thinking: false, keepAnswer: true },
+  ] as const)(
+    "does not use pre-tool text for an empty $stopReason answer (thinking=$thinking, kept=$keepAnswer)",
+    ({ stopReason, thinking, keepAnswer }) => {
+      const lastAssistant = makeAgentAssistantMessage({
+        api: "ollama",
+        provider: "ollama",
+        stopReason,
+        content: thinking ? [{ type: "thinking", thinking: "Still considering the result." }] : [],
+      });
+      const payloads = buildPayloads({
+        assistantTexts: ["I will read the file.", "Checking the next file."],
+        lastAssistant,
+        keptAnswer: keepAnswer
+          ? {
+              assistant: makeAgentAssistantMessage({
+                content: [{ type: "text", text: "Completed answer." }],
+              }),
+              messageIndex: 1,
+            }
+          : undefined,
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        keepAnswer ? ["Completed answer."] : [],
+      );
+    },
+  );
+
+  it.each(["Second answer.", "NO_REPLY", ""])(
     "buildEmbeddedRunPayloads selects each sealed and open segment's answer with middle answer %s",
     (middleAnswer) => {
       const answers = ["First answer.", middleAnswer, "Third answer."];
@@ -253,18 +284,18 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         assistantTranscriptSource: { occurrenceId: "response-3", messageId: "row-3" },
       });
       expect(payloads.map((payload) => payload.text)).toEqual(
-        answers.filter((text) => text !== "NO_REPLY"),
+        answers.filter((text) => text && text !== "NO_REPLY"),
       );
       expect(
         payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantMessageIndex),
-      ).toEqual(middleAnswer === "NO_REPLY" ? [2, 6] : [2, 4, 6]);
+      ).toEqual(middleAnswer === "Second answer." ? [2, 4, 6] : [2, 6]);
       expect(
         payloads.map((payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer),
-      ).toEqual(middleAnswer === "NO_REPLY" ? [true, undefined] : [true, true, undefined]);
+      ).toEqual(middleAnswer === "Second answer." ? [true, true, undefined] : [true, undefined]);
       expect(
         payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantTranscriptSource),
       ).toEqual(
-        middleAnswer === "NO_REPLY"
+        middleAnswer !== "Second answer."
           ? [
               { occurrenceId: "response-1", messageId: "row-1" },
               { occurrenceId: "response-3", messageId: "row-3" },

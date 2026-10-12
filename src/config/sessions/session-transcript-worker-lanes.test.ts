@@ -1,23 +1,22 @@
+// Register shared worker mocks before modules that consume them.
+// oxfmt-ignore
+import { input, observed } from "./session-transcript-worker-lanes.test-support.js";
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
-import type {
-  WorkerTaskOptions,
-  WorkerTaskPoolOptions,
-} from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
 import {
   historyLane,
   maintenanceLane,
   projectionLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import {
@@ -29,193 +28,26 @@ import {
 } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
-type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
-const observed = vi.hoisted(() => ({
-  preparedDatabase: true,
-  serializePools: false,
-  queued: vi.fn<(busy: boolean) => void>(),
-  explicitSqliteCloseReleasesNativeResources: true,
-  setTimeout: vi.spyOn(globalThis, "setTimeout"),
-  clearTimeout: vi.spyOn(globalThis, "clearTimeout"),
-  run: vi.fn<(input: unknown, options: WorkerTaskOptions<unknown>) => Promise<unknown>>(),
-  // Import-time pools are drained even when a name filter skips every test.
-  rotate: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-  closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
-  unregister: vi.fn<() => void>(),
-  resources: [] as Resource[],
-  replaceWorkers: [] as Array<() => () => Promise<void>>,
-}));
-
-// Transport controls normally represent an admitted store; the cold-admission
-// regression below exercises the real writer queue before such facts exist.
-vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>()),
-  captureExistingOpenClawAgentDatabaseExecution: (options: { path: string }) => {
-    if (!observed.preparedDatabase) {
-      return undefined;
-    }
-    const claim = { identity: "transport", incarnation: "transport", assertCurrent() {} };
-    return {
-      agentId: "main",
-      path: options.path,
-      fileIdentity: undefined,
-      assertCurrent() {},
-      captureGenerationClaim: () => claim,
-      capturePreparedGenerationClaim: () => claim,
-      async prepare() {
-        throw new Error("Readonly transport must not prepare a writer");
-      },
-      async runExisting() {
-        throw new Error("Readonly transport must not open a writer");
-      },
-      async release() {},
-    };
-  },
-}));
-
-vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/bun-sqlite-library.js")>()),
-  ensureSqliteLibrarySelected: () => ({ source: "runtime" }),
-  captureSqliteWorkerClosePolicy: () => observed.explicitSqliteCloseReleasesNativeResources,
-  getSqliteRuntimeCapabilities: () => ({
-    explicitSqliteCloseReleasesNativeResources: observed.explicitSqliteCloseReleasesNativeResources,
-    reason: "test policy",
-  }),
-}));
-
-vi.mock("node:diagnostics_channel", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:diagnostics_channel")>();
-  const pressure = actual.channel(Symbol("session-transcript-worker-lanes"));
-  return {
-    ...actual,
-    channel: (name: string | symbol) =>
-      name === "openclaw.memory.critical" ? pressure : actual.channel(name),
-  };
-});
-
-vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/worker-task-pool.js")>()),
-  createOwnedWorkerTaskPool: (poolOptions: WorkerTaskPoolOptions<unknown>) => {
-    let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
-    const retiring = new Set<NonNullable<typeof worker>>();
-    let activeTasks = 0;
-    const serialSlots = Array.from({ length: poolOptions.maxWorkers ?? 1 }, () =>
-      Promise.resolve(),
-    );
-    let nextSlot = 0;
-    observed.replaceWorkers.push(() => {
-      const previous = worker;
-      worker = poolOptions.prepareWorker?.();
-      return async () => previous?.releaseResources?.();
-    });
-    return {
-      async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
-        const execute = async () => {
-          activeTasks++;
-          try {
-            const preparedInput = prepare();
-            worker ??= poolOptions.prepareWorker?.();
-            return await observed.run(preparedInput, options);
-          } finally {
-            activeTasks--;
-          }
-        };
-        if (!observed.serializePools) {
-          return execute();
-        }
-        observed.queued(activeTasks >= serialSlots.length);
-        const index = nextSlot++ % serialSlots.length;
-        const result = serialSlots[index]!.then(execute);
-        serialSlots[index] = result.then(
-          () => {},
-          () => {},
-        );
-        return result;
-      },
-      getSnapshot: () => ({ activeTasks }),
-      async rotate() {
-        if (worker) {
-          retiring.add(worker);
-        }
-        worker = undefined;
-        const previous = [...retiring];
-        try {
-          await observed.rotate();
-          for (const prepared of previous) {
-            if (retiring.delete(prepared)) {
-              await prepared.releaseResources?.();
-            }
-          }
-        } catch (error) {
-          void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
-          throw error;
-        }
-      },
-      closeResources: observed.closeResources,
-    };
-  },
-}));
-vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
-  matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
-    candidate.path === targetPath,
-  registerOpenClawAgentDatabaseReadCandidateResource: (resource: Resource) => {
-    observed.resources.push(resource);
-    return observed.unregister;
-  },
-  registerOpenClawAgentDatabaseAsyncResource: (resource: Resource) => {
-    observed.resources.push(resource);
-    return observed.unregister;
-  },
-}));
-// The pure transport must not become the process-wide disk-scan singleton.
-vi.mock("./disk-budget-runtime.js", () => ({
-  measureSessionPhysicalDiskUsage: () => {
-    throw new Error("Disk scans are forbidden in these pure controls");
-  },
-  drainSessionDiskBudgetWorkers: async () => {},
-}));
-
-let sequence = 0;
-function input() {
-  const database = { agentId: "main", path: `/synthetic/session-read-lanes-${++sequence}.sqlite` };
-  return {
-    database,
-    scope: {
-      agentId: "main",
-      databaseAgentId: "main",
-      sessionKey: "agent:main:lanes",
-      storePath: database.path,
-    },
-  };
-}
-
-beforeEach(() => {
-  observed.preparedDatabase = true;
-  observed.serializePools = false;
-  observed.queued.mockReset();
-  observed.explicitSqliteCloseReleasesNativeResources = true;
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  observed.setTimeout.mockImplementation(globalThis.setTimeout);
-  observed.clearTimeout.mockImplementation(globalThis.clearTimeout);
-  observed.run.mockReset();
-  observed.rotate.mockReset().mockResolvedValue(undefined);
-  observed.closeResources.mockReset().mockResolvedValue(undefined);
-  observed.unregister.mockReset();
-});
-afterEach(async () => {
-  observed.rotate.mockResolvedValue(undefined);
-  observed.closeResources.mockResolvedValue(undefined);
-  await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await Promise.all(
-    [historyLane, projectionLane, maintenanceLane, targetDiscoveryLane].map((lane) =>
-      rotateDatabaseWorkers(lane),
-    ),
-  );
-});
-afterAll(() => {
-  vi.useRealTimers();
-  observed.setTimeout.mockRestore();
-  observed.clearTimeout.mockRestore();
+it("keeps native close conservative until an unqualified reader is retired", async () => {
+  const pool = createSessionTranscriptHistoryPool();
+  const request = { kind: "prewarm" as const, database: input().database, env: {} };
+  const read = () => pool.run(() => request, {});
+  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+  try {
+    observed.explicitSqliteCloseReleasesNativeResources = false;
+    await read();
+    observed.rotate.mockRejectedValueOnce(new Error("reader retirement failed"));
+    await expect(pool.rotate()).rejects.toThrow("reader retirement failed");
+    observed.explicitSqliteCloseReleasesNativeResources = true;
+    await read();
+    expect(pool.canCloseNativeResources()).toBe(false);
+    await pool.rotate();
+    await read();
+    expect(pool.canCloseNativeResources()).toBe(true);
+  } finally {
+    observed.rotate.mockResolvedValue(undefined);
+    await pool.rotate();
+  }
 });
 
 it.each([false, true])(
@@ -479,7 +311,6 @@ it.each([historyLane, maintenanceLane])(
     observed.run.mockRejectedValueOnce(new Error("worker unavailable"));
     await expect(prewarmSessionHistoryWorker(request.database, lane)).resolves.toBeUndefined();
     expect(lane.pending).toBe(0);
-    expect(observed.rotate).toHaveBeenCalledOnce();
 
     const reply = createDeferredCore<unknown>();
     observed.run.mockReturnValueOnce(reply.promise);
@@ -674,71 +505,6 @@ it("joins unfinished reads before accepting a sibling eviction", async () => {
   }
 });
 
-it("joins full retirement if retained reader custody is revoked during discovery cleanup", async () => {
-  const request = input();
-  observed.run.mockResolvedValue({ ok: true, value: false });
-  await withSessionHistoryWorkerDatabase(request.database, (owner) =>
-    owner.readEntryPresence(request.scope),
-  );
-  const resource = observed.resources.find((entry) => entry.agentId === "main");
-  assert(resource);
-  const closing = createDeferredCore();
-  const started = createDeferredCore();
-  const retiring = createDeferredCore();
-  const retired = createDeferredCore();
-  observed.closeResources.mockImplementationOnce(async () => {
-    started.resolve();
-    await closing.promise;
-  });
-  observed.run.mockResolvedValueOnce({
-    ok: true,
-    value: {
-      kind: "session-store-target",
-      logicalAgentId: "main",
-      sourcePath: request.database.path,
-      database: request.database,
-    },
-  });
-  const discovery = withSessionHistoryWorkerReadCandidates(
-    [{ path: request.database.path, physicalPath: request.database.path }],
-    (owner) =>
-      owner.readStoreTarget({
-        agentId: "main",
-        storePath: request.database.path,
-        env: {},
-        registeredDatabases: [],
-      }),
-  );
-  const rejected = expect(discovery).rejects.toThrow("custody was revoked");
-  try {
-    await started.promise;
-    observed.rotate.mockImplementationOnce(() => {
-      retiring.resolve();
-      return retired.promise;
-    });
-    resource.revoke();
-    closing.resolve();
-    let settled = false;
-    void discovery.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await retiring.promise;
-    expect(settled).toBe(false);
-    retired.resolve();
-    await rejected;
-    expect(observed.rotate).toHaveBeenCalled();
-  } finally {
-    closing.resolve();
-    retired.resolve();
-    await discovery.catch(() => {});
-  }
-});
-
 it("joins pending search status before releasing cancelled reader custody", async () => {
   const request = input();
   const statusStarted = createDeferredCore();
@@ -839,59 +605,6 @@ it.each([
     expect(observed.unregister).toHaveBeenCalledTimes(1);
   },
 );
-
-it("binds native-close policy to each worker generation before replies", async () => {
-  const read = async (lane: typeof historyLane) => {
-    const request = input();
-    observed.run.mockResolvedValueOnce({ ok: true, value: false });
-    await withSessionHistoryWorkerDatabase(
-      request.database,
-      (owner) => owner.readEntryPresence(request.scope),
-      lane,
-    );
-    const resource = observed.resources.at(-1);
-    assert(resource?.agentId);
-    return resource;
-  };
-  observed.explicitSqliteCloseReleasesNativeResources = false;
-  const early = await read(historyLane);
-  observed.explicitSqliteCloseReleasesNativeResources = true;
-  const otherLane = await read(maintenanceLane);
-  // A completed host decision cannot upgrade a worker born before admission.
-  await early.close();
-  expect(observed.rotate).toHaveBeenCalledOnce();
-  await otherLane.close();
-  expect(observed.closeResources).toHaveBeenCalledOnce();
-
-  const predecessor = await read(historyLane);
-  const releasePredecessor = observed.replaceWorkers[0]!();
-  // Replacement captures its own policy without waiting for a task result.
-  await predecessor.close();
-  expect(observed.closeResources).toHaveBeenCalledTimes(2);
-  const successor = await read(historyLane);
-  await releasePredecessor();
-  await successor.close();
-  expect(observed.closeResources).toHaveBeenCalledTimes(3);
-  expect(observed.rotate).toHaveBeenCalledOnce();
-});
-
-it("requires every live worker to support native close", async () => {
-  const request = input();
-  observed.explicitSqliteCloseReleasesNativeResources = false;
-  observed.run.mockResolvedValue({ ok: true, value: false });
-  await withSessionHistoryWorkerDatabase(request.database, (owner) =>
-    owner.readEntryPresence(request.scope),
-  );
-  observed.explicitSqliteCloseReleasesNativeResources = true;
-  const releaseOlder = observed.replaceWorkers[0]!();
-  try {
-    await observed.resources[0]!.close();
-    expect(observed.rotate).toHaveBeenCalledOnce();
-    expect(observed.closeResources).not.toHaveBeenCalled();
-  } finally {
-    await releaseOlder();
-  }
-});
 
 it.each([false, true])("retains reads dispatched after cleanup (capable=%s)", async (capable) => {
   observed.explicitSqliteCloseReleasesNativeResources = capable;

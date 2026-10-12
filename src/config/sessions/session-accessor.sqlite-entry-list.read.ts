@@ -19,7 +19,6 @@ import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js"
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
-import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
 import {
   resolveSqliteScope,
@@ -35,6 +34,7 @@ import {
   readWithCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 
 function captureListingSource(
@@ -68,6 +68,7 @@ export function readSelectedSessionEntriesInDatabase(
     continuation?: CanonicalSessionReaderContinuation;
     fullEntryKeys?: readonly string[];
     label?: string;
+    sessionIdOrKey?: string;
   } = {},
 ): SessionEntrySummary[] {
   return readWithCanonicalSessionReaderContinuation(database, options.continuation, () => {
@@ -90,6 +91,21 @@ export function readSelectedSessionEntriesInDatabase(
           .select("session_key")
           .where("label", "=", options.label.trim()),
       );
+    }
+    if (options.sessionIdOrKey !== undefined) {
+      selected = selected
+        .union(
+          db
+            .selectFrom("session_nodes")
+            .select("session_key")
+            .where("session_key", "=", options.sessionIdOrKey),
+        )
+        .union(
+          db
+            .selectFrom("session_nodes")
+            .select("session_key")
+            .where("current_session_id", "=", options.sessionIdOrKey),
+        );
     }
     // Warm admission permits raw metadata changes. The listing contract still
     // rejects delivery-canonical sibling drift, so include its existing dirty set.
@@ -115,7 +131,10 @@ export function readSelectedSessionEntriesInDatabase(
       validateDeliveryCanonicalSessionEntry(row.session_key, entry);
       if (
         keys.has(row.session_key) ||
-        (options.label !== undefined && entry.label === options.label)
+        (options.label !== undefined && entry.label === options.label) ||
+        (options.sessionIdOrKey !== undefined &&
+          (row.session_key === options.sessionIdOrKey ||
+            entry.sessionId === options.sessionIdOrKey))
       ) {
         entries.push({ sessionKey: row.session_key, entry });
       }

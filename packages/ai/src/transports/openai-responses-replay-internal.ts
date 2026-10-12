@@ -1,7 +1,7 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
-import type { OpenAIResponsesCompactionRejection } from "../provider-options.js";
+import type { CompactionReplayRejection } from "../provider-options.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
@@ -25,6 +25,23 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
     ((typeof value === "object" && value !== null) || typeof value === "function") &&
     Symbol.asyncIterator in value
   );
+}
+
+export function readResponsesRecoveryEvent(event: unknown) {
+  const record = isRecord(event) ? event : undefined;
+  const response = isRecord(record?.response) ? record.response : undefined;
+  return {
+    failure:
+      record?.type === "response.failed"
+        ? response?.error
+        : record?.type === "error"
+          ? (record.error ?? record)
+          : undefined,
+    hasResponseOutput: Array.isArray(response?.output) && response.output.length > 0,
+    isPrelude:
+      record !== undefined &&
+      ["response.created", "response.in_progress", "response.queued"].includes(String(record.type)),
+  };
 }
 
 export function isInvalidEncryptedContentError(error: unknown): boolean {
@@ -71,12 +88,12 @@ type ResponsesEncryptedContentAttemptKind =
 export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
   kind: ResponsesEncryptedContentAttemptKind;
   request: TRequest;
-  rejectedCompaction?: OpenAIResponsesCompactionRejection;
+  rejectedCompaction?: CompactionReplayRejection;
 };
 
 export function commitResponsesEncryptedContentAttempt(
   attempt: ResponsesEncryptedContentAttempt<ResponsesEncryptedContentRequest>,
-  commit: (checkpoint: OpenAIResponsesCompactionRejection | undefined) => void,
+  commit: (checkpoint: CompactionReplayRejection | undefined) => void,
 ): void {
   if (attempt.kind === "compaction-stripped") {
     commit(attempt.rejectedCompaction);
@@ -109,7 +126,7 @@ function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedCont
 
 function readOpenAIResponsesCompactionRejection(
   request: ResponsesEncryptedContentRequest,
-): OpenAIResponsesCompactionRejection | undefined {
+): CompactionReplayRejection | undefined {
   if (!Array.isArray(request.input)) {
     return undefined;
   }
@@ -176,8 +193,8 @@ export async function createResponsesStreamWithRecovery(params: {
   encodeBody?: ReturnType<typeof prepareModelRequestBody>;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
-  initialRejectedCompaction?: OpenAIResponsesCompactionRejection;
-  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  initialRejectedCompaction?: CompactionReplayRejection;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
   canRetryStream?: () => boolean;
   onServiceTierRejected?: (tier: "ultrafast" | "priority") => void;
   wrapStream?: (result: {
@@ -329,44 +346,24 @@ export async function createResponsesStreamWithRecovery(params: {
           try {
             for await (const event of params.wrapStream?.({ ...current, stream: providerStream }) ??
               providerStream) {
-              if (isRecord(event)) {
-                const failure =
-                  event.type === "response.failed" && isRecord(event.response)
-                    ? event.response.error
-                    : event.type === "error"
-                      ? (event.error ?? event)
-                      : undefined;
-                if (
-                  isRecord(event.response) &&
-                  Array.isArray(event.response.output) &&
-                  event.response.output.length
-                ) {
-                  outputObserved = true;
-                }
-                if (
-                  isRecord(failure) &&
-                  params.canRetryStream?.() === true &&
-                  (isInvalidEncryptedContentError(failure) ||
-                    (!outputObserved && isResponsesServiceTierRejection(failure)))
-                ) {
-                  rejectedEvent = event;
-                  const message = typeof failure.message === "string" ? failure.message : "";
-                  throw Object.assign(new Error(message), {
-                    code: failure.code,
-                    status: failure.status,
-                    type: failure.type,
-                    param: failure.param,
-                  });
-                }
-              }
+              const { failure, hasResponseOutput, isPrelude } = readResponsesRecoveryEvent(event);
+              outputObserved ||= hasResponseOutput;
               if (
-                !isRecord(event) ||
-                !["response.created", "response.in_progress", "response.queued"].includes(
-                  String(event.type),
-                )
+                isRecord(failure) &&
+                params.canRetryStream?.() === true &&
+                (isInvalidEncryptedContentError(failure) ||
+                  (!outputObserved && isResponsesServiceTierRejection(failure)))
               ) {
-                outputObserved = true;
+                rejectedEvent = event;
+                const message = typeof failure.message === "string" ? failure.message : "";
+                throw Object.assign(new Error(message), {
+                  code: failure.code,
+                  status: failure.status,
+                  type: failure.type,
+                  param: failure.param,
+                });
               }
+              outputObserved ||= !isPrelude;
               yield event;
             }
             return;

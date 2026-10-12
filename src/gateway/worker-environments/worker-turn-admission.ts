@@ -1,28 +1,40 @@
 import { randomUUID } from "node:crypto";
 import { createSessionPlacementSettlementClosedAbortError } from "../../agents/run-termination.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.types.js";
+import type {
+  LocalTurnPlacementClaim,
+  RequiredSessionPlacementAdmission,
+} from "../../agents/session-placement-admission.types.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { assertRequiredWorkerLocalExecution } from "../../config/required-worker-profile.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
+import { workerInferencePlacement } from "./inference-placement.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
-import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import type { WorkerRuntimeRefreshInFlight } from "./provider-runtime-refresh.js";
+import type { WorkerEnvironmentService } from "./service.js";
 import { captureWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 import {
   projectWorkspaceResultConflict,
@@ -32,6 +44,56 @@ import {
 } from "./workspace-conflicts.js";
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
+
+/** Required policy uses current placement facts at the existing turn-admission boundary. */
+export function createRequiredWorkerTurnAdmission(options: {
+  placements: WorkerSessionPlacementStore;
+  environments: Pick<WorkerEnvironmentService, "get">;
+  withRequiredSession?: RequiredSessionPlacementAdmission;
+}) {
+  return {
+    usesWorkerInference: async (identity: Omit<LocalTurnPlacementClaim, "runId">) => {
+      const projection = await options.placements.readProjection([identity.sessionId], {
+        current: true,
+      });
+      const placement = projection.placements.get(identity.sessionId);
+      const environment = placement?.environmentId
+        ? options.environments.get(placement.environmentId)
+        : undefined;
+      return Boolean(
+        placement?.state === "active" &&
+        placement.executionMode === "worker-turn" &&
+        placement.agentId === identity.agentId &&
+        placement.sessionKey === identity.sessionKey &&
+        environment &&
+        isCurrentActiveWorkerEnvironment(placement, environment) &&
+        workerInferencePlacement(environment) === "worker",
+      );
+    },
+    assertLocalAllowed() {
+      assertRequiredWorkerLocalExecution(getRuntimeConfig());
+    },
+    assertCurrent(claim: LocalTurnPlacementClaim) {
+      const required = getRuntimeConfig().cloudWorkers?.requiredProfile;
+      if (required) {
+        const live = options.placements.get(claim.sessionId);
+        const environment = live?.environmentId
+          ? options.environments.get(live.environmentId)
+          : undefined;
+        if (
+          !live ||
+          live.state === "local" ||
+          live.executionMode !== "worker-turn" ||
+          (environment && environment.profileId !== required)
+        ) {
+          throw new Error(
+            "The live placement no longer satisfies the required worker profile policy.",
+          );
+        }
+      }
+    },
+  };
+}
 
 export function assertWorkerPlacementCompactionAllowed(
   placement: WorkerSessionPlacementRecord | undefined,
@@ -123,7 +185,13 @@ export async function waitForInitialWorkerPlacement(params: {
     ...identity,
     storePath: params.turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
   };
-  const original = loadSessionEntryReadOnly(target);
+  const memory = getSessionActorStorageBinding(target);
+  const binding = memory ? undefined : captureIncognitoSessionBinding(target);
+  const original = memory
+    ? memory.actor.snapshot(memory.authority)?.entry
+    : binding
+      ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
+      : loadSessionEntryReadOnly(target);
   const refuseSession = (): never => {
     throw createAbortError("Session changed while waiting for worker setup");
   };
@@ -146,10 +214,8 @@ export async function waitForInitialWorkerPlacement(params: {
       assertSources();
     },
   );
-  assertSessionCurrent();
   const completed = await params.wait(params.placement, params.turn.abortSignal);
   // Setup completion is a notification, not authority: read the durable owner again.
-  assertSessionCurrent();
   let placement = completed;
   const assertCurrent = composeSessionSourceAssertion([assertSessionCurrent], (assertSession) => {
     assertSession();
@@ -282,11 +348,7 @@ export function requireActivePlacement(
   placement: WorkerSessionPlacementRecord,
 ): ActiveWorkerPlacement {
   const failureDetail = placement.state === "failed" ? `: ${placement.recoveryError}` : "";
-  if (
-    placement.state !== "active" ||
-    !placement.remoteWorkspaceDir ||
-    !placement.workerBundleHash
-  ) {
+  if (placement.state !== "active") {
     throw new Error(`Worker turn rejected in placement ${placement.state}${failureDetail}`);
   }
   return placement;
@@ -312,17 +374,13 @@ export async function executeLocalTurn<T>(params: {
 }): Promise<T> {
   let identity: ReturnType<typeof resolvePlacementIdentity>;
   let claimSessionKey: string;
-  const assertPreflightCurrent = () => {
-    params.assertCurrent?.();
-    params.preparedPlacement?.assertCurrent();
-  };
+  const assertPreflightCurrent = params.assertCurrent ?? (() => {});
   try {
     const current = params.preparedPlacement
       ? params.preparedPlacement.placement
       : (await params.placements.readProjection([params.claim.sessionId])).placements.get(
           params.claim.sessionId,
         );
-    assertPreflightCurrent();
     identity = resolvePlacementIdentity(params.claim, current);
     claimSessionKey = current?.sessionKey ?? identity.sessionKey;
     const assertLocalWorkspace = (repositoryWorkspaceId: string | undefined) => {
@@ -337,7 +395,11 @@ export async function executeLocalTurn<T>(params: {
       ...identity,
       storePath: reader?.database.path ?? resolveSessionStorePathForScope(identity),
     };
-    if (reader) {
+    const memory = getSessionActorStorageBinding(scope);
+    if (memory) {
+      assertPreflightCurrent();
+      assertLocalWorkspace(memory.actor.snapshot(memory.authority)?.entry?.repositoryWorkspaceId);
+    } else if (reader) {
       const key = assertSessionEntryCohortScope(reader, scope);
       await reader.withRead(
         { sessionKeys: [key], snapshotFields: [] },
@@ -349,10 +411,8 @@ export async function executeLocalTurn<T>(params: {
       );
     } else {
       const entry = await readSessionEntryReadOnlyInWorker(scope, assertPreflightCurrent);
-      assertPreflightCurrent();
       assertLocalWorkspace(entry?.repositoryWorkspaceId);
     }
-    assertPreflightCurrent();
   } finally {
     // The claim transaction rechecks placement predicates and publishes its own observation.
     params.preparedPlacement?.release();
@@ -459,17 +519,7 @@ export async function claimWorkerTurn(params: {
       return null;
     }
     if (!(cancelledClaim && params.isCancellationRequested(cancelledClaim))) {
-      const refreshed = await params.placements.getAsync(params.identity.sessionId);
-      params.signal?.throwIfAborted();
-      params.assertCurrent?.();
-      if (
-        refreshed?.state !== "active" ||
-        !matchesWorkerPlacementTarget(refreshed, params.placement) ||
-        refreshed.turnClaim
-      ) {
-        throw error;
-      }
-      return { placement: refreshed, turnClaim: await claim() };
+      throw error;
     }
   }
   await params.placements.waitForTurnClaimRelease(params.identity.sessionId, {
