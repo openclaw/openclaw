@@ -158,6 +158,7 @@ export function createGatewayHttpServer(opts: {
   getRuntimeConfig?: () => OpenClawConfig;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   httpRequestLifetime?: GatewayHttpRequestLifetime;
+  waitForRequestRuntime?: () => Promise<void>;
   isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;
@@ -273,7 +274,8 @@ export function createGatewayHttpServer(opts: {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
         return undefined;
       }
-      if (classifyGatewayProbePath(requestPath) === "live") {
+      const probeKind = classifyGatewayProbePath(requestPath);
+      if (probeKind === "live") {
         await handleGatewayProbeRequest(
           req,
           res,
@@ -288,6 +290,9 @@ export function createGatewayHttpServer(opts: {
         return undefined;
       }
 
+      if (probeKind === "outside" || probeKind === "namespace") {
+        await opts.waitForRequestRuntime?.();
+      }
       const configSnapshot = loadGatewayConfig();
       const controlUiEnabled =
         opts.controlUiEnabled ?? configSnapshot.gateway?.controlUi?.enabled ?? true;

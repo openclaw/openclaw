@@ -38,9 +38,11 @@ import {
   prepareSessionEntryMutationDatabases,
 } from "./session-accessor.entry-mutation.js";
 import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
-import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
+  readPreparedSessionEntryChange,
+} from "./session-accessor.sqlite-entry-cache-publication.js";
+import {
   projectSessionSharingEntry,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache.js";

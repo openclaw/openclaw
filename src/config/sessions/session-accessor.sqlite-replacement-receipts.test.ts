@@ -15,7 +15,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { captureRuntimeConfigAsyncReader } from "../io.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   retainPreparedSessionEntryPredicate,
   retainPreparedSessionGenerationFacts,
@@ -39,6 +39,7 @@ import { prepareSessionEntryReplacementPublication } from "./session-accessor.sq
 import { captureSessionEntryMetadataReceipts } from "./session-entry-metadata-receipt.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";
+import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import type { SessionEntry } from "./types.js";
@@ -108,7 +109,7 @@ it.each(["autocommit", "transaction"] as const)(
   "seals native metadata before observers for %s",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      await captureRuntimeConfigAsyncReader()();
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:native-metadata-seal";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey, env },
@@ -311,6 +312,166 @@ it.each(["native", "worker"] as const)(
         }
       } finally {
         stop();
+        sharing.release();
+      }
+    });
+  },
+);
+
+it("keeps unrelated predicates current through participant publication", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      sessionKey: "agent:main:participant-authority",
+    };
+    const entry = { sessionId: "participant-authority", updatedAt: 1, sandboxMode: "off" } as const;
+    replaceSessionEntrySync(scope, entry);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable participant fixture");
+    }
+    const retained = { databaseIdentity: `file:${identity}`, sessionKey: scope.sessionKey, entry };
+    const policy = retainPreparedSessionEntryPredicate({
+      ...retained,
+      matches: (before, after) =>
+        before?.sessionId === after?.sessionId && before?.sandboxMode === after?.sandboxMode,
+    });
+    const participants = retainPreparedSessionEntryPredicate({
+      ...retained,
+      matches: (before, after) => before?.participantCount === after?.participantCount,
+    });
+    const publication = retainSessionEntryWorkerPublication({
+      ...scope,
+      databaseIdentity: identity,
+    });
+    publication.beginChanges(
+      [scope.sessionKey],
+      new Map(),
+      [scope.sessionKey],
+      new Map([
+        [
+          scope.sessionKey,
+          { participants: [{ identity: { type: "agent", id: "other" } }], participantCount: 1 },
+        ],
+      ]),
+    );
+    const observations: boolean[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        observations.push(policy.isCurrent() && !participants.isCurrent());
+      }
+    });
+    try {
+      expect(policy.isCurrent()).toBe(true);
+      expect(participants.isCurrent()).toBe(false);
+      expect(
+        await recordSessionParticipantInWorker(scope, {
+          identity: { type: "agent", id: "other" },
+          promptedAt: 1,
+        }),
+      ).toBe("inserted");
+      expect(policy.isCurrent()).toBe(true);
+      expect(participants.canRefresh()).toBe(false);
+      expect(observations.length).toBeGreaterThan(0);
+      expect(observations.every(Boolean)).toBe(true);
+      expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.participantCount).toBe(1);
+    } finally {
+      stop();
+      publication.settle(undefined, false);
+      policy.release();
+      participants.release();
+    }
+  });
+});
+
+it.each([
+  { successor: "metadata", authorityChanged: false },
+  { successor: "metadata", authorityChanged: true },
+  { successor: "member", authorityChanged: true },
+] as const)(
+  "keeps newer $successor facts when an older replacement settles (authority changed=$authorityChanged)",
+  async ({ successor, authorityChanged }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:late-replacement",
+      };
+      replaceSessionEntrySync(scope, {
+        sessionId: "late-replacement",
+        updatedAt: 1,
+        category: "shared",
+        sandboxMode: "off",
+      });
+      addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
+      const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+      if (typeof identity !== "string") {
+        throw new Error("Expected durable publication fixture");
+      }
+      const entry = readExactSessionEntryRow(database, scope.sessionKey)!.entry;
+      const retained = {
+        databaseIdentity: `file:${identity}`,
+        sessionKey: scope.sessionKey,
+        entry,
+      };
+      const predicate = retainPreparedSessionEntryPredicate({
+        ...retained,
+        matches: (before, after) =>
+          before?.sessionId === after?.sessionId && before?.sandboxMode === after?.sandboxMode,
+      });
+      const generation = retainPreparedSessionGenerationFacts(retained);
+      const sharing = retainPreparedSessionSharingFacts({
+        ...retained,
+        membership: new Set(["member"]),
+      });
+      delivery.afterResult = () => {
+        if (successor === "member") {
+          addSessionMember(scope, { identityId: "later-member", addedBy: "owner", addedAt: 2 });
+        } else {
+          replaceSessionEntrySync(scope, {
+            ...readExactSessionEntryRow(database, scope.sessionKey)!.entry,
+            label: "newer commit",
+            sandboxMode: authorityChanged ? undefined : "off",
+          });
+        }
+      };
+      try {
+        await applySessionEntryExactReplacements({
+          storePath: database.path,
+          sessionKeys: [scope.sessionKey],
+          update: ([row]) => ({
+            result: undefined,
+            replacements: [
+              {
+                sessionKey: scope.sessionKey,
+                entry: {
+                  ...row!.entry,
+                  label: "older commit",
+                  sandboxMode: successor === "member" ? undefined : "off",
+                },
+              },
+            ],
+          }),
+        });
+        expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.label).toBe(
+          successor === "member" ? "older commit" : "newer commit",
+        );
+        expect(predicate.isCurrent()).toBe(!authorityChanged);
+        if (!authorityChanged) {
+          expect(predicate.readCurrent()?.entry?.label).toBe("newer commit");
+        }
+        expect(generation.readCurrent()).toMatchObject({ sessionId: entry.sessionId });
+        expect(sharing.readCurrent()).toMatchObject({
+          entry: { sessionId: entry.sessionId, category: "shared" },
+          membership: new Set(successor === "member" ? ["member", "later-member"] : ["member"]),
+        });
+      } finally {
+        delivery.afterResult = undefined;
+        predicate.release();
+        generation.release();
         sharing.release();
       }
     });

@@ -188,16 +188,19 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
           profileId,
         }),
       ).toBeUndefined();
-      await expect(
-        resolvePersistedAuthProfileOwnerAgentDirAsync({ agentDir: subAgents[1], profileId }),
-      ).resolves.toBeUndefined();
-      await expect(
-        resolvePersistedAuthProfileOwnerAgentDirAsync({ agentDir: subAgents[2], profileId }),
-      ).resolves.toBe(subAgents[2]);
+      const [copiedOwner, independentOwner, portableOwner] = await Promise.all(
+        subAgents
+          .slice(1)
+          .map((agentDir) =>
+            work.track(() =>
+              resolvePersistedAuthProfileOwnerAgentDirAsync({ agentDir, profileId }),
+            ),
+          ),
+      );
+      expect(copiedOwner).toBeUndefined();
+      expect(independentOwner).toBe(subAgents[2]);
       // A portable copy is not fenced, but its matching refresh generation still reads main.
-      await expect(
-        resolvePersistedAuthProfileOwnerAgentDirAsync({ agentDir: subAgents[3], profileId }),
-      ).resolves.toBeUndefined();
+      expect(portableOwner).toBeUndefined();
       expect(callCount).toBe(1);
       for (const agentDir of subAgents.slice(0, 2)) {
         const fenced = read(agentDir);

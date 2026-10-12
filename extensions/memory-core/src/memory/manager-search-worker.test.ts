@@ -16,6 +16,28 @@ const { closeAllMemorySearchManagers, getMemorySearchManager } = await import(".
 const fixture = createManagerIndexFixture({ getMemorySearchManager, closeAllMemorySearchManagers });
 const execFileAsync = promisify(execFile);
 
+it("sees published replacements through reused search and curated readers", async () => {
+  const filename = path.join(fixture.paths.workspace, "MEMORY.md");
+  await fs.writeFile(filename, "- Remember violetcompass. <!-- trigger: compass -->");
+  const manager = await fixture.getFreshManager(
+    fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
+    "cli",
+  );
+  await manager.sync({ reason: "before-reader-reuse", force: true });
+  expect((await manager.search("violetcompass", { lexicalOnly: true }))[0]?.snippet).toContain(
+    "violetcompass",
+  );
+  expect((await manager.listTriggerCandidates())[0]?.snippet).toContain("violetcompass");
+
+  await fs.writeFile(filename, "- Remember ambercompass. <!-- trigger: compass -->");
+  await manager.sync({ reason: "replace-after-reader-reuse", force: true });
+  await expect(manager.search("violetcompass", { lexicalOnly: true })).resolves.toEqual([]);
+  expect((await manager.search("ambercompass", { lexicalOnly: true }))[0]?.snippet).toContain(
+    "ambercompass",
+  );
+  expect((await manager.listTriggerCandidates())[0]?.snippet).toContain("ambercompass");
+});
+
 it("cancels post-probe metadata reads and releases the generation for publication", async () => {
   await fixture.seedSessionTranscript({
     sessionId: "metadata-cancellation",

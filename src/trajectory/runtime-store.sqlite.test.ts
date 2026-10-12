@@ -10,16 +10,24 @@ import {
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../infra/sqlite-database-admission.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
-  appendSqliteTrajectoryRuntimeEvents as appendSerializedTrajectoryRuntimeEvents,
+  appendSqliteTrajectoryRuntimeEventsWithWriter,
   loadSqliteTrajectoryRuntimeEventRowsSync,
   loadSqliteTrajectoryRuntimeEvents,
 } from "./runtime-store.sqlite.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
+  appendSerializedTrajectoryRuntimeEvents,
   createTrajectoryEvent,
 } from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
@@ -113,6 +121,63 @@ describe("SQLite trajectory runtime store", () => {
       reads.restore();
     }
   });
+
+  it.each(["session-1", "session-2"])(
+    "keeps transcript receipts current across trajectory append and trimming for %s",
+    async (sessionId) => {
+      await replaceSessionEntry(
+        { sessionKey: "agent:main:other", storePath },
+        { sessionId: "session-2", updatedAt: 10 },
+      );
+      const options = { agentId: "main", path: sqlitePath() };
+      const database = openOpenClawAgentDatabase(options);
+      const scopes = [
+        "agent:main:main",
+        "agent:main:other",
+        sqliteSessionIdWriteScope("session-1"),
+        sqliteSessionIdWriteScope("session-2"),
+      ];
+      const token = readSqliteDatabaseScopedWriteToken(database.db, scopes);
+      expect(token).toBeTypeOf("string");
+      const append = (types: string[], discardPrevious?: boolean, maxRuntimeBytes?: number) =>
+        appendSqliteTrajectoryRuntimeEventsWithWriter(
+          {
+            sessionId,
+            discardPrevious,
+            maxRuntimeBytes,
+            events: types.map((type) => {
+              const event = createTrajectoryEvent({ sessionId, type });
+              return { runId: event.runId, ts: event.ts, line: JSON.stringify(event) };
+            }),
+          },
+          (operationLabel, write) =>
+            runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
+        ).receipt;
+      expect(append(["first", "second"])).toEqual({
+        kind: "trajectory-runtime-append",
+        sessionId,
+        appendedRange: { firstSeq: 0, lastSeq: 1 },
+        removedThroughSeq: undefined,
+      });
+      expect(append(["third", "fourth"], true)).toEqual({
+        kind: "trajectory-runtime-append",
+        sessionId,
+        appendedRange: { firstSeq: 2, lastSeq: 3 },
+        removedThroughSeq: 1,
+      });
+      const last = createTrajectoryEvent({ sessionId, type: "last" });
+      expect(append(["last"], false, Buffer.byteLength(JSON.stringify(last), "utf8") + 1)).toEqual({
+        kind: "trajectory-runtime-append",
+        sessionId,
+        appendedRange: { firstSeq: 4, lastSeq: 4 },
+        removedThroughSeq: 3,
+      });
+      expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
+      expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId, storePath })).toEqual([
+        { seq: 4, event: last },
+      ]);
+    },
+  );
 
   it("rolls back a later batch failure and retries without losing or duplicating events", async () => {
     const scope = { sessionId: "session-1", storePath };

@@ -8,6 +8,7 @@ import type {
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
+import * as execDefaults from "../exec-defaults.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
@@ -136,6 +137,48 @@ describe("plugin-owned CLI execution host boundary", () => {
         requestUserInput: expect.any(Function),
       }),
     );
+  });
+
+  it("does not disclose private context when history access changes during permission preparation", async () => {
+    const { context } = await createExecution();
+    context.promptContext = { prependContext: "private conversation history" };
+    let historyReadable = true;
+    context.cliHistoryWriter = {
+      target: {
+        agentId: "main",
+        sessionId: "sdk-session",
+        sessionKey: "agent:main:main",
+        storePath: "/synthetic/sessions.sqlite",
+      },
+      runId: "history-owner",
+      authFingerprint: "a".repeat(64),
+      assertCurrent() {},
+      async assertReadable() {
+        if (!historyReadable) {
+          throw new Error("Private history account changed");
+        }
+      },
+    };
+    const preparingPermission = createDeferred();
+    const releasePermission = createDeferred();
+    const resolvePermission = execDefaults.resolveExecDefaultsAsync;
+    vi.spyOn(execDefaults, "resolveExecDefaultsAsync").mockImplementationOnce(async (...args) => {
+      preparingPermission.resolve();
+      await releasePermission.promise;
+      return resolvePermission(...args);
+    });
+    const execute = vi.fn(async function* () {
+      yield SUCCESS_RESULT;
+    });
+    const result = runPlugin(context, execute).catch((error: unknown) => error);
+    try {
+      await preparingPermission.promise;
+      historyReadable = false;
+    } finally {
+      releasePermission.resolve();
+    }
+    expect(await result).toEqual(new Error("Private history account changed"));
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

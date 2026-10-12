@@ -96,9 +96,7 @@ async function open(editor: HTMLElement, text = "Edit reference") {
   flush();
   const modal = editor.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")!;
   await modal.updateComplete;
-  const wa = modal.shadowRoot!.querySelector("wa-dialog")!;
-  await wa.updateComplete;
-  const dialog = wa.shadowRoot!.querySelector("dialog")!;
+  const dialog = modal.querySelector("dialog")!;
   await vi.waitFor(() => expect(dialog.open).toBe(true));
   await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
   return { dialog, trigger };

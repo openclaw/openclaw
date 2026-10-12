@@ -149,7 +149,7 @@ export function upsertPluginStateEntry(db: DatabaseSync, row: PluginStateRow): v
 }
 
 const pluginStateInsertIfAbsentQuery = createSqliteQueryCache((db) =>
-  prepareSqliteQuerySync<PluginStateRow, PluginStateRow>(db, (parameter) =>
+  prepareSqliteQuerySync<PluginStateRow & { now: number }, PluginStateRow>(db, (parameter) =>
     getPluginStateKysely(db)
       .insertInto("plugin_state_entries")
       .values({
@@ -161,15 +161,30 @@ const pluginStateInsertIfAbsentQuery = createSqliteQueryCache((db) =>
         expires_at: parameter((value) => value.expires_at),
       })
       .onConflict((conflict) =>
-        conflict.columns(["plugin_id", "namespace", "entry_key"]).doNothing(),
+        conflict
+          .columns(["plugin_id", "namespace", "entry_key"])
+          .doUpdateSet({
+            value_json: (eb) => eb.ref("excluded.value_json"),
+            created_at: (eb) => eb.ref("excluded.created_at"),
+            expires_at: (eb) => eb.ref("excluded.expires_at"),
+          })
+          .where(
+            "plugin_state_entries.expires_at",
+            "<=",
+            parameter((value) => value.now),
+          ),
       )
       .returningAll(),
   ),
 );
 
-export function insertPluginStateEntryIfAbsent(db: DatabaseSync, row: PluginStateRow): boolean {
+export function insertPluginStateEntryIfAbsent(
+  db: DatabaseSync,
+  row: PluginStateRow,
+  now: number,
+): boolean {
   assertPluginStateKey(db, row.entry_key, "register");
-  const result = pluginStateInsertIfAbsentQuery(db)(row);
+  const result = pluginStateInsertIfAbsentQuery(db)({ ...row, now });
   for (const current of result.rows) {
     pluginStatePublication.stagePostimage(db, current);
   }

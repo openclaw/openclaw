@@ -3767,6 +3767,8 @@ export const en: TranslationMap & {
       compactingContext: "Compacting context...",
       contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
+      modelFallbackEvent: "Model fallback: {from} → {to}",
+      modelRestoredEvent: "Returned to selected model: {from} → {to}",
       fallbackCleared: "Fallback cleared: {model}",
       fallbackSelected: "Selected: {model}",
       fallbackCurrent: "Active: {model}",

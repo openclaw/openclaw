@@ -629,6 +629,24 @@ it("reserves schema-missing first birth against a sibling captured before its wi
   }
 });
 
+it("creates an absent target through its already captured logical owner", async () => {
+  const options = fixture();
+  const observed = readDatabasePathIdentitySync(options.path);
+  const sibling = captureOpenClawAgentDatabaseExecution(options);
+  let creator: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
+  try {
+    creator = captureOpenClawAgentDatabaseExecution(options, {
+      expectedCreationIdentity: observed,
+    });
+    await creator.prepare(source());
+    await sibling.prepare(source());
+    expect(creator.fileIdentity).toMatchObject({ kind: "file" });
+    expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
+  } finally {
+    await Promise.allSettled([creator?.release(), sibling.release()]);
+  }
+});
+
 it.each([
   { name: "replacement", write: replaceSessionEntry },
   { name: "upsert", write: upsertSessionEntryCore },
