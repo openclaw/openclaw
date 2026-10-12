@@ -61,7 +61,7 @@ function FileContent(props: { content: string; result: SearchResult }) {
   );
 }
 
-export function MemoryMemoriesContent(props: MemoryMemoriesProps) {
+function MemoryMemoriesContent(props: MemoryMemoriesProps) {
   const [query, setQuery] = createSignal("");
   const [searchState, setSearchState] = createSignal<SearchState>({ kind: "idle" });
   const [openResultKey, setOpenResultKey] = createSignal<string | null>(null);

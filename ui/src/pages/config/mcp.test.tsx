@@ -8,9 +8,9 @@ import {
   createApplicationGateway,
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
-import { renderMcp } from "./mcp.tsx";
+import { Mcp } from "./mcp.tsx";
 
-type McpViewProps = Parameters<typeof renderMcp>[0];
+type McpViewProps = Parameters<typeof Mcp>[0];
 
 function createProps(overrides: Partial<McpViewProps> = {}): McpViewProps {
   return {
@@ -45,7 +45,7 @@ function mountMcp(props: McpViewProps) {
     agentSelection: { subscribe: () => () => undefined },
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(() => renderMcp(props), { wrapper: provider.wrapper });
+  const view = mountSolid(() => <Mcp {...props} />, { wrapper: provider.wrapper });
   onTestFinished(() => {
     view.unmount();
     runtimeConfig.dispose();
@@ -63,7 +63,7 @@ function buttonByText(container: Element, text: string): HTMLButtonElement {
   return button;
 }
 
-describe("renderMcp", () => {
+describe("Mcp", () => {
   it("renders summary counts, operator commands, and the managed servers card", () => {
     const container = mountMcp(createProps());
 

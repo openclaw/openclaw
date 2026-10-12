@@ -274,6 +274,9 @@ it.each([
             ...(cause === "reported-error" ? { failureFacts } : {}),
           };
     if (writerReceipt) {
+      if (cause === "success") {
+        receipt.deferredInspectionCheckIds = ["core/doctor/new-target-inspection"];
+      }
       receipt.configChanges = [
         { kind: "key", key: "agents" },
         { kind: "migration", message: "Moved model allowlist." },
@@ -331,6 +334,7 @@ it.each([
     });
 
     assert(step);
+    expect(step.deferredInspectionCheckIds).toEqual(receipt.deferredInspectionCheckIds ?? null);
     if (run) {
       expect(step).toMatchObject({ exitCode, outputLimitExceeded });
       if (cause === "reported-error") {
@@ -349,6 +353,7 @@ it.each([
     expect(isFailedUpdateStep(step)).toBe(Boolean(reason));
     const expected = {
       exitCode,
+      deferredInspectionCheckIds: receipt.deferredInspectionCheckIds ?? null,
       configChanges: receipt.configChanges,
       ...(reason
         ? { stderrTail: expect.stringContaining(`agents. ${reason}: Config writer refused.`) }

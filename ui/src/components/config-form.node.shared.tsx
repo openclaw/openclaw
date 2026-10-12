@@ -108,12 +108,7 @@ export function FieldRow(props: {
         <div class="settings-row__control">
           {props.control}
           {props.errorId && (
-            <span
-              id={props.errorId}
-              class="cfg-field__error settings-control__sr-label"
-              role="alert"
-              hidden
-            />
+            <span id={props.errorId} class="cfg-field__error" role="alert" hidden />
           )}
         </div>
       )}

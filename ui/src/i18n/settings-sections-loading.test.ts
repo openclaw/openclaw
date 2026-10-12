@@ -25,7 +25,7 @@ afterAll(async () => {
 });
 
 it.each([
-  { surface: "config form", load: () => import("../components/config-form.render.ts") },
+  { surface: "config form", load: () => import("../components/config-form.render.tsx") },
   { surface: "Setup", load: () => import("../pages/config/setup.tsx") },
   { surface: "Settings search", load: () => import("../pages/config/settings-search.ts") },
 ])("loads Settings section fallback copy before $surface uses it", async ({ load }) => {

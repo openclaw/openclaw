@@ -45,7 +45,7 @@ type SettingsProps = {
   buildEditor: (() => JSX.Element) | undefined;
   advancedExpanded: boolean;
 };
-export function SessionStorageSettingsContent(props: SettingsProps) {
+function SessionStorageSettingsContent(props: SettingsProps) {
   const context = useApplication();
   const gatewayProjection = projectGateway(context.gateway);
   const configProjection = projectRuntimeConfig(context.runtimeConfig);

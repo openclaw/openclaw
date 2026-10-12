@@ -39,7 +39,6 @@ import type {
 } from "../infra/sqlite-wal-write-admission.js";
 import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
-import type { SqliteWorkerRuntimePreparation } from "../infra/sqlite-worker-runtime-preparation.types.js";
 import type {
   InterruptedUpdateSettlement,
   InterruptedUpdateSettlementResult,
@@ -240,7 +239,6 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
 /** Host-only admission options; never serialized with a worker command. */
 export type OpenClawStateWorkerOperationOptions = {
   preparation?: OpenClawStateWorkerOpenPreparation;
-  runtimePreparation?: SqliteWorkerRuntimePreparation;
   existingOnly?: boolean;
   signal?: AbortSignal;
   assertCurrent?: (commandType?: PropertyKey) => void;

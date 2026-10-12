@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +23,10 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  retainAgentDatabase,
+} from "./openclaw-agent-db-lifecycle.js";
 import {
   captureAgentDatabaseCloseFence,
   registerOpenClawAgentDatabaseAsyncResource,
@@ -328,6 +332,44 @@ it.each([false, true])(
       }
       resetGatewayWorkAdmission();
       releaseState();
+    }
+  },
+);
+
+it.each([false, true])(
+  "certifies native close only after its WAL is empty (pinned: %s)",
+  async (pinned) => {
+    const { db, worker } = await setup();
+    const releaseHost = retainAgentDatabase(db);
+    let reader: DatabaseSync | undefined;
+    try {
+      await worker.execute({ type: "append", input: { value: "worker commit" } }, () => {});
+      beginGatewayShutdownCleanup();
+      await worker.close();
+      if (pinned) {
+        reader = new DatabaseSync(options.path, { readOnly: true });
+        reader.exec("BEGIN");
+        reader.prepare("SELECT value FROM worker_proof").all();
+      }
+      db.exec("INSERT INTO worker_proof VALUES ('after worker checkpoint')");
+      const prepare = vi.spyOn(db, "prepare");
+      const exec = vi.spyOn(db, "exec");
+      await closeOpenClawAgentDatabasesAsync(root);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(exec).not.toHaveBeenCalled();
+      expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(
+        pinned ? 0 : 1,
+      );
+      resetGatewayWorkAdmission();
+      const reopened = openOpenClawAgentDatabase(options);
+      expect(reopened.db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
+        { value: "worker commit" },
+        { value: "after worker checkpoint" },
+      ]);
+    } finally {
+      reader?.close();
+      releaseHost();
+      resetGatewayWorkAdmission();
     }
   },
 );
@@ -876,9 +918,7 @@ describe("pooled agent publication owner (captured source)", () => {
       expect(closing).toContainEqual({
         status: "rejected",
         reason: expect.objectContaining({
-          errors: expect.arrayContaining([
-            expect.objectContaining({ message: "controlled worker lease cleanup failure" }),
-          ]),
+          message: "controlled worker lease cleanup failure",
         }),
       });
       expect(readLeases()).toEqual(retainedLeases);
