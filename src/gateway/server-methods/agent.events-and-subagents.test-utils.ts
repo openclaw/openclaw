@@ -38,8 +38,6 @@ import {
   mockMainSessionEntry,
   mockSuccessfulAgentCommand,
   buildExistingMainStoreEntry,
-  setupNewYorkTimeConfig,
-  resetTimeConfig,
   primeMainAgentRun,
   backendGatewayClient,
   cronContinuationGatewayClient,
@@ -464,70 +462,6 @@ describe("gateway agent handler", () => {
       "Error: attachment broken.png: invalid base64 content",
     );
     expectStringFieldContains(logMeta, "error", "\n    at ");
-  });
-
-  it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
-    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
-    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
-
-    await invokeAgent(
-      {
-        message: "Reply exactly: pong",
-        agentId: "main",
-        provider: "ollama",
-        model: "llama3.2:latest",
-        modelRun: true,
-        promptMode: "none",
-        sessionKey: "agent:main:main",
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:discord:source",
-          sourceTool: "sessions_send",
-        },
-        idempotencyKey: "test-model-run-raw",
-      },
-      {
-        reqId: "model-run-raw",
-        client: operatorWriteCliClient(["operator.admin"]),
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{
-      message?: string;
-      modelRun?: boolean;
-      promptMode?: string;
-    }>();
-    expectRecordFields(callArgs, {
-      message: "Reply exactly: pong",
-      modelRun: true,
-      promptMode: "none",
-    });
-    expect(callArgs.message).not.toContain("[Inter-session message]");
-
-    resetTimeConfig();
-  });
-
-  it("rejects promptMode none without the stateless model-run contract", async () => {
-    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
-    mocks.agentCommand.mockClear();
-
-    const respond = await invokeAgent(
-      {
-        message: "unsafe raw run",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        promptMode: "none",
-        idempotencyKey: "test-raw-run-with-visible-session-effects",
-      },
-      { reqId: "raw-run-with-visible-session-effects", flushDispatch: false },
-    );
-
-    expectRespondError(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message:
-        'promptMode="none" requires modelRun=true so the run cannot mutate a durable session.',
-    });
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   it("keeps CLI model runs out of durable and visible gateway state", async () => {

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerCapabilityCli } from "./capability-cli.js";
+import { registerModelRunInputTests } from "./capability-cli.model-run-input.test-utils.js";
 import {
   runCap,
   runCapability,
@@ -440,6 +441,20 @@ vi.mock("../web-fetch/runtime.js", () => ({
 }));
 
 describe("capability cli", () => {
+  registerModelRunInputTests({
+    tempDirs,
+    firstCompletionCall,
+    firstGatewayCall,
+    firstJsonOutput,
+    expectRuntimeErrorContains,
+    expectInvalidNoDispatch: () => {
+      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  });
+
   it.each([
     {
       root: "infer",
@@ -507,7 +522,7 @@ describe("capability cli", () => {
       messages?: Array<{ content?: unknown; role?: unknown }>;
       systemPrompt?: unknown;
     };
-    options?: { reasoning?: unknown };
+    options?: { maxTokens?: unknown; reasoning?: unknown; temperature?: unknown };
   };
   type ImageDescribeParams = {
     agentId?: string;
@@ -988,22 +1003,6 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("Codex app-server agent runtime");
     expect(mocks.releaseSimpleCompletion).toHaveBeenCalledTimes(1);
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { args: ["--prompt", "\n\t"], error: "--prompt cannot be empty or whitespace-only." },
-    {
-      args: ["--model", "not-a-provider/"],
-      error: "Model overrides must use the form <provider/model>.",
-    },
-    { args: ["--thinking", "turbo-mode"], error: "Invalid thinking level." },
-  ])("rejects invalid model run options $args before dispatch", async ({ args, error }) => {
-    await expect(runModelProbe(...args)).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains(error);
-    expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 

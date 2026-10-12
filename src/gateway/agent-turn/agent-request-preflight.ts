@@ -170,6 +170,9 @@ export function prepareAgentRequestPreflight(params: {
       'promptMode="none" requires modelRun=true so the run cannot mutate a durable session.',
     );
   }
+  if (request.modelRunRequestedOverrides !== undefined && !isOneShotModelRun) {
+    return rejectInvalidRequest("modelRunRequestedOverrides requires modelRun=true.");
+  }
   if (requestedModelOverride && !allowModelOverride) {
     return rejectInvalidRequest("provider/model overrides are not authorized for this caller.");
   }

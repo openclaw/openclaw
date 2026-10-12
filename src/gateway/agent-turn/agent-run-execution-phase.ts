@@ -508,6 +508,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 lane: params.request.lane,
                 swarmExecutionLane: params.swarmExecutionLane,
                 modelRun: params.request.modelRun === true,
+                streamParams: params.request.modelRunRequestedOverrides,
                 promptMode: params.request.promptMode,
                 extraSystemPrompt: params.request.extraSystemPrompt,
                 bootstrapContextMode: params.request.bootstrapContextMode,

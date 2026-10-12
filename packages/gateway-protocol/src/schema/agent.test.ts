@@ -15,6 +15,34 @@ import {
 } from "./agent.js";
 
 describe("AgentParamsSchema", () => {
+  it("accepts bounded model-run generation settings", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "classify",
+        modelRun: true,
+        modelRunRequestedOverrides: { maxTokens: 64, temperature: 0 },
+        idempotencyKey: "model-run-1",
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { maxTokens: 0, temperature: 0 },
+    { maxTokens: 64.5, temperature: 0 },
+    { maxTokens: 64, temperature: -0.1 },
+    { maxTokens: 64, temperature: 2.1 },
+    { maxTokens: 64, temperature: 0, unexpected: true },
+  ])("rejects invalid model-run generation settings %#", (modelRunRequestedOverrides) => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "classify",
+        modelRun: true,
+        modelRunRequestedOverrides,
+        idempotencyKey: "model-run-1",
+      }),
+    ).toBe(false);
+  });
+
   it.each([undefined])(
     "accepts the backend expected-session binding with revision %s",
     (revision) => {
