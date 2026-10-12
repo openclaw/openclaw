@@ -193,6 +193,30 @@ describe("SQLite backup commands", () => {
     ).rejects.toThrow(missingSnapshotMessage);
   });
 
+  it("reports a repository-format mismatch when listing a Git backup as SQLite", async () => {
+    const repositoryPath = path.join(state.root, "git-backup");
+    await fs.mkdir(path.join(repositoryPath, ".git"), { recursive: true });
+    await fs.writeFile(path.join(repositoryPath, ".git", "COMMIT_EDITMSG"), "snapshot commit\n");
+
+    const runtime = createRuntimeCapture();
+    await expect(
+      backupSqliteListCommand(runtime, { repository: repositoryPath, json: true }),
+    ).rejects.toThrow(/Git backup repository.*openclaw backup git log --repository <path>/iu);
+  });
+
+  it("continues rejecting a .git symlink as an unsafe SQLite repository entry", async () => {
+    const repositoryPath = path.join(state.root, "git-link-backup");
+    const gitMetadataTarget = path.join(state.root, "git-metadata-target");
+    await fs.mkdir(repositoryPath, { recursive: true });
+    await fs.mkdir(gitMetadataTarget, { recursive: true });
+    await fs.symlink(gitMetadataTarget, path.join(repositoryPath, ".git"));
+
+    const runtime = createRuntimeCapture();
+    await expect(
+      backupSqliteListCommand(runtime, { repository: repositoryPath, json: true }),
+    ).rejects.toThrow("SQLite snapshot repository contains unexpected entry");
+  });
+
   it("requires exactly one named OpenClaw database source", async () => {
     const runtime = createRuntimeCapture();
 
