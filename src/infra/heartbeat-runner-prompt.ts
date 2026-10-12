@@ -8,7 +8,7 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import { channelRouteTargetsMatchExact } from "../plugin-sdk/channel-route.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../sessions/session-state-event-kinds.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -130,10 +130,13 @@ export async function resolveHeartbeatPreflight(params: {
 }): Promise<HeartbeatPreflight> {
   let monitorScratch: Awaited<ReturnType<typeof readCronScratchSnapshot>>;
   try {
-    monitorScratch = await readCronScratchSnapshot(resolveCronJobsStorePathFromConfig(params.cfg), {
-      kind: "heartbeat",
-      agentId: params.agentId,
-    });
+    monitorScratch = await readCronScratchSnapshot(
+      await resolveCronJobsStorePathFromConfigAsync(params.cfg),
+      {
+        kind: "heartbeat",
+        agentId: params.agentId,
+      },
+    );
   } catch (error) {
     log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
   }

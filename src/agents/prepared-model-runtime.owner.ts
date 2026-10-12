@@ -6,6 +6,10 @@ import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remot
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./auth-profiles/path-resolve.js";
+import {
   resolveSelectedAgentHarnessRuntime,
   type AgentHarnessPluginSelection,
 } from "./harness/runtime-plugin-load-plan.js";
@@ -207,6 +211,13 @@ export function normalizeOptionalDir(dirname: string | undefined): string | unde
   return dirname ? path.resolve(dirname) : undefined;
 }
 
+export async function prepareModelRuntimeInput(
+  input: PreparedModelRuntimeInput,
+): Promise<PreparedModelRuntimeInput> {
+  await prepareSharedAuthStoreOwnership(input.env);
+  return normalizePreparedModelRuntimeInput(input);
+}
+
 export function normalizePreparedModelRuntimeInput(
   input: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeInput {
@@ -371,6 +382,9 @@ export function readPublishedModelRuntimeSnapshot(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot | undefined {
+  if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
+    return undefined;
+  }
   const input = normalizePreparedModelRuntimeInput(rawInput);
   const owner = resolvePublishedOwner(owners, input, {
     allowConfiguredWorkspaceFallback:

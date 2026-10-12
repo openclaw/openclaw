@@ -7,6 +7,7 @@ import type {
 import {
   captureAgentLifecycleBinding,
   matchesAgentLifecycleBinding,
+  matchesAgentLifecycleBindingAsync,
 } from "../agents/agent-lifecycle-registry.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import {
@@ -290,7 +291,10 @@ export function createGitHubOAuthLifecycle(params: {
       queueDeviceCleanup(requestId);
       return { status: "expired" };
     }
-    if (!authorizationStillOwned(params.getConfig(), record)) {
+    if (
+      !(await authorizationStillOwnedAsync(params.getConfig, record)) ||
+      !authorizationStillOwned(params.getConfig(), record)
+    ) {
       queueDeviceCleanup(requestId);
       return { status: "failed", reason: "identity_changed" };
     }
@@ -472,10 +476,10 @@ export function createGitHubOAuthLifecycle(params: {
         const agentBindingMatches =
           record.scope === "system" ||
           (record.pendingInitial.agentLifecycleBinding !== undefined &&
-            matchesAgentLifecycleBinding(
-              persistedConfig,
+            (await matchesAgentLifecycleBindingAsync(
+              () => persistedConfig,
               record.pendingInitial.agentLifecycleBinding,
-            ));
+            )));
         if (
           agentBindingMatches &&
           persistedIdentity?.profileId === profileId &&

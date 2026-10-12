@@ -50,13 +50,13 @@ function skipped(
 }
 
 /** Create the complete initial outcome set; awaited startup work may replace entries later. */
-export function createGatewayStartupOutcomeRecorder(
+export async function createGatewayStartupOutcomeRecorder(
   params: GatewayStartupOutcomeRecorderParams,
-): GatewayStartupOutcomeRecorder {
+): Promise<GatewayStartupOutcomeRecorder> {
   const internalHooks =
     params.cfg.hooks?.internal?.enabled === false
       ? "hooks-disabled"
-      : resolveInternalHookSelection(params.cfg).configured
+      : (await resolveInternalHookSelection(params.cfg)).configured
         ? "no-handlers-loaded"
         : "not-configured";
   const gmailWatcher = !params.cfg.hooks?.enabled

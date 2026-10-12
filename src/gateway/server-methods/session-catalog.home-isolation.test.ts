@@ -15,6 +15,11 @@ vi.mock("../../state/user-profiles.js", () => ({
   getUserProfileRole: vi.fn(() => null),
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
 }));
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
+}));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 const { listActiveSessionCatalogs } = await import("../../plugins/session-catalog-active.js");

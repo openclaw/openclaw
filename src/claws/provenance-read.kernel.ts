@@ -24,7 +24,7 @@ type ClawInstallRow = Omit<
   updated_at_ms: number | bigint;
 };
 
-export function clawInstallRecordFromRow(row: ClawInstallRow): PersistedClawInstall {
+function clawInstallRecordFromRow(row: ClawInstallRow): PersistedClawInstall {
   if (
     (row.source_kind !== "package" && row.source_kind !== "development") ||
     (row.integrity_kind !== "artifact" && row.integrity_kind !== "development-snapshot") ||

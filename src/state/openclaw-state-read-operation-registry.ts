@@ -16,7 +16,8 @@ import type { SessionStateReadOperations } from "../sessions/session-state-event
 import type { sessionUpstreamReadOperations } from "../sessions/session-upstream-links.kernel.js";
 import type { SkillLibraryReadOperations } from "../skills/library/read.contract.js";
 import type { AgentRecoveryReadOperations } from "./agent-deletion-recovery.read-contract.js";
-import type { agentLifecycleReadOperations } from "./agent-lifecycle-read.kernel.js";
+import type { agentLifecycleReadOperations } from "./agent-lifecycle-read.worker.js";
+import type { MachineStateReadOperations } from "./config-machine-state.read.worker.js";
 import {
   createWorkerOperationRegistry,
   type WorkerOperations,
@@ -38,17 +39,20 @@ type Operations = WorkerOperations<typeof localWorkspaceReadOperations> &
   WorkerOperations<typeof sessionUpstreamReadOperations> &
   SecretStoreReadOperations &
   WorkerOperations<typeof configHealthReadOperations> &
-  DeferredPluginMigrationReadOperations;
+  DeferredPluginMigrationReadOperations &
+  MachineStateReadOperations;
 export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
 export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
 
 export const stateReadRegistry = createWorkerOperationRegistry<Operations, DatabaseSync>({
+  machineState: () =>
+    import("./config-machine-state.read.worker.js").then((m) => m.machineStateReadOperations),
   agentDeletion: () =>
     import("../agents/agent-delete-session-store-safety.kernel.js").then(
       (m) => m.agentDeletionSessionStoreReadOperations,
     ),
   agentLifecycle: () =>
-    import("./agent-lifecycle-read.kernel.js").then((m) => m.agentLifecycleReadOperations),
+    import("./agent-lifecycle-read.worker.js").then((m) => m.agentLifecycleReadOperations),
   agentRecovery: () =>
     import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryReadOperations),
   legacySessionMigration: () =>

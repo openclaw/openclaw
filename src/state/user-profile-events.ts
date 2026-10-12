@@ -125,7 +125,10 @@ export function captureUserProfileModelAccountLinksAuthority(
   const store = authorityStore(admission.identity);
   const links = store.modelAccountLinks.get(profileId);
   const identity = store.profileIdentities.get(profileId);
+  // A merge can add default links to its target without changing the target's identity.
+  const profile = store.profiles.get(profileId);
   const key = mutationKey("identity", profileId);
+  const profileKey = mutationKey("profile", profileId);
   const linksKey = mutationKey("modelAccountLinks", profileId);
   return () => {
     try {
@@ -134,8 +137,11 @@ export function captureUserProfileModelAccountLinksAuthority(
         changes.authorityStores.get(admission.identity.key) === store &&
         store.modelAccountLinks.get(profileId) === links &&
         store.profileIdentities.get(profileId) === identity &&
+        store.profiles.get(profileId) === profile &&
         !store.pending.get(key)?.size &&
         !store.uncertain.has(key) &&
+        !store.pending.get(profileKey)?.size &&
+        !store.uncertain.has(profileKey) &&
         !store.pending.get(linksKey)?.size &&
         !store.uncertain.has(linksKey)
       );

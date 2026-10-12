@@ -2,6 +2,7 @@ import { selectApplicableRuntimeConfig } from "../config/config.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { prepareWebSearchConfiguration } from "../web-search/runtime.js";
 import {
   resolveAgentDir,
@@ -97,10 +98,20 @@ export async function prepareOpenClawTools(
     prepareMediaAvailability("videoGenerate", "videoGenerationProviders", "video"),
     prepareMediaAvailability("musicGenerate", "musicGenerationProviders", "music"),
   ]);
+  let personalInstructionsEnabled = false;
+  if (!isEmbeddedMode()) {
+    const profiles = await prepareUserProfileCatalog();
+    try {
+      personalInstructionsEnabled = profiles.hasMultipleSessionSharingIdentities();
+    } finally {
+      profiles.release();
+    }
+  }
   return {
     captured,
     delegated,
     webSearchConfigured,
+    personalInstructionsEnabled,
     mediaTools: { ...mediaPlan, imageGenerate, videoGenerate, musicGenerate },
   };
 }

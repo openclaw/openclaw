@@ -112,10 +112,9 @@ export async function buildOnboardingWelcome(params: {
     overview.config.valid &&
     authoredConfig !== undefined &&
     authoredConfig?.gateway?.mode !== "remote"
-      ? (await import("../state/local-onboarding-state.js")).readLocalOnboardingStateForConfig(
-          overview.config.path,
-          authoredConfig,
-        )
+      ? await (
+          await import("../state/local-onboarding-state.js")
+        ).readLocalOnboardingStateForConfigAsync(overview.config.path, authoredConfig)
       : undefined;
   const pendingSetup = localSetup?.status === "pending" ? localSetup : undefined;
   const setupModel = (overview.defaultModel ?? overview.setupModel)?.trim();

@@ -40,7 +40,10 @@ import {
   resolveModelPricing,
   resolveModelPricingContext,
 } from "./pricing.js";
-import { getRemoteModelCatalogProviderOverlay } from "./remote-overlay.js";
+import {
+  captureRemoteModelCatalogStartupSnapshotAtBoot,
+  getRemoteModelCatalogProviderOverlay,
+} from "./remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "./remote-overlay.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -109,6 +112,7 @@ describe("hosted model pricing", () => {
       bundledGeneratedAt: () => 100,
       readStoredCatalog,
     });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
   });
 
   afterEach(() => {
@@ -203,6 +207,7 @@ describe("hosted model pricing", () => {
   it.each(["retirement", "current read failure"])(
     "preserves pricing publication semantics after %s",
     async (change) => {
+      readStoredCatalog.mockClear();
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
       const config = configFor("https://api.openai.com/v1");
       const cache = createPluginCache();
@@ -274,6 +279,11 @@ describe("hosted model pricing", () => {
         },
       }),
     });
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog,
+    });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
     const cost = resolveModelCostConfig({
       config,
       agentDir,
@@ -628,6 +638,11 @@ describe("hosted model pricing", () => {
       bundle_json: bundleJson,
     });
 
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog,
+    });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
     const fingerprint = resolveModelCostConfigFingerprint(configFor("https://api.openai.com/v1"));
     const withoutHostedPricing = configFor("https://api.openai.com/v1");
     withoutHostedPricing.models = {
@@ -677,6 +692,7 @@ describe("OpenRouter routing shortcut estimates", () => {
   });
 
   it("prices the OpenRouter :nitro shortcut after endpoint checks", () => {
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
     const agentDir = tempDirs.make("openclaw-routing-pricing-");
     const model = "openai/gpt-catalog:nitro";
     const rates = { input: 1, output: 2 };
@@ -737,6 +753,7 @@ describe("OpenRouter routing shortcut estimates", () => {
     const agentDir = tempDirs.make("openclaw-routing-variants-");
     hostedPricing["openrouter/openai/gpt-catalog:nitro"] = { input: 7, output: 8 };
     hostedPricing["openrouter/openai/gpt-catalog:free"] = { input: 3, output: 4 };
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
     const config: OpenClawConfig = {
       models: {
         providers: { openrouter: { baseUrl: "https://openrouter.ai/api/v1", models: [] } },
@@ -875,6 +892,7 @@ describe("standalone v2 pricing", () => {
         checked_at: 200,
       }),
     });
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
   });
 
   afterEach(() => {
@@ -981,6 +999,7 @@ describe("inline v2 pricing", () => {
     expected: { input: number; output?: number } | undefined;
   }>)("uses $name pricing without reviving the bundled price", ({ price, expected }) => {
     pricing = price;
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
     const config = {};
     const context = resolveModelPricingContext(config);
     expect(resolveModelPricing(context, "fixture/native/model")).toEqual(expected);
@@ -997,6 +1016,7 @@ describe("inline v2 pricing", () => {
   });
 
   it("does not let known zero bypass disabled external pricing", () => {
+    captureRemoteModelCatalogStartupSnapshotAtBoot();
     const config: OpenClawConfig = {};
     const snapshot = pluginMetadata.resolvePluginMetadataSnapshot({ config, env: process.env });
     for (const plugin of snapshot.manifestRegistry.plugins) {

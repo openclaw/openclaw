@@ -15,7 +15,10 @@ import {
   recordRuntimeAuthProfileStorePersistedMutation,
   resolveRuntimeStoreKey,
 } from "./mutation-lineage.js";
-import { captureAuthProfileOwnerScope } from "./path-resolve.js";
+import {
+  captureAuthProfileOwnerScope,
+  getPreparedSharedAuthStoreOwnership,
+} from "./path-resolve.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
 import {
@@ -252,6 +255,9 @@ export function registerRuntimeAuthProfileStoreMutationListener(
 export function getRuntimeAuthProfileStoreSnapshotCore(
   agentDir?: string,
 ): RuntimeAuthProfileStore | undefined {
+  if (!agentDir && !getPreparedSharedAuthStoreOwnership(process.env)) {
+    return undefined;
+  }
   return getRuntimeAuthProfileStoreSnapshotAtDatabasePath(resolveRuntimeStoreKey(agentDir));
 }
 
@@ -274,6 +280,12 @@ export function getPreparedRuntimeAuthProfileStoreSnapshotCore(
   inheritedAuthDir?: string,
   env?: NodeJS.ProcessEnv,
 ): RuntimeAuthProfileStore | undefined {
+  if (
+    (!agentDir || !inheritedAuthDir) &&
+    !getPreparedSharedAuthStoreOwnership(env ?? process.env)
+  ) {
+    return undefined;
+  }
   const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir, env);
   const requestedKey = resolveRuntimeStoreKey(agentDir, env);
   const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);

@@ -23,6 +23,7 @@ import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath as resolveSharedAuthPath,
 } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { materializePreparedPersonalAuthProfile } from "./personal-profiles.js";
 import type {
   AuthProfileReadOwner,
@@ -534,6 +535,7 @@ export function createAuthProfileStoreRuntimeReader({
       method: "loadAuthProfileStoreForRuntime",
       replacement: "loadAuthProfileStoreForRuntimeAsync",
     });
+    prepareSharedAuthStoreOwnershipForNative(env ?? getScopedAuthProfileEnv());
     return loadRuntimeAuthProfileStore(agentDir, options, env);
   }
 

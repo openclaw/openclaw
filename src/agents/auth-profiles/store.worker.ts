@@ -65,8 +65,8 @@ export const authProfileOperations = {
     { open, stateOptions },
   ): UserModelAuthProfile | undefined => {
     const database = open();
-    let committed: UserModelAuthProfile | undefined;
     const options = { ...stateOptions(), database };
+    let committed: UserModelAuthProfile | undefined;
     updateUserModelAuthProfile(
       input.profileId,
       (profile) => {
@@ -78,16 +78,13 @@ export const authProfileOperations = {
         return true;
       },
       options,
-      (stage) => {
-        if (stage === "transaction") {
-          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+      (operation) => {
+        if (operation.stage === "transaction") {
+          requestSqliteWorkerOperationAdmission({ stage: operation.stage, facts: undefined });
         } else {
-          committed = readUserModelAuthProfileInDatabase(database.db, input.profileId);
-          if (!isDeepStrictEqual(committed, input.next)) {
-            throw new Error("Personal credential codec changed the prepared update");
-          }
-          const digest = createHash("sha256").update(JSON.stringify(input.next)).digest("hex");
-          requestSqliteWorkerOperationAdmission({ stage, facts: digest });
+          committed = operation.profile;
+          const digest = createHash("sha256").update(JSON.stringify(committed)).digest("hex");
+          requestSqliteWorkerOperationAdmission({ stage: operation.stage, facts: digest });
           deferSqliteWorkerCommitReceipt(database.db, digest);
         }
       },
@@ -143,7 +140,7 @@ export const authProfileOperations = {
         return true;
       },
       stateOptions(),
-      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+      ({ stage }) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
     );
     return result;
   },

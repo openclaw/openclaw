@@ -11,7 +11,11 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type * as CronDelivery from "../cron/delivery.js";
 import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
-import { loadCronStore, saveCronStore } from "../cron/store.js";
+import {
+  loadCronStore,
+  saveCronStore,
+  resolveCronJobsStorePathFromConfigAsync,
+} from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -24,6 +28,10 @@ import {
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import {
+  expectCronJobIdFromResponse,
+  expectEnqueuedRunPayload,
+} from "./server.cron.assertions.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -180,6 +188,7 @@ async function createDirectCronState(params?: {
   ]);
   const cronState = {
     ...buildGatewayCronService({
+      storePath: await resolveCronJobsStorePathFromConfigAsync(getRuntimeConfig()),
       scheduler: createTestGatewayScheduler({
         ...createGatewaySchedulerClock().clock,
         now: () => Date.now(),
@@ -283,14 +292,6 @@ async function directCronReq(
   return expectDefined(result, `${method} did not respond`);
 }
 
-function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
-  expect(response.ok, JSON.stringify((response as { error?: unknown }).error ?? null)).toBe(true);
-  const value = (response.payload as { id?: unknown } | null)?.id;
-  const id = typeof value === "string" ? value : "";
-  expect(id.length > 0).toBe(true);
-  return id;
-}
-
 async function addWebhookCronJob(params: {
   ws: WebSocket;
   name: string;
@@ -323,14 +324,6 @@ async function writeCronConfig(config: unknown) {
   await fs.mkdir(path.dirname(configPath as string), { recursive: true });
   await fs.writeFile(configPath as string, JSON.stringify(config, null, 2), "utf-8");
   resetConfigRuntimeState();
-}
-
-function expectEnqueuedRunPayload(payload: unknown): string {
-  const record = payload as { ok?: unknown; enqueued?: unknown; runId?: unknown } | null;
-  expect(record?.ok).toBe(true);
-  expect(record?.enqueued).toBe(true);
-  expect(typeof record?.runId).toBe("string");
-  return record?.runId as string;
 }
 
 async function runCronJobAndWaitForFinished(ws: WebSocket, jobId: string) {

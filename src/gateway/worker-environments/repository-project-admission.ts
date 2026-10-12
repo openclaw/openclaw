@@ -130,6 +130,7 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertAgent();
     return identity;
   };
+  await assertAgentPrepared();
   assertAdmission();
   let identity = await prepareIdentity(assertCaller);
   assertAdmission();

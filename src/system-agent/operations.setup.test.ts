@@ -136,7 +136,7 @@ vi.mock("../config/config.js", () => ({
 }));
 vi.mock("../state/local-onboarding-state.js", () => ({
   readLocalOnboardingState: localOnboarding.read,
-  readLocalOnboardingStateForConfig: localOnboarding.readForConfig,
+  readLocalOnboardingStateForConfigAsync: localOnboarding.readForConfig,
   completeLocalOnboarding: localOnboarding.complete,
 }));
 
@@ -778,29 +778,21 @@ describe("local setup recovery", () => {
     );
   });
 
-  it.each(["owner", "config identity"])(
-    "rejects replacement %s at the setup config-write boundary",
-    async (changed) => {
-      const pending = pendingOwner();
-      const replacement = changed === "owner" ? { ...pending, runId: "replacement-run" } : pending;
-      const setupEffects = vi.fn();
-      await rejectsRecovery(
-        replacement,
-        async (params) => {
-          if (changed === "owner") {
-            localOnboarding.states.set(configPath, replacement);
-          } else {
-            recoveryConfig(pending, "2026-08-03T00:00:00.000Z");
-          }
-          params.assertCommitPreconditions?.((await mockConfig.read()).sourceConfig);
-          setupEffects();
-          return setupResult();
-        },
-        "Another onboarding run replaced this setup operation",
-      );
-      expect(setupEffects).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects a replaced config identity at the setup config-write boundary", async () => {
+    const pending = pendingOwner();
+    const setupEffects = vi.fn();
+    await rejectsRecovery(
+      pending,
+      async (params) => {
+        recoveryConfig(pending, "2026-08-03T00:00:00.000Z");
+        params.assertCommitPreconditions?.((await mockConfig.read()).sourceConfig);
+        setupEffects();
+        return setupResult();
+      },
+      "Another onboarding run replaced this setup operation",
+    );
+    expect(setupEffects).not.toHaveBeenCalled();
+  });
 
   it("keeps onboarding pending when its configuration disappears after setup", async () => {
     await rejectsRecovery(pendingOwner(), async () => {

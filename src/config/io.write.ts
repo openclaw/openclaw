@@ -2,7 +2,7 @@ import type fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok } from "@openclaw/normalization-core/result";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import {
   readConfigWritePendingMigrations,
@@ -182,7 +182,7 @@ export async function writeConfigFileFromContext(
   };
   const cronOwnerRefusal = cronOwner
     ? await prepareCronOwnerWriteRefusal(snapshot.config, {
-        storePath: resolveCronJobsStorePathFromConfig(nextConfig, deps.env),
+        storePath: await resolveCronJobsStorePathFromConfigAsync(nextConfig, deps.env),
         ...cronOwner,
         env: deps.env,
       })

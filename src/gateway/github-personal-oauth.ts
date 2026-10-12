@@ -20,7 +20,6 @@ import {
   resolveManagedGitHubProfileRoot,
 } from "../agents/github-tool-identity.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import {
@@ -29,9 +28,10 @@ import {
   listUserGitHubConnectionsAsync,
   mutateUserGitHubConnection as mutateConnection,
   observeUserGitHubProfileRetirement,
-  readUserGitHubConnection,
+  prepareUserGitHubConnection,
+  readCanonicalUserGitHubConnectionAsync,
+  readPreparedUserGitHubConnection,
   readUserGitHubConnectionAsync,
-  resolvePersonalGitHubOwner,
   updateUserGitHubRefreshAsync as updateRefresh,
   type UserGitHubConnection,
   type UserGitHubConnected,
@@ -39,6 +39,7 @@ import {
 } from "../state/user-github-connections.js";
 import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
+import { warnGitHubPublicationDeprecation } from "./github-publication-deprecation.js";
 
 export type PersonalGitHubAction = { owner: string; assertCurrent: () => void };
 export type PersonalGitHubActionV2 = PersonalGitHubAction & { signal: AbortSignal };
@@ -70,7 +71,7 @@ export function personalGitHubStatus(action: PersonalGitHubAction): PersonalGitH
   action.assertCurrent();
   let record: UserGitHubConnection | undefined;
   try {
-    record = readUserGitHubConnection(action.owner);
+    record = readPreparedUserGitHubConnection(action.owner);
   } catch {
     action.assertCurrent();
     return {
@@ -285,13 +286,10 @@ export function createPersonalGitHubOAuthLifecycle() {
     if (!candidate) {
       throw new Error("My GitHub authorization has no candidate.");
     }
+    const prepared = await prepareUserGitHubConnection(action.owner);
     const assertCurrent = () => {
       guard(action);
-      const record = requirePending(
-        readUserGitHubConnection(action.owner),
-        generation,
-        pending.requestId,
-      );
+      const record = requirePending(prepared.read(), generation, pending.requestId);
       if (
         record.pending.kind !== "device" ||
         record.pending.candidate?.profileId !== candidate.profileId
@@ -333,7 +331,7 @@ export function createPersonalGitHubOAuthLifecycle() {
         });
       });
       guard(action);
-      return { status: "success", personal: personalGitHubStatus(action) };
+      return { status: "success", personal: await resolvePersonalGitHubStatus(action) };
     } catch {
       guard(action);
       return { status: "failed", reason: "setup_failed" };
@@ -421,10 +419,14 @@ export function createPersonalGitHubOAuthLifecycle() {
     operationId: string,
     assertOwned: () => void,
   ): Promise<void> => {
+    const canonical = await readCanonicalUserGitHubConnectionAsync(owner);
+    if (!canonical) {
+      throw new Error("My GitHub refresh ownership changed.");
+    }
+    const prepared = await prepareUserGitHubConnection(canonical.owner);
     const readExact = () => {
       assertOwned();
-      const canonical = resolvePersonalGitHubOwner(owner);
-      const selection = canonical ? readUserGitHubConnection(canonical)?.selection : undefined;
+      const selection = prepared.read()?.selection;
       if (
         selection?.kind !== "connected" ||
         selection.profileId !== id ||
@@ -662,11 +664,7 @@ export function createPersonalGitHubOAuthLifecycle() {
     },
     /** @deprecated Use cancelAuthorizationAsync; removed in the next Plugin SDK major. */
     cancelAuthorization(action: PersonalGitHubAction, requestId: string): boolean {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "personal.cancelAuthorization",
-        replacement: "personal.cancelAuthorizationAsync",
-      });
+      warnGitHubPublicationDeprecation("personal.cancelAuthorization");
       return cancelUserGitHubAuthorizationSync(action.owner, requestId, () => guard(action));
     },
     async cancelAuthorizationAsync(
@@ -682,11 +680,7 @@ export function createPersonalGitHubOAuthLifecycle() {
     },
     /** @deprecated Use disconnectAsync; removed in the next Plugin SDK major. */
     disconnect(action: PersonalGitHubAction): void {
-      warnPluginSdkDeprecation({
-        family: "github-publication",
-        method: "personal.disconnect",
-        replacement: "personal.disconnectAsync",
-      });
+      warnGitHubPublicationDeprecation("personal.disconnect");
       disconnectUserGitHubConnectionSync(action.owner, () => guard(action));
       clearNativeGitHubTokenCache();
     },

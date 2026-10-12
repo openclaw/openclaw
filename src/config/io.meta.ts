@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
+import { writeConfigMachineStateAsync } from "../state/config-machine-state-write-async.js";
 // Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
 import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";

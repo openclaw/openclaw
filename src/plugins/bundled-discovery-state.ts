@@ -1,5 +1,6 @@
 // Bundled-discovery compatibility is machine-owned upgrade state.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -149,21 +150,32 @@ export async function prepareBundledDiscoveryMode(
     ? readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options))
     : undefined;
   if (snapshot) {
-    const signal = getPluginCacheRetirementSignal(owner);
-    // Private policy needs no global activation, but its caller must retain this exact scope.
-    const assertCurrent = () => {
-      signal.throwIfAborted();
-      if (
-        readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options)) !==
-        snapshot
-      ) {
+    const existing = discoveryState.snapshotModes.get(snapshot);
+    if (existing) {
+      return () => discoveryState.snapshotModes.set(snapshot, existing);
+    }
+    // The read worker retains these snapshot bytes; derivation consumes its result locally.
+    let value: BundledDiscoveryMode;
+    try {
+      value = parseBundledDiscoveryMode(
+        await readConfigMachineStateAsync("plugins.bundledDiscovery", options, {
+          artifactPreservingReadOnly: true,
+        }),
+      );
+    } catch (error) {
+      if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
         throw new PluginCacheFactInvalidatedError(
-          "Plugin discovery snapshot changed during preparation; retry the operation.",
+          "Plugin discovery read admission changed during preparation; retry the operation.",
+          { cause: error },
         );
       }
+      throw error;
+    }
+    const activate = () => {
+      discoveryState.snapshotModes.set(snapshot, { value });
     };
-    assertCurrent();
-    return assertCurrent;
+    activate();
+    return activate;
   }
   const cache = owner.preparedBundledDiscoveryModes;
   const key = resolveBundledDiscoveryMemoKey(env);

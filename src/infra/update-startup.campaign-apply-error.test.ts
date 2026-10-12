@@ -45,15 +45,18 @@ vi.mock("./restart-sentinel.js", async () => {
   };
 });
 
-vi.mock("../state/config-machine-state-write.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../state/config-machine-state-write.js")>();
+vi.mock("../state/config-machine-state-write-async.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../state/config-machine-state-write-async.js")>();
   return {
     ...actual,
-    writeConfigMachineState: (...args: Parameters<typeof actual.writeConfigMachineState>) => {
+    writeConfigMachineStateAsync: (
+      ...args: Parameters<typeof actual.writeConfigMachineStateAsync>
+    ) => {
       if (fault.at === "state-write" && fault.error) {
         throw fault.error;
       }
-      return actual.writeConfigMachineState(...args);
+      return actual.writeConfigMachineStateAsync(...args);
     },
   };
 });

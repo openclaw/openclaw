@@ -1227,7 +1227,7 @@ describe("promoteAuthProfileInOrder", () => {
           profiles: { [profileId]: original, "other:default": unrelated },
         };
         saveAuthProfileStore(store, agentDir);
-        expect(reloadSharedAuthStoreOwnership().location).toBe("legacy-main");
+        expect((await reloadSharedAuthStoreOwnership()).location).toBe("legacy-main");
         replaceRuntimeAuthProfileStoreSnapshots([
           {
             agentDir,

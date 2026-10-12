@@ -30,8 +30,11 @@ vi.mock("../../web-search/runtime.js", () => ({
   listConfiguredWebSearchProviders: mocks.available,
   resolveWebSearchProviderId: mocks.selection,
 }));
-vi.mock("../../plugins/management-service.js", () => ({
-  resolveManagedPluginMetadata: mocks.metadata,
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshotAsync: mocks.metadata,
+}));
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
 }));
 vi.mock("../../plugins/credential-descriptors.js", () => ({
   resolvePluginCredentialDescriptors: () => [credential],

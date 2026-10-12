@@ -20,11 +20,16 @@ import {
   createLazyRuntimeSurface,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
-import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
+import {
+  listWebSearchProviders,
+  listWebSearchProvidersAsync,
+  runWebSearch,
+} from "../../web-search/runtime.js";
 import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
 } from "../loader-runtime-load.js";
+import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -350,7 +355,15 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     system: base.system,
     media: createRuntimeMedia(),
     webSearch: {
-      listProviders: listWebSearchProviders,
+      listProviders: (params) => {
+        warnPluginSdkDeprecation({
+          family: "web-search-providers",
+          method: "runtime.webSearch.listProviders",
+          replacement: "runtime.webSearch.listProvidersAsync",
+        });
+        return listWebSearchProviders(params);
+      },
+      listProvidersAsync: listWebSearchProvidersAsync,
       search: runWebSearch,
     },
     channel: createRuntimeChannel(

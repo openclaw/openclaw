@@ -15,6 +15,7 @@ import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath,
 } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { prepareAgentAuthProfileRowsRead } from "./sqlite-read.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
@@ -37,6 +38,7 @@ function normalizeDisplayPath(pathname: string, env: NodeJS.ProcessEnv = process
 
 /** Resolve the user-facing path for the database selected by the auth store loader. */
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
+  prepareSharedAuthStoreOwnershipForNative();
   const localPath = agentDir
     ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
     : undefined;

@@ -53,6 +53,7 @@ import {
   startGatewayCaseControlClient,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
+import { readRequestBody, writeJson } from "./tui-pty-model-http-test-support.js";
 import { buildTuiProcessArgs } from "./tui-pty-process-test-support.js";
 import { startRuntimePty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
@@ -202,24 +203,6 @@ async function requestWithUnavailableRetry<T>(request: () => Promise<T>): Promis
 }
 
 type CleanupRegistrar = (cleanup: () => Promise<void>) => void;
-
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-function writeJson(res: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(text),
-    "cache-control": "no-store",
-  });
-  res.end(text);
-}
 
 async function writeResponsesSse(
   res: ServerResponse,
@@ -1826,8 +1809,11 @@ export default {
         const agentDir = path.join(fixture.stateDir, "agents", "main", "agent");
         const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
         expect(await stat(sqlitePath).then((entry) => entry.isFile())).toBe(true);
+        await reloadSharedAuthStoreOwnership({
+          ...process.env,
+          OPENCLAW_STATE_DIR: fixture.stateDir,
+        });
         const store = withEnv({ OPENCLAW_STATE_DIR: fixture.stateDir }, () => {
-          reloadSharedAuthStoreOwnership();
           return loadAuthProfileStoreForRuntime(agentDir, {
             readOnly: true,
             syncExternalCli: false,

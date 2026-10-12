@@ -16,7 +16,12 @@ import {
 } from "../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import {
+  completeAgentDeletionJournalInDatabase,
+  deleteAgentDeletionJournalInDatabase,
+  handoffAgentDeletionJournalInDatabase,
+  readAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { recordAgentProvenanceInDatabase } from "../state/agent-provenance.kernel.js";
 import {
@@ -118,7 +123,7 @@ describe("agent lifecycle registry", () => {
     },
   );
 
-  it("revalidates incarnation and deletion through its current transaction and restores authority after rollback", async () => {
+  it("keeps committed lifecycle authority through a rolled-back writer transaction", async () => {
     const options = createOptions();
     const config = { agents: { entries: { main: {} } } };
     await recordAgentProvenance("main", { createdVia: "operator" }, { ...options, nowMs: 1 });
@@ -132,17 +137,17 @@ describe("agent lifecycle registry", () => {
           creatorAgentId: null,
           createdAtMs: 2,
         });
-        expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
+        expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
         const provenance = readAgentProvenance("main", options);
         expect(provenance?.createdAtMs).toBe(2);
         const currentBinding = { ...binding, provenance: provenance ?? null };
-        expect(matchesAgentLifecycleBinding(config, currentBinding, options)).toBe(true);
+        expect(matchesAgentLifecycleBinding(config, currentBinding, options)).toBe(false);
         beginAgentDeletionJournal(
           { ...createEntry("main"), operationId: "delete-main", deleteFiles: false },
           options,
         );
         expect(isAgentDeletionBlocked("main", options)).toBe(true);
-        expect(matchesAgentLifecycleBinding(config, currentBinding, options)).toBe(false);
+        expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
         throw rollback;
       }, options),
     ).toThrow(rollback);
@@ -379,51 +384,49 @@ describe("agent lifecycle registry", () => {
     }, options);
   });
 
-  it("refuses changed journal authority before filesystem effects while the original deletion lease is held", async () => {
+  it("uses committed journal authority for filesystem effects without host SQL", async () => {
     const options = createOptions();
     await withAgentDeletion(
       "main",
       async (begin) => {
         const entry = createEntry("main");
         const deletion = await begin(entry);
-        const { db } = openOpenClawStateDatabase(options);
         const effectPath = path.join(options.env.OPENCLAW_STATE_DIR, "cleanup-effect");
         const writeEffect = () => {
           deletion.assertCurrentFinal();
           fs.writeFileSync(effectPath, "cleanup accepted");
         };
-        for (const mutation of [
-          "UPDATE agent_deletion_journal SET operation_id = 'replacement' WHERE agent_id = 'main'",
-          "UPDATE agent_deletion_journal SET cleanup_completed = 1 WHERE agent_id = 'main'",
-          "UPDATE agent_deletion_journal SET cleanup_completed = 2 WHERE agent_id = 'main'",
-          "DELETE FROM agent_deletion_journal WHERE agent_id = 'main'",
-        ]) {
-          await deletion.assertCurrentAsync();
-          // A committed external change cannot be hidden by an earlier discovery snapshot.
-          db.exec(mutation);
-          expect(writeEffect).toThrow();
-          expect(fs.existsSync(effectPath)).toBe(false);
-          await expect(deletion.assertCurrentAsync()).rejects.toThrow();
-          beginAgentDeletionJournal(
-            { ...entry, operationId: deletion.entry.operationId, deleteFiles: true },
-            options,
-          );
-        }
-        await deletion.assertCurrentAsync();
-        const executed: string[] = [];
-        const observation = observeHostDataSql((sql, database) => {
-          if (database === undefined) {
-            executed.push(sql);
+        const operationId = deletion.entry.operationId;
+        const mutate = [
+          (database: Parameters<typeof handoffAgentDeletionJournalInDatabase>[0]) =>
+            handoffAgentDeletionJournalInDatabase(database, "main", operationId, "replacement"),
+          (database: Parameters<typeof completeAgentDeletionJournalInDatabase>[0]) =>
+            completeAgentDeletionJournalInDatabase(database, "main", operationId),
+          (database: Parameters<typeof deleteAgentDeletionJournalInDatabase>[0]) =>
+            deleteAgentDeletionJournalInDatabase(database, "main", operationId, false),
+        ];
+        for (const mutation of mutate) {
+          expect(runOpenClawStateWriteTransaction(mutation, options)).toBe(true);
+          const observation = observeHostDataSql();
+          try {
+            expect(writeEffect).toThrow("no longer owns");
+            expect(observation.queries).toEqual([]);
+          } finally {
+            observation.restore();
           }
-        });
+          expect(fs.existsSync(effectPath)).toBe(false);
+          beginAgentDeletionJournal({ ...entry, operationId, deleteFiles: true }, options);
+        }
+        expect(() =>
+          runOpenClawStateWriteTransaction((database) => {
+            handoffAgentDeletionJournalInDatabase(database, "main", operationId, "rolled-back");
+            throw new Error("rollback journal change");
+          }, options),
+        ).toThrow("rollback journal change");
+        const observation = observeHostDataSql();
         try {
           writeEffect();
-          expect(executed.filter((sql) => /\bagent_deletion_journal\b/i.test(sql))).toHaveLength(1);
-          expect(
-            observation.queries.some((sql) =>
-              /^\s*(?:begin|commit|rollback|savepoint)\b/i.test(sql),
-            ),
-          ).toBe(false);
+          expect(observation.queries).toEqual([]);
         } finally {
           observation.restore();
         }
@@ -432,40 +435,6 @@ describe("agent lifecycle registry", () => {
       },
       options,
     );
-  });
-
-  it("refuses a stolen lease before filesystem effects and rechecks it in the heartbeat worker", async () => {
-    const options = createOptions();
-    await expect(
-      withAgentDeletion(
-        "main",
-        async (begin) => {
-          const deletion = await begin(createEntry("main"));
-          await deletion.assertCurrentAsync();
-          openOpenClawStateDatabase(options)
-            .db.prepare("UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?")
-            .run("successor", "core:agent-deletion", "main");
-          const effectPath = path.join(options.env.OPENCLAW_STATE_DIR, "cleanup-effect");
-          expect(() => {
-            deletion.assertCurrentFinal();
-            fs.writeFileSync(effectPath, "cleanup accepted");
-          }).toThrow();
-          expect(fs.existsSync(effectPath)).toBe(false);
-          const observation = observeHostDataSql(() => {
-            throw new Error("Deletion authority must not execute SQL on the parent");
-          });
-          try {
-            await expect(deletion.assertCurrentAsync()).rejects.toMatchObject({
-              code: "OPENCLAW_STATE_LEASE_LOST",
-            });
-            expect(observation.queries).toEqual([]);
-          } finally {
-            observation.restore();
-          }
-        },
-        options,
-      ),
-    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
   });
 
   it("rejects a current worker reply when deletion closes before the reply is consumed", async () => {
@@ -624,7 +593,7 @@ describe("agent lifecycle registry", () => {
   });
 
   it.each(["present", "absent"] as const)(
-    "captures without host SQL and observes foreign lifecycle commits with provenance table %s",
+    "captures without host SQL and follows committed lifecycle receipts with provenance table %s",
     async (provenanceTable) => {
       const options = createOptions();
       if (provenanceTable === "absent") {
@@ -659,10 +628,7 @@ describe("agent lifecycle registry", () => {
           const authorityReads = executed.filter((sql) =>
             /\bagent_(?:provenance|deletion_journal)\b/i.test(sql),
           );
-          expect(authorityReads).toHaveLength(1);
-          expect(authorityReads[0]).not.toMatch(
-            /\*|\b(?:database_paths_json|cleanup_paths_json)\b/i,
-          );
+          expect(authorityReads).toHaveLength(0);
           expect(
             observation.queries.some((sql) =>
               /^\s*(?:begin|commit|rollback|savepoint)\b/i.test(sql),
@@ -723,18 +689,20 @@ describe("agent lifecycle registry", () => {
       } finally {
         recordAgentDatabaseAdmissions([], { env: otherEnv });
       }
-      const database = openOpenClawStateDatabase(options);
-      database.db.exec("UPDATE agent_provenance SET created_at_ms = 43 WHERE agent_id = 'main'");
+      await recordAgentProvenance("main", { createdVia: "operator" }, { ...options, nowMs: 43 });
       assertMatches(recreated, false);
-      database.db.exec("UPDATE agent_provenance SET created_at_ms = 42 WHERE agent_id = 'main'");
+      await recordAgentProvenance("main", { createdVia: "operator" }, { ...options, nowMs: 42 });
       assertMatches(recreated, true);
       beginAgentDeletionJournal(
-        { ...createEntry("main"), operationId: "foreign-deletion", deleteFiles: false },
+        { ...createEntry("main"), operationId: "owner-deletion", deleteFiles: false },
         options,
       );
       assertMatches(recreated, false);
       expect(await matchesAgentLifecycleBindingAsync(() => config, recreated, options)).toBe(false);
-      database.db.exec("DELETE FROM agent_deletion_journal WHERE agent_id = 'main'");
+      runOpenClawStateWriteTransaction(
+        (current) => deleteAgentDeletionJournalInDatabase(current, "main", "owner-deletion"),
+        options,
+      );
       assertMatches(recreated, true);
 
       const capturing = captureAgentLifecycleBinding(() => config, "main", options);

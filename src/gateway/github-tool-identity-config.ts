@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   matchesAgentLifecycleBinding,
+  matchesAgentLifecycleBindingAsync,
   type AgentLifecycleBinding,
 } from "../agents/agent-lifecycle-registry.js";
 import { resolveMutableAgentEntry } from "../agents/agent-scope.js";
@@ -19,7 +20,7 @@ export async function updateGitHubToolIdentityConfig(params: {
 }): Promise<OpenClawConfig> {
   const mutation = await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
-    mutate: (draft) => {
+    mutate: async (draft) => {
       if (params.scope === "system") {
         if (
           params.expectedIdentity !== undefined &&
@@ -38,7 +39,8 @@ export async function updateGitHubToolIdentityConfig(params: {
 
       if (
         params.agentLifecycleBinding &&
-        !matchesAgentLifecycleBinding(draft, params.agentLifecycleBinding)
+        (!(await matchesAgentLifecycleBindingAsync(() => draft, params.agentLifecycleBinding)) ||
+          !matchesAgentLifecycleBinding(draft, params.agentLifecycleBinding))
       ) {
         throw new Error("Agent changed while GitHub setup was in progress.");
       }

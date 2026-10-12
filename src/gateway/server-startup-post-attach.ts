@@ -159,7 +159,7 @@ export async function startGatewaySidecars(params: {
     );
   };
 
-  const internalHooksConfigured = resolveInternalHookSelection(params.cfg).configured;
+  const internalHooksConfigured = (await resolveInternalHookSelection(params.cfg)).configured;
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
     try {
       const { prepareInternalHooks } = await import("../hooks/loader.js");
@@ -823,7 +823,7 @@ export async function startGatewayPostAttachRuntime(
             logGatewayReady(params, "candidate gateway ready; autonomous sidecars suppressed");
             return pluginRegistry;
           }
-          const startupOutcomes = createGatewayStartupOutcomeRecorder({
+          const startupOutcomes = await createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
             gatewayStartHooks: pluginRegistry.typedHooks.some(
               (hook) => hook.hookName === "gateway_start",

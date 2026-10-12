@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import * as personalStore from "./github-personal-publication-store.js";
 import {
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
@@ -196,7 +195,6 @@ it.each([false, true])(
     openOpenClawStateDatabase()
       .db.prepare("UPDATE github_personal_publication_requests SET status = ? WHERE request_id = ?")
       .run("needs_confirmation", published.requestId);
-    const fallback = vi.spyOn(personalStore, "readPersonalGitHubPublication");
     if (corrupt) {
       const workspace = await sharedRepositoryWorkspace();
       insertRepositoryGitHubPublication(
@@ -213,7 +211,6 @@ it.each([false, true])(
       await expect(
         fixture.coordinator.personalPending(fixture.action, fixture.action),
       ).rejects.toThrow("GitHub repository publication receipt is corrupt");
-      expect(fallback).not.toHaveBeenCalled();
       return;
     }
     await expect(
@@ -221,10 +218,6 @@ it.each([false, true])(
     ).resolves.toMatchObject({
       result: { requestId: published.requestId, status: "needs_confirmation" },
       confirmation: { generation: fixture.generation, account },
-    });
-    expect(fallback).toHaveBeenCalledWith(fixture.owner, {
-      sessionKey: SESSION_KEY,
-      agentId: "main",
     });
   },
 );

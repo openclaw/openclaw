@@ -321,7 +321,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const agentId = normalized.value;
-    if (agentOwnsSharedAuthStore(cfg, agentId)) {
+    if (await agentOwnsSharedAuthStore(cfg, agentId)) {
       respond(
         false,
         undefined,

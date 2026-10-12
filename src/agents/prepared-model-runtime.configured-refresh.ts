@@ -10,6 +10,7 @@ import {
   type ActiveRemoteModelCatalog,
   type RemoteCatalogPublicationResult,
 } from "../model-catalog/remote-overlay.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
@@ -222,6 +223,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     progress?: Parameters<typeof publishPreparedModelRuntimeOwnerBatch>[0]["progress"];
   },
 ): Promise<void> {
+  await prepareSharedAuthStoreOwnership();
   const { owners, agentBuildCompletions, gatewayLifecycleActive, isPublicationCurrent, progress } =
     context;
   const catalogMode = options.catalogMode ?? "live";

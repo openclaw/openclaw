@@ -81,13 +81,15 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
   ) {
     return undefined;
   }
-  let worktreeOwner: Awaited<ReturnType<typeof readLocalGitHubPublicationWorktreeOwner>>;
+  let worktreeOwner:
+    | Awaited<ReturnType<typeof readLocalGitHubPublicationWorktreeOwner>>
+    | undefined;
   const { assertCurrent, refreshIdentity } = createGitHubPublicationExecutionIdentity({
     row,
     identity: params.identity,
     validateAuthority: params.validateCustody,
     assertWorkspace: () => {
-      worktreeOwner.assertCurrent();
+      worktreeOwner!.assertCurrent();
     },
   });
   let url: string | undefined;
@@ -130,6 +132,8 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
       "GitHub publication is unconfirmed; restore read access to the original target and retry recovery. Recorded effects are retained.",
       { cause: error },
     );
+  } finally {
+    worktreeOwner?.release();
   }
   if (!url) {
     return undefined;
@@ -703,5 +707,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       throw error;
     }
     return result;
+  } finally {
+    worktreeOwner?.release();
   }
 }

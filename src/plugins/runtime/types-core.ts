@@ -532,9 +532,13 @@ export type PluginRuntimeCore = {
     ) => import("../../music-generation/types.js").MusicGenerationProvider[];
   };
   webSearch: {
+    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. */
     listProviders: (
       params?: RuntimeProviderListParams,
     ) => import("../web-provider-types.js").PluginWebSearchProviderEntry[];
+    listProvidersAsync: (
+      params?: RuntimeProviderListParams,
+    ) => Promise<import("../web-provider-types.js").PluginWebSearchProviderEntry[]>;
     search: (
       params: import("../../web-search/runtime-types.js").RunWebSearchParams,
     ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;

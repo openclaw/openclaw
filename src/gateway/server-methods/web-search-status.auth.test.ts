@@ -45,8 +45,11 @@ vi.mock("../../flows/search-setup.js", () => ({ listSearchProviderOptions: mocks
 vi.mock("../../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: mocks.providers,
 }));
-vi.mock("../../plugins/management-service.js", () => ({
-  resolveManagedPluginMetadata: () => ({ byPluginId: new Map() }),
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshotAsync: async () => ({ byPluginId: new Map() }),
+}));
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
 }));
 vi.mock("../../agents/web-search-tool-policy.js", () => ({
   resolveWebSearchToolPolicy: () => ({ allowed: true }),

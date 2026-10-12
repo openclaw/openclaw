@@ -24,8 +24,8 @@ describe("gateway startup outcomes", () => {
       reason: "disabled-by-environment",
     },
     { account: undefined, env: {}, reason: "no-gmail-account" },
-  ])("records Gmail skip reason $reason", ({ account, env, reason }) => {
-    const recorder = createGatewayStartupOutcomeRecorder({
+  ])("records Gmail skip reason $reason", async ({ account, env, reason }) => {
+    const recorder = await createGatewayStartupOutcomeRecorder({
       ...inactiveParams,
       cfg: { hooks: { enabled: true, gmail: { account } } },
       env,
@@ -37,8 +37,8 @@ describe("gateway startup outcomes", () => {
     });
   });
 
-  it("records awaited internal hook outcomes without logging raw error fields", () => {
-    const recorder = createGatewayStartupOutcomeRecorder({
+  it("records awaited internal hook outcomes without logging raw error fields", async () => {
+    const recorder = await createGatewayStartupOutcomeRecorder({
       ...inactiveParams,
       cfg: {
         hooks: {

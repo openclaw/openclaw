@@ -37,7 +37,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import type { RunExit } from "../process/supervisor/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   createGatewaySchedulerClock,
@@ -49,6 +48,7 @@ import {
   registerGatewayCronMutationAuthorityTests,
   registerGatewayCronStreamMutationTests,
 } from "./server-cron.mutation-lifecycle.test-support.js";
+import { createWatchedRun, runExit } from "./server-cron.process.test-support.js";
 import { registerGatewayCronQueueTests } from "./server-cron.queue.test-support.js";
 import {
   registerGatewayCronHandoffTests,
@@ -280,14 +280,20 @@ import {
 } from "../cron/service/active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronServiceState } from "../cron/service/state.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
 import { fireOnExitJob } from "./server-cron-event-dispatch.js";
 import { buildGatewayCronService as buildGatewayCronServiceRuntime } from "./server-cron.js";
 
-function buildGatewayCronService(params: Parameters<typeof buildGatewayCronServiceRuntime>[0]) {
+function buildGatewayCronService(
+  params: Omit<Parameters<typeof buildGatewayCronServiceRuntime>[0], "storePath">,
+) {
   const legacyStore = (params.cfg.cron as { store?: unknown } | undefined)?.store;
   if (typeof legacyStore !== "string") {
-    return buildGatewayCronServiceRuntime(params);
+    return buildGatewayCronServiceRuntime({
+      ...params,
+      storePath: resolveCronJobsStorePathFromConfig(params.cfg, params.env),
+    });
   }
   const env = {
     ...process.env,
@@ -296,7 +302,11 @@ function buildGatewayCronService(params: Parameters<typeof buildGatewayCronServi
   };
   // These fixtures predate the config-to-SQLite move; seed the canonical machine-state owner.
   writeConfigMachineState("cron.store", legacyStore, { env });
-  return buildGatewayCronServiceRuntime({ ...params, env });
+  return buildGatewayCronServiceRuntime({
+    ...params,
+    env,
+    storePath: resolveCronJobsStorePathFromConfig(params.cfg, env),
+  });
 }
 
 function createCronConfig(name: string): OpenClawConfig {
@@ -435,35 +445,6 @@ function addScriptJob(
   overrides: CronJobOverrides = {},
 ) {
   return addCronJob(service, name, { kind: "script", script }, overrides);
-}
-
-function runExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "manual-cancel",
-    exitCode: null,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
-}
-
-function createWatchedRun(settleOnCancel = true, exitResult: Partial<RunExit> = {}) {
-  const exit = createDeferred<RunExit>();
-  return {
-    exit,
-    startedAtMs: Date.now(),
-    cancel: vi.fn(() => {
-      if (settleOnCancel) {
-        exit.resolve(runExit(exitResult));
-      }
-    }),
-    detachOutput: vi.fn(),
-    wait: vi.fn(() => exit.promise),
-  };
 }
 
 function mockCronSupervisor(...runs: ReturnType<typeof createWatchedRun>[]) {

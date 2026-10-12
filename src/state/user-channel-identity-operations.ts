@@ -21,7 +21,7 @@ import {
   publishUserProfileAliasChange,
   readUserProfileVersion,
 } from "./user-profile-events.js";
-import { isUserProfileCatalogReady, readUserProfileIdentity } from "./user-profile-list.js";
+import { isUserProfileCatalogReady, readResidentUserProfileIdentity } from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   UserChannelIdentity,
@@ -271,7 +271,7 @@ export async function prepareUserProfileRolePolicyAuthority(
   return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
     const source = { path: context.admission.databasePath };
     if (isUserProfileCatalogReady(source)) {
-      const profile = readUserProfileIdentity(profileId, source);
+      const profile = readResidentUserProfileIdentity(profileId, source);
       return (
         profile && {
           profileId: profile.profileId,

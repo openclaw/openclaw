@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -13,7 +14,7 @@ import { invalidateCronJobNames, publishCronJobNames } from "./store/job-name.js
 import { readCronJobNamesInDatabase } from "./store/job-name.kernel.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
-import { resolveCronJobsStorePath } from "./store/paths.js";
+import { resolveCronJobsStorePath, resolveCronJobsStorePathAsync } from "./store/paths.js";
 import {
   assertCronStoreCanPersist,
   readCronJobsFingerprint,
@@ -39,7 +40,12 @@ import type {
 } from "./store/transaction-hooks.types.js";
 import type { LoadedCronStore } from "./store/types.js";
 import type { CronStoreFile } from "./types.js";
-export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
+export {
+  resolveCronJobsStorePath,
+  resolveCronJobsStorePathAsync,
+  resolveCronJobsStorePathFromConfig,
+  resolveCronJobsStorePathFromConfigAsync,
+} from "./store/paths.js";
 export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 export { CronJobsStoreChangedError } from "./store/save-error.js";
 export type { LoadedCronStore } from "./store/types.js";
@@ -356,9 +362,19 @@ export async function saveCronJobsStore(
 }
 
 // Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.
-/** Resolves the public plugin-SDK cron store path. */
+/** @deprecated Await resolveCronStorePathAsync. Removed in the next Plugin SDK major. */
 export function resolveCronStorePath(storePath?: string) {
+  warnPluginSdkDeprecation({
+    family: "cron-store-path",
+    method: "resolveCronStorePath",
+    replacement: "resolveCronStorePathAsync",
+  });
   return resolveCronJobsStorePath(storePath);
+}
+
+/** Resolves the public plugin-SDK cron partition through the shared-state worker. */
+export async function resolveCronStorePathAsync(storePath?: string): Promise<string> {
+  return resolveCronJobsStorePathAsync(storePath);
 }
 
 /** Plugin-SDK alias for loading the cron store. */

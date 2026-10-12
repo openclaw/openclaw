@@ -28,7 +28,7 @@ import {
   PreparedModelRuntimePublicationSupersededError,
   hasSameLifecycleInput,
   normalizeOptionalDir,
-  normalizePreparedModelRuntimeInput,
+  prepareModelRuntimeInput,
   ownerKey,
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
@@ -267,7 +267,7 @@ export async function publishPreparedModelRuntimeSnapshot(
   options: PreparedModelRuntimePublicationOptions = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
   captureModelRuntimeLifetime();
-  const input = normalizePreparedModelRuntimeInput(rawInput);
+  const input = await prepareModelRuntimeInput(rawInput);
   const existing = owners.get(ownerKey(input));
   if (existing?.pending) {
     if (!options.force && hasSameLifecycleInput(existing.input, input)) {
@@ -316,7 +316,8 @@ export async function activateStandalonePreparedModelRuntime(
   > = {},
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   const assertLifetime = captureModelRuntimeLifetime();
-  const input = normalizePreparedModelRuntimeInput(rawInput);
+  const input = await prepareModelRuntimeInput(rawInput);
+  assertLifetime();
   const key = ownerKey(input);
   const previous = standaloneActivationTails.get(key) ?? Promise.resolve();
   // One writer per owner key prevents conflicting config activations from alternately

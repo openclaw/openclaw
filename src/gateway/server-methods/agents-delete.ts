@@ -34,6 +34,7 @@ import {
 } from "../../agents/agent-scope.js";
 import {
   resolveSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
 } from "../../agents/auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
@@ -83,7 +84,11 @@ type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
 
 export class AgentSharedAuthStoreOwnerError extends Error {}
 
-export function agentOwnsSharedAuthStore(cfg: OpenClawConfig, agentId: string): boolean {
+export async function agentOwnsSharedAuthStore(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Promise<boolean> {
+  await prepareSharedAuthStoreOwnership();
   const agentDir = resolveAgentDir(cfg, agentId);
   return isSharedAuthStoreOwner({
     ownership: resolveSharedAuthStoreOwnership(),
@@ -113,7 +118,7 @@ export async function deleteGatewayAgent(
           throw new Error(`Agent ${agentId} deletion recovery no longer owns its journal.`);
         }
         const configured = isConfiguredAgent(lockedConfig, agentId);
-        if (agentOwnsSharedAuthStore(lockedConfig, agentId)) {
+        if (await agentOwnsSharedAuthStore(lockedConfig, agentId)) {
           throw new AgentSharedAuthStoreOwnerError(formatSharedAuthStoreOwnerDeleteError(agentId));
         }
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
@@ -181,7 +186,7 @@ export async function deleteGatewayAgent(
           await deletion.assertCurrentAsync();
           await assertAgentSessionStoreDeletionSafe(lockedConfig, agentId);
           if (
-            agentOwnsSharedAuthStore(lockedConfig, agentId) ||
+            (await agentOwnsSharedAuthStore(lockedConfig, agentId)) ||
             isInheritedAuthStoreOwner(lockedConfig, agentId)
           ) {
             throw new AgentSharedAuthStoreOwnerError(

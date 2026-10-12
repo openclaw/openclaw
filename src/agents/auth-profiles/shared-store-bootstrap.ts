@@ -24,8 +24,8 @@ import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
-  resolveSharedAuthStoreOwnership,
 } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import type { SharedAuthStoreOwnership } from "./types.js";
@@ -249,7 +249,7 @@ export function publishFreshSharedAuthStoreHandoff(
 }
 
 function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
-  const ownership = resolveSharedAuthStoreOwnership(env);
+  const ownership = prepareSharedAuthStoreOwnershipForNative(env);
   if (ownership.location === "state-db" || inspectedLegacySharedAuthOwnerships.has(ownership)) {
     return;
   }

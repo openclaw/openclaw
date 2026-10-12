@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { collectAttackSurfaceSummaryFindings } from "./audit-extra.summary.js";
 
 function requireAttackSurfaceSummary(
-  findings: ReturnType<typeof collectAttackSurfaceSummaryFindings>,
+  findings: Awaited<ReturnType<typeof collectAttackSurfaceSummaryFindings>>,
 ) {
   const summary = findings.find((f) => f.checkId === "summary.attack_surface");
   if (!summary) {
@@ -16,22 +16,24 @@ function requireAttackSurfaceSummary(
 }
 
 describe("security audit attack surface summary", () => {
-  it("warns for each agent opting its GitHub identity into sandboxed execution", () => {
+  it("warns for each agent opting its GitHub identity into sandboxed execution", async () => {
     const identity = { profileId: "ghp_0123456789abcdef0123456789abcdef" };
     const optedIn = { ...identity, allowInSandbox: true };
     const optedOut = { ...identity, allowInSandbox: false };
-    const findings = collectAttackSurfaceSummaryFindings({
-      agents: {
-        ownership: "explicit",
-        entries: {
-          release: { tools: { github: optedIn } },
-          maintenance: { tools: { github: optedIn } },
-          disabled: { tools: { github: optedOut } },
-          default: { tools: { github: identity } },
-          unconfigured: {},
+    const findings = (
+      await collectAttackSurfaceSummaryFindings({
+        agents: {
+          ownership: "explicit",
+          entries: {
+            release: { tools: { github: optedIn } },
+            maintenance: { tools: { github: optedIn } },
+            disabled: { tools: { github: optedOut } },
+            default: { tools: { github: identity } },
+            unconfigured: {},
+          },
         },
-      },
-    }).filter((finding) => finding.checkId === "sandbox.github_identity_exposed");
+      })
+    ).filter((finding) => finding.checkId === "sandbox.github_identity_exposed");
     expect(findings).toEqual(
       ["release", "maintenance"].map((agentId) =>
         expect.objectContaining({
@@ -49,7 +51,7 @@ describe("security audit attack surface summary", () => {
     }
   });
 
-  it("includes an attack surface summary (info)", () => {
+  it("includes an attack surface summary (info)", async () => {
     const cfg: OpenClawConfig = {
       channels: { whatsapp: { groupPolicy: "open" }, telegram: { groupPolicy: "allowlist" } },
       tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
@@ -57,7 +59,7 @@ describe("security audit attack surface summary", () => {
       browser: { enabled: true },
     };
 
-    const findings = collectAttackSurfaceSummaryFindings(cfg);
+    const findings = await collectAttackSurfaceSummaryFindings(cfg);
     const summary = requireAttackSurfaceSummary(findings);
 
     expect(summary.detail).toBe(
@@ -112,8 +114,8 @@ describe("security audit attack surface summary", () => {
       } satisfies OpenClawConfig,
       expected: "browser control: disabled",
     },
-  ])("reports browser control from effective plugin policy: $name", ({ cfg, expected }) => {
-    const summary = requireAttackSurfaceSummary(collectAttackSurfaceSummaryFindings(cfg));
+  ])("reports browser control from effective plugin policy: $name", async ({ cfg, expected }) => {
+    const summary = requireAttackSurfaceSummary(await collectAttackSurfaceSummaryFindings(cfg));
 
     expect(summary.detail).toContain(expected);
   });

@@ -8,7 +8,10 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "./openclaw-agent-db-registry-listing.js";
+import {
+  listOpenClawRegisteredAgentDatabasesAsync,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+} from "./openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -41,6 +44,30 @@ function createRegistry(malformed: boolean) {
   closeOpenClawStateDatabaseForTest();
   return options;
 }
+
+it("loads runtime registry rows off thread and observes committed registration changes", async () => {
+  const options = createRegistry(false);
+  const target = {
+    agentId: "worker",
+    path: path.join(options.env.OPENCLAW_STATE_DIR, "agents/worker/agent/openclaw-agent.sqlite"),
+    env: options.env,
+  };
+  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+  expect(await listOpenClawRegisteredAgentDatabasesAsync(options)).toEqual([]);
+  expect(prepare).not.toHaveBeenCalled();
+
+  registerOpenClawAgentDatabase(target);
+  prepare.mockClear();
+  expect(await listOpenClawRegisteredAgentDatabasesAsync(options)).toMatchObject([
+    { agentId: target.agentId, path: target.path },
+  ]);
+  expect(prepare).not.toHaveBeenCalled();
+
+  unregisterOpenClawAgentDatabase(target);
+  prepare.mockClear();
+  expect(await listOpenClawRegisteredAgentDatabasesAsync(options)).toEqual([]);
+  expect(prepare).not.toHaveBeenCalled();
+});
 
 it("discovers the published registry across overlapping creation and deletion", async () => {
   const options = createRegistry(false);

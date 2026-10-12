@@ -14,6 +14,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js"
 import { isRestartEnabled } from "../config/commands.flags.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewayRestartPolicy } from "../infra/restart.js";
@@ -132,8 +133,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     await publication?.checkpoint?.();
     assertReloadPublicationCurrent(publication?.isCurrent() ?? true, isRestartRetryStopped());
 
-    // Cron preparation can outlive its reload owner while loading, handing off
-    // watchers, or awaiting publication. Recheck before construction and commit.
     const assertCronReloadCurrent = () =>
       assertReloadPublicationCurrent(
         publication?.isCurrent() ?? true,
@@ -146,18 +145,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       | undefined;
     if (plan.restartCron) {
       const { buildGatewayCronService } = await import("./server-cron.js");
+      const storePath = await resolveCronJobsStorePathFromConfigAsync(nextConfig, candidateEnv);
       assertCronReloadCurrent();
       nextState.cronState = buildGatewayCronService({
+        storePath,
         scheduler: params.scheduler,
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
-        env: publication?.runtimeEnv ?? process.env,
+        env: candidateEnv,
         // Without this a cron hot reload silently drops scheduler gateway
         // context, so scheduled runs regress to contextless after any reload.
-        ...(params.resolveGatewayContext
-          ? { resolveGatewayContext: params.resolveGatewayContext }
-          : {}),
+        resolveGatewayContext: params.resolveGatewayContext,
         resolvePluginRegistry: params.getPluginRegistry,
       });
       if (
@@ -535,7 +534,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           pluginLifecycle: plan.pluginLifecycle,
           prepareConfigEffects,
           commitRuntime,
-          env: publication?.runtimeEnv ?? process.env,
+          env: candidateEnv,
           isAborted: isPluginReloadAborted,
           checkpoint: publication?.checkpoint,
           assertInvokerOwned: publication?.assertInvokerOwned,

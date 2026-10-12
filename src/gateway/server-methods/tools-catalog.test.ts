@@ -88,6 +88,7 @@ function expectCatalogPayload(respond: ReturnType<typeof vi.fn>): CatalogPayload
 
 describe("tools.catalog handler", () => {
   beforeEach(() => {
+    vi.spyOn(userProfileList, "hasMultipleResidentSessionSharingIdentities").mockReturnValue(false);
     const voiceCall = {
       name: "voice_call",
       label: "voice_call",
@@ -131,7 +132,7 @@ describe("tools.catalog handler", () => {
     "projects configurable core tools (swarm=$swarm, multipleProfiles=$multipleProfiles)",
     async ({ swarm, multipleProfiles }) => {
       using identityCount = vi
-        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .spyOn(userProfileList, "hasMultipleResidentSessionSharingIdentities")
         .mockReturnValue(multipleProfiles);
       const { respond, invoke } = createInvokeParams(
         { includePlugins: false },

@@ -8,6 +8,7 @@ import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/crede
 import { coerceProfileUsageStats } from "../agents/auth-profiles/profile-usage-stats.js";
 import type { AuthProfileCredential, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "../secrets/store/secret-store-validation-error.js";
 import {
@@ -31,7 +32,10 @@ import {
   userModelAccountRecordValue as accountRecordValue,
   type UserModelAccountRecordName as AccountRecordName,
 } from "./user-model-account-records.kernel.js";
-import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
+import {
+  captureUserProfileModelAccountLinksAuthority,
+  publishUserProfileModelAccountLinksChange,
+} from "./user-profile-events.js";
 import {
   selectResolvedUserProfile,
   selectResolvedUserProfileMetadataById,
@@ -186,9 +190,10 @@ function writeProfile(
   owner: string,
   authProfileId: string,
   profile: UserModelAuthProfile,
-): void {
+): UserModelAuthProfile {
   const record = profileSchema.parse({ version: 1, ...profile });
   writeRecord(db, owner, `model-account:${authProfileId}`, JSON.stringify(record));
+  return { credential: record.credential, usageStats: record.usageStats };
 }
 
 function accountLinks(record: UserModelLinks): UserProfileAuthLink[] {
@@ -359,11 +364,13 @@ export function updateUserModelAuthProfile(
   authProfileId: string,
   update: (profile: UserModelAuthProfile) => boolean,
   options: OpenClawStateDatabaseOptions = {},
-  admit?: (stage: "transaction" | "commit") => void,
+  admit?: (
+    operation: { stage: "transaction" } | { stage: "commit"; profile: UserModelAuthProfile },
+  ) => void,
 ): boolean {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      admit?.("transaction");
+      admit?.({ stage: "transaction" });
       const owner = credentialOwner(db, authProfileId);
       const current = owner ? readProfile(db, owner, authProfileId) : undefined;
       if (!owner || !current) {
@@ -376,8 +383,8 @@ export function updateUserModelAuthProfile(
       if (current.credential.provider !== provider) {
         throw new Error("A personal model account refresh cannot change its provider.");
       }
-      writeProfile(db, owner, authProfileId, current);
-      admit?.("commit");
+      const profile = writeProfile(db, owner, authProfileId, current);
+      admit?.({ stage: "commit", profile });
       return true;
     },
     options,
@@ -459,7 +466,12 @@ export function listUserProfileAuthLinksInDatabase(
   return owner ? accountLinks(readLinks(db, owner)) : [];
 }
 
-/** Fresh private account selections are read on the shared-state reader, never the Gateway thread. */
+const userProfileAuthLinks = new Map<
+  string,
+  { links: UserProfileAuthLink[]; isCurrent: () => boolean }
+>();
+
+/** The profile writer's receipts invalidate links shared by Gateway readers. */
 export async function listUserProfileAuthLinksAsync(
   profileId: string,
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
@@ -467,16 +479,24 @@ export async function listUserProfileAuthLinksAsync(
   } = {},
 ): Promise<UserProfileAuthLink[]> {
   const context = options.context ?? captureOpenClawStateReadWorkerContext(options);
+  const key = JSON.stringify([context.admission.databasePath, profileId]);
+  const cached = userProfileAuthLinks.get(key);
+  if (cached?.isCurrent()) {
+    return cached.links.map((link) => Object.assign({}, link));
+  }
+  const isCurrent = captureUserProfileModelAccountLinksAuthority(context.admission, profileId);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "userModelAccounts.links", profileId },
     { context, current: true, preferIndependentWarmRead: true },
   );
-  context.admission.assertCurrent();
   if (reply && (!reply.ok || reply.type !== "userModelAccounts.links")) {
     throw new Error(reply.ok ? "Unexpected model account links reply" : reply.message);
   }
-  return reply?.links ?? [];
+  const links = reply?.links ?? [];
+  userProfileAuthLinks.set(key, { links, isCurrent });
+  pruneMapToMaxSize(userProfileAuthLinks, 512);
+  return links.map((link) => Object.assign({}, link));
 }
 
 /** Apply Doctor's verified credential renames without changing account selections or ownership. */

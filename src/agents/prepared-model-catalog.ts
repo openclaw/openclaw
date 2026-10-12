@@ -7,6 +7,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
+import {
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./auth-profiles/path-resolve.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
@@ -220,6 +224,9 @@ function findPreparedCatalogOwner(
 export function getPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): PreparedModelRuntimeSnapshot | undefined {
+  if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
+    return undefined;
+  }
   const { activationExact, activationFull, exact, full } = resolveInputs(params);
   return findPreparedCatalogOwner([full, activationFull, exact, activationExact], "exact");
 }
@@ -231,6 +238,9 @@ export function getPreparedModelCatalogOwnerSnapshot(
 export function getPublishedPreparedModelCatalogOwnerSnapshot(
   params: GetPublishedPreparedModelCatalogOwnerParams = {},
 ): PreparedModelRuntimeSnapshot | undefined {
+  if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
+    return undefined;
+  }
   const { activationFull, full } = resolveInputs(params);
   return findPreparedCatalogOwner([full, activationFull], "published");
 }
@@ -288,6 +298,7 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   configPolicy: PreparedModelCatalogConfigPolicy,
   preparePublishedOwner = preparePublishedCatalogOwner,
 ): Promise<PreparedModelCatalogOwner> {
+  await prepareSharedAuthStoreOwnership(params.env);
   const { activationExact, activationFull, exact } = resolveInputs(params);
   if (params.readOnly) {
     const prepared = await resolveReadOnlyPublishedModelCatalogOwner(
@@ -356,6 +367,7 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
   read: (snapshot: PreparedModelRuntimeSnapshot) => T | Promise<T>,
   preparePublishedOwner = preparePublishedCatalogOwner,
 ): Promise<T> {
+  await prepareSharedAuthStoreOwnership(params.env);
   // Ordinary reads return published rows; explicit refresh keeps its writable default.
   const request = {
     ...params,
@@ -390,6 +402,7 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
 async function loadScopedReadOnlyModelCatalog(
   params: LoadPreparedModelCatalogParams,
 ): Promise<ModelCatalogSnapshot> {
+  await prepareSharedAuthStoreOwnership(params.env);
   const { activationExact } = resolveInputs(params);
   const prepared = await resolveReadOnlyPublishedModelCatalogOwner(
     params,
@@ -442,6 +455,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
   /** Input preparation must resolve modalities for this route, independently of reasoning. */
   requiredInputRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
 }): Promise<ModelCatalogEntry[]> {
+  await prepareSharedAuthStoreOwnership();
   const request = { ...params, readOnly: true };
   const admitted = resolveAdmittedModelCatalogOwner(request);
   let snapshot: ModelCatalogSnapshot;

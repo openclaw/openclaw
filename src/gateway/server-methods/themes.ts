@@ -35,7 +35,7 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
-import { resolveUserProfileId } from "../../state/user-profiles.js";
+import { readResidentUserProfileId } from "../../state/user-profile-list.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
@@ -57,7 +57,7 @@ function requestOwner(options: ThemeRequest) {
         ? caller?.gatewayUiCommandTarget?.profileId
         : client?.authenticatedUserProfile?.profileId;
   const assertCaller = captureGatewayToolCallerAssertion();
-  const profileId = capturedProfile ? resolveUserProfileId(capturedProfile) : undefined;
+  const profileId = capturedProfile ? readResidentUserProfileId(capturedProfile) : undefined;
   const assertCurrent = () => {
     participant?.assertCurrent();
     options.signal?.throwIfAborted();
@@ -68,7 +68,7 @@ function requestOwner(options: ThemeRequest) {
       throw new Error("Theme request authority is no longer active.");
     }
     if (
-      (capturedProfile && resolveUserProfileId(capturedProfile) !== profileId) ||
+      (capturedProfile && readResidentUserProfileId(capturedProfile) !== profileId) ||
       (!runtimeIdentity &&
         !participant &&
         !client?.internal?.syntheticClient &&

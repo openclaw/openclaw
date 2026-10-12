@@ -14,6 +14,7 @@ import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import { loadOpenClawAgentCanonicalValidationReceipt } from "./openclaw-agent-canonical-validation-receipt.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -208,6 +209,7 @@ export function openOpenClawAgentDatabaseReadOnly(
     }
     // Worker admission loads file-bound proof before a read transaction prevents it.
     if (!isMainThread) {
+      loadOpenClawAgentCanonicalValidationReceipt(database);
       hasOpenClawAgentCanonicalValidation(database);
     }
     if (behavior.lifecycle === "agent") {

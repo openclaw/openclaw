@@ -14,7 +14,7 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
-import { resolveUserProfileId } from "../../state/user-profiles.js";
+import { readResidentUserProfileId } from "../../state/user-profile-list.js";
 import { pushHandlers } from "./push.js";
 import type { GatewayClient } from "./types.js";
 
@@ -61,19 +61,19 @@ vi.mock("../../state/user-preferences.js", () => ({
 }));
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileSelectionAuthority: vi.fn(async (id: string) => {
-    const profileId = resolveUserProfileId(id);
+    const profileId = readResidentUserProfileId(id);
     return profileId
-      ? { profileId, isCurrent: () => resolveUserProfileId(id) === profileId }
+      ? { profileId, isCurrent: () => readResidentUserProfileId(id) === profileId }
       : undefined;
   }),
 }));
 vi.mock("../../state/user-profile-list.js", () => ({
+  readResidentUserProfileId: vi.fn(),
   prepareUserProfileCatalog: async () => ({
-    readCurrentIdentity: (id: string) => ({ profileId: resolveUserProfileId(id) }),
+    readCurrentIdentity: (id: string) => ({ profileId: readResidentUserProfileId(id) }),
     release: vi.fn(),
   }),
 }));
-vi.mock("../../state/user-profiles.js", () => ({ resolveUserProfileId: vi.fn() }));
 
 const endpoint = "https://push.example.test/authority";
 const keys = { p256dh: "synthetic-p256dh", auth: "synthetic-auth" };
@@ -182,7 +182,7 @@ function createInvocation(method: WriteMethod, scope: "user" | "device" = "devic
 beforeEach(() => {
   vi.resetAllMocks();
   snapshotScope.active = false;
-  vi.mocked(resolveUserProfileId).mockImplementation((id) => id);
+  vi.mocked(readResidentUserProfileId).mockImplementation((id) => id);
   vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue(subscription());
   vi.mocked(registerWebPushSubscription).mockResolvedValue(subscription());
   vi.mocked(setWebPushSubscriptionPreferences).mockResolvedValue(true);
@@ -192,9 +192,9 @@ beforeEach(() => {
     return { ok: true, value: { profileId: "profile-owner" } };
   });
   vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (id) => {
-    const profileId = resolveUserProfileId(id);
+    const profileId = readResidentUserProfileId(id);
     return profileId
-      ? { profileId, isCurrent: () => resolveUserProfileId(id) === profileId }
+      ? { profileId, isCurrent: () => readResidentUserProfileId(id) === profileId }
       : undefined;
   });
 });
@@ -451,7 +451,7 @@ describe("Web Push request authority across asynchronous storage", () => {
   ] as const)("%s preserves %s ownership", async (method, owner) => {
     const invocation = createInvocation(method);
     if (owner === "merged alias") {
-      vi.mocked(resolveUserProfileId).mockImplementation((id) =>
+      vi.mocked(readResidentUserProfileId).mockImplementation((id) =>
         id === "retired-profile" ? "profile-owner" : id,
       );
       expectDefined(invocation.client.authenticatedUserProfile, "bound profile").profileId =

@@ -5,8 +5,8 @@ import { resolveInternalHookSelection } from "./configured.js";
 
 const readConfigMachineStateMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../state/config-machine-state.js", () => ({
-  readConfigMachineState: readConfigMachineStateMock,
+vi.mock("../state/config-machine-state-async.js", () => ({
+  readConfigMachineStateAsync: readConfigMachineStateMock,
 }));
 
 describe("resolveInternalHookSelection", () => {
@@ -22,15 +22,15 @@ describe("resolveInternalHookSelection", () => {
     [{ hooks: { internal: { load: { extraDirs: ["/tmp/hooks"] } } } }, true],
   ] satisfies Array<[OpenClawConfig, boolean]>)(
     "reports whether %j selects discovery",
-    (config, configured) => {
-      expect(resolveInternalHookSelection(config).configured).toBe(configured);
+    async (config, configured) => {
+      expect((await resolveInternalHookSelection(config)).configured).toBe(configured);
     },
   );
 
-  it("retains explicit and installed names while extra roots keep discovery open", () => {
+  it("retains explicit and installed names while extra roots keep discovery open", async () => {
     readConfigMachineStateMock.mockReturnValue({ pack: { source: "path", hooks: ["installed"] } });
     expect(
-      resolveInternalHookSelection({
+      await resolveInternalHookSelection({
         hooks: {
           internal: {
             entries: { disabled: { enabled: false } },
@@ -41,72 +41,80 @@ describe("resolveInternalHookSelection", () => {
     ).toEqual({ configured: true, names: null, declaredNames: new Set(["disabled", "installed"]) });
   });
 
-  it("keeps CLI-shaped named entries closed when the master flag is enabled", () => {
+  it("keeps CLI-shaped named entries closed when the master flag is enabled", async () => {
     expect(
-      resolveInternalHookSelection({
-        hooks: {
-          internal: {
-            enabled: true,
-            entries: {
-              enabled: { enabled: true },
-              disabled: { enabled: false },
+      (
+        await resolveInternalHookSelection({
+          hooks: {
+            internal: {
+              enabled: true,
+              entries: {
+                enabled: { enabled: true },
+                disabled: { enabled: false },
+              },
             },
           },
-        },
-      }).names,
+        })
+      ).names,
     ).toEqual(new Set(["enabled"]));
 
     expect(
-      resolveInternalHookSelection({
-        hooks: {
-          internal: {
-            enabled: true,
-            entries: { disabled: { enabled: false } },
+      (
+        await resolveInternalHookSelection({
+          hooks: {
+            internal: {
+              enabled: true,
+              entries: { disabled: { enabled: false } },
+            },
           },
-        },
-      }).names,
+        })
+      ).names,
     ).toEqual(new Set());
   });
 
-  it("keeps a bare master enable open for broad discovery", () => {
+  it("keeps a bare master enable open for broad discovery", async () => {
     expect(
-      resolveInternalHookSelection({
-        hooks: { internal: { enabled: true } },
-      }).names,
+      (
+        await resolveInternalHookSelection({
+          hooks: { internal: { enabled: true } },
+        })
+      ).names,
     ).toBeNull();
   });
 
-  it("keeps extra directories open-ended even with named entries", () => {
+  it("keeps extra directories open-ended even with named entries", async () => {
     expect(
-      resolveInternalHookSelection({
-        hooks: {
-          internal: {
-            enabled: true,
-            entries: { named: { enabled: true } },
-            load: { extraDirs: ["/opt/openclaw/hooks"] },
+      (
+        await resolveInternalHookSelection({
+          hooks: {
+            internal: {
+              enabled: true,
+              entries: { named: { enabled: true } },
+              load: { extraDirs: ["/opt/openclaw/hooks"] },
+            },
           },
-        },
-      }).names,
+        })
+      ).names,
     ).toBeNull();
   });
 
-  it("uses declared install hook names as an allowlist", () => {
+  it("uses declared install hook names as an allowlist", async () => {
     readConfigMachineStateMock.mockReturnValue({
       pack: { source: "path", hooks: ["installed-one", "installed-two"] },
     });
 
-    expect(resolveInternalHookSelection({}).names).toEqual(
+    expect((await resolveInternalHookSelection({})).names).toEqual(
       new Set(["installed-one", "installed-two"]),
     );
   });
 
-  it("keeps installs with unknown dynamic hook names open-ended", () => {
+  it("keeps installs with unknown dynamic hook names open-ended", async () => {
     readConfigMachineStateMock.mockReturnValue({ pack: { source: "path" } });
 
-    expect(resolveInternalHookSelection({}).names).toBeNull();
+    expect((await resolveInternalHookSelection({})).names).toBeNull();
   });
 
-  it("lets explicit disablement override every discovery surface", () => {
+  it("lets explicit disablement override every discovery surface", async () => {
     readConfigMachineStateMock.mockReturnValue({ pack: { source: "path" } });
     const config = {
       hooks: {
@@ -118,6 +126,6 @@ describe("resolveInternalHookSelection", () => {
       },
     } satisfies OpenClawConfig;
 
-    expect(resolveInternalHookSelection(config).names).toEqual(new Set());
+    expect((await resolveInternalHookSelection(config)).names).toEqual(new Set());
   });
 });

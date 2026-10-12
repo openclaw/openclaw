@@ -9,7 +9,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import type { GatewayReloadPlan } from "./config-reload-plan.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type {
   GatewayPluginReloadResult,
@@ -346,5 +346,17 @@ export function createManagedRestartSequenceConfigs() {
     invalidHotConfig,
     invalidNoopConfig,
     replacementConfig,
+  };
+}
+
+export function createRecordedChannelHandlers(events: string[]) {
+  return {
+    stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+      events.push(`stop:${channel}:${accountId}`);
+    }),
+    start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+      events.push(`start:${channel}:${accountId}`);
+      return new Map();
+    }),
   };
 }
