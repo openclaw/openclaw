@@ -708,6 +708,7 @@ class ChatController internal constructor(
   private val sessionBranchSwitchGeneration = AtomicLong(0)
   private val sessionBranchSwitchClaimed = AtomicBoolean(false)
   private val reconciledOutboxBranchScopes = ConcurrentHashMap.newKeySet<ReconciledOutboxBranchScope>()
+  private val historyRejectedOutboxScopes = ConcurrentHashMap<ReconciledOutboxBranchScope, String>()
   private val ambiguousMutationReconciliationStates = ConcurrentHashMap<ReconciledOutboxBranchScope, ChatOutboxBranchState>()
   private val outboxSessionMutationEventLock = Any()
   private val activeOutboxSessionMutations = ConcurrentHashMap<ReconciledOutboxBranchScope, ActiveOutboxSessionMutation>()
@@ -1054,6 +1055,7 @@ class ChatController internal constructor(
 
   private fun clearOutboxBranchReconciliation() {
     reconciledOutboxBranchScopes.clear()
+    historyRejectedOutboxScopes.clear()
     ambiguousMutationReconciliationStates.clear()
     synchronized(outboxSessionMutationEventLock) {
       activeOutboxSessionMutations.clear()
@@ -1816,6 +1818,35 @@ class ChatController internal constructor(
     branchScope: ChatOutboxScope,
   ) {
     reconciledOutboxBranchScope(gatewayScope, branchScope)?.let(reconciledOutboxBranchScopes::remove)
+  }
+
+  /**
+   * Records that this gateway definitively rejected a scope's history, which stops automatic
+   * recovery retries for it. This deliberately does not mark the scope reconciled: a rejected
+   * read proves nothing about branch ownership, so queued rows stay gated until an explicit
+   * retry reconciles the scope authoritatively.
+   */
+  private fun markOutboxBranchHistoryRejected(
+    gatewayScope: ChatCacheScope?,
+    branchScope: ChatOutboxScope,
+    reason: String,
+  ): Boolean {
+    val key = reconciledOutboxBranchScope(gatewayScope, branchScope) ?: return false
+    if (gatewayScope != currentCacheScope()) return false
+    historyRejectedOutboxScopes[key] = reason
+    return true
+  }
+
+  private fun outboxBranchHistoryRejectionReason(
+    gatewayScope: ChatCacheScope?,
+    branchScope: ChatOutboxScope,
+  ): String? = reconciledOutboxBranchScope(gatewayScope, branchScope)?.let(historyRejectedOutboxScopes::get)
+
+  private fun clearOutboxBranchHistoryRejection(
+    gatewayScope: ChatCacheScope?,
+    branchScope: ChatOutboxScope,
+  ) {
+    reconciledOutboxBranchScope(gatewayScope, branchScope)?.let(historyRejectedOutboxScopes::remove)
   }
 
   private fun releaseOutboxSessionMutation(
@@ -5166,6 +5197,9 @@ class ChatController internal constructor(
       if (requeued > 0) {
         acknowledgedRunIdByRowId.remove(id)
         unconfirmedSightings.remove(id)
+        // An explicit retry re-opens authoritative reconciliation for the scope: an earlier
+        // permanent rejection must not re-park the row without a fresh history read.
+        row.outboxScope()?.let { clearOutboxBranchHistoryRejection(outboxScope, it) }
         if (_healthOk.value) requestOutboxFlush()
       }
     }
@@ -5359,6 +5393,13 @@ class ChatController internal constructor(
     for (branchScope in branchScopes) {
       val scopedRows = grouped[branchScope].orEmpty()
       if (isOutboxBranchReconciled(flushScope, branchScope)) continue
+      // A definitively rejected scope stays out of the recovery lane. Rows queued after that
+      // rejection can never be delivered either, so park them with the same actionable error
+      // instead of leaving a silent queued bubble or re-requesting the rejected history.
+      outboxBranchHistoryRejectionReason(flushScope, branchScope)?.let { reason ->
+        if (!parkOutboxRowsRejectedByHistory(scopedRows, reason)) scheduleOutboxBranchReconciliationRetry()
+        continue
+      }
       val state = commandOutbox.branchState(flushScope.gatewayId, branchScope) ?: continue
       val reconciliationKey = ReconciledOutboxBranchScope(flushScope, branchScope)
       val savedCandidate = ambiguousMutationReconciliationStates[reconciliationKey]
@@ -5384,11 +5425,28 @@ class ChatController internal constructor(
             _messages.value.mapNotNullTo(mutableSetOf()) { it.entryId }
           } else {
             val historyJson =
-              requestGatewayBound(
-                flushScope.gatewayId,
-                "chat.history",
-                sessionRequestParams(sessionKey, branchScope.ownerAgentId).toString(),
-              )
+              try {
+                requestGatewayBound(
+                  flushScope.gatewayId,
+                  "chat.history",
+                  sessionRequestParams(sessionKey, branchScope.ownerAgentId).toString(),
+                )
+              } catch (err: GatewayRequestRejected) {
+                if (err.gatewayError.code != "INVALID_REQUEST") throw err
+                // The persisted owner/session can never satisfy this gateway, so retrying the
+                // identical request cannot succeed. Park the queued rows with an actionable
+                // error and stop automatic recovery for this scope instead of re-requesting
+                // the rejected history every retry interval. Recovery stops without granting
+                // delivery readiness: this read proved nothing about branch ownership, so rows
+                // queued later stay gated until an explicit retry reconciles the scope.
+                if (parkOutboxRowsRejectedByHistory(scopedRows, err.gatewayError.message)) {
+                  markOutboxBranchHistoryRejected(flushScope, branchScope, err.gatewayError.message)
+                  if (savedCandidate != null) {
+                    ambiguousMutationReconciliationStates.remove(reconciliationKey, savedCandidate)
+                  }
+                }
+                continue
+              }
             val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = emptyList())
             if (mutationReconciliationState == null) {
               savedState = reconcileOutboxHistory(flushScope.gatewayId, branchScope, savedState, history) ?: continue
@@ -5425,7 +5483,9 @@ class ChatController internal constructor(
           markOutboxBranchReconciled(flushScope, branchScope)
         }
       } finally {
-        if (!isOutboxBranchReconciled(flushScope, branchScope)) {
+        if (outboxBranchHistoryRejectionReason(flushScope, branchScope) == null &&
+          !isOutboxBranchReconciled(flushScope, branchScope)
+        ) {
           // Keep retries on the existing single-flight reconciliation lane; delivery stays
           // gated until authoritative history and branch metadata both reconcile this scope.
           scheduleOutboxBranchReconciliationRetry()
@@ -5433,6 +5493,24 @@ class ChatController internal constructor(
       }
     }
     publishOutbox()
+  }
+
+  /**
+   * Parks the queued rows of a scope whose history the gateway definitively rejected. Returns
+   * false when any status write fails so the caller leaves the scope unreconciled and recovery
+   * retries after the transient storage failure (fail closed, like the other park paths).
+   */
+  private suspend fun parkOutboxRowsRejectedByHistory(
+    rows: List<ChatOutboxItem>,
+    gatewayMessage: String,
+  ): Boolean {
+    val lastError = outboxHistoryRejectedError(gatewayMessage)
+    var parked = true
+    for (row in rows) {
+      if (row.status != ChatOutboxStatus.Queued) continue
+      if (updateOutboxStatusOrNull(row, ChatOutboxStatus.Failed, lastError) == null) parked = false
+    }
+    return parked
   }
 
   // Gated command rows enqueued under an older connection epoch park instead of auto-replaying;
