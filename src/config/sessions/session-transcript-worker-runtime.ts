@@ -285,7 +285,6 @@ export async function runProcessHeldHistoryTask(
           return { kind: "cli-process-history", request };
         },
         {
-          inputBytes: request.params.cliHistoryRedaction?.retainedBytes,
           timeoutMs: 60_000,
           onRequest,
           signal,

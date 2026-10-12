@@ -582,8 +582,6 @@ export function createUserTurnTranscriptRecorder(
         admission,
         message: admittedMessage,
         text,
-        // SAFETY: This is the host config already consumed by persistUserTurnTranscript.
-        config: resolvedPersistenceTarget?.config as SessionTranscriptTurnPersistOptions["config"],
         assertCurrent,
         assertWritable: () => {
           assertCurrent();

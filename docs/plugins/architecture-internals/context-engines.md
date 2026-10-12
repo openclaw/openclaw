@@ -69,9 +69,8 @@ persistent backend thread. Omit it for legacy per-turn projection. Return
 injected once into a backend thread and reused until the epoch changes. Change
 the epoch after the engine's semantic context changes, such as after an
 engine-owned compaction pass. Hosts may preserve tool-call metadata, input
-shape, and redacted tool results in a thread-bootstrap projection so fresh
-backend threads retain tool continuity without copying raw secret-bearing
-payloads.
+shape, and tool results in a thread-bootstrap projection so fresh backend
+threads retain tool continuity. Tool-result text is not secret-masked.
 
 If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:

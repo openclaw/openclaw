@@ -72,7 +72,6 @@ async function createFixture(options: {
   const state: SelectedFacts = {
     scope: "shared-scope",
     revision: "initial",
-    redactionRevision: "initial-policy",
     sessions: options.facts,
   };
   const selectSessionFacts = vi
@@ -842,22 +841,6 @@ describe("Sessions board rules and live facts", () => {
       expect(read.sessions[0]).toMatchObject(known);
       await service.read(BOARD_ID);
       expect(logger.warn).toHaveBeenCalledOnce();
-      state.redactionRevision = "tightened-policy";
-      state.revision = "redaction-changed-with-failure";
-      state.sessions = state.sessions.map((row) =>
-        Object.assign({}, row, { label: "Safe label", derivedTitle: "Safe title" }),
-      );
-      const safe = await service.read(BOARD_ID);
-      expect(JSON.stringify(safe.sessions)).not.toContain(marker);
-      expect(safe.sessions[0]).toMatchObject({
-        columnId: "focus",
-        run: "active",
-        label: "Safe label",
-        derivedTitle: "Safe title",
-        observerDigest: { health: "on-track", revision: 1 },
-        pullRequests: [{ number: 12, state: "open" }],
-      });
-      expect(safe.sessions[0]?.lastMessagePreview).toBeUndefined();
       state.sessions = [facts("known"), facts("new")];
       state.revision = "recovered";
       const recovered = await service.read(BOARD_ID);

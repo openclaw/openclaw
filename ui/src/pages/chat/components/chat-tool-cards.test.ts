@@ -446,7 +446,7 @@ describe("tool-cards", () => {
     const credential = ["sk", "1234567890abcdef"].join("-");
     expect(
       resolveCollapsedToolArgumentPreview({ description: `OPENAI_API_KEY=${credential}` }),
-    ).not.toContain(credential);
+    ).toContain(credential);
   });
 
   it("marks expanded raw block-art output so QR whitespace uses block-art rendering", async () => {

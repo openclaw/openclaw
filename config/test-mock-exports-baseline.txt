@@ -26,7 +26,6 @@
 ["extensions/agentsapi/agentsapi-environment.test.ts","./agentsapi-session.js","2d30c734878c3eacdf731f7cbd5284df34f68b95786af092de3077f1c1fc44f3",1]
 ["extensions/agentsapi/agentsapi-environment.test.ts","./agentsapi-tools.js","c7ce967893acc0c2ae421e211744ec3a33fba352f7d83588eb3accac44d66f5d",1]
 ["extensions/agentsapi/agentsapi-environment.test.ts","openclaw/plugin-sdk/agent-harness-attempt-runtime","5efa2cacc3d88b8f538b18b82126f94aefaf2f233f76360d02796f9430a53291",1]
-["extensions/agentsapi/agentsapi-environment.test.ts","openclaw/plugin-sdk/agent-harness-runtime","2fa13db347abd17b732440db847b0be9dd56f06fbfd18a1005f91074e69b28c7",1]
 ["extensions/agentsapi/agentsapi-environment.test.ts","openclaw/plugin-sdk/agent-sessions","1f02d67079c2f88936027baca33d902c5261dba0901dbeddc5b764de89422ea2",1]
 ["extensions/agentsapi/agentsapi-environment.test.ts","openclaw/plugin-sdk/llm","1f37a6193d5c8b885ce2652e3317b5e2708f46623911f2a39826ac8e7d435538",1]
 ["extensions/agentsapi/agentsapi-environment.test.ts","openclaw/plugin-sdk/ssrf-runtime","be5b0d00e1d47e226500d094ec04f27b6763294ed8eaaf0a688b1cfbe2f68ceb",1]

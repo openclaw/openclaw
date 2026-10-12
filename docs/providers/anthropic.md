@@ -950,8 +950,8 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     compaction occurs, OpenClaw assembles the streamed summary and stores it
     with the provider's opaque compaction metadata as hidden replay state. Both
     survive session reopening and are sent first on the next matching request.
-    Summary text still passes through transcript redaction; opaque metadata is
-    preserved for replay. The full transcript remains local; only the outbound
+    Summary text and opaque metadata are preserved without secret masking for
+    replay. The full transcript remains local; only the outbound
     history before the checkpoint is omitted. An empty compaction block is not
     stored as a checkpoint, so the next request sends the same history as
     before and OpenClaw's client-side compaction stays available. If Anthropic

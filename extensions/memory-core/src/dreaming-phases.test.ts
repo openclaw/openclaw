@@ -747,8 +747,7 @@ describe("memory-core dreaming phases", () => {
     const corpusFile = corpusPath(workspaceDir);
     const corpus = await fs.readFile(corpusFile, "utf-8");
     expect(corpus).toContain("Move backups to S3 Glacier.");
-    expect(corpus).not.toContain("OPENAI_API_KEY=sk-1234567890abcdef");
-    expect(corpus).toContain("OPENAI_API_KEY=***");
+    expect(corpus).toContain("OPENAI_API_KEY=sk-1234567890abcdef");
     expect(corpus).toContain("Set retention to 365 days.");
     expect(corpus).toContain(`${renderedSource}User: ${renderedPadding}\n`);
     expect(corpus).toContain(

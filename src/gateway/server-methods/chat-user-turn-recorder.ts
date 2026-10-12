@@ -10,7 +10,6 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
@@ -251,7 +250,7 @@ export function createGatewayChatUserTurnController(params: {
               messageId: anchor.entryId,
               senderProfileId,
               recipientProfileIds: retained.map((mention) => mention.profileId),
-              excerpt: redactSensitiveText(text),
+              excerpt: text,
             });
             void mentionCommit.catch(onPersistenceError);
           },

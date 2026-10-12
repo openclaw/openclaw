@@ -18,7 +18,6 @@ import type {
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { selectProgressLabel } from "../shared/progress-labels.js";
 import { compactProgressText } from "../shared/text-truncate.js";
@@ -884,7 +883,7 @@ export function resolveChannelProgressDraftLabel(params: {
   const normalizedLabel =
     typeof progress.label === "string" ? normalizeOptionalLowercaseString(progress.label) : null;
   if (typeof progress.label === "string" && progress.label.trim() && normalizedLabel !== "auto") {
-    return redactToolPayloadText(progress.label.trim());
+    return progress.label.trim();
   }
   const labels = normalizeTrimmedStringList(progress.labels);
   const label = selectProgressLabel({
@@ -892,7 +891,7 @@ export function resolveChannelProgressDraftLabel(params: {
     seed: params.seed,
     random: params.random,
   });
-  return label ? redactToolPayloadText(label) : label;
+  return label;
 }
 
 export function resolveChannelProgressDraftMaxLines(

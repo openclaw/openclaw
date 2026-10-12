@@ -178,8 +178,8 @@ Older hosts without this capability provide only the current attempt's
 
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
-and `flush()` operations. The host adds session attribution, bounds and redacts
-event data, and persists it through the canonical trajectory store. Treat the
+and `flush()` operations. The host adds session attribution, bounds event data,
+and persists it through the canonical trajectory store without secret masking. Treat the
 capability as optional, send only structured non-secret facts, and await
 `flush()` before the attempt settles; do not infer storage paths or create a
 plugin-side fallback when the capability is absent.

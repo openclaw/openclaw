@@ -7,7 +7,7 @@ import { getLogbookState, loadLogbook } from "./logbook-controller.ts";
 import { Logbook } from "./logbook-view.tsx";
 
 describe("Logbook view", () => {
-  it("renders timeline clocks in the capture host timezone", () => {
+  it("renders timeline clocks in the capture host timezone and preserves detail text", () => {
     const host = {};
     const state = getLogbookState(host);
     state.day = "2026-01-01";
@@ -34,13 +34,14 @@ describe("Logbook view", () => {
           endMs: Date.UTC(2026, 0, 2, 1, 30),
           title: "Work",
           summary: "Summary",
-          detail: "",
+          detail: "  API_TOKEN = computeToken()  ",
           category: "Coding",
           distractions: [],
         },
       ],
       stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
     };
+    state.expandedCardIds = new Set([1]);
 
     const container = document.createElement("div");
     const view = mountSolid(() => <Logbook host={host} client={null} connected={false} />, {
@@ -61,6 +62,9 @@ describe("Logbook view", () => {
         expectedTime,
       );
       expect(container.querySelector(".logbook-card__duration")?.textContent?.trim()).toBe("1h");
+      expect(container.querySelector(".logbook-card__detail")?.textContent).toBe(
+        "API_TOKEN = computeToken()",
+      );
     } finally {
       view.unmount();
     }

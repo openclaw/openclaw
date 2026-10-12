@@ -6,7 +6,6 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor as StoredSessionActor,
 } from "../config/sessions/session-entry-provenance.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -54,7 +53,7 @@ async function prepareIdentityFacts(input: UserProfileCatalogIdentityInput) {
 
 function sourceLabel(value: string | null | undefined): string | undefined {
   const text = value?.trim();
-  return text ? truncateUtf16Safe(redactToolPayloadText(text), 200) : undefined;
+  return text ? truncateUtf16Safe(text, 200) : undefined;
 }
 
 function verifiedGitHubIdentities(profileIds?: readonly string[]) {

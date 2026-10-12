@@ -308,16 +308,14 @@ same oversized window.
 
 A returned window keeps recent user messages verbatim, and on xAI the system
 prompt too (the public OpenAI endpoint receives it as `instructions` instead).
-If [transcript redaction](/gateway/config-observability) would change any of that content,
-OpenClaw skips the endpoint before calling it and uses client-side compaction.
-The skip, a discarded endpoint result, and an endpoint failure are each logged
-as a warning with the reason.
+Transcript preparation does not secret-mask that content. A discarded endpoint
+result or an endpoint failure is logged as a warning with the reason.
 
 If the pending input alone fills the model's context window, recovery asks for a
 smaller message or a larger-context model without repeatedly compacting history.
 Later messages retain their normal recovery budget.
 
-If an older version or transcript redaction removes the complete window needed for replay, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
+If an older version left the complete window needed for replay unavailable, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
 
 Direct Anthropic API-key requests on models that Anthropic documents for threshold compaction ask the API to compact inside an ordinary request once input reaches the threshold, and OpenClaw replays the returned summary on later requests. `params.anthropicServerCompaction: false` disables it for a model. If Anthropic returns an empty summary, OpenClaw keeps sending the existing history and its client-side compaction remains the fallback. See [Anthropic server-side compaction](/providers/anthropic#advanced-configuration).
 

@@ -1230,8 +1230,6 @@ src/logging/logger-settings-internal.ts
 src/logging/logger.ts
 src/logging/redact-bounded.ts
 src/logging/redact-edit-composition.ts
-src/logging/redact-internal-state.ts
-src/logging/redact-internal.ts
 src/logging/redact-json-tokens.ts
 src/logging/redact-json.ts
 src/logging/redact-linear-matchers.ts

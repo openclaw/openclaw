@@ -15,6 +15,16 @@ const keepText = (text: string): string => text;
 const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
 
 describe("formatErrorMessage", () => {
+  it("preserves error content when no diagnostic redaction policy is supplied", () => {
+    expect(
+      formatErrorMessage(
+        new Error("API_TOKEN = computeToken()", {
+          cause: new Error("sk-abc123456789012345678"),
+        }),
+      ),
+    ).toBe("API_TOKEN = computeToken() | sk-abc123456789012345678");
+  });
+
   it("keeps provider persistence diagnostics in initiating order without reordering other errors", () => {
     const persistence = new Error("write secret", { cause: new Error("write root") });
     const cleanup = new AggregateError([new Error("cleanup root")], "cleanup secret");

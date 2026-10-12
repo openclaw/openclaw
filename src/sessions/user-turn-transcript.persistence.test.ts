@@ -146,12 +146,14 @@ describe("persistUserTurnTranscript", () => {
     expect(persisted).not.toHaveProperty("__openclaw.workContext");
   });
 
-  it("round-trips a multi-attachment SQLite row byte-identically", async () => {
+  it("round-trips source text and attachments byte-identically despite logging patterns", async () => {
     const dir = sessionDirs.make();
     const target = createSqliteTranscriptTarget({ dir });
+    const text =
+      "Inspect both\nAPI_TOKEN = computeToken()\nOPENAI_API_KEY=sk-proj-fixture1234567890";
     const expected = {
       role: "user",
-      content: "Inspect both",
+      content: text,
       timestamp: 456,
       __openclaw: {
         media: [
@@ -163,8 +165,9 @@ describe("persistUserTurnTranscript", () => {
 
     const appended = await persistUserTurnTranscript({
       ...target,
+      config: { logging: { redactPatterns: ["computeToken"] } },
       input: {
-        text: "Inspect both",
+        text,
         timestamp: 456,
         media: [
           { path: "/tmp/image.png", contentType: "image/png" },

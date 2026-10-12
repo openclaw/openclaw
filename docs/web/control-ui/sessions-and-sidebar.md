@@ -435,8 +435,8 @@ including while the team directory is loading or unavailable.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
 The public page excludes tools, reasoning, files, images, widgets, hidden messages,
-and internal metadata. Credential-pattern redaction is best effort, so review the
-conversation itself before publishing. Public access does not let visitors send
+and internal metadata. Included text is not secret-masked, so review the
+conversation for credentials and other sensitive content before publishing. Public access does not let visitors send
 messages or grant authenticated Control UI permissions. For link lifecycle, pagination,
 backup behavior, and login-proxy configuration, see
 [Public session transcripts](/web/urls#public-session-transcripts).

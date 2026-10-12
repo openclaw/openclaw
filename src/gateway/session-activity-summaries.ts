@@ -28,7 +28,6 @@ import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isCronSessionKey,
@@ -399,10 +398,10 @@ export function createSessionActivitySummaries(deps: {
           };
           ownedWork = execute();
           text = truncateUtf16Safe(
-            redactToolPayloadText(
+            (
               await racePromiseWithAbortSignal(ownedWork, controller.signal, (signal) =>
                 toErrorObject(signal.reason, "Activity recap cancelled"),
-              ),
+              )
             )
               .replace(/\s+/gu, " ")
               .trim(),

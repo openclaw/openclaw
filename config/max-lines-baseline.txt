@@ -268,7 +268,6 @@ src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/sessions.test.ts
 src/agents/tools/video-generate-tool.test.ts
 src/agents/tools/web-fetch.ts
-src/agents/transcript-redact.test.ts
 src/agents/workspace.ts
 src/agents/worktrees/service.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
@@ -459,7 +458,6 @@ src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
-src/logging/redact.test.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts

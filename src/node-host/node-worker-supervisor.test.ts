@@ -348,7 +348,7 @@ describe("node worker supervisor", () => {
     );
   });
 
-  it("bounds output and scrubs launch credentials after registry eviction", async () => {
+  it("preserves worker result text while bounding and scrubbing failure diagnostics", async () => {
     await using f = fixture();
     const { supervisor, workspaceDir } = f;
     const successInput = launchInput(workspaceDir, "secret-success-launch", "secret-success");
@@ -379,13 +379,12 @@ describe("node worker supervisor", () => {
     expect(success.state).toBe("completed");
     expect(JSON.parse(success.resultJson ?? "null")).toEqual({
       status: "completed",
-      transcriptLeafId: "raw [REDACTED] encoded [REDACTED] github [REDACTED]",
+      transcriptLeafId: `raw ${TEST_WORKER_CREDENTIAL} encoded ${encodeURIComponent(TEST_WORKER_CREDENTIAL)} github ${successInput.descriptor.assignment.github.token}`,
       transcriptNextSeq: 2,
     });
     expect(failure.state).toBe("failed");
     expect(Buffer.byteLength(failure.errorText ?? "", "utf8")).toBeLessThanOrEqual(4 * 1024);
     for (const representation of representations) {
-      expect(success.resultJson).not.toContain(representation);
       expect(failure.errorText).not.toContain(representation);
     }
     expect(overflow).toMatchObject({
@@ -431,7 +430,7 @@ describe("node worker supervisor", () => {
     const completed = await waitForTerminal(supervisor, second.launchId);
     expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
       status: "completed",
-      transcriptLeafId: "raw [REDACTED] encoded [REDACTED] github [REDACTED]",
+      transcriptLeafId: `raw ${second.descriptor.admission.credential} encoded ${encodeURIComponent(second.descriptor.admission.credential)} github ${second.descriptor.assignment.github.token}`,
       transcriptNextSeq: 2,
     });
 

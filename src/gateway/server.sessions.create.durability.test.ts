@@ -558,7 +558,7 @@ test("retains idle chat input custody when its separate transcript commit is ref
   }
 });
 
-test("dispatches the canonical redacted bytes of a committed initial input", async () => {
+test("dispatches the original bytes of a committed initial input", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
   const key = "agent:main:dashboard:initial-redaction";
@@ -584,9 +584,7 @@ test("dispatches the canonical redacted bytes of a committed initial input", asy
       turn.userTurn.recorder.getPersistedMessage?.(),
       "canonical input",
     );
-    expect(persisted.content).not.toContain("initial-secret");
-    expect(persisted.content).toContain("Check ");
-    expect(persisted.content).toContain(" before execution.");
+    expect(persisted.content).toBe(message);
     expect(turn.turn.ctx).toMatchObject({
       Body: persisted.content,
       BodyForAgent: persisted.content,
@@ -595,7 +593,7 @@ test("dispatches the canonical redacted bytes of a committed initial input", asy
     });
     const history = await rpcReq<{ messages: unknown[] }>(ws, "chat.history", { sessionKey: key });
     expect(history.ok, JSON.stringify(history)).toBe(true);
-    expect(JSON.stringify(history.payload?.messages)).not.toContain("initial-secret");
+    expect(JSON.stringify(history.payload?.messages)).toContain("initial-secret");
     expect(JSON.stringify(history.payload?.messages)).toContain(JSON.stringify(persisted.content));
   } finally {
     const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });

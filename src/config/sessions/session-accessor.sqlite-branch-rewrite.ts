@@ -25,7 +25,7 @@ import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
-  redactTranscriptMessageForStorage,
+  sanitizeTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
@@ -84,7 +84,7 @@ export function prepareTranscriptRewriteSync(
     if (!preparation?.messagesAlreadyRedacted) {
       for (const entry of entries) {
         if (entry.type === "message") {
-          entry.message = redactTranscriptMessageForStorage(entry.message, {});
+          entry.message = sanitizeTranscriptMessageForStorage(entry.message);
         }
       }
     }
@@ -156,7 +156,6 @@ export function prepareTranscriptRewriteSync(
                     parentId: entry.parentId,
                     now: Date.parse(entry.timestamp),
                     message: entry.message,
-                    messageAlreadyRedacted: true,
                     appendMode: entry.appendMode,
                     idempotencyLookup: "caller-checked",
                   },

@@ -1,4 +1,5 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import {
   buildSessionObserverPrompt,
   normalizeSessionObserverModelOutput,
@@ -80,7 +81,7 @@ export function createSessionObserverCompletion(params: {
           lastRejectedText = result.text;
         }
         const prefix = sanitizeSessionObserverModelText(
-          lastRejectedText,
+          redactToolPayloadText(lastRejectedText),
           REJECTED_OUTPUT_MAX_CHARS,
         );
         throw new Error(

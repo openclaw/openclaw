@@ -14,10 +14,7 @@ import {
 } from "./event-projector-items.js";
 import { collectDynamicToolContentText } from "./event-projector-tool-output.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
-import {
-  sanitizeCodexAgentEventRecord,
-  sanitizeCodexToolArguments,
-} from "./tool-progress-normalization.js";
+import { asCodexToolArguments } from "./tool-progress-normalization.js";
 import { projectCodexWebSearchItem } from "./web-search-item.js";
 
 export function readInterceptedNativePatchInput(
@@ -93,21 +90,21 @@ export function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boo
 
 export function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefined {
   if (item.type === "commandExecution") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       command: item.command,
       ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
-    });
+    };
   }
   if (item.type === "fileChange") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       changes: itemFileChanges(item, true),
-    });
+    };
   }
   if (item.type === "webSearch") {
     return webSearchToolArgs(item);
   }
   if (item.type === "dynamicToolCall" || item.type === "mcpToolCall") {
-    return sanitizeCodexToolArguments(item.arguments);
+    return asCodexToolArguments(item.arguments);
   }
   return undefined;
 }
@@ -127,37 +124,37 @@ function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
   if (!args.query && !args.url && !args.pattern) {
     args.queryUnavailable = true;
   }
-  return sanitizeCodexAgentEventRecord(args);
+  return args;
 }
 
 export function itemToolResult(item: CodexThreadItem): Record<string, unknown> | undefined {
   if (item.type === "commandExecution") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       status: item.status,
       exitCode: item.exitCode,
       durationMs: item.durationMs,
-    });
+    };
   }
   if (item.type === "fileChange") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       status: item.status,
       changes: itemFileChanges(item),
-    });
+    };
   }
   if (item.type === "mcpToolCall") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       status: item.status,
       durationMs: item.durationMs,
       ...(item.error ? { error: item.error } : {}),
       ...(item.result ? { result: item.result } : {}),
-    });
+    };
   }
   if (item.type === "webSearch") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       status: itemStatus(item),
       ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
       ...webSearchToolArgs(item),
-    });
+    };
   }
   return undefined;
 }

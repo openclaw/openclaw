@@ -6,7 +6,6 @@ import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/hea
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaOutput } from "../media/parse-output.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
@@ -241,7 +240,7 @@ function publicMessageText(
   text = splitMediaOutput(text, {
     extractAudioDirectives: false,
   }).text;
-  text = redactToolPayloadText(text).trim();
+  text = text.trim();
   return text ? { role: entry.role, text } : undefined;
 }
 
@@ -266,10 +265,8 @@ export function renderPublicSessionDocument(params: {
     ? `<a class="button login" id="session-login"${params.clientAuthBasePath !== undefined ? ` data-gateway-path="${escapeHtml(params.clientAuthBasePath)}"` : ""} href="${escapeHtml(params.entryUrl)}">Log in <span aria-hidden="true">→</span></a>`
     : "";
   const title = escapeHtml(
-    truncateUtf16Safe(
-      redactToolPayloadText(stripInternalMetadataForDisplay(params.title)),
-      200,
-    ).trim() || "Shared conversation",
+    truncateUtf16Safe(stripInternalMetadataForDisplay(params.title), 200).trim() ||
+      "Shared conversation",
   );
   let truncated = params.truncated || params.messages.length > MAX_MESSAGES;
   let remaining = MAX_DOCUMENT_CHARS;

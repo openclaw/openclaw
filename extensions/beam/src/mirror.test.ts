@@ -384,7 +384,7 @@ describe("createBeamMirrorRunner", () => {
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
   });
 
-  it("redacts credentials from the uploaded title and visible messages while preserving prose", async () => {
+  it("preserves the uploaded title and visible messages", async () => {
     const token = `sk-${"synthetic".repeat(5)}`;
     const sent: SentRequest[] = [];
     const catalog = createBeamTestCatalog({
@@ -400,12 +400,12 @@ describe("createBeamMirrorRunner", () => {
     });
     await runner.tick();
     expect(sent).toHaveLength(1);
-    expect(JSON.stringify(sent[0]?.payload)).not.toContain(token);
+    expect(JSON.stringify(sent[0]?.payload)).toContain(token);
     expect(sent[0]?.payload).toMatchObject({
-      title: expect.stringContaining("Review credential"),
+      title: `Review credential ${token}`,
       items: [
-        { type: "userMessage", text: expect.stringContaining("inspect the gateway") },
-        { type: "agentMessage", text: expect.stringContaining("was found in configuration") },
+        { type: "userMessage", text: `Use ${token} to inspect the gateway.` },
+        { type: "agentMessage", text: `Credential ${token} was found in configuration.` },
       ],
     });
   });

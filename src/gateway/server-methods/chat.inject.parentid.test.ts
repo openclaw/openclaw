@@ -164,7 +164,7 @@ describe("gateway chat.inject transcript writes", () => {
     },
   );
 
-  it("emits a redacted injected message through its persisted transcript owner", async () => {
+  it("preserves injected source text through its persisted transcript owner", async () => {
     const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-redact-",
       sessionId: "sess-redact",
@@ -184,14 +184,14 @@ describe("gateway chat.inject transcript writes", () => {
       });
 
       expect(appended.ok).toBe(true);
-      expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(appended.message)).toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
       expect(updates[0]).toMatchObject({ sessionKey: "agent:main:main", agentId: "main" });
 
       const last = (await readLastTranscriptRecord(fixture)) as { message?: unknown };
-      expect(JSON.stringify(last.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(last.message)).toContain(fakeApiKey);
       expect(updates[0]?.message).toEqual(last.message);
-      expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
+      expect(JSON.stringify(updates[0]?.message)).toContain(fakeApiKey);
     } finally {
       unsubscribe();
       await cleanupFixture(fixture);

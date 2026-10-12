@@ -52,7 +52,7 @@ Set `OPENCLAW_SECRET_SENTINELS=off` (also accepts `0` or `false`, case-insensiti
 
 ## Agent-access boundary
 
-SecretRefs stop credentials from being persisted in config and generated model files, but they are not a process-isolation boundary. A plaintext credential left on disk in a path the agent can read is still readable via file or shell tools, bypassing API-level redaction.
+SecretRefs stop credentials from being persisted in config and generated model files, but they are not a process-isolation boundary. A plaintext credential left on disk in a path the agent can read is still readable via file or shell tools. Tool results and transcripts do not secret-mask that content.
 
 For production deployments where agent-accessible files are in scope, treat migration as complete only when all of these hold:
 

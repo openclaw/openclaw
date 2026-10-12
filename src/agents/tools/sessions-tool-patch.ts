@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -7,7 +8,6 @@ import {
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";

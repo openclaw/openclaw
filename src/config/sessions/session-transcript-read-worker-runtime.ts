@@ -4,7 +4,6 @@ import {
   resolveWorkerPoolSize,
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 } from "../../infra/worker-pool-sizing.js";
-import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
@@ -108,7 +107,6 @@ export async function readSessionTranscriptContextMessagesInWorker(
 export async function prepareSessionEntryInWorker(
   absPath: string,
   options: SessionEntryWorkerInput["options"],
-  redaction: SensitiveTextRedactionSnapshot,
 ) {
   const receipt = resolveSessionTranscriptReadFence(options);
   const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
@@ -120,7 +118,6 @@ export async function prepareSessionEntryInWorker(
             kind: "session-entry",
             absPath,
             options,
-            redaction,
             ...(receipt ? { admission: { ...receipt } } : {}),
           },
           {
@@ -130,8 +127,7 @@ export async function prepareSessionEntryInWorker(
                 options.agentId.length +
                 options.sessionId.length +
                 options.storePath.length +
-                (options.sessionKey?.length ?? 0) +
-                redaction.registeredSecretValues.reduce((bytes, value) => bytes + value.length, 0)),
+                (options.sessionKey?.length ?? 0)),
           },
         ),
     ),

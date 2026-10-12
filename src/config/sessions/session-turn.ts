@@ -19,7 +19,7 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
@@ -291,14 +291,12 @@ export async function appendSessionTurnInWorker(
       async run(prepareTurn, commit) {
         if (fixedVoiceTranscript) {
           // Fixed voice events keep transaction-local validation without a planning read.
-          plan.options.messages = messages.map(({ config, ...message }) => ({
+          plan.options.messages = messages.map(({ config: _messageConfig, ...message }) => ({
             ...message,
             message:
               options.atomicGroup === true
                 ? message.message
-                : redactTranscriptMessageForStorage(message.message, {
-                    config: config ?? options.config,
-                  }),
+                : sanitizeTranscriptMessageForStorage(message.message),
           }));
           return commit();
         }
@@ -386,7 +384,6 @@ export async function appendSessionTurnInWorker(
         for (const [index, append] of plan.options.messages.entries()) {
           const hooks = accepted[index]!.workerPreparation;
           const facts = preparation?.messages[index];
-          const config = accepted[index]!.config ?? options.config;
           const prepare =
             hooks?.prepareMessageAfterIdempotencyCheckAsync ??
             hooks?.prepareMessageAfterIdempotencyCheck;
@@ -407,7 +404,7 @@ export async function appendSessionTurnInWorker(
             append.freshGuard = true;
           }
           if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
-            message = redactTranscriptMessageForStorage(message, { config });
+            message = sanitizeTranscriptMessageForStorage(message);
           }
           plan.options.messages[index] = {
             ...append,

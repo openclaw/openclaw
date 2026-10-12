@@ -681,14 +681,12 @@ describe("SQLite report payload selection", () => {
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(3);
       expect(events[1]).toEqual(unreadable);
-      expect(JSON.stringify(events[2])).not.toContain(secret);
-      expect(JSON.stringify(events[2])).toContain("synthe…alue");
       expect(events[2]).toMatchObject({
         type: "message",
         parentId: "unreadable",
         message: {
           responseId: assistant.responseId,
-          content: [{ type: "text", text: expect.stringContaining(body) }],
+          content: [{ type: "text", text: `${body}${secret}` }],
         },
       });
     });

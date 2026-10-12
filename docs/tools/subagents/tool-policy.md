@@ -38,7 +38,7 @@ depth. Sub-agents at the configured depth cap additionally
 lose `subagents`, `sessions_list`, `sessions_history`, and `sessions_spawn`, so
 their communication stays on the announce chain.
 
-`sessions_history` remains a bounded, redacted recall view here too — it
+`sessions_history` remains a bounded recall view without secret masking here too — it
 is neither a raw transcript dump nor a prose-only rendering.
 
 By default, sub-agents below depth `5` receive `sessions_spawn`, `subagents`,

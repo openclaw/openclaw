@@ -687,7 +687,7 @@ it.each(["append", "persist"] as const)(
 );
 
 it.each(["registry", "pattern"] as const)(
-  "rolls back actor static notes after %s redaction drift and accepts fresh preparation",
+  "preserves actor static notes when %s logging redaction changes during commit",
   async (policy) => {
     const target = await create(`static-redaction-${policy}`);
     const marker = `synthetic-actor-note-${policy}-private-value`;
@@ -715,19 +715,14 @@ it.each(["registry", "pattern"] as const)(
     });
     try {
       await withIncognitoSessionActor(actor, async () => {
-        await expect(appendSessionTranscriptNote(target, note)).rejects.toThrow(
-          "Transcript message redaction changed before persistence",
-        );
-        expect(changed).toBe(true);
-        expect((await SessionManager.openAsync(target)).getEntries()).toEqual([]);
-        spy.mockRestore();
         const committed = await appendSessionTranscriptNote(target, note);
+        expect(changed).toBe(true);
         const reopened = await SessionManager.openAsync(target);
         expect(reopened.getEntries()).toHaveLength(1);
         expect(reopened.getEntry(committed.messageId)).toMatchObject({
           message: committed.message,
         });
-        expect(JSON.stringify(committed.message)).not.toContain(marker);
+        expect(committed.message).toEqual(note);
       });
     } finally {
       spy.mockRestore();

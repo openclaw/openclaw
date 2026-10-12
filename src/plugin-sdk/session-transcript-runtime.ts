@@ -190,7 +190,7 @@ export type SessionTranscriptMessageEntry = {
   parentId: string | null;
   /** Ordered read metadata for this full transcript read, not a resumable cursor. */
   seq: number;
-  /** Redacted agent message payload as persisted by the runtime. */
+  /** Agent message payload as persisted by the runtime. */
   message: AgentMessage;
   /** Convenience mirror of message.role. */
   role: AgentMessage["role"];
@@ -433,7 +433,6 @@ export async function appendAssistantMirrorMessageByIdentity(
         ? findLatestEquivalentAssistantMessageId(
             selectVisibleTranscriptEvents(await locked.readEvents()),
             message,
-            params.config,
           )
         : undefined;
     if (latestEquivalentAssistantId) {
@@ -457,7 +456,6 @@ export async function appendAssistantMirrorMessageByIdentity(
         sourceAssistantMessageId = findEquivalentAssistantMessageInRun(
           facts.sourceEvents ?? [],
           message,
-          params.config,
           sourceRunId,
         );
       } else {
@@ -484,12 +482,7 @@ export async function appendAssistantMirrorMessageByIdentity(
             events = selectVisibleTranscriptEvents(await locked.readEvents());
           }
         }
-        sourceAssistantMessageId = findLatestEquivalentAssistantMessageId(
-          events,
-          message,
-          params.config,
-          true,
-        );
+        sourceAssistantMessageId = findLatestEquivalentAssistantMessageId(events, message, true);
       }
       const correlatedMessage = {
         ...message,
@@ -629,7 +622,7 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
 
 /**
  * Atomically appends one ordered, already-hooked message group. Preparation and
- * redaction finish before SQLite begins; this is the canonical future harness seam.
+ * normalization finish before SQLite begins; this is the canonical future harness seam.
  */
 export async function appendSessionTranscriptMessagesByIdentity<TMessage>(
   params: SessionTranscriptAppendMessagesParams<TMessage>,

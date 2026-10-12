@@ -284,11 +284,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it.each([
     [
       '/debug set gateway.auth.token="synthetic-private-token"',
-      '/debug set gateway.auth.token="__OPEN…ED__"',
+      '/debug set gateway.auth.token="__OPENCLAW_REDACTED__"',
     ],
     [
       '/config set gateway.auth={"mode":"token","token":"synthetic-private-token"}',
-      '/config set gateway.auth={"mode":"token","token":"__OPEN…ED__"}',
+      '/config set gateway.auth={"mode":"token","token":"__OPENCLAW_REDACTED__"}',
     ],
     [
       "/debug set channels.telegram.botToken=synthetic-private-token",

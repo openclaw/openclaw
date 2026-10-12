@@ -476,7 +476,6 @@ export async function handleToolExecutionEnd(
   });
 
   if (isExecToolName(toolName)) {
-    // Use sanitizedResult so `aggregated` is redacted before reaching command_output.
     const commandItemId = buildCommandItemId(toolCallId);
     if (
       execDetails?.status === "approval-pending" ||

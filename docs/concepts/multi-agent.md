@@ -27,7 +27,7 @@ Auth profiles are per-agent, read from `<agentDir>/openclaw-agent.sqlite`. With 
 ```
 
 <Note>
-`sessions_history` is the safer cross-session recall path: it returns a bounded, redacted view, not a raw transcript dump. It strips thinking-block signatures, tool-result payload details, `<relevant-memories>` scaffolding, tool-call XML tags (`<tool_call>`, `<function_call>`, and their plural/downgraded forms), and MiniMax tool-call XML, then truncates and caps output by byte size.
+`sessions_history` provides bounded cross-session recall without secret-masking the retained text. It strips thinking-block signatures, tool-result payload details, `<relevant-memories>` scaffolding, tool-call XML tags (`<tool_call>`, `<function_call>`, and their plural/downgraded forms), and MiniMax tool-call XML, then truncates and caps output by byte size.
 </Note>
 
 <Warning>

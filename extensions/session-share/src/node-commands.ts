@@ -1,5 +1,4 @@
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -240,14 +239,12 @@ export function createSessionShareNodeCommands(
             threadId,
             name,
             color: entry.color,
-            cwd: cwd ? redactToolPayloadText(cwd).slice(0, 6000) : undefined,
+            cwd: cwd ? cwd.slice(0, 6000) : undefined,
             status: archived ? "archived" : "idle",
             createdAt: entry.createdAt,
             updatedAt: entry.updatedAt,
             recencyAt,
-            gitBranch: entry.worktree?.branch
-              ? redactToolPayloadText(entry.worktree.branch).slice(0, 6000)
-              : undefined,
+            gitBranch: entry.worktree?.branch ? entry.worktree.branch.slice(0, 6000) : undefined,
             archived,
             canContinue: false,
             canArchive: false,

@@ -26,7 +26,7 @@ describe("progress draft snapshot continuation", () => {
     vi.useRealTimers();
   });
 
-  it("redacts public progress before rendering and snapshot capture", async () => {
+  it("preserves public progress in rendering and snapshot capture", async () => {
     const secret = `sk-test-${"a".repeat(48)}`;
     const update = vi.fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>(() => true);
     const progress = createProgress({
@@ -52,9 +52,9 @@ describe("progress draft snapshot continuation", () => {
     });
     await progress.pushCommentaryProgress(`Checking account ${secret}`);
     const snapshot = progress.getSnapshot();
-    expect(JSON.stringify(update.mock.calls)).not.toContain(secret);
-    expect(progress.getText()).not.toContain(secret);
-    expect(JSON.stringify(snapshot)).not.toContain(secret);
+    expect(JSON.stringify(update.mock.calls)).toContain(secret);
+    expect(progress.getText()).toContain(secret);
+    expect(JSON.stringify(snapshot)).toContain(secret);
     expect(snapshot.plan?.[0]?.step).toContain("Check account");
     expect(update.mock.calls[0]?.[0]).toContain("Account");
   });

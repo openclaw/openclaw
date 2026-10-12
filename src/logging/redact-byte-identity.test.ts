@@ -3,8 +3,6 @@ import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
   redactLogRecordForTransport,
-  redactModelVisibleToolPayloadText,
-  redactModelVisibleToolPayloadTextWithConfig,
   redactSensitiveFieldValue,
   redactSensitiveText,
   redactToolPayloadText,
@@ -16,7 +14,7 @@ import {
 // 32,768-character slicing threshold byte-identical through each entry point.
 type Fixture = {
   samples: string[];
-  outputs: [string, string, string, string][];
+  outputs: [string, string, string][];
 };
 
 const fixture = JSON.parse(
@@ -40,11 +38,9 @@ it("fixture is present and bounded by the old slicing threshold", () => {
 it("redacts short texts byte-identically to the pre-fix implementation", () => {
   for (let index = 0; index < fixture.samples.length; index++) {
     const sample = restoreSchemes(fixture.samples[index]!);
-    const [sensitive, toolPayload, modelVisible, logRecord] =
-      fixture.outputs[index]!.map(restoreSchemes);
+    const [sensitive, toolPayload, logRecord] = fixture.outputs[index]!.map(restoreSchemes);
     expect(redactSensitiveText(sample, { mode: "tools" })).toBe(sensitive);
     expect(redactToolPayloadText(sample)).toBe(toolPayload);
-    expect(redactModelVisibleToolPayloadText(sample)).toBe(modelVisible);
     expect(JSON.stringify(redactLogRecordForTransport({ message: sample, level: "info" }))).toBe(
       logRecord,
     );
@@ -53,7 +49,8 @@ it("redacts short texts byte-identically to the pre-fix implementation", () => {
 
 it("preserves baseline bytes across secret families, near misses, and ordered compositions", () => {
   // Recorded from the untouched baseline named in the fixture, before prefilter changes.
-  // Hash the complete outputs together to keep the seven-mode corpus small without
+  // The retired model-visible output was removed after verifying the original hashes.
+  // Hash the remaining outputs together to keep the six-mode corpus small without
   // deriving expected values from the current implementation or storing masked duplicates.
   // JSON escapes keep synthetic PEM markers out of repository bytes; parsing restores them.
   const corpus = JSON.parse(
@@ -68,7 +65,6 @@ it("preserves baseline bytes across secret families, near misses, and ordered co
       redactSensitiveFieldValue("content", text, { mode: "tools" }),
       redactSensitiveFieldValue("token", text, { mode: "tools" }),
       redactToolPayloadTextWithConfig(text, {}),
-      redactModelVisibleToolPayloadTextWithConfig(text, {}),
     ];
     expect(createHash("sha256").update(JSON.stringify(outputs)).digest("hex"), name).toBe(sha256);
   }

@@ -2,7 +2,6 @@ import type { BuildSessionEntryOptions } from "../../../packages/memory-host-sdk
 import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
 import type { SessionCostUsageCacheRead } from "../../infra/session-cost-usage-cache-read.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
-import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { VoiceSessionLookup } from "../../talk/client-voice-session-store.js";
@@ -192,5 +191,4 @@ export type SessionEntryWorkerInput = {
     storePath: string;
   };
   admission?: UserTurnTranscriptAdmissionReceipt;
-  redaction: SensitiveTextRedactionSnapshot;
 };

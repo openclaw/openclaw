@@ -1,8 +1,8 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   type EligibleNodeMessages,
   resolveEligibleNodeFromList,

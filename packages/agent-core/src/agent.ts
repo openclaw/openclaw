@@ -766,7 +766,7 @@ export class Agent {
       try {
         await listener(event, signal);
       } finally {
-        // A later redaction policy can replace a frozen, already committed tool result.
+        // Result preparation can replace a frozen, already committed tool result.
         if (
           publishedToolResult &&
           event.type === "message_end" &&

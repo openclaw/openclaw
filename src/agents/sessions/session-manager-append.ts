@@ -20,7 +20,6 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
-import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
@@ -78,7 +77,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     appended: boolean;
     viewWasSuperseded?: true;
   }> {
-    const canonical = canonicalizeSessionEntry(entry, options);
+    const canonical = canonicalizeSessionEntry(entry);
     return withSessionManagerAppend(
       this,
       async (admission) => {
@@ -124,12 +123,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         const message =
           canonical.type === "message"
             ? {
-                prepared: prepareTranscriptMessageAppendForWorker(
-                  copyCodeModeSourceAppendOptions(options, {
-                    message: canonical.message,
-                    config: options?.config,
-                  }),
-                ),
+                prepared: prepareTranscriptMessageAppendForWorker({
+                  message: canonical.message,
+                  config: options?.config,
+                }),
                 cwd: this.cwd,
                 validateTurn:
                   activeBranchAppend &&
@@ -195,16 +192,16 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     preserveParent = false,
   ): { entry: T; anchor?: TranscriptEntryAnchor; lifecycleRevision?: string; appended: boolean } {
     this.assertTranscriptViewAvailable();
-    const canonicalEntry = canonicalizeSessionEntry(entry, options);
+    const canonicalEntry = canonicalizeSessionEntry(entry);
     const activeBranchAppend =
       !preserveParent &&
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
       !isSessionTranscriptSideAppendEntry(canonicalEntry);
-    const persistenceOptions = copyCodeModeSourceAppendOptions(options, {
+    const persistenceOptions = {
       ...options,
       ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
-    });
+    };
     const preparedTurnAppend =
       activeBranchAppend &&
       canonicalEntry.type === "message" &&
@@ -226,20 +223,19 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       if (validatedMutationAt === undefined) {
         throw new SqliteTranscriptMutationConflictError(this.persistenceTarget.sessionId);
       }
-      attemptOptions = copyCodeModeSourceAppendOptions(persistenceOptions, {
+      attemptOptions = {
         ...persistenceOptions,
         expectedMutationAt: validatedMutationAt,
-      });
+      };
     }
-    // Keep preparation local to this append: retries must not redact the payload again or
-    // consume its code-mode source token against a different message object.
+    // Reuse the prepared payload across retries of this append.
     const preparedMessage =
       this.persistenceTarget && canonicalEntry.type === "message"
         ? prepareTranscriptMessageAppend(
-            copyCodeModeSourceAppendOptions(options, {
+            {
               message: canonicalEntry.message,
               config: options?.config,
-            }),
+            },
             {
               scope: this.persistenceTarget,
               envelope: {
@@ -293,10 +289,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           ? readTranscriptMutationAtSync(this.persistenceTarget)
           : null;
       }
-      const retryOptions = copyCodeModeSourceAppendOptions(persistenceOptions, {
+      const retryOptions = {
         ...persistenceOptions,
         expectedMutationAt,
-      });
+      };
       persistenceResult = this.persistRecord(canonicalEntry, retryOptions, preparedMessage);
     }
     return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId);

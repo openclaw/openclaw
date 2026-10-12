@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
-import { redactTranscriptMessage } from "./transcript-redact.js";
+import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
 describe("Responses reasoning transcript preservation", () => {
   it.each([
@@ -23,7 +23,7 @@ describe("Responses reasoning transcript preservation", () => {
       content: [{ type: "thinking", thinking: "", thinkingSignature: signature }],
     });
 
-    const redacted = redactTranscriptMessage(message);
+    const redacted = sanitizeTranscriptMessage(message);
 
     expect(redacted).toMatchObject({
       content: [{ thinkingSignature: signature }],

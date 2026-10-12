@@ -3,13 +3,12 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ExecAutoReviewTranscript,
   ExecAutoReviewTranscriptEntry,
 } from "../infra/exec-auto-review.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
-import { redactTranscriptMessage } from "./transcript-redact.js";
+import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
 const DEFAULT_LIMITS = {
   userAssistantChars: 4_000,
@@ -67,10 +66,9 @@ function userOrigin(message: AgentMessage): ExecAutoReviewTranscriptEntry["origi
   return identity?.type === "observation" ? "channel" : "unknown";
 }
 
-/** Projects current live messages into bounded, redacted reviewer evidence. */
+/** Projects current live messages into bounded reviewer evidence. */
 export function buildExecAutoReviewTranscript(params: {
   messages: readonly AgentMessage[];
-  config?: OpenClawConfig;
   userTurnOrigins?: ReadonlyMap<AgentMessage, AgentMessage>;
   limits?: Partial<Record<keyof typeof DEFAULT_LIMITS, number>>;
 }): ExecAutoReviewTranscript {
@@ -141,7 +139,7 @@ export function buildExecAutoReviewTranscript(params: {
     });
   };
   for (const source of messages) {
-    const message = redactTranscriptMessage(source, params.config);
+    const message = sanitizeTranscriptMessage(source);
     if (message.role === "user" || message.role === "toolResult") {
       const text =
         typeof message.content === "string"

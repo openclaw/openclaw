@@ -38,6 +38,15 @@ beforeEach(() => {
 });
 
 describe("Crabbox protected model command", () => {
+  it("preserves command output returned to the caller", async () => {
+    const output = {
+      ...result("API_TOKEN = computeToken()\n"),
+      stderr: "sk-abc123456789012345678",
+    };
+    mocks.run.mockResolvedValueOnce(result(capabilityHelp)).mockResolvedValueOnce(output);
+    expect(await runCrabboxModelCommand(options)).toEqual(output);
+  });
+
   it("delegates one native job with a host-only proxy grant and sentinel-only app environment", async () => {
     let remoteInput = "";
     mocks.run.mockImplementation(async (argv: string[], params: CommandOptions) => {

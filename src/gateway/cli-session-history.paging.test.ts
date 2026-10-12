@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
-import { captureTranscriptRedactionSnapshot } from "../agents/transcript-redact-text.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -97,7 +96,6 @@ it("serves a captured history prefix while both transcripts append and observes 
         sessionAgentId: scope.agentId,
         canonicalKey: scope.sessionKey,
         cliHistoryHomeDir: homeDir,
-        cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
         max: 4,
         maxHistoryBytes: 64 * 1024,
         effectiveMaxChars: 4096,
@@ -205,7 +203,6 @@ it("applies native history eligibility to actual empty, message, and marker-only
                 sessionAgentId: scope.agentId,
                 canonicalKey: scope.sessionKey,
                 cliHistoryHomeDir: homeDir,
-                cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
                 max: 10,
                 maxHistoryBytes: 64 * 1024,
                 effectiveMaxChars: 4096,
@@ -284,7 +281,6 @@ it("observes newly available reset archives and refuses changed archive bodies u
         sessionAgentId: scope.agentId,
         canonicalKey: scope.sessionKey,
         cliHistoryHomeDir: homeDir,
-        cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
         max: 10,
         maxHistoryBytes: 64 * 1024,
         effectiveMaxChars: 4096,
@@ -480,7 +476,6 @@ it.each([
               sessionAgentId: scope.agentId,
               canonicalKey: scope.sessionKey,
               cliHistoryHomeDir: homeDir,
-              cliHistoryRedaction: captureTranscriptRedactionSnapshot(),
               max: 10,
               maxHistoryBytes: 64 * 1024,
               effectiveMaxChars: 4096,

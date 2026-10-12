@@ -36,7 +36,7 @@ import {
   appendTranscriptEventInTransaction,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
-  redactTranscriptMessageForStorage,
+  sanitizeTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
@@ -105,11 +105,11 @@ export function prepareTranscriptMessageAppend<TMessage extends object>(
   return read.found ? { ...prepared, physicalPayload: read.value } : prepared;
 }
 
-/** Redaction stays on the host; physical payload preparation belongs to the writer. */
+/** Transcript normalization stays on the host; physical payload preparation belongs to the writer. */
 export function prepareTranscriptMessageAppendForWorker<TMessage extends object>(
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "message" | "config">,
 ): PreparedTranscriptMessageAppend<TMessage> {
-  const message = redactTranscriptMessageForStorage(options.message, options);
+  const message = sanitizeTranscriptMessageForStorage(options.message);
   const persistedMessage = normalizeTranscriptJsonValue(
     canonicalizePersistedUserMessageMedia(message).message,
     "",
@@ -121,14 +121,13 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   options: TranscriptMessageAppendOptions<TMessage> & {
-    messageAlreadyRedacted?: boolean;
     appendMode?: "side";
   },
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
   projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): TranscriptMessageCommit<TMessage> | undefined {
   const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
-  // Accepted input already owns its hook and redaction decision. A host-prepared
+  // Accepted input already owns its hook and normalization decision. A host-prepared
   // candidate must never replace those bytes during promotion or terminal replay.
   const storagePreparation = pending ? undefined : preparedMessage;
   if (
@@ -138,10 +137,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     throw new Error("Pending input session changed before transcript promotion");
   }
   const serializeForStorage = (message: TMessage): TMessage =>
-    storagePreparation?.persistedMessage ??
-    (options.messageAlreadyRedacted
-      ? message
-      : redactTranscriptMessageForStorage(message, options));
+    storagePreparation?.persistedMessage ?? sanitizeTranscriptMessageForStorage(message);
   const readAnchor = (params: {
     message: unknown;
     messageId: string;
@@ -214,7 +210,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     }
     return existingAppendResult(committed);
   }
-  // Pending input already passed the hook and redaction before acknowledgment.
+  // Pending input already passed the hook and normalization before acknowledgment.
   const prepared = pending
     ? (pending.message as TMessage) // SAFETY: exact private custody supplies this keyed user's approved storage bytes.
     : options.prepareMessageAfterIdempotencyCheck

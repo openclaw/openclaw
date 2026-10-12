@@ -1,4 +1,4 @@
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
@@ -49,14 +49,10 @@ export function sanitizeNodeWorkerDiagnostic(
   return truncateUtf8Suffix(oneLine || fallback, NODE_WORKER_STDERR_MAX_BYTES);
 }
 
-export function parseNodeWorkerOutput(
-  raw: string,
-  scrubCredential: (text: string) => string,
-): unknown {
-  const redacted = redactLaunchText(raw, scrubCredential);
+export function parseNodeWorkerOutput(raw: string): unknown {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(redacted);
+    parsed = JSON.parse(raw);
   } catch (error) {
     throw new Error("worker returned invalid JSON output", { cause: error });
   }

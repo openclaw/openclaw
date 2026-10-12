@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { withSecretRedactionRegistrySnapshot } from "../logging/secret-redaction-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createPublicSessionRepresentationCache } from "./control-ui-public-session-cache.js";
@@ -19,22 +18,6 @@ afterEach(() => {
 });
 
 describe("public transcript representation cache", () => {
-  it("retires completed and pending content when exact-value redaction changes", () => {
-    const cache = createCache();
-    withSecretRedactionRegistrySnapshot({ revision: 100, values: [] }, () => {
-      const ready = cache.begin("ready", sessionKey, config).complete("Published text");
-      const pending = cache.begin("pending", sessionKey, config);
-      withSecretRedactionRegistrySnapshot(
-        { revision: 101, values: ["synthetic-redaction-fixture"] },
-        () => {
-          expect(ready?.isCurrent()).toBe(false);
-          expect(cache.get("ready", config)).toBeUndefined();
-          expect(pending.complete("Old policy text")).toBeUndefined();
-        },
-      );
-    });
-  });
-
   it("shares one immutable representation until its own transcript or publication changes", () => {
     const cache = createCache();
     const result = cache.begin("page", sessionKey, config).complete("Published text");

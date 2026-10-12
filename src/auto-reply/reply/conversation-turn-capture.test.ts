@@ -4,7 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as transcriptRedact from "../../agents/transcript-redact.js";
+import * as transcriptRedact from "../../agents/transcript-sanitize.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
@@ -158,8 +158,8 @@ describe("conversation turn capture", () => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const prepared = createDeferredCore();
-      const originalRedact = transcriptRedact.redactTranscriptMessage;
-      vi.spyOn(transcriptRedact, "redactTranscriptMessage").mockImplementation((...args) => {
+      const originalRedact = transcriptRedact.sanitizeTranscriptMessage;
+      vi.spyOn(transcriptRedact, "sanitizeTranscriptMessage").mockImplementation((...args) => {
         const message = originalRedact(...args);
         prepared.resolve();
         return message;
@@ -641,12 +641,12 @@ describe("conversation turn capture", () => {
     ).toHaveLength(1);
   });
 
-  it("redacts the durable reply and its audit artifact before persistence", async () => {
+  it("preserves the durable reply and its audit artifact despite log patterns", async () => {
     const setup = await setupReefConversation();
     const operationId = "turn-redacted";
     const outboundMessageId = "reef-outbound-redacted";
-    const redactedValue = "sensitive-reply-value";
-    const replyText = `trusted provenance\n\n<reef-message>secret ${redactedValue}</reef-message>`;
+    const replyValue = "sensitive-reply-value";
+    const replyText = `trusted provenance\n\n<reef-message>secret ${replyValue}</reef-message>`;
     await persistSentOperation({
       scope: setup.scope,
       operationId,
@@ -682,25 +682,24 @@ describe("conversation turn capture", () => {
           NativeDirectUserId: "peer-agent",
           MessageSidFull: "reef-inbound-redacted",
           ReplyToIdFull: outboundMessageId,
-          RawBody: `secret ${redactedValue}`,
+          RawBody: `secret ${replyValue}`,
           BodyForAgent: replyText,
-          commandText: `secret ${redactedValue}`,
+          commandText: `secret ${replyValue}`,
           agentText: replyText,
-          rawText: `secret ${redactedValue}`,
+          rawText: `secret ${replyValue}`,
         } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(true);
     await expect(pending.wait()).resolves.toMatchObject({ text: replyText });
 
     const operation = await getConversationDeliveryOperation(setup.scope, operationId);
-    expect(operation?.reply?.text).toBeTruthy();
-    expect(operation?.reply?.text).not.toContain(redactedValue);
+    expect(operation?.reply?.text).toBe(replyText);
     const events = await sessionAccessor.loadTranscriptEvents({
       agentId: "main",
       sessionId: setup.sessionId,
       storePath: setup.storePath,
     });
-    expect(JSON.stringify(events)).not.toContain(redactedValue);
+    expect(JSON.stringify(events)).toContain(replyValue);
   });
 
   it("completes the durable reply when optional audit persistence throws", async () => {

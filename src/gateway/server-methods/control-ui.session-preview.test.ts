@@ -196,7 +196,7 @@ describe("controlUi.sessionPreview", () => {
     });
   });
 
-  it("returns bounded, redacted metadata for one session", async () => {
+  it("returns bounded, original metadata for one session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const secret = "sk-test-session-preview-secret-1234567890";
       const scope = {
@@ -266,7 +266,7 @@ describe("controlUi.sessionPreview", () => {
       expect(payload.derivedTitle).toHaveLength(200);
       expect(payload.lastMessagePreview).toBeTruthy();
       expect(payload.lastMessagePreview?.length).toBeLessThanOrEqual(200);
-      expect(payload.lastMessagePreview).not.toContain(secret);
+      expect(payload.lastMessagePreview).toContain(secret);
     });
   });
 

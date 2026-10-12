@@ -749,34 +749,6 @@ async function resolveInProgressTurnId(params: {
   }
 }
 
-function redactString(value: string): string {
-  return value
-    .replace(/\b(?:sk|glpat|xox[baprs])-[-_a-zA-Z0-9]{12,}\b/g, "[redacted]")
-    .replace(/\b(?:ghp|gho|ghu|ghs)_[-_a-zA-Z0-9]{12,}\b/g, "[redacted]")
-    .replace(/\bBearer\s+[-._~+/a-zA-Z0-9]+=*/g, "Bearer [redacted]");
-}
-
-/** Redacts secret-bearing fields before legacy tool results leave the plugin. */
-function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
-  if (typeof value === "string") {
-    return /authorization|password|secret|token|api[-_]?key/i.test(key)
-      ? "[redacted]"
-      : redactString(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactCodexSupervisionValue(entry));
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([entryKey, entryValue]) => [
-      entryKey,
-      redactCodexSupervisionValue(entryValue, entryKey),
-    ]),
-  );
-}
-
 function redactEndpointUrl(value: string): string {
   if (value.startsWith("unix://")) {
     return "unix://";
@@ -814,22 +786,16 @@ function endpointResult(
   };
 }
 
-function sanitizeSessionListResult(
+function projectSessionListResult(
   result: CodexSupervisorSessionListResult,
   includeTranscriptDerivedFields: boolean,
-): Record<string, unknown> {
+): CodexSupervisorSessionListResult {
+  if (includeTranscriptDerivedFields) {
+    return result;
+  }
   return {
-    sessions: result.sessions.map((session) => {
-      const sanitized = redactCodexSupervisionValue(session) as Record<string, unknown>;
-      if (!includeTranscriptDerivedFields) {
-        delete sanitized.preview;
-        delete sanitized.name;
-      }
-      return sanitized;
-    }),
-    errors: includeTranscriptDerivedFields
-      ? redactCodexSupervisionValue(result.errors)
-      : result.errors.map(({ endpointId, ok }) => ({ endpointId, ok })),
+    sessions: result.sessions.map(({ preview: _preview, name: _name, ...session }) => session),
+    errors: result.errors.map(({ endpointId, ok }) => ({ endpointId, ok })),
   };
 }
 
@@ -1066,7 +1032,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
         const { pluginConfig } = requireCurrentEndpointSet(options, endpoints);
         return jsonResult({
           summary: `codex sessions: ${result.sessions.length}`,
-          ...sanitizeSessionListResult(
+          ...projectSessionListResult(
             result,
             readCodexPluginConfig(pluginConfig).supervision?.allowRawTranscripts === true,
           ),
@@ -1098,7 +1064,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
         assertCurrentEndpointAtEffect(options, "raw-transcripts", endpoint);
         return jsonResult({
           summary: `codex session: ${threadId}`,
-          response: redactCodexSupervisionValue({ thread }),
+          response: { thread },
         });
       },
     },

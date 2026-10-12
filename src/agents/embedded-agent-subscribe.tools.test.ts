@@ -8,25 +8,10 @@ import {
   extractToolResultText,
   extractToolErrorCode,
   extractToolErrorMessage,
-  sanitizeToolArgs,
   sanitizeToolResult,
 } from "./embedded-agent-tool-results.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
-
-it("preserves redacted own JSON fields in args", () => {
-  const input = JSON.parse(
-    '{"__proto__":{"label":"kept","token":"fixture-value"},"details":{"__proto__":null}}',
-  );
-  const before = JSON.stringify(input);
-  const result = sanitizeToolArgs(input) as Record<string, unknown>;
-  expect(JSON.stringify(result)).toBe(
-    '{"__proto__":{"label":"kept","token":"***"},"details":{"__proto__":null}}',
-  );
-  expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
-  expect(Object.getPrototypeOf(result.details)).toBe(Object.prototype);
-  expect(JSON.stringify(input)).toBe(before);
-});
 
 describe("tool errors", () => {
   it("ignores non-error status values", () => {
@@ -121,7 +106,7 @@ describe("tool sanitization", () => {
     expect(Object.getPrototypeOf(result.content[0])).toBe(Object.prototype);
     expect(Object.getOwnPropertyDescriptor(result.content[0], "__proto__")?.value).toEqual({
       label: "kept",
-      token: "***",
+      token: "fixture-value",
     });
     expect(JSON.stringify(input)).toBe(before);
   });
@@ -131,41 +116,19 @@ describe("tool sanitization", () => {
     expect(sanitizeToolResult(result)).toEqual(result);
   });
 
-  it("redacts primitive string results without corrupting source assignments", () => {
-    const sanitized = sanitizeToolResult("OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789");
-    expect(sanitized).not.toContain("sk-or-v1-abcdef0123456789");
-    expect(sanitized).toContain("OPENROUTER_API_KEY=");
-    expect(sanitizeToolResult("if let token = timeObserverToken {")).toBe(
+  it("preserves primitive strings and structured credential fields", () => {
+    for (const text of [
+      "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789",
+      "API_TOKEN = computeToken()",
       "if let token = timeObserverToken {",
-    );
-  });
-
-  it("preserves top-level arrays while redacting nested strings", () => {
-    const sanitized = sanitizeToolResult([
+    ]) {
+      expect(sanitizeToolResult(text)).toBe(text);
+    }
+    const input = [
       { output: "Authorization: Bearer abcdef0123456789QWERTY=" },
       "apiKey=sk-1234567890abcdefXYZ",
-    ]);
-    expect(Array.isArray(sanitized)).toBe(true);
-    expect(JSON.stringify(sanitized)).not.toContain("abcdef0123456789QWERTY=");
-    expect(JSON.stringify(sanitized)).not.toContain("sk-1234567890abcdefXYZ");
-    expect(sanitized).toEqual([
-      { output: expect.stringContaining("Authorization: Bearer") },
-      expect.any(String),
-    ]);
-  });
-
-  it("redacts string-valued credentials nested anywhere in args", () => {
-    const sanitized = sanitizeToolArgs({
-      apiKey: "sk-1234567890abcdefXYZ",
-      headers: { Authorization: "Bearer abcdef0123456789QWERTY=" },
-      command: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789 ./run.sh",
-      flags: ["--api-key", "sk-1234567890abcdefXYZ"],
-    });
-    const serialized = JSON.stringify(sanitized);
-    expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
-    expect(serialized).not.toContain("abcdef0123456789QWERTY=");
-    expect(serialized).not.toContain("sk-or-v1-abcdef0123456789");
-    expect(sanitized).toMatchObject({ flags: ["--api-key", expect.any(String)] });
+    ];
+    expect(sanitizeToolResult(input)).toEqual(input);
   });
 });
 
@@ -199,7 +162,7 @@ describe("extractToolResultText", () => {
     ).toContain('"stdout":"command output"');
   });
 
-  it("suppresses MCP binary fields and structured secrets", () => {
+  it("omits MCP binary fields while preserving structured credential fields", () => {
     const text = extractToolResultText({
       content: [
         { type: "audio", data: "audio-base64-secret", mimeType: "audio/mpeg" },
@@ -227,10 +190,10 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("audio-base64-secret");
     expect(text).not.toContain("document-base64-secret");
     expect(text).not.toContain("resource-base64-secret");
-    expect(text).not.toContain("sk-structured-secret-1234567890");
+    expect(text).toContain("sk-structured-secret-1234567890");
   });
 
-  it("redacts structured headers and omits opaque CLI payloads before the output cap", () => {
+  it("preserves structured headers and omits opaque CLI payloads before the output cap", () => {
     const text = extractToolResultText([
       {
         type: "web_search_result",
@@ -249,9 +212,9 @@ describe("extractToolResultText", () => {
     expect(text).toContain('"title":"Useful result"');
     expect(text).not.toContain("opaque-search-ciphertext");
     expect(text).not.toContain("opaque-command-ciphertext");
-    expect(text).not.toContain("array-valued-api-secret");
-    expect(text).not.toContain("structured-cookie-secret");
-    expect(text).not.toContain("structured-set-cookie-secret");
+    expect(text).toContain("array-valued-api-secret");
+    expect(text).toContain("structured-cookie-secret");
+    expect(text).toContain("structured-set-cookie-secret");
   });
 
   it("caps structured fallback output", () => {

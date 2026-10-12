@@ -51,7 +51,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
+import { asCodexToolArguments } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -164,7 +164,7 @@ export class CodexToolTranscriptProjection {
     this.recordToolCall({
       id: params.callId,
       name: params.tool,
-      arguments: sanitizeCodexToolArguments(params.arguments),
+      arguments: asCodexToolArguments(params.arguments),
     });
   }
 

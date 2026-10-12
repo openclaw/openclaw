@@ -420,7 +420,7 @@ Tool activity summaries count the operations inside a workflow rather than count
 
 Native Codex Code Mode calls show **run JavaScript** when no purpose is available. Expand **Tool input** to read the source. Captured text-block responses display their text directly, and completed command envelopes show readable output with nonzero exit codes kept visible. JSON output is indented without changing number or string values. **Raw details** retains the original response, including execution metadata. For long results, choose **Show full output** to inspect the complete response; copy and download preserve those captured bytes.
 
-Filesystem paths remain readable in tool activity and error messages; credential values are still masked. Compact tool labels shorten macOS, Linux, and Windows home-directory prefixes to `~` while retaining the directory and filename.
+Filesystem paths and credential-shaped values remain readable in tool activity and conversation text. Logs and diagnostic exports retain secret masking. Compact tool labels shorten macOS, Linux, and Windows home-directory prefixes to `~` while retaining the directory and filename.
 
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 

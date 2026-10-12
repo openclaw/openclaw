@@ -264,16 +264,16 @@ describe("chat transcript feed", () => {
     expect(unclocked?.querySelector(".chat-task-feed__time")).toBeNull();
   });
 
-  it("redacts a complete credential-shaped fixture before shortening the command label", () => {
+  it("preserves a complete credential-shaped fixture while bounding the command label", () => {
     const syntheticToken = `AKIA${"0".repeat(16)}`;
     const command = `echo ${"a".repeat(140)} ${syntheticToken}`;
     const container = mount([
       { role: "assistant", content: [toolCall("redact", "exec", { command })] },
     ]);
-    expect(container.querySelector(".chat-task-feed__row-label")?.textContent).not.toContain(
-      syntheticToken.slice(0, 10),
+    expect(container.querySelector(".chat-task-feed__row-label")?.textContent).toBe(
+      command.slice(0, 160),
     );
-    expect(container.querySelector("code")?.textContent).not.toContain(syntheticToken);
+    expect(container.querySelector("code")?.textContent).toBe(command);
   });
 
   it.each<[string, Record<string, unknown>, string | null]>([

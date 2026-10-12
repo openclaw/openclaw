@@ -59,6 +59,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
   },
   racePromiseWithAbortSignal: (promise: Promise<unknown>) => promise,
 }));
+// mock-isolation: This environment fixture supplies its own harness state and must not initialize the process-wide runtime.
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   agentHarnessAttemptTerminal: { normalize: () => ({ kind: "ok" }) },
   loadAgentHarnessMcpConfig: async () => ({
@@ -98,7 +99,6 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   resolveAgentDir: () => "/fixture/agent",
   runAgentEndSideEffects: vi.fn(),
   runAgentHarnessLlmOutputHook: vi.fn(),
-  sanitizeToolArgs: (args: unknown) => args,
   setActiveEmbeddedRun: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({

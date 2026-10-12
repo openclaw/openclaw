@@ -1,14 +1,13 @@
 import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
 /**
  * Projects OpenClaw context-engine assemblies into Codex prompt text while
- * preserving safety boundaries and redacting tool payloads.
+ * preserving media boundaries and bounding historical tool payloads.
  */
 import {
   isOpenClawRuntimeContextCustomMessage,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -524,9 +523,7 @@ function renderMessageBody(message: AgentMessage, options: MessageRenderOptions)
             .trim()
         : "[non-text content omitted]";
   return toolResult
-    ? redactToolPayloadText(
-        `${toolResultLabel}${message.toolName ? ` (${message.toolName})` : ""}\n${body}`,
-      )
+    ? `${toolResultLabel}${message.toolName ? ` (${message.toolName})` : ""}\n${body}`
     : body;
 }
 
@@ -579,7 +576,7 @@ function renderToolResultPayload(record: Record<string, unknown>): Record<string
     ...Object.fromEntries(
       Object.entries(record)
         .filter(([key]) => !TOOL_PAYLOAD_METADATA_KEYS.has(key))
-        .map(([key, value]) => [key, projectToolPayloadValue(value, "content", key)]),
+        .map(([key, value]) => [key, projectToolPayloadValue(value, "content")]),
     ),
   };
 }
@@ -598,27 +595,24 @@ function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string
   for (const key of TOOL_PAYLOAD_METADATA_KEYS) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
-      payload[key] = redactSensitiveFieldValue(key, value);
+      payload[key] = value;
     }
   }
   return payload;
 }
 
-// Inputs retain shape only; results retain useful content with log redaction.
+// Inputs retain shape only; results retain useful content.
 // Both projections preserve the same object order and repeated-reference marker.
 function projectToolPayloadValue(
   value: unknown,
   mode: "shape" | "content",
-  key = "",
   seen = new WeakSet<object>(),
 ): unknown {
   if (
     mode === "content" &&
     (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
   ) {
-    const text = String(value);
-    const redacted = redactSensitiveFieldValue(key, redactToolPayloadText(text));
-    return redacted === text ? value : redacted;
+    return value;
   }
   if (value === null || (mode === "content" && value === undefined)) {
     return value;
@@ -629,12 +623,12 @@ function projectToolPayloadValue(
     }
     seen.add(value);
     if (Array.isArray(value)) {
-      return value.map((entry) => projectToolPayloadValue(entry, mode, key, seen));
+      return value.map((entry) => projectToolPayloadValue(entry, mode, seen));
     }
     return Object.fromEntries(
       Object.entries(value).map(([childKey, child]) => [
         childKey,
-        projectToolPayloadValue(child, mode, childKey, seen),
+        projectToolPayloadValue(child, mode, seen),
       ]),
     );
   }

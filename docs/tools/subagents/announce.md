@@ -177,7 +177,7 @@ should be rewritten in normal assistant voice.
 `sessions_history` is the safer orchestration path for reading a child's
 transcript from within an agent turn:
 
-- Redacts credential/token-like text even when general-purpose log redaction is disabled.
+- Preserves text, including credentials, without secret masking.
 - Truncates long text blocks (4000 chars per block) and drops thinking signatures, reasoning replay payloads, and inline image data.
 - Caps returned messages at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`.
 - Use `nextOffset` when present to page backward through older transcript windows.
