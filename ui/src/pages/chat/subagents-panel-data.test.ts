@@ -387,8 +387,12 @@ describe("Subagents panel data ownership", () => {
       },
     });
     const f = fixture((method, params) => {
-      if (method === "sessions.list") return page(params.spawnedBy ? [row] : []);
-      if (method === "chat.history") return history(row);
+      if (method === "sessions.list") {
+        return page(params.spawnedBy ? [row] : []);
+      }
+      if (method === "chat.history") {
+        return history(row);
+      }
       throw new Error(`Unexpected method: ${method}`);
     });
     f.open();
@@ -451,7 +455,9 @@ describe("Subagents panel data ownership", () => {
       { role: "assistant", runId: "previous-run", content: [], activity: [previous] },
     ];
     const f = fixture((method, params) => {
-      if (method === "sessions.list") return page(params.spawnedBy ? [row] : []);
+      if (method === "sessions.list") {
+        return page(params.spawnedBy ? [row] : []);
+      }
       if (method === "chat.history") {
         return {
           sessionId: row.sessionId,
