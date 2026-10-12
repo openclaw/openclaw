@@ -302,6 +302,7 @@ export async function executeTextAction(
   });
   return textResult(wrapped.text, {
     ok: result.ok,
+    text: wrapped.text,
     targetId: result.targetId,
     url: result.url,
     truncated: result.truncated || wrapped.truncated,
