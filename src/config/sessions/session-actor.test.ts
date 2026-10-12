@@ -22,6 +22,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   readExactSessionEntryRow,
   writeSessionEntry,
@@ -141,6 +142,13 @@ it.each([false, true])(
         });
         expect(fixture.read()).toEqual(beforeEntry);
 
+        const retained = retainPreparedSessionEntryPredicate({
+          databaseIdentity: `file:${identity.identity}`,
+          sessionKey: fixture.scope.sessionKey,
+          entry: fixture.read(),
+          matches: (before, after) => before?.updatedAt === after?.updatedAt,
+        });
+        using _ = { [Symbol.dispose]: retained.release };
         const result = await actor.patch(
           {
             commandId: "durable",
@@ -148,6 +156,7 @@ it.each([false, true])(
             reducers: [{ kind: "activity", updatedAt: 543 }],
           },
           authority,
+          { committed: () => expect(retained.isCurrent()).toBe(false) },
         );
         expect(result.kind).toBe("committed");
         if (result.kind !== "committed") {

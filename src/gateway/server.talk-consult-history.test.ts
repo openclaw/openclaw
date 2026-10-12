@@ -64,6 +64,7 @@ import {
   getSessionRowProjection,
 } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { captureSessionMutationRouting } from "./session-sharing-routing.js";
 import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
 import { resolveTalkAgentConsultAuthority } from "./talk/client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "./talk/client-run-authority.js";
@@ -719,7 +720,15 @@ describe("Direct Talk consult history after call closure", () => {
       const runner = createTalkClientAgentConsultRunner({
         config: getRuntimeConfig(),
         context,
-        sessionTarget: { agentId, sessionKey, canonicalKey, storePath },
+        sessionTarget: {
+          agentId,
+          sessionKey,
+          canonicalKey,
+          storePath,
+          assertCurrent: captureSessionMutationRouting(getRuntimeConfig(), undefined, [
+            { agentId, sessionKey },
+          ]),
+        },
         ownerConnId: connectionId,
         getVoiceSessionId: () => callId,
         initialItems: [],
@@ -912,7 +921,15 @@ it("dispatches permitted native actions once per logical request across text and
     const runner = createTalkClientAgentConsultRunner({
       config: getRuntimeConfig(),
       context,
-      sessionTarget: { agentId, sessionKey, canonicalKey, storePath },
+      sessionTarget: {
+        agentId,
+        sessionKey,
+        canonicalKey,
+        storePath,
+        assertCurrent: captureSessionMutationRouting(getRuntimeConfig(), undefined, [
+          { agentId, sessionKey },
+        ]),
+      },
       ownerConnId: connectionId,
       runAuthority: retained,
       authority: resolveTalkAgentConsultAuthority(client.connect.scopes, client),

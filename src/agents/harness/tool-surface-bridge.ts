@@ -55,6 +55,8 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     prompt?: string;
     runId?: string;
     runtimeToolAllowlist?: readonly string[];
+    /** Owner-prepared policy projection for async tool-surface construction. */
+    preparedToolOverrideAllowlist?: readonly string[];
     sessionId?: string;
     scheduledToolPolicy?: ScheduledToolPolicyContext;
     sourceReplyDeliveryMode?: string;
@@ -113,15 +115,17 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
   let runtimePreserveToolNames: string[] | undefined;
   const preserveRuntimeTools = () =>
     (runtimePreserveToolNames ??= resolveLocalModelLeanPreserveToolNames({
-      toolNames: resolveConversationCapabilityProfile({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        modelProvider: params.modelProvider,
-        modelId: params.modelId,
-        runtimeToolAllowlist,
-        scheduledToolPolicy: params.scheduledToolPolicy,
-      }).policy.explicitToolOverrideAllowlist,
+      toolNames: params.preparedToolOverrideAllowlist
+        ? [...params.preparedToolOverrideAllowlist, ...(runtimeToolAllowlist ?? [])]
+        : resolveConversationCapabilityProfile({
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            modelProvider: params.modelProvider,
+            modelId: params.modelId,
+            runtimeToolAllowlist,
+            scheduledToolPolicy: params.scheduledToolPolicy,
+          }).policy.explicitToolOverrideAllowlist,
       forceMessageTool: params.forceMessageTool,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     }));
@@ -206,12 +210,14 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
         tools: effectiveTools,
         catalogRef: toolSearchCatalogRef,
         codeModeControlsEnabled,
-        toolSearchPrompt: toolSearchControlsEnabled
-          ? {
-              config: toolSearchRuntimeConfig,
-              contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
-            }
-          : undefined,
+        catalogPrompt:
+          toolSearchControlsEnabled || codeModeControlsEnabled
+            ? {
+                config: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
+                agentId: params.agentId,
+                contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
+              }
+            : undefined,
       }),
     };
   };

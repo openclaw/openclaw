@@ -114,6 +114,7 @@ it.each([
 it.each([
   { kind: "alias", agentId: "main" },
   { kind: "global", agentId: "work" },
+  { kind: "unknown", agentId: "main" },
 ])(
   "admits missing $agentId $kind session authority without caller-thread SQL",
   async ({ kind, agentId }) => {
@@ -129,7 +130,7 @@ it.each([
       const client = roleClient("write", "new-session-owner");
       const scope = {
         agentId,
-        sessionKey: "global",
+        sessionKey: kind === "unknown" ? "unknown" : "global",
       };
       const route = resolveGatewaySessionStoreTarget({
         cfg,
@@ -169,14 +170,14 @@ it.each([
                 members: membership.get(latest.legacyKey ?? latest.canonicalKey) ?? [],
               },
               () => {
-                if (kind === "global") {
+                if (kind === "global" || kind === "unknown") {
                   const wrongOwnerEffect = vi.fn();
                   expect(() =>
                     result.authorization!.withPreparedCurrent!(
                       {
                         agentId: latest.agentId,
                         storePath: latest.storePath,
-                        sessionKey: "agent:other:global",
+                        sessionKey: `agent:other:${kind}`,
                         entry: latest.entry,
                         readSource: latest.capturedReadSource,
                         members: [],
@@ -197,6 +198,7 @@ it.each([
           },
         });
         await result.authorization!.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
+          expect(facts.sessionKey).toBe(route.canonicalKey);
           expect(facts.entry).toBeUndefined();
           expect(facts.members).toEqual([]);
           assertCurrent();
@@ -221,7 +223,7 @@ function invalidateSessionReadFacts(scope: { agentId: string; sessionKey: string
   });
 }
 
-it("allows unrelated config reloads while worker authorization reads are pending", async () => {
+it("allows unrelated config reloads after session authority is prepared", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg = rolePolicyConfig();
     const client = roleClient("write", "reload-owner");
@@ -235,39 +237,20 @@ it("allows unrelated config reloads while worker authorization reads are pending
         id: client.authenticatedUserProfile!.profileId,
       },
     });
-    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-    let reloads = 0;
-    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await read(...args);
-      if (
-        reply.ok &&
-        typeof reply.value === "object" &&
-        reply.value !== null &&
-        "kind" in reply.value &&
-        reply.value.kind === "session-exact-entries"
-      ) {
-        reloads += 1;
-        cfg = { ...cfg, logging: { level: reloads % 2 ? "debug" : "info" } };
-      }
-      return reply;
+    const result = await resolveSessionMutationAuthorizationAsync({
+      client,
+      method: "chat.send",
+      requestParams: scope,
+      context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
     });
     try {
-      const result = await resolveSessionMutationAuthorizationAsync({
-        client,
-        method: "chat.send",
-        requestParams: scope,
-        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-      });
       expect(result.error).toBeNull();
-      expect(reloads).toBeGreaterThan(0);
-      const initialReloads = reloads;
-      invalidateSessionReadFacts(scope);
+      cfg = { ...cfg, logging: { level: "debug" } };
       const effect = vi.fn(() => result.authorization!.assertCurrent());
       await result.authorization!.withCurrent!(effect);
-      expect(reloads).toBeGreaterThan(initialReloads);
       expect(effect).toHaveBeenCalledOnce();
     } finally {
-      spy.mockRestore();
+      result.authorization?.release?.();
     }
   });
 });

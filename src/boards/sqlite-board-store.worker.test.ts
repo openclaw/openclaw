@@ -3,7 +3,10 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-protocol/src/index.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
@@ -109,44 +112,70 @@ it("admits Board writes and request authority without reading SQLite on the call
   }
 });
 
-it("rejects a Board write whose session is replaced during preparation", async () => {
-  const { database, options, store, target } = fixture();
-  const replaceSession = () =>
-    replaceSessionEntrySync(
-      { ...target, agentId: options.agentId, storePath: database.path },
-      { sessionId: "replacement-session", updatedAt: 2 },
-    );
-  const pending = store.putWidget(
-    {
-      ...target,
-      name: "app",
-      content: {
-        kind: "mcp-app",
-        descriptor: {
-          serverName: "server",
-          toolName: "tool",
-          uiResourceUri: "ui://app",
-          toolCallId: "call",
+it.each([false, true])(
+  "rejects a Board write whose session is replaced during preparation (cross-store: %s)",
+  async (crossStore) => {
+    const { database, env, options, store, target } = fixture();
+    const source = crossStore ? openOpenClawAgentDatabase({ agentId: "source", env }) : undefined;
+    const sourceEntry = { sessionId: "source-session", updatedAt: 1 };
+    const scope = source && {
+      agentId: "source",
+      sessionKey: "agent:source:authority",
+      storePath: source.path,
+      env,
+    };
+    if (scope) {
+      replaceSessionEntrySync(scope, sourceEntry);
+    }
+    const assertCurrent =
+      scope &&
+      captureSessionEntrySourceAssertion({
+        scope,
+        expected: sourceEntry,
+        fields: ["sessionId"],
+        assertCurrent() {},
+        refuse(): never {
+          throw new Error("Board source changed");
         },
-        interactive: true,
+      });
+    const replaceSession = () =>
+      replaceSessionEntrySync(
+        { ...target, agentId: options.agentId, storePath: database.path },
+        { sessionId: "replacement-session", updatedAt: 2 },
+      );
+    const pending = store.putWidget(
+      {
+        ...target,
+        name: "app",
+        content: {
+          kind: "mcp-app",
+          descriptor: {
+            serverName: "server",
+            toolName: "tool",
+            uiResourceUri: "ui://app",
+            toolCallId: "call",
+          },
+          interactive: true,
+        },
       },
-    },
-    {
-      resolveMcpAppInteraction: async () => {
-        replaceSession();
-        return true;
+      {
+        assertCurrent,
+        resolveMcpAppInteraction: async () => {
+          replaceSession();
+          return true;
+        },
       },
-    },
-  );
-  await expect(pending).rejects.toMatchObject({
-    code: "invalid_operation",
-    message: "board session changed; retry",
-  });
-  expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
-});
+    );
+    await expect(pending).rejects.toMatchObject({
+      code: "invalid_operation",
+      message: "board session changed; retry",
+    });
+    expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
+  },
+);
 
 it("preserves cross-store Board source authority through the write effect", async () => {
-  const { env, store, target } = fixture();
+  const { database, env, store, target } = fixture();
   const sessionKey = "agent:source:authority";
   const source = openOpenClawAgentDatabase({ agentId: "source", env });
   const scope = { agentId: "source", sessionKey, storePath: source.path, env };
@@ -166,10 +195,33 @@ it("preserves cross-store Board source authority through the write effect", asyn
     },
     refuse,
   });
-  await store.putWidget(
-    { ...target, name: "permitted", content: { kind: "html", html: "permitted" } },
-    { assertCurrent },
+  const reads = trackSqliteStatementExecutions(database.db, ["session"], (sql) =>
+    /^select "entry_json" from "session_nodes"/iu.test(sql) ? "session" : null,
   );
+  try {
+    const put = await store.putWidget(
+      {
+        ...target,
+        name: "permitted",
+        content: { kind: "html", html: "permitted" },
+        declared: { tools: ["health"] },
+      },
+      { assertCurrent },
+    );
+    expect(reads.counts.session).toBe(1);
+    await store.applyOps(
+      target,
+      [{ kind: "widget_resize", name: "permitted", sizeW: 8, sizeH: 6 }],
+      { assertCurrent },
+    );
+    expect(reads.counts.session).toBe(2);
+    await store.grant(target, "permitted", "granted", 1, put.widgets[0]?.instanceId, {
+      assertCurrent,
+    });
+    expect(reads.counts.session).toBe(3);
+  } finally {
+    reads.restore();
+  }
   await expect(
     store.putWidget(
       {

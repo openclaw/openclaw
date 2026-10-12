@@ -1535,6 +1535,7 @@ describe("createCodexDynamicToolBridge", () => {
       const bridge = createSingleToolBridge(tool, {
         hookContext: scheduled
           ? {
+              config: {},
               trigger: "cron",
               runId: "run-scheduled-hook",
               sessionId: "session-scheduled-hook",

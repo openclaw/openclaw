@@ -74,7 +74,7 @@ import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js
 import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
-import { resolveAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
+import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import {
   clearAgentHarnesses,
@@ -1761,7 +1761,7 @@ describe("runAgentHarnessAttempt", () => {
         sessionKey: testCase.sessionKey,
         swarmCollector: testCase.swarmCollector,
       };
-      nativeRestrictions.push(resolveAgentHarnessNativeToolPolicyRestricted(params, harness));
+      nativeRestrictions.push(await prepareAgentHarnessNativeToolPolicyRestricted(params, harness));
       await runAgentHarnessAttempt(params);
     }
 

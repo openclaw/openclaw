@@ -34,6 +34,7 @@ import {
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
 import type { ReplyBackendQueueMessageResult } from "./reply-run-registry.contracts.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
@@ -611,7 +612,6 @@ describe("question response custody through reply adoption", () => {
             throw new Error("unexpected ordinary steering of an answered question");
           });
           const subscribe = vi.fn(() => () => {});
-          let finalAssertion: (() => void) | undefined;
           const queue = async (
             message: string,
             options: QueueOptions,
@@ -621,7 +621,6 @@ describe("question response custody through reply adoption", () => {
             try {
               if (receiptScope) {
                 assertCurrent();
-                finalAssertion = assertCurrent;
                 await updateSessionEntry(receiptScope, () => ({
                   restartRecoveryDeliveryReceiptState: "terminal-pending",
                 }));
@@ -811,18 +810,19 @@ describe("question response custody through reply adoption", () => {
             expect.soft(adopted).toHaveBeenCalledOnce();
             expect.soft(settled).toHaveBeenCalledOnce();
             expect(nativeSteer).not.toHaveBeenCalled();
-            if (mode === "late-receipt") {
-              expect(finalAssertion).toBeDefined();
-              await expect(
-                queue(
-                  "ordinary input after the answer",
-                  undefined,
-                  finalAssertion!,
-                  "source-bound",
-                ),
-              ).rejects.toMatchObject({
-                cause: expect.any(MessageInjectionTargetUnavailableError),
+            if (receiptScope) {
+              const delivery = prepareSteeringDelivery({
+                ...receiptScope,
+                sessionId: run.run.sessionId,
+                assertCurrent,
               });
+              try {
+                await expect(delivery.prepareCurrent()).rejects.toBeInstanceOf(
+                  MessageInjectionTargetUnavailableError,
+                );
+              } finally {
+                delivery.release();
+              }
               expect(nativeSteer).not.toHaveBeenCalled();
             }
             if (confirmed) {

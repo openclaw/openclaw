@@ -176,7 +176,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     const previous = f.git(["rev-parse", outcomeRef]);
     const original = f.record();
     expect(original).toMatchObject({ accepted: true, asyncMerge: { status: "failed", sha: null } });
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
 
     const run = f.run(false, f.repo, "squash", previous);
 
@@ -206,7 +206,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       f.save({ ...f.state(), asyncMergeStatus: "failed" });
       expect(f.run().status).toBe(1);
       const previous = f.git(["rev-parse", outcomeRef]);
-      expect(f.recover()).toBe(true);
+      expect(f.recover()).toBe(false);
       f.save({
         ...f.state(),
         asyncMergeStatus: ["pending", "enqueued", "expired", "unknown"].includes(fault)

@@ -157,7 +157,7 @@ export function resolveDurableChatClaim(params: {
   clientRunId: string;
   entry?: SessionEntry;
   persistedSessionKey: string;
-  reloadEntry: () => SessionEntry | undefined;
+  reloadEntry: () => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   storePath: string;
   recoveryRuntime?: GatewayRecoveryRuntime;
   warn: (message: string) => void;
@@ -197,7 +197,7 @@ export function resolveDurableChatClaim(params: {
     } catch (error) {
       params.warn(String(error));
     }
-    const current = params.reloadEntry();
+    const current = await params.reloadEntry();
     if (
       isAdoptedRestartRecoveryClaim(current, params.clientRunId) &&
       current.abortedLastRun === true
@@ -293,7 +293,7 @@ function hasRestartUnsafeChatWork(params: {
 
 export type PreparedRestartSafeChatPlacement = {
   sessionId: string;
-  facts: Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>;
+  facts: Awaited<ReturnType<WorkerSessionPlacementStore["prepareSessionPlacement"]>>;
 };
 
 /** Borrow placement facts only while the chat owner revalidates and commits admission. */
@@ -302,10 +302,10 @@ export async function withRestartSafeChatPlacement(
   sessionId: string,
   consume: (prepared: PreparedRestartSafeChatPlacement) => Promise<void>,
 ): Promise<void> {
-  if (!service.prepareRuntimeRefresh) {
+  if (!service.prepareSessionPlacement) {
     throw new Error("Worker placement admission reader is unavailable; retry.");
   }
-  const facts = await service.prepareRuntimeRefresh(sessionId);
+  const facts = await service.prepareSessionPlacement(sessionId);
   try {
     await consume({ sessionId, facts });
   } finally {

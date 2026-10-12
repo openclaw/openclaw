@@ -1,7 +1,7 @@
 import path from "node:path";
 import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
@@ -119,6 +119,7 @@ async function main() {
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
   assert(stateDir, "missing OPENCLAW_STATE_DIR");
+  const storePath = resolveStorePath(undefined, { agentId: "main" });
 
   const response = await fetchJson(`${gatewayUrl.replace(/\/$/, "")}/v1/responses`, {
     method: "POST",
@@ -160,15 +161,21 @@ async function main() {
     }),
   });
   const mentions = await readSessionLogMentions(stateDir);
+  const storePath = resolveStorePath(undefined, {
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
   const session = getSessionEntry({
     agentId: "main",
     sessionKey: MCP_CODE_MODE_SESSION_KEY,
+    storePath,
   });
   assert(session?.sessionId, "gateway did not persist the MCP code-mode session");
   const transcriptEvents = await readSessionTranscriptEvents({
     agentId: "main",
     sessionId: session.sessionId,
     sessionKey: MCP_CODE_MODE_SESSION_KEY,
+    storePath,
   });
   const plannedTools = extractMcpCodeModePlannedTools(transcriptEvents);
   if (process.env.MOCK_REQUEST_LOG) {

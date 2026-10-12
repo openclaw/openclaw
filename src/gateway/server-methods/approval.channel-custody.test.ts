@@ -36,8 +36,23 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Approval fixtures control custody and config revocation without loading channel runtimes.
 vi.mock("../approval-channel-custody.js", () => ({
-  prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
+  prepareApprovalChannelCustody: (...args: unknown[]) => {
+    const custody = prepareApprovalChannelCustodyMock(...args);
+    return (
+      custody && {
+        ...custody,
+        isCurrent:
+          custody.isCurrent ??
+          ((request: unknown) => {
+            const input = args[0] as { cfg: unknown; getCfg?: () => unknown };
+            return (!input.getCfg || input.getCfg() === input.cfg) && custody.authorizes(request);
+          }),
+        [Symbol.dispose]() {},
+      }
+    );
+  },
 }));
 
 function createFixture(includeSystemAgent = false) {
@@ -547,9 +562,11 @@ describe("approval authority boundaries", () => {
     const { databaseOptions, managers, handlers } = createFixture(true);
     const pending = await registerSystemAgent(managers.systemAgent, "system-agent:revoked-owner");
     // Custody holds when the request arrives, then the owner is removed before the decision write.
-    prepareApprovalChannelCustodyMock
-      .mockReturnValueOnce({ resolverId: "irc:default", authorizes: () => true })
-      .mockReturnValue(null);
+    prepareApprovalChannelCustodyMock.mockReturnValue({
+      resolverId: "irc:default",
+      authorizes: () => true,
+      isCurrent: () => false,
+    });
     const response = await invoke({
       handlers,
       method: "approval.resolve",

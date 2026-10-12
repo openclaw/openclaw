@@ -217,8 +217,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   };
 });
 
+// mock-isolation: Exercise model directives without sandbox backend or session storage setup.
 vi.mock("../../agents/sandbox.js", () => ({
-  resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
+  resolveSandboxRuntimeStatusAsync: vi.fn(async () => ({ sandboxed: false })),
 }));
 
 vi.mock("../../config/sessions.js", () => ({

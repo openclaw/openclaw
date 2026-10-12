@@ -469,7 +469,8 @@ Schemas, retained bytes, durability, and update behavior are unchanged.
 Bundled plugins obtain prepared currentness checks and compose entry commit guards
 through the `session-binding-runtime` facade. `captureSessionEntryCurrentCheckAsync`
 retains the selected session generation and optional conversation alternatives;
-its awaited effect check reads both in one existing reader-worker snapshot. Typed
+its awaited effect check reads both in one existing reader-worker snapshot. The
+returned `release()` ends the owning operation’s captured authority after settlement. Typed
 mutations carry the prepared source so the writer checks all alternatives in one
 batched conversation read and publishes matching branches through its transaction
 grant. Entry-only binding mutations carry `entryCurrent` through existing writer
@@ -608,7 +609,9 @@ reuses the database owner's admitted table and index facts.
 
 Durable Board writes with ordinary request callbacks use the existing worker.
 Cross-store source authority and native incognito retain their explicit native
-adapter. Board reads inside a transaction reuse its snapshot without a nested
+adapter. Cross-store writes check the captured target session identity once in
+the mutation kernel's transaction, without a second session-existence read.
+Board reads inside a transaction reuse its snapshot without a nested
 savepoint. Ambient-watch preparation uses the existing read worker; the released
 synchronous prompt adapter remains deprecated with a runtime warning.
 
@@ -1444,6 +1447,11 @@ Empty plugin-state receipts travel with native settlement instead of an addition
 early commit frame. They remain recorded at COMMIT and install before the operation
 completes. Nonempty and unknown-coverage receipts still publish immediately after
 COMMIT.
+
+Register-if-absent uses one conditional insert to preserve a live key or replace an
+expired key, including expired keys outside the bounded cleanup batch. A rejected
+capacity check rolls back both the insert and its staged receipt. The same kernel
+serves worker operations and the deprecated synchronous compatibility adapter.
 
 The Gateway retains bounded plugin-state observation rows from these receipts.
 Repeated observations reuse the stored JSON image without a worker request;

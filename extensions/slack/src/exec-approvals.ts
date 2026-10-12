@@ -1,6 +1,6 @@
 import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
-  createChannelExecApprovalProfile,
+  createChannelExecApprovalProfileAsync,
   isChannelExecApprovalTargetRecipient,
 } from "openclaw/plugin-sdk/approval-client-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -47,7 +47,7 @@ export function getSlackExecApprovalApprovers(params: {
   });
 }
 
-const slackExecApprovalProfile = createChannelExecApprovalProfile({
+const slackExecApprovalProfile = createChannelExecApprovalProfileAsync({
   resolveConfig: (params) => resolveSlackAccount(params).config.execApprovals,
   resolveApprovers: getSlackExecApprovalApprovers,
   normalizeSenderId: normalizeSlackApproverId,

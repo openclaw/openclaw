@@ -128,6 +128,8 @@ it.each(["runtime open", "doctor repair"] as const)(
     // Reuse remains valid while a sibling is live; final close requires readmission.
     const survivingReader = openOpenClawStateReadOnlyLocation(database.path, database.path);
     closeOpenClawStateDatabaseForTest();
+    // Final close retires admission; the cold reopen precedes the warm-borrow observation.
+    openOpenClawStateDatabase(options);
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       expect(

@@ -16,7 +16,7 @@ import {
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { loadSessionEntry, patchSessionEntryCore } from "./session-accessor.entry.js";
+import { patchSessionEntryCore } from "./session-accessor.entry.js";
 import { createSessionEntryWithTranscriptInScope } from "./session-accessor.sqlite-creation.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
@@ -40,6 +40,7 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
+import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
@@ -326,6 +327,7 @@ export function prepareSessionEntryMutationDatabases(
     assertCurrent: () => void;
     relatedScopes?: readonly SessionAccessScope[];
     expectedSource?: SessionEntryDatabasePreparationSource;
+    followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
   }[],
   ready: Promise<void>,
 ) {
@@ -418,7 +420,16 @@ export function prepareSessionEntryMutationDatabases(
           for (const member of members) {
             member.capture.begin(member.target.options.path, execution);
           }
-          await prepareSessionEntryReplacementDatabase(target.options, assertCurrent, execution);
+          await prepareSessionEntryReplacementDatabase(
+            target.options,
+            assertCurrent,
+            execution,
+            (change) => {
+              for (const { index } of members) {
+                targets[index]!.followRegistration?.(change);
+              }
+            },
+          );
           for (const member of members) {
             member.capture.finish(member.target.options.path, member.target.identity);
           }
@@ -589,10 +600,10 @@ export async function updateSessionEntry(
 }
 
 /** Resolves one abort target identity without exposing the mutable store. */
-export function resolveSessionAbortTarget(
+export async function resolveSessionAbortTarget(
   scope: SessionAccessScope,
-): SessionAbortTargetIdentity | null {
-  const entry = loadSessionEntry(scope);
+): Promise<SessionAbortTargetIdentity | null> {
+  const entry = await readSessionEntryReadOnlyInWorker(scope);
   if (!entry) {
     return null;
   }
