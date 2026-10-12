@@ -400,6 +400,14 @@ function FramedMessageGroup(props: {
       <Show when={!frame().inlineUserAvatar}>
         <GroupAvatar frame={frame()} />
       </Show>
+      <Show
+        when={
+          !frame().isTurnBlock &&
+          (frame().normalizedRole === "user" || frame().normalizedRole === "assistant")
+        }
+      >
+        <h2 class="sr-only">{frame().who}</h2>
+      </Show>
       <div class="chat-group-messages">
         <Show when={frame().forwardedSource}>
           <LitContent value={renderForwardedAttribution(props.group, options())} />

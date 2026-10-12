@@ -253,6 +253,7 @@ export function renderSolidStreamGroup(parts: StreamGroupPart[], opts: StreamGro
 }
 
 export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGroupOptions }) {
+  const name = () => props.options.assistant?.name ?? "Assistant";
   const starts = () =>
     props.parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const startedAt = () => (starts().length ? Math.min(...starts()) : null);
@@ -289,6 +290,9 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
       data-chat-row-key={props.parts[0]?.key}
     >
       <LitContent value={avatar()} />
+      <Show when={Boolean(source())}>
+        <h2 class="sr-only">{name()}</h2>
+      </Show>
       <div class="chat-group-messages">
         <LitContent value={renderReplyLine(replyLine(), props.options)} />
         <StreamGroupParts parts={props.parts} options={props.options} presentation="standalone" />
@@ -298,7 +302,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
         <div class="chat-group-footer" aria-hidden={active() ? "true" : undefined}>
           <Show when={!active()}>
             <div class="chat-group-footer__meta">
-              <span class="chat-sender-name">{props.options.assistant?.name ?? "Assistant"}</span>
+              <span class="chat-sender-name">{name()}</span>
               <ChatTimestamp timestamp={startedAt()!} />
             </div>
           </Show>

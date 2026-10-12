@@ -891,6 +891,12 @@ Selecting the author's name on a reply's **Replying to** line scrolls to the
 original message and briefly highlights it, first opening its containing
 **Worked for…** group when the original sits inside one.
 
+Screen-reader heading navigation moves between rendered user and assistant turns.
+Each turn starts with a level-two sender heading, including streaming replies and
+turns whose sender name is visually hidden. Grouped assistant turns have one
+heading. In long conversations, only the currently rendered portion of history
+is available to heading navigation; scroll to bring other turns into view.
+
 On wide desktop panes, the conversation position rail provides keyboard shortcuts
 to messages. In right-to-left interface languages, the rail uses the right gutter
 and its previews open toward the conversation. Tab enters at the current message, or the first marker if no message

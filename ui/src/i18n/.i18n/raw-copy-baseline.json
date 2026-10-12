@@ -348,13 +348,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-stream-view.tsx",
-      "text": "Assistant"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp-view.tsx",
       "text": "% ctx"
     },
