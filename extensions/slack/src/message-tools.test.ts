@@ -24,7 +24,9 @@ function requireSchemaProperty(
   };
 }
 
-const configuredSlack: OpenClawConfig = { channels: { slack: { botToken: "xoxb-test" } } };
+const configuredSlack: OpenClawConfig = {
+  channels: { slack: { botToken: "xoxb-test", actions: { channels: true } } },
+};
 
 describe("Slack message tools", () => {
   it("forwards trusted current-conversation, requester-account, and action authority context", async () => {
@@ -206,6 +208,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "channel-create",
       "conversation-open",
       "read",
       "edit",
@@ -221,6 +224,7 @@ describe("Slack message tools", () => {
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
     const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    expect(schemas.find((entry) => entry.actions?.includes("channel-create"))).toBeUndefined();
     expect(schemas.find((entry) => entry.actions?.includes("conversation-open"))).toMatchObject({
       actions: ["conversation-open"],
       visibility: "all-configured",
@@ -296,6 +300,7 @@ describe("Slack message tools", () => {
         slack: {
           botToken: "xoxb-root",
           actions: {
+            channels: false,
             reactions: false,
             messages: false,
             pins: false,
@@ -306,6 +311,7 @@ describe("Slack message tools", () => {
             default: {
               botToken: "xoxb-default",
               actions: {
+                channels: false,
                 reactions: false,
                 messages: false,
                 pins: false,
@@ -316,6 +322,7 @@ describe("Slack message tools", () => {
             work: {
               botToken: "xoxb-work",
               actions: {
+                channels: true,
                 reactions: true,
                 messages: true,
                 pins: false,
@@ -333,6 +340,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "channel-create",
       "conversation-open",
       "read",
       "edit",
@@ -400,6 +408,7 @@ describe("Slack message tools", () => {
           slack: {
             botToken: "xoxb-test",
             actions: {
+              channels: false,
               reactions: false,
             },
           },
@@ -445,6 +454,7 @@ describe("Slack message tools", () => {
           slack: {
             botToken: "xoxb-test",
             actions: {
+              channels: false,
               reactions: false,
               messages: false,
               pins: false,
