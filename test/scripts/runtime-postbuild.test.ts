@@ -1364,7 +1364,9 @@ describe("previous release update compatibility", () => {
       path.join(MODULE_ROOT, `test/fixtures/update-config-runtime-alias-${release}.txt`),
       "utf8",
     );
-    const exportedNames = [...alias.matchAll(/select\("(\w+)"\)/g)].map((match) => match[1]);
+    const exportedNames = [...alias.matchAll(/select\("(\w+)"\)/g)].flatMap(
+      (match) => match[1] ?? [],
+    );
     const sortedNames = exportedNames.toSorted((left, right) =>
       left < right ? -1 : left > right ? 1 : 0,
     );
