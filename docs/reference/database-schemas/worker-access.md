@@ -18,6 +18,15 @@ Physical integrity admission remains valid independently of canonical readiness.
 The schema 25 migration seeds every existing node before admission; see
 [canonical writer validation](/reference/database-schemas/agent-schema-history#canonical-writer-validation).
 
+Inbound session metadata and last-route changes use closed entry operations. The
+Gateway prepares plugin-owned group and origin facts once; the writer merges
+those facts with its current entry, preserving concurrent metadata, routing
+fallbacks, creation provenance, and activity timestamps without a detached
+callback comparison. Skill snapshot persistence uses the same fixed-field path.
+Generic callbacks retain their prepare-and-compare contract, and source and
+conversation authority still apply at the mutation boundary. These operations
+change no schemas, stored formats, retention, or update behavior.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,
@@ -5586,6 +5595,13 @@ still read their logical agent namespaces. Recorded quarantine remains authorita
 Canonical validation receipts share that same physical admission; their certifying
 and offline repair writers publish committed replacements. Ordinary session writes
 do not expire the receipt, and rollback cannot publish an uncommitted one.
+
+Lifecycle mutations return the resulting entry count from their committed
+inserts and removals. Finalization subtracts only acknowledged retention removals;
+it does not query the count again after archive publication. A later lifecycle
+operation reads its own starting count, so unrelated writes after the earlier
+commit belong to that later operation. Doctor callbacks that can change arbitrary
+rows still count inside their transaction.
 
 Warm maintenance reads use the current age hint and one count statement without
 an explicit transaction. Capacity pressure still requests full planning, whose

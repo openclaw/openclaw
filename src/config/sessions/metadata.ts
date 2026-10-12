@@ -116,12 +116,10 @@ export function deriveSessionOrigin(
   });
 }
 
-function deriveGroupSessionPatch(params: {
+function prepareGroupSessionPatch(params: {
   ctx: MsgContext;
-  sessionKey: string;
-  existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
-}): Partial<SessionEntry> | null {
+}) {
   const resolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
   if (!resolution?.channel) {
     return null;
@@ -148,6 +146,24 @@ function deriveGroupSessionPatch(params: {
       : undefined);
   const nextSubject = nextGroupChannel ? undefined : subject;
 
+  return { resolution, nextSubject, nextGroupChannel, topicName, space };
+}
+
+export type PreparedSessionMetaPatch = {
+  group: ReturnType<typeof prepareGroupSessionPatch>;
+  origin: SessionOrigin | undefined;
+  internalTurn: boolean;
+};
+
+function projectGroupSessionPatch(
+  group: PreparedSessionMetaPatch["group"],
+  existing: SessionEntry | undefined,
+  sessionKey: string,
+): Partial<SessionEntry> | null {
+  if (!group) {
+    return null;
+  }
+  const { resolution, nextSubject, nextGroupChannel, topicName, space } = group;
   const patch: Partial<SessionEntry> = {
     chatType: resolution.chatType ?? "group",
     groupId: resolution.id,
@@ -170,13 +186,13 @@ function deriveGroupSessionPatch(params: {
   }
 
   const displayName = buildGroupDisplayName({
-    provider: channel,
-    subject: nextSubject ?? (nextGroupChannel ? undefined : params.existing?.subject),
-    topicName: topicName ?? params.existing?.topicName,
-    groupChannel: nextGroupChannel ?? (nextSubject ? undefined : params.existing?.groupChannel),
-    space: space ?? params.existing?.space,
+    provider: resolution.channel,
+    subject: nextSubject ?? (nextGroupChannel ? undefined : existing?.subject),
+    topicName: topicName ?? existing?.topicName,
+    groupChannel: nextGroupChannel ?? (nextSubject ? undefined : existing?.groupChannel),
+    space: space ?? existing?.space,
     id: resolution.id,
-    key: params.sessionKey,
+    key: sessionKey,
   });
   if (displayName) {
     patch.displayName = displayName;
@@ -193,14 +209,48 @@ export function deriveSessionMetaPatch(params: {
   preserveExistingDeliveryRoute?: boolean;
   skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
-  const groupPatch = deriveGroupSessionPatch(params);
-  const origin = deriveSessionOrigin(params.ctx, {
-    skipSystemEventOrigin: params.skipSystemEventOrigin,
+  return projectSessionMetaPatch({
+    ...params,
+    prepared: prepareSessionMetaPatch(params),
   });
+}
+
+/** Resolve plugin-owned ingress facts once, before handing pure metadata to the writer. */
+export function prepareSessionMetaPatch(params: {
+  ctx: MsgContext;
+  groupResolution?: GroupKeyResolution | null;
+  skipSystemEventOrigin?: boolean;
+}): PreparedSessionMetaPatch {
+  const sourceChannel = normalizeMessageChannel(
+    params.ctx.Provider ?? params.ctx.Surface ?? params.ctx.OriginatingChannel,
+  );
+  return {
+    group: prepareGroupSessionPatch(params),
+    origin: deriveSessionOrigin(params.ctx, {
+      skipSystemEventOrigin: params.skipSystemEventOrigin,
+    }),
+    internalTurn:
+      params.ctx.InternalTurnSource !== undefined ||
+      sourceChannel === INTERNAL_MESSAGE_CHANNEL ||
+      (sourceChannel != null && isInternalNonDeliveryChannel(sourceChannel)),
+  };
+}
+
+export function projectSessionMetaPatch(params: {
+  prepared: PreparedSessionMetaPatch;
+  sessionKey: string;
+  existing?: SessionEntry;
+  preserveExistingDeliveryRoute?: boolean;
+}): Partial<SessionEntry> | null {
+  const { origin, internalTurn } = params.prepared;
+  const groupPatch = projectGroupSessionPatch(
+    params.prepared.group,
+    params.existing,
+    params.sessionKey,
+  );
   if (!groupPatch && !origin) {
     return null;
   }
-
   const existingOrigin = sessionDeliveryOrigin(params.existing);
   const nextProvider = origin?.provider;
   const nextOwnsExternalRoute = Boolean(
@@ -208,13 +258,6 @@ export function deriveSessionMetaPatch(params: {
     nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
     !isInternalNonDeliveryChannel(nextProvider),
   );
-  const sourceChannel = normalizeMessageChannel(
-    params.ctx.Provider ?? params.ctx.Surface ?? params.ctx.OriginatingChannel,
-  );
-  const internalTurn =
-    params.ctx.InternalTurnSource !== undefined ||
-    sourceChannel === INTERNAL_MESSAGE_CHANNEL ||
-    (sourceChannel != null && isInternalNonDeliveryChannel(sourceChannel));
   if (existingOrigin && internalTurn) {
     const existingContext = normalizeDeliveryContext({
       channel: existingOrigin.provider,
@@ -303,7 +346,20 @@ export function deriveLastRoutePatch(params: {
   existing: SessionEntry | undefined;
   sessionKey: string;
 }): Partial<SessionEntry> {
-  const { channel, to, accountId, threadId, ctx, existing } = params;
+  return projectLastRoutePatch({
+    ...params,
+    metadata: params.ctx
+      ? prepareSessionMetaPatch({ ctx: params.ctx, groupResolution: params.groupResolution })
+      : undefined,
+  });
+}
+
+export function projectLastRoutePatch(
+  params: Omit<Parameters<typeof deriveLastRoutePatch>[0], "ctx" | "groupResolution"> & {
+    metadata?: PreparedSessionMetaPatch;
+  },
+): Partial<SessionEntry> {
+  const { channel, to, accountId, threadId, existing } = params;
   const explicitContext = normalizeDeliveryContext(params.deliveryContext);
   const inlineContext = normalizeDeliveryContext({
     channel,
@@ -345,12 +401,11 @@ export function deriveLastRoutePatch(params: {
     origin: fallbackOrigin,
   });
   const nextEntry = existing ? { ...existing, delivery } : ({ delivery } as SessionEntry);
-  const metaPatch = ctx
-    ? deriveSessionMetaPatch({
-        ctx,
+  const metaPatch = params.metadata
+    ? projectSessionMetaPatch({
+        prepared: params.metadata,
         sessionKey: params.sessionKey,
         existing: nextEntry,
-        groupResolution: params.groupResolution,
         preserveExistingDeliveryRoute: routeContext != null,
       })
     : null;
