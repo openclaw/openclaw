@@ -6,7 +6,6 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -14,7 +13,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
 import type {
   NodeWorkerLaunchClaim,
@@ -63,7 +62,7 @@ function ensureNodeWorkerLaunchSchema(
 ): void {
   // sqlite-allow-raw -- Canonical feature-local additive DDL only.
   database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, {
+    getOpenClawStateFeatureSchemaSql(table, {
       endMarker: table === "node_worker_launches" ? NODE_WORKER_LAUNCH_SCHEMA_END : undefined,
     }),
   );

@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -246,6 +247,7 @@ export function installSpawnAuthorityFixture() {
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
+    await captureRuntimeConfigAsyncReader()();
     await resetSubagentRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
       () => getActivePluginRegistry() ?? createTestRegistry([]),

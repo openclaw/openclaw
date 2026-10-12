@@ -34,7 +34,9 @@ type ApprovalRouteRuntimeRecord = {
   accountId?: string | null;
   requestGateway: GatewayRequestFn;
   shouldHandle: (request: ApprovalRequest) => boolean | Promise<boolean>;
-  classifyRoute: (request: ApprovalRequest) => ApprovalRequestChannelRouteClass;
+  classifyRoute: (
+    request: ApprovalRequest,
+  ) => ApprovalRequestChannelRouteClass | Promise<ApprovalRequestChannelRouteClass>;
 };
 
 type ApprovalRouteSkipReason = "ambiguous-owner" | "ineligible" | "owner-unavailable";
@@ -156,7 +158,7 @@ async function resolveApprovalRouteSelection(
       );
       let routeClass: ApprovalRequestChannelRouteClass;
       try {
-        routeClass = group[0]?.classifyRoute(params.request) ?? "unbound";
+        routeClass = (await group[0]?.classifyRoute(params.request)) ?? "unbound";
       } catch (error) {
         for (const runtime of group) {
           verdicts.set(runtime.runtimeId, { kind: "selector-error", error });

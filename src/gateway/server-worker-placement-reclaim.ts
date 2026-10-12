@@ -1,14 +1,20 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { retainPreparedSessionSharingFacts } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { withTimeout } from "../infra/fs-safe.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   closeSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
   startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
   resolveWorkerPlacementSessionStoreTarget,
@@ -16,6 +22,8 @@ import {
   WorkerDispatchTargetChangedError,
   type WorkerPlacementSessionRuntime,
 } from "./server-worker-placement-session-target.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 import type { WorkerPlacementReclaimBarriers } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { matchesWorkerPlacementTarget } from "./worker-environments/placement-target.js";
@@ -37,12 +45,103 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     agentId,
   }: WorkerPlacementReclaimRequest) => {
     const sessionRuntime = await params.loadSessionRuntime();
-    const resolveTarget = () =>
-      resolveWorkerPlacementSessionStoreTarget(sessionRuntime, getRuntimeConfig(), {
-        sessionKey,
-        agentId,
-      });
-    const target = resolveTarget();
+    const config = getRuntimeConfig();
+    const target = await resolveWorkerPlacementSessionStoreTarget(sessionRuntime, config, {
+      sessionKey,
+      agentId,
+    });
+    const metadata = captureSessionEntryMetadataRead({
+      sessionKey,
+      agentId,
+      storePath: target.storePath,
+    });
+    const nativeIncognito = !metadata && isIncognitoSessionKey(target.canonicalKey);
+    const assertRoutingCurrent = captureSessionMutationRouting(
+      config,
+      () =>
+        new WorkerDispatchTargetChangedError(
+          `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+        ),
+      [{ sessionKey, agentId, preserveQualifiedAddress: true }],
+    );
+    let retained: ReturnType<typeof retainPreparedSessionSharingFacts> | undefined;
+    let active = true;
+    let unregister = () => {};
+    const release = () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      retained?.release();
+      unregister();
+    };
+    const assertActive = () => {
+      if (!active) {
+        throw new WorkerDispatchTargetChangedError(
+          `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+        );
+      }
+    };
+    try {
+      if (!metadata && !nativeIncognito) {
+        await withSessionEntryReadOnlyInWorker(
+          {
+            agentId: target.agentId,
+            sessionKey: target.canonicalKey,
+            storePath: target.storePath,
+            projection: "list",
+          },
+          () => {
+            assertActive();
+            assertRoutingCurrent(getRuntimeConfig());
+          },
+          async (read) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            retained?.initialize({
+              entry: read.value && projectSessionSharingEntry(read.value),
+              membership: new Set(),
+            });
+            target.store = read.value ? { [target.canonicalKey]: read.value } : {};
+          },
+          (database, identity) => {
+            retained = retainPreparedSessionSharingFacts({
+              databaseIdentity: identity.key,
+              sessionKey: target.canonicalKey,
+              acquiring: true,
+            });
+            unregister = registerOpenClawAgentDatabaseAsyncResource({
+              agentId: database.agentId,
+              path: database.path,
+              revoke: release,
+              close: async () => release(),
+            });
+          },
+        );
+      }
+    } catch (error) {
+      release();
+      throw error;
+    }
+    const readCurrentTarget = () => {
+      assertActive();
+      if (nativeIncognito) {
+        return resolveGatewaySessionStoreTargetWithStore({
+          cfg: getRuntimeConfig(),
+          key: sessionKey,
+          agentId,
+          preserveQualifiedAddress: true,
+          clone: false,
+          exactRead: true,
+        });
+      }
+      if (!metadata) {
+        assertRoutingCurrent(getRuntimeConfig());
+      }
+      const entry = metadata ? metadata.readCurrent() : retained?.readCurrent()?.entry;
+      return { ...target, store: entry ? { [target.canonicalKey]: entry } : {} };
+    };
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     const cancelAndDrain = async (
       closeWorkAdmissions: (reason: Error) => void,
@@ -78,10 +177,24 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         () => undefined,
       );
       try {
+        const entry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+          target.store,
+          target.storeKeys,
+        );
         await params.cancelSessionWork({
           sessionId,
           sessionKeys: lifecycleIdentities,
           agentId,
+          session: {
+            ok: true,
+            value: {
+              cfg: config,
+              storePath: target.storePath,
+              canonicalKey: target.canonicalKey,
+              agentId: target.agentId,
+              entry,
+            },
+          },
           assertCurrent: assertCancellationCurrent,
           // A queued dispatch can coexist with local chat before any placement exists.
           // Interrupt only after canonical abort snapshots partials and retires approvals.
@@ -112,7 +225,14 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       await runExclusiveSessionStoreWrite(target.storePath, async () => {}, { reentrant: true });
     };
 
-    return { sessionRuntime, target, resolveTarget, lifecycleIdentities, cancelAndDrain };
+    return {
+      sessionRuntime,
+      target,
+      readCurrentTarget,
+      lifecycleIdentities,
+      cancelAndDrain,
+      [Symbol.dispose]: release,
+    };
   };
 
   const runReclaimPreparation: WorkerPlacementReclaimBarriers["runReclaimPreparation"] = async ({
@@ -124,15 +244,16 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     pendingOperations,
     run,
   }) => {
-    const { sessionRuntime, target, resolveTarget, lifecycleIdentities, cancelAndDrain } =
-      await resolveLifecycleContext({ sessionId, sessionKey, agentId });
+    using context = await resolveLifecycleContext({ sessionId, sessionKey, agentId });
+    const { sessionRuntime, target, readCurrentTarget, lifecycleIdentities, cancelAndDrain } =
+      context;
     const entry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
       target.store,
       target.storeKeys,
     );
     const revision = entry?.lifecycleRevision ?? null;
     const assertTargetCurrent = () => {
-      const current = resolveTarget();
+      const current = readCurrentTarget();
       const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
         current.store,
         current.storeKeys,
@@ -230,12 +351,12 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     begin,
     reclaim,
   }) => {
-    const { sessionRuntime, target, lifecycleIdentities, cancelAndDrain } =
-      await resolveLifecycleContext({
-        sessionId,
-        sessionKey,
-        agentId,
-      });
+    using context = await resolveLifecycleContext({
+      sessionId,
+      sessionKey,
+      agentId,
+    });
+    const { sessionRuntime, target, lifecycleIdentities, cancelAndDrain } = context;
     const resolveReclaimTarget = () =>
       resolveWorkerPlacementSessionTarget({
         sessionRuntime,
@@ -247,65 +368,75 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
       });
     let assertBindingCurrent: (() => void) | undefined;
-    return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
-      scope: target.storePath,
-      identities: lifecycleIdentities,
-      prepare: async (lifecycle) => {
-        beforeDrain?.();
-        const resolved = await resolveReclaimTarget();
-        const placement = await params.placements.getAsync(sessionId);
-        authorize?.();
-        resolved.assertBindingCurrent(getRuntimeConfig());
-        if (
-          placement?.state !== "active" &&
-          placement?.state !== "draining" &&
-          placement?.state !== "reclaimed"
-        ) {
-          throw new Error(
-            `Session ${sessionKey} cannot stop cloud worker from placement ${placement?.state ?? "missing"}`,
-          );
-        }
-        assertBindingCurrent = () => {
+    let preparedTarget: Awaited<ReturnType<typeof resolveReclaimTarget>> | undefined;
+    try {
+      return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
+        scope: target.storePath,
+        identities: lifecycleIdentities,
+        prepare: async (lifecycle) => {
+          beforeDrain?.();
+          const resolved = (preparedTarget = await resolveReclaimTarget());
+          const placement = await params.placements.getAsync(sessionId);
           authorize?.();
           resolved.assertBindingCurrent(getRuntimeConfig());
-        };
-        await cancelAndDrain(lifecycle.closeWorkAdmissions, assertBindingCurrent);
-      },
-      run: async () => {
-        if (!assertBindingCurrent) {
-          throw new Error(`Session ${sessionKey} cloud worker stop barrier did not prepare`);
-        }
-        assertBindingCurrent();
-        const resolved = await resolveReclaimTarget();
-        // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
-        // immediately before drain so revoked callers cannot commit stale placement authority.
-        assertBindingCurrent();
-        // Eligibility ends at this operation's drain, unlike caller authority during teardown.
-        beforeDrain?.();
-        resolved.assertCurrent(getRuntimeConfig());
-        const assertDrainCurrent = () => {
-          assertBindingCurrent?.();
-          resolved.assertBindingCurrent(getRuntimeConfig());
-        };
-        const placement = await begin(assertDrainCurrent);
-        assertDrainCurrent();
-        const reclaimedPlacement = await reclaim(resolved.workspace, placement, assertDrainCurrent);
-        params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
-        return reclaimedPlacement;
-      },
-    });
+          if (
+            placement?.state !== "active" &&
+            placement?.state !== "draining" &&
+            placement?.state !== "reclaimed"
+          ) {
+            throw new Error(
+              `Session ${sessionKey} cannot stop cloud worker from placement ${placement?.state ?? "missing"}`,
+            );
+          }
+          assertBindingCurrent = () => {
+            authorize?.();
+            resolved.assertBindingCurrent(getRuntimeConfig());
+          };
+          await cancelAndDrain(lifecycle.closeWorkAdmissions, assertBindingCurrent);
+        },
+        run: async () => {
+          if (!assertBindingCurrent) {
+            throw new Error(`Session ${sessionKey} cloud worker stop barrier did not prepare`);
+          }
+          assertBindingCurrent();
+          using resolved = await resolveReclaimTarget();
+          // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
+          // immediately before drain so revoked callers cannot commit stale placement authority.
+          assertBindingCurrent();
+          // Eligibility ends at this operation's drain, unlike caller authority during teardown.
+          beforeDrain?.();
+          resolved.assertCurrent(getRuntimeConfig());
+          const assertDrainCurrent = () => {
+            assertBindingCurrent?.();
+            resolved.assertBindingCurrent(getRuntimeConfig());
+          };
+          const placement = await begin(assertDrainCurrent);
+          assertDrainCurrent();
+          const reclaimedPlacement = await reclaim(
+            resolved.workspace,
+            placement,
+            assertDrainCurrent,
+          );
+          params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
+          return reclaimedPlacement;
+        },
+      });
+    } finally {
+      preparedTarget?.[Symbol.dispose]();
+    }
   };
 
   const runFailedReclaimBarrier: WorkerPlacementReclaimBarriers["runFailedReclaimBarrier"] =
     async ({ sessionId, sessionKey, agentId, authorize, reclaim }) => {
-      const { sessionRuntime, target, resolveTarget, lifecycleIdentities, cancelAndDrain } =
-        await resolveLifecycleContext({
-          sessionId,
-          sessionKey,
-          agentId,
-        });
+      using context = await resolveLifecycleContext({
+        sessionId,
+        sessionKey,
+        agentId,
+      });
+      const { sessionRuntime, target, readCurrentTarget, lifecycleIdentities, cancelAndDrain } =
+        context;
       const assertCurrent = () => {
-        const currentTarget = resolveTarget();
+        const currentTarget = readCurrentTarget();
         const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
           currentTarget.store,
           currentTarget.storeKeys,

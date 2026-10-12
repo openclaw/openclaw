@@ -368,10 +368,12 @@ describe("createOpenClawTools browser plugin integration", () => {
       requesterAccountId: "work",
       requesterSenderId: "sender-1",
     });
+    const cfg: OpenClawConfig = { tools: { allow: ["message"] } };
+    setRuntimeConfigSnapshot(cfg);
     setActivePluginRegistry(createEmptyPluginRegistry());
     await resolveGatewayScopedTools({
       ...identity,
-      cfg: { tools: { allow: ["message"] } },
+      cfg,
       surface: "loopback",
       messageProvider: "telegram",
       accountId: "work",
@@ -575,6 +577,7 @@ function requirePluginTool(overrides: Parameters<typeof createOpenClawTools>[0])
     agentSessionKey: "agent:main:discord:channel:123",
     disableMessageTool: true,
     pluginToolAllowlist: [name],
+    config: {},
     requesterAgentIdOverride: "main",
     wrapBeforeToolCallHook: false,
     ...overrides,

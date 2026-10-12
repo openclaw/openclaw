@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateApprovalGetResult } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
@@ -32,8 +36,23 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Approval fixtures control custody and config revocation without loading channel runtimes.
 vi.mock("../approval-channel-custody.js", () => ({
-  prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
+  prepareApprovalChannelCustody: (...args: unknown[]) => {
+    const custody = prepareApprovalChannelCustodyMock(...args);
+    return (
+      custody && {
+        ...custody,
+        isCurrent:
+          custody.isCurrent ??
+          ((request: unknown) => {
+            const input = args[0] as { cfg: unknown; getCfg?: () => unknown };
+            return (!input.getCfg || input.getCfg() === input.cfg) && custody.authorizes(request);
+          }),
+        [Symbol.dispose]() {},
+      }
+    );
+  },
 }));
 
 function createFixture(includeSystemAgent = false) {
@@ -72,6 +91,7 @@ describe("approval authority boundaries", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await cleanupApprovalHandlerFixtures();
+    clearRuntimeConfigSnapshot();
   });
 
   it("hides foreign pending and terminal approvals from roles without foreign-session access", async () => {
@@ -84,6 +104,21 @@ describe("approval authority boundaries", () => {
       const profile = ensureProfileForEmail("approval-guest@example.test", databaseOptions);
       setUserProfileRole(profile.id, "guest", databaseOptions);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog(databaseOptions)).release };
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.approvals"],
+              },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
       const ownerKey = "agent:main:approval-owned";
       const foreignKey = "agent:main:approval-foreign";
       for (const [sessionKey, creatorId] of [
@@ -108,20 +143,6 @@ describe("approval authority boundaries", () => {
         id: "approval:foreign",
         request: { sessionKey: foreignKey },
       });
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "none" },
-                agents: "*",
-                scopes: ["operator.approvals"],
-              },
-            },
-          },
-        },
-      };
       const context = {
         ...createContext(),
         getRuntimeConfig: () => cfg,
@@ -541,9 +562,11 @@ describe("approval authority boundaries", () => {
     const { databaseOptions, managers, handlers } = createFixture(true);
     const pending = await registerSystemAgent(managers.systemAgent, "system-agent:revoked-owner");
     // Custody holds when the request arrives, then the owner is removed before the decision write.
-    prepareApprovalChannelCustodyMock
-      .mockReturnValueOnce({ resolverId: "irc:default", authorizes: () => true })
-      .mockReturnValue(null);
+    prepareApprovalChannelCustodyMock.mockReturnValue({
+      resolverId: "irc:default",
+      authorizes: () => true,
+      isCurrent: () => false,
+    });
     const response = await invoke({
       handlers,
       method: "approval.resolve",

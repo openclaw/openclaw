@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,6 +24,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("preserves request-order outcomes while isolating expected-identity failures", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (let index = 0; index < 3; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:batch-${index}` },
@@ -92,6 +94,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("projects non-archive patches in request order against prior successes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (let index = 0; index < 2; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:label-${index}` },
@@ -127,6 +130,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("does not reserve a projected label when target authorization fails", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKeys = [0, 1].map((index) => `agent:main:label-race-${index}`);
       for (const [index, sessionKey] of sessionKeys.entries()) {
         await upsertSessionEntryCore(
@@ -193,6 +197,7 @@ describe("sessions.patchMany orchestration", () => {
         session: { mainKey: "work" },
         agents: { entries: { main: {} } },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";
       const siblingKeys = ["agent:main:alias-race-before", "agent:main:alias-race-after"];
@@ -297,6 +302,7 @@ describe("sessions.patchMany orchestration", () => {
         session: { mainKey: "work" },
         agents: { entries: { main: {} } },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";
       await upsertSessionEntryCore(
@@ -376,6 +382,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("isolates archive preparation authorization per target and continues in input order", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const targets = [0, 1, 2].map((index) => ({
         key: `agent:main:archive-auth-${index}`,
         expectedSessionId: `session-archive-auth-${index}`,
@@ -451,6 +458,7 @@ describe("sessions.patchMany orchestration", () => {
 
   it("converts an unexpected target exception into an ordered isolated failure", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       for (let index = 0; index < 3; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:throw-${index}` },

@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -76,6 +77,7 @@ it.each(mutationMethods)(
   async (method) => {
     await withOpenClawTestState({ label: "message-cut-initializing-source" }, async (testState) => {
       await testState.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:initializing-source";
       const initialized = createDeferredCore();
@@ -103,6 +105,9 @@ it.each(mutationMethods)(
             parentId: "alternate-user",
             targetId: "user-2",
           });
+          await waitForSessionTranscriptIndexReconcile(
+            toDatabaseOptions(resolveSqliteScope(source)),
+          );
           initialized.resolve();
           await release.promise;
         },

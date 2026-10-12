@@ -11,7 +11,8 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
-import { readUserProfileAliases } from "../../state/user-profiles.js";
+import { readUserProfileAliases } from "../../state/user-profile-list.js";
+import { readUserProfileAliasesNative } from "../../state/user-profile-list.native.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   publishSessionEntryCacheParticipantUpdate,
@@ -37,8 +38,9 @@ export function recordSessionParticipant(
   scope: SessionAccessScope,
   params: SessionParticipantRecordInput,
 ): RecordSessionParticipantResult | null {
-  // Native callers may open shared state here; keep that read before their agent transaction.
-  return recordSessionParticipantWithAliasRead(scope, params, "before-transaction");
+  return recordSessionParticipantWithAliasRead(scope, params, () =>
+    readUserProfileAliases(params.identity.id, { env: scope.env }),
+  );
 }
 
 /** The sharing worker already holds its agent transaction when resolving profile aliases. */
@@ -47,13 +49,18 @@ export function recordSessionParticipantFromWorker(
   scope: SessionAccessScope,
   params: SessionParticipantRecordInput,
 ): RecordSessionParticipantResult | null {
-  return recordSessionParticipantWithAliasRead(scope, params, "on-miss", database);
+  return recordSessionParticipantWithAliasRead(
+    scope,
+    params,
+    () => readUserProfileAliasesNative(params.identity.id, { env: scope.env }),
+    database,
+  );
 }
 
 function recordSessionParticipantWithAliasRead(
   scope: SessionAccessScope,
   params: SessionParticipantRecordInput,
-  aliasRead: "before-transaction" | "on-miss",
+  readAliases: () => ReadonlySet<string> | undefined,
   transaction?: OpenClawAgentDatabase,
 ): RecordSessionParticipantResult | null {
   const actorId = params.identity.id;
@@ -64,10 +71,6 @@ function recordSessionParticipantWithAliasRead(
   const options = toDatabaseOptions(resolved);
   const promptedAt = params.promptedAt ?? Date.now();
   const namespace = participantIdentityNamespace(params.identity);
-  const preparedAliases =
-    aliasRead === "before-transaction" && params.identity.type === "profile"
-      ? readUserProfileAliases(actorId, { env: scope.env })
-      : undefined;
   const write = (database: OpenClawAgentDatabase): RecordSessionParticipantResult => {
     ensureSessionParticipantsSchema(database.db);
     const kysely = getSessionKysely(database.db);
@@ -85,10 +88,7 @@ function recordSessionParticipantWithAliasRead(
     // Prefer the exact row, otherwise the first retained alias. Preserve raw history;
     // read-time canonicalization combines aliases without a cross-database rewrite.
     if (!existing && params.identity.type === "profile") {
-      const aliases =
-        aliasRead === "on-miss"
-          ? readUserProfileAliases(actorId, { env: scope.env })
-          : preparedAliases;
+      const aliases = readAliases();
       if (aliases && aliases.size > 1) {
         existing = executeSqliteQuerySync(
           database.db,

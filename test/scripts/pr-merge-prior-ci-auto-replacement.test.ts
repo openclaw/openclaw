@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
@@ -8,7 +10,34 @@ const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness(
 const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 const uncertainGatewayResponse = '{\n  "message": "Server Error"\n}\ngh: Server Error (HTTP 502)\n';
 
-function cancelledAutoReplacement(
+const setupSnapshots = useAutoCleanupTempDirTracker(afterAll);
+const restoredRoots = new Set<string>();
+afterEach(() => cleanupTempDirs(restoredRoots));
+
+function reuseCompletedSetup<Args extends unknown[], Setup extends { f: { root: string } }>(
+  create: (...args: Args) => Setup,
+): (...args: Args) => Setup {
+  const completed = new Map<string, { setup: Setup; snapshot: string }>();
+  return (...args) => {
+    const key = JSON.stringify(args);
+    const cached = completed.get(key);
+    if (cached) {
+      // Keep absolute Git worktree links and retained evidence paths intact.
+      rmSync(cached.setup.f.root, { recursive: true, force: true });
+      copyTreeCloseOnExec(cached.snapshot, cached.setup.f.root);
+      restoredRoots.add(cached.setup.f.root);
+      return cached.setup;
+    }
+    const setup = create(...args);
+    const snapshot = setupSnapshots.make("pr-recovery-setup-");
+    // Builders settle every command and recover failed dispatch locks before returning.
+    copyTreeCloseOnExec(setup.f.root, snapshot);
+    completed.set(key, { setup, snapshot });
+    return setup;
+  };
+}
+
+const cancelledAutoReplacement = reuseCompletedSetup(function (
   options: { cancellation?: "confirmed" | "missing" | "uncertain"; replace?: boolean } = {},
 ) {
   const cancellation = options.cancellation ?? "confirmed";
@@ -34,7 +63,7 @@ function cancelledAutoReplacement(
     const cancelled = initial.cancel(originalOid);
     expect(cancelled.status, cancelled.output).toBe(cancellation === "confirmed" ? 0 : 1);
     if (cancellation === "uncertain") {
-      expect(initial.recover()).toBe(true);
+      expect(initial.recover()).toBe(false);
     }
   }
   const retiredOid = initial.git(["rev-parse", outcomeRef]);
@@ -70,9 +99,9 @@ function cancelledAutoReplacement(
     tests: { result: "fail", preExistingCi: { head: replacement, runId: 501, runAttempt: 2 } },
   });
   return { f, originalOid, originalRecord, retiredOid, retiredRecord, replacement, captures };
-}
+});
 
-function staleAdminReplacement() {
+const staleAdminReplacement = reuseCompletedSetup(function () {
   const cancelled = cancelledAutoReplacement({ replace: false });
   const { f, retiredOid } = cancelled;
   f.save({ ...f.state(), restMergeRefusal: uncertainGatewayResponse });
@@ -91,7 +120,7 @@ function staleAdminReplacement() {
   expect(readFileSync(join(f.worktree, ".local", adminCapture), "utf8")).toBe(
     uncertainGatewayResponse,
   );
-  expect(f.recover()).toBe(true);
+  expect(f.recover()).toBe(false);
 
   const replacement = f.replacePreparedHead();
   writeFileSync(
@@ -115,9 +144,9 @@ function staleAdminReplacement() {
     adminCapture,
     replacement,
   };
-}
+});
 
-function recoveredStaleAdminAuto() {
+const recoveredStaleAdminAuto = reuseCompletedSetup(function () {
   const setup = staleAdminReplacement();
   const recovered = setup.f.run(true, setup.f.repo, "squash", setup.adminOid, setup.replacement);
   expect(recovered.status, recovered.output).toBe(0);
@@ -130,7 +159,7 @@ function recoveredStaleAdminAuto() {
     recovery: { outcome: setup.adminOid },
   });
   return { ...setup, recoveredOid, recoveredRecord };
-}
+});
 
 function rewriteRecord(
   f: ReturnType<typeof staleAdminReplacement>["f"],
@@ -265,7 +294,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     const attemptCapture = `merge-output.${recoveredRecord.attempt}.log`;
     const attemptBytes = readFileSync(join(f.worktree, ".local", attemptCapture), "utf8");
     expect(() => f.git(["cat-file", "-e", `${recoveredOid}:${attemptCapture}`])).toThrow();
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
 
     f.save({ ...f.state(), cancellation: "success" });
     const cancelled = f.cancel(recoveredOid);

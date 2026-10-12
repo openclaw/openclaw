@@ -77,9 +77,9 @@ Use `inspectConversationBindingAsync(...)` and its `ConversationBindingInspectio
 result from `openclaw/plugin-sdk/conversation-binding-inspection-runtime` for this
 available/unavailable distinction outside route preparation. This public inspection
 helper is read-only and does not refresh binding liveness. The synchronous
-`inspectConversationBinding`, `resolveConversationRouteOwner`, and
-`prepareConversationRouteOwners` APIs remain deprecated compatibility until the
-next Plugin SDK major; see
+`inspectConversationBinding` and `resolveConversationRouteOwner` APIs remain
+deprecated compatibility while plugins migrate to async preparation. The
+unreleased synchronous `prepareConversationRouteOwners` hook has been removed; see
 [binding migration](/plugins/sdk-migration/how-to-migrate#await-plugin-state-and-conversation-bindings).
 
 ## Account-scoped conversation binding support

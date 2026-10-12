@@ -1,8 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
@@ -14,6 +18,8 @@ import type { WorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 async function seedAttached(environmentId: string) {
   await support.seedBootstrapping(environmentId);
@@ -69,6 +75,7 @@ async function createDispatch(
 describe("targeted worker placement recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
   beforeEach(() => {
+    setRuntimeConfigSnapshot(support.testState.config);
     support.testState.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
       protocolFeatures: [

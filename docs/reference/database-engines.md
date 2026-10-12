@@ -32,8 +32,11 @@ and tables. Put its connection DSN in a secret, then configure a SecretRef:
 
 Provide `OPENCLAW_DATABASE_DSN` in the Gateway's environment through your secret
 manager. It is the secret referenced by this example, not an engine-selection
-environment variable. [File, exec, and secret-store references](/gateway/secrets/secretref-contract)
-are also supported. The host resolves the secret and passes the connection to
+environment variable. [File and exec references](/gateway/secrets/secretref-contract)
+are also supported. Store-backed references are rejected because resolving them
+requires the shared database that this connection must open. Use an env, file or
+exec SecretRef instead; `openclaw doctor` reports invalid connection refs.
+The host resolves the secret and passes the connection to
 database workers; workers do not resolve SecretRefs. Treat the DSN as a credential
 and do not put it in logs or diagnostic captures.
 
@@ -44,7 +47,7 @@ that stores without a PostgreSQL schema remain on SQLite.
 | Field                            | Default      | Meaning                                                                                                                                                          |
 | -------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `database.engine`                | `"sqlite"`   | `"sqlite"` or `"postgres"`. PostgreSQL applies to every registered store that supplies a PostgreSQL schema.                                                      |
-| `database.postgres.connection`   | None         | Required for PostgreSQL. A DSN string or SecretRef; prefer a SecretRef.                                                                                          |
+| `database.postgres.connection`   | None         | Required for PostgreSQL. A DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema. |
 
 Workboard is currently the only PostgreSQL-supported store. Shared state,

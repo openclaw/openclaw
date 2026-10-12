@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
+import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
@@ -157,9 +158,12 @@ export function inspectAgentAuthProfileJsonCellReadOnly(
 }
 
 /** The isolated reader closes its native pool before transferring credential rows. */
-export function readAuthProfileRowsReadOnly(databasePath: string): AuthProfileRowRead {
+export function readAuthProfileRowsReadOnly(
+  databasePath: string,
+  schema?: SqliteAuthSchema,
+): AuthProfileRowRead {
   try {
-    const acquired = acquireAuthProfileReadDatabase(databasePath);
+    const acquired = acquireAuthProfileReadDatabase(databasePath, schema);
     if (acquired.status !== "readable") {
       const inspection: PersistedAuthProfileStoreInspection =
         acquired.status === "missing"
@@ -168,7 +172,7 @@ export function readAuthProfileRowsReadOnly(databasePath: string): AuthProfileRo
       return { store: inspection, state: inspection, cacheable: false };
     }
     try {
-      return readAuthProfileRows(acquired.db, databasePath, "agent");
+      return readAuthProfileRows(acquired.db, databasePath, "agent", schema);
     } catch {
       return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
     }
@@ -182,14 +186,20 @@ export function readAuthProfileRows(
   database: DatabaseSync,
   databasePath: string,
   databaseKind: "agent" | "shared-state",
+  authSchema?: SqliteAuthSchema,
 ): AuthProfileRowRead {
   const canCache = prepareSqliteReadCache(database, databasePath);
   const storeTable = authProfileTableName("store", databaseKind);
   const stateTable = authProfileTableName("state", databaseKind);
   let schemaObjects: Array<Record<string, unknown>>;
   try {
-    const schema = getAdmittedSqliteSchemaFacts(database);
-    if (schema) {
+    const schema = authSchema ? undefined : getAdmittedSqliteSchemaFacts(database);
+    if (authSchema) {
+      schemaObjects = [
+        { name: storeTable, type: authSchema.store === "missing" ? undefined : authSchema.store },
+        { name: stateTable, type: authSchema.state === "missing" ? undefined : authSchema.state },
+      ];
+    } else if (schema) {
       schemaObjects = [storeTable, stateTable].map((name) => ({
         name,
         type: authProfileSchemaObjectType(schema, name),

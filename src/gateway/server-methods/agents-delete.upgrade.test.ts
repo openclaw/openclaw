@@ -10,6 +10,8 @@ import { prepareDoctorDatabasePreflight } from "../../commands/doctor-database-p
 import { beginDoctorMaintenance } from "../../commands/doctor-maintenance.js";
 import { backupDoctorMigrationDatabases } from "../../commands/doctor-migration-backup.js";
 import { createConfigIO, getRuntimeConfig, resetConfigRuntimeState } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
@@ -117,7 +119,8 @@ it.for([true, false])(
         const readScope = createSqliteReadOnlyWorkerScope({ signal, deadlineOwnedByCaller: false });
         let scheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
         let cron: CronService | undefined;
-        const startRecoveryOwner = () => {
+        const startRecoveryOwner = async () => {
+          await captureRuntimeConfigAsyncReader()();
           scheduler = createTestGatewayScheduler();
           cron = new CronService({
             scheduler,
@@ -270,6 +273,7 @@ it.for([true, false])(
               ambientEnvTriggers: "suppress",
               log: { info: vi.fn(), warn: vi.fn() },
             });
+            setRuntimeConfigSnapshot(startup.snapshot.config);
             await runStartupSessionMaintenanceForTest({
               cfg: startup.snapshot.config,
               log: { info: vi.fn(), warn: vi.fn() },
@@ -280,7 +284,7 @@ it.for([true, false])(
             });
             await assertKeeper();
 
-            let context = startRecoveryOwner();
+            let context = await startRecoveryOwner();
             await resumeAgentDeletions(context, signal);
             signal.throwIfAborted();
             expect(context.logGateway.warn).not.toHaveBeenCalled();
@@ -312,7 +316,7 @@ it.for([true, false])(
               ).toEqual([]);
             }
 
-            context = startRecoveryOwner();
+            context = await startRecoveryOwner();
             await resumeAgentDeletions(context, signal);
             expect(context.logGateway.warn).not.toHaveBeenCalled();
             expect(readAgentDeletionJournal("doomed")).toMatchObject({ cleanupCompleted: true });

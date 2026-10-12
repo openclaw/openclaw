@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   generatePostgresSchemas,
   generateWorkboardPostgresSchema,
+  pendingPromotion,
 } from "../../scripts/generate-postgres-schema.mts";
+import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -54,17 +56,45 @@ describe("PostgreSQL schema generation", () => {
   it("accounts for every canonical SQLite object and generates identical bytes twice", async () => {
     const generated = await generatePostgresSchemas(root);
     expect((await generatePostgresSchemas(root)).files).toEqual(generated.files);
-    expect(Object.keys(generated.files).toSorted()).toEqual([
-      "agent.postgres.sql",
-      "portability-report.json",
-      "portability-report.md",
-      "state.postgres.sql",
-    ]);
-    expect(JSON.parse(generated.files["portability-report.json"]!)).toEqual(generated.report);
+    expect(Object.keys(generated.files).toSorted()).toEqual(
+      [
+        "agent.postgres.sql",
+        ...generated.report.fragments.map((fragment) => fragment.file),
+        "manifest.json",
+        "portability-report.md",
+        "state.postgres.sql",
+      ].toSorted(),
+    );
+    expect(
+      generated.report.catalogs
+        .state!.objects.filter((item) => item.sql === null && item.kind === "index")
+        .map((item) => item.name)
+        .toSorted(),
+    ).toEqual(pendingPromotion.map((item) => item.name).toSorted());
+    for (const fragment of generated.report.fragments) {
+      expect(generated.files[fragment.file]).toContain(
+        "SET LOCAL standard_conforming_strings = on;",
+      );
+      for (const table of fragment.tables) {
+        expect(generated.files["state.postgres.sql"]).not.toContain(
+          `CREATE TABLE "openclaw_state"."${table}"`,
+        );
+        expect(generated.files[fragment.file]).toContain(
+          `CREATE TABLE "openclaw_state"."${table}"`,
+        );
+      }
+    }
+    const exported = await generatePostgresSchemas(root, "openclaw", { includeJsonReport: true });
+    expect(JSON.parse(exported.files["portability-report.json"]!)).toEqual(generated.report);
     for (const name of ["state", "agent"]) {
       const db = new DatabaseSync(":memory:");
       try {
         db.exec(fs.readFileSync(path.join(root, `src/state/openclaw-${name}-schema.sql`), "utf8"));
+        if (name === "state") {
+          for (const fragment of listOpenClawStateFeatureSchemas()) {
+            db.exec(fragment.sql());
+          }
+        }
         const expected: string[] = [];
         const add = (kind: string, table: unknown, item: unknown) =>
           expected.push(JSON.stringify([kind, table, item]));
@@ -136,7 +166,7 @@ describe("PostgreSQL schema generation", () => {
             );
           } else {
             expect(
-              generated.files[`${name}.postgres.sql`],
+              Object.values(generated.files).join("\n"),
               `${item.kind} ${item.table}.${item.name}`,
             ).toContain(item.sql);
           }
@@ -198,16 +228,22 @@ describe("PostgreSQL schema generation", () => {
       ["value == 1 OR value <> 2", '"value" = 1'],
       ["value IN (-1, 0, 1)", '"value" IN (-1, 0, 1)'],
       ["value NOT IN (3, 4)", '"value" NOT IN (3, 4)'],
-      ["optional IS NULL OR length(optional) > 0", 'length("optional")'],
+      ["optional IS NULL OR length(optional) > 0", 'char_length("optional")'],
       ["value BETWEEN 0 AND 9", '"value" BETWEEN 0 AND 9'],
       ["NOT (value = 3)", "NOT ("],
       ["json_valid(document)", '"document" IS JSON'],
-      ["length(payload) <= 32", 'length("payload")'],
+      ["length(payload) <= 32", 'octet_length("payload")'],
+      ["length(CAST(name AS BLOB)) <= 32", "octet_length(convert_to("],
+      ["name IS optional", '"name" IS NOT DISTINCT FROM "optional"'],
+      ["name IS NOT optional", '"name" IS DISTINCT FROM "optional"'],
+      ["trim(name) = name", 'btrim("name")'],
+      ["substr(name, 1, 2) = 'aa'", 'substr("name", 1, 2)'],
+      ["coalesce(optional, name) = name", 'coalesce("optional", "name")'],
+      ["typeof(value) = 'integer'", "ELSE 'integer' END"],
       ["name GLOB 'run-?.*'", String.raw`\Arun-.\..*\Z`],
       ["name NOT GLOB '*[^A-Za-z0-9_-]*'", String.raw`!~ '\A.*[^A-Za-z0-9_-].*\Z'`],
     ];
     const refused = [
-      "typeof(value) = 'integer'",
       "json_extract(document, '$.kind') = 'x'",
       "name COLLATE NOCASE = 'x'",
       "value",
@@ -222,10 +258,15 @@ describe("PostgreSQL schema generation", () => {
       ) STRICT;
       CREATE INDEX record_length ON records(length(name)) WHERE value >= 0;
       CREATE UNIQUE INDEX refused_expression ON records(json_extract(document, '$.kind'));
-      CREATE UNIQUE INDEX refused_predicate ON records(name) WHERE typeof(value) = 'integer';
+      CREATE UNIQUE INDEX refused_predicate ON records(name) WHERE abs(value) = 1;
       CREATE INDEX refused_collation ON records(name COLLATE NOCASE);
     `);
-    const { files, report } = await generatePostgresSchemas(directory);
+    await expect(generatePostgresSchemas(directory)).rejects.toThrow(
+      /Unsupported shared-state default records.unsupported_default.*abs/,
+    );
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     const objects = report.catalogs.state!.objects;
     const checks = objects.filter((item) => item.kind === "check");
     expect(checks).toHaveLength(accepted.length + refused.length);
@@ -237,7 +278,7 @@ describe("PostgreSQL schema generation", () => {
       expect(item.sql, item.source).toBeNull();
       expect(item.reason).toBeTruthy();
     }
-    expect(files["state.postgres.sql"]).toContain('(length("name")) ASC NULLS FIRST');
+    expect(files["state.postgres.sql"]).toContain('(char_length("name")) ASC NULLS FIRST');
     for (const name of [
       "unsupported_default",
       "refused_expression",
@@ -260,7 +301,9 @@ describe("PostgreSQL schema generation", () => {
       CREATE TABLE dependent (id INTEGER PRIMARY KEY, target TEXT REFERENCES mixed(id)) STRICT;
       CREATE VIEW projection AS SELECT id FROM mixed;
     `);
-    const { files, report } = await generatePostgresSchemas(directory);
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     const objects = report.catalogs.state!.objects;
     expect(objects.find((item) => item.kind === "table" && item.name === "mixed")).toMatchObject({
       sql: null,
@@ -318,7 +361,9 @@ describe("PostgreSQL schema generation", () => {
         expect(() => db.exec("INSERT INTO child VALUES (2)")).toThrow(/FOREIGN KEY/);
       },
     );
-    const { files, report } = await generatePostgresSchemas(directory);
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     const catalog = report.catalogs.state!;
     const foreignKey = catalog.objects.find((item) => item.kind === "foreignKey");
     expect(foreignKey).toMatchObject({ sql: null });
@@ -341,7 +386,7 @@ describe("PostgreSQL schema generation", () => {
           expect(db.prepare("SELECT COUNT(*) AS count FROM records").get()?.count).toBe(1);
         },
       );
-      const { report } = await generatePostgresSchemas(directory);
+      const { report } = await generatePostgresSchemas(directory, "openclaw", { reportOnly: true });
       const objects = report.catalogs.state!.objects;
       expect(
         objects.some(
@@ -366,7 +411,9 @@ describe("PostgreSQL schema generation", () => {
         db.prepare("SELECT COUNT(*) AS count FROM nullable_key WHERE id IS NULL").get()?.count,
       ).toBe(2);
     });
-    const { files, report } = await generatePostgresSchemas(directory);
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     expect(report.catalogs.state!.objects.find((item) => item.kind === "table")).toMatchObject({
       sql: null,
       reason: expect.stringMatching(/nullable.*primary|primary.*nullable/i),
@@ -387,7 +434,9 @@ describe("PostgreSQL schema generation", () => {
         });
       },
     );
-    const { files, report } = await generatePostgresSchemas(directory);
+    const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
+      reportOnly: true,
+    });
     expect(report.catalogs.state!.objects.find((item) => item.kind === "default")).toMatchObject({
       sql: null,
       reason: expect.stringMatching(/type|bigint|boolean/i),

@@ -3,7 +3,6 @@
 # Existing suppressions carry a TODO at the file site.
 extensions/acpx/src/runtime.ts
 extensions/active-memory/index.test.ts
-extensions/amazon-bedrock/index.test.ts
 extensions/amazon-bedrock/stream.runtime.ts
 extensions/anthropic/session-catalog.test.ts
 extensions/browser/src/browser-tool.test.ts
@@ -351,7 +350,6 @@ src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/daemon/launchd.test.ts
 src/daemon/schtasks.startup-fallback.test.ts
@@ -542,6 +540,5 @@ ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
-ui/src/pages/config/view.browser.test.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/test-helpers/control-ui-e2e.ts

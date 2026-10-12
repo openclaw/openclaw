@@ -456,9 +456,10 @@ function createMinimalRun(params?: {
     },
   } as unknown as FollowupRun;
   const activeOperation = replyRunRegistry.get(sessionKey);
-  if (activeOperation && params?.isActive && params.bindActiveAuthority !== false) {
-    activeOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
-  }
+  const activeAuthority =
+    activeOperation && params?.isActive && params.bindActiveAuthority !== false
+      ? prepareReplyToolAuthority(followupRun)
+      : undefined;
 
   return {
     followupRun,
@@ -466,6 +467,9 @@ function createMinimalRun(params?: {
     typing,
     opts,
     run: async () => {
+      if (activeOperation && activeAuthority) {
+        await activeOperation.bindToolAuthoritySnapshotAsync(activeAuthority);
+      }
       const runReplyAgent = await getRunReplyAgent();
       const operation = replyRunRegistry.get(sessionKey);
       if (operation && params?.attachSteerBackend !== false) {
@@ -802,8 +806,8 @@ describe("runReplyAgent active steering", () => {
       sessionId: "session",
       resetTriggered: false,
     });
-    active.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
-    active.bindToolAuthorityRoute(activeRoute);
+    await active.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
+    await active.bindToolAuthorityRouteAsync(activeRoute);
     active.setPhase("running");
 
     await expect(run()).resolves.toBeUndefined();

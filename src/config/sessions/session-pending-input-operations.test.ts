@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -34,6 +34,7 @@ import {
   ensureSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
@@ -43,6 +44,8 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
+
+afterEach(() => resetConfigRuntimeState());
 
 const scope = {
   agentId: "main",
@@ -57,6 +60,7 @@ const message = (runId: string) => ({
 });
 
 it("accepts supplied legacy completion callbacks without falling back from async completion", async () => {
+  setRuntimeConfigSnapshot({});
   const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
   const legacy = vi.fn(() => outcome);
   const recorder = {
@@ -103,6 +107,7 @@ it("accepts supplied legacy completion callbacks without falling back from async
 });
 
 function createFixture() {
+  setRuntimeConfigSnapshot({});
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
   writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
   return {

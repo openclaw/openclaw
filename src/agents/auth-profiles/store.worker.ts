@@ -12,6 +12,7 @@ import {
 } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import {
+  encodeUserModelAuthProfile,
   readUserModelAuthProfile,
   readUserModelAuthProfileInDatabase,
   updateUserModelAuthProfile,
@@ -83,7 +84,10 @@ export const authProfileOperations = {
           requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
         } else {
           committed = readUserModelAuthProfileInDatabase(database.db, input.profileId);
-          if (!isDeepStrictEqual(committed, input.next)) {
+          if (
+            !committed ||
+            encodeUserModelAuthProfile(committed) !== encodeUserModelAuthProfile(input.next)
+          ) {
             throw new Error("Personal credential codec changed the prepared update");
           }
           const digest = createHash("sha256").update(JSON.stringify(input.next)).digest("hex");

@@ -138,6 +138,7 @@ describe("live chat directive projection", () => {
     state.updateBuffer("reply", { itemId: "tail", text: "Tail." });
     expect(state.resolveBuffer("reply").text).toBe("Tail.");
     expect(state.resolveBuffer("reply", { final: true }).text).toBe("Saved.\n\nTail.");
+    expect(state.resolveBuffer("reply", { final: true }).displayText).toBe("Tail.");
   });
 
   it.each(["Saved.", "Saved.\n\n"])(

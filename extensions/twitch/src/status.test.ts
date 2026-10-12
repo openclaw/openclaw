@@ -19,23 +19,6 @@ function expectSingleIssue(
   expect(issues).toEqual([expected]);
 }
 
-function expectIssues(
-  issues: ReturnType<typeof collectTwitchStatusIssues>,
-  expected: ReturnType<typeof collectTwitchStatusIssues>,
-): void {
-  expect(issues).toEqual(expected);
-}
-
-function neverConnectedIssue(): ReturnType<typeof collectTwitchStatusIssues>[number] {
-  return {
-    channel: "twitch",
-    accountId: "default",
-    kind: "runtime",
-    message: "Account has never connected successfully",
-    fix: "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
-  };
-}
-
 describe("status", () => {
   describe("collectTwitchStatusIssues", () => {
     it("should detect disabled accounts", () => {
@@ -59,7 +42,7 @@ describe("status", () => {
 
       const issues = collectTwitchStatusIssues(snapshots);
 
-      expectIssues(issues, [
+      expect(issues).toEqual([
         {
           channel: "twitch",
           accountId: "default",
@@ -67,8 +50,14 @@ describe("status", () => {
           message: "Last error: Connection timeout",
           fix: "Check your token validity and network connection. Ensure the bot has the required OAuth scopes.",
         },
-        neverConnectedIssue(),
-      ]);
+        {
+          channel: "twitch",
+          accountId: "default",
+          kind: "runtime",
+          message: "Account has never connected successfully",
+          fix: "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
+        },
+      ] satisfies ReturnType<typeof collectTwitchStatusIssues>);
     });
 
     it("should detect long-running connections", () => {

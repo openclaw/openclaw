@@ -5,9 +5,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync, gunzipSync } from "node:zlib";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configIo from "../config/io.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../infra/device-pairing-tokens.js";
@@ -76,7 +80,10 @@ const REAL_PNG = Buffer.from(
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tokenAuth = { mode: "token", token: "test-token", allowTailscale: false } as const;
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   resolvePlaybackTranscodeMock.mockReset();
@@ -168,6 +175,9 @@ describe("handleControlUiHttpRequest", () => {
     url: string,
     { rootKind = "resolved", ...params }: Omit<ControlRequestParams, "url" | "rootPath"> = {},
   ) {
+    if (params.config) {
+      setRuntimeConfigSnapshot(params.config);
+    }
     return runRequest(
       handleControlUiHttpRequest,
       { ...params, url },
@@ -187,6 +197,7 @@ describe("handleControlUiHttpRequest", () => {
   }
 
   function runAvatarRequest(params: RequestParams & AuthParams & { config: OpenClawConfig }) {
+    setRuntimeConfigSnapshot(params.config);
     return runRequest(handleControlUiAvatarRequest, params, params);
   }
 

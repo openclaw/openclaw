@@ -6,6 +6,7 @@ import {
   admitReplyTurn,
   runWithReplyOperationLifecycleAdmission,
 } from "../../auto-reply/reply/reply-turn-admission.js";
+import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -108,6 +109,7 @@ it("keeps healthy stores recoverable when an earlier startup mark fails", async 
       talk: { agentId: "main" },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["main", "worker"]) {
       const sessionKey = `agent:${agentId}:main`;
       const sessionId = `${agentId}-session`;
@@ -179,6 +181,7 @@ it.each(["before", "after"] as const)(
   "preserves a registry-owned writer registered %s orphan planning",
   async (registration) => {
     await withOpenClawTestState({ label: "recovery-live-writer" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:main";
       const sessionId = "owned-session";
       const runId = "owned-run";
@@ -237,6 +240,7 @@ it.each(["before", "after"] as const)(
 
 it("recovers an orphan after its owner releases retained run metadata", async () => {
   await withOpenClawTestState({ label: "recovery-retained-run" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const sessionKey = "agent:main:main";
     const sessionId = "retained-session";
     const runId = "retained-run";
@@ -286,6 +290,7 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
       },
       talk: { agentId: "main" },
     };
+    setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["main", "cleaner"]) {
       await replaceSessionEntry(
         { agentId, sessionKey: `agent:${agentId}:main` },

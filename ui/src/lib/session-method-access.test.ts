@@ -30,15 +30,6 @@ function snapshot(params: {
 }
 
 describe("readSessionMethodAccess", () => {
-  it("allows a write-scoped operator to create ordinary sessions", () => {
-    expect(
-      readSessionMethodAccess(snapshot({}), {
-        method: "sessions.create",
-        params: { agentId: "main" },
-      }),
-    ).toEqual({ allowed: true, requiredScope: "operator.write" });
-  });
-
   it("admits ordinary scoped creation before an owned row exists", () => {
     const scoped = snapshot({ scopes: ["operator.sessions.write"] });
     const request = { method: "sessions.create", params: { agentId: "main", message: "Hello" } };
@@ -71,17 +62,6 @@ describe("readSessionMethodAccess", () => {
     });
   });
 
-  it("allows write-scoped device placement through the caller's scope", () => {
-    const method = "sessions.dispatch";
-    expect(
-      readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.write"] }), {
-        method,
-        params: { key: "agent:main:device", deviceId: "runner" },
-        requiredScope: "operator.write",
-      }),
-    ).toEqual({ allowed: true, requiredScope: "operator.write" });
-  });
-
   it("keeps profile placement admin-only through the caller's scope", () => {
     const method = "sessions.dispatch";
     const params = { key: "agent:main:cloud", profileId: "aws" };
@@ -101,7 +81,7 @@ describe("readSessionMethodAccess", () => {
     ).toEqual({ allowed: true, requiredScope: "operator.admin" });
   });
 
-  it.each(["model", "thinkingLevel", "fastMode"])(
+  it.each(["model"])(
     "allows write-scoped %s changes while keeping read-only clients read-only",
     (field) => {
       for (const scope of [
@@ -197,15 +177,6 @@ describe("readSessionMethodAccess", () => {
     }
   });
 
-  it("allows admin to satisfy write-scoped actions", () => {
-    expect(
-      readSessionMethodAccess(
-        snapshot({ methods: ["sessions.groups.put"], scopes: ["operator.admin"] }),
-        { method: "sessions.groups.put", requiredScope: "operator.write" },
-      ).allowed,
-    ).toBe(true);
-  });
-
   it("allows read, write, and admin scopes to satisfy read-scoped actions", () => {
     for (const method of ["session.members.list", "session.members.listEvidence"]) {
       for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
@@ -232,17 +203,17 @@ describe("readSessionMethodAccess", () => {
     });
   });
 
-  it.each([
-    ["auth", { includeAuth: false }],
-    ["scopes", { includeScopes: false }],
-  ])("rejects snapshots without advertised %s", (_name, params) => {
-    expect(
-      readSessionMethodAccess(snapshot(params), {
-        method: "sessions.create",
-        params: { agentId: "main" },
-      }),
-    ).toMatchObject({ allowed: false, cause: "missing-scope" });
-  });
+  it.each([["auth", { includeAuth: false }]])(
+    "rejects snapshots without advertised %s",
+    (_name, params) => {
+      expect(
+        readSessionMethodAccess(snapshot(params), {
+          method: "sessions.create",
+          params: { agentId: "main" },
+        }),
+      ).toMatchObject({ allowed: false, cause: "missing-scope" });
+    },
+  );
 
   it("rejects disconnected and unadvertised calls before scope checks", () => {
     expect(

@@ -11,6 +11,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineInRegistry } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
@@ -18,6 +21,11 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { withEnv } from "../../test-utils/env.js";
+import {
+  clearPreparedEmbeddedAgentSettings,
+  createPreparedEmbeddedAgentSettingsManager,
+} from "../agent-project-settings.js";
+import { shouldPreemptivelyCompactBeforePrompt } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import { cliCompactionBackendEntrypoints } from "./cli-compaction-runtime.test-support.js";
@@ -269,6 +277,70 @@ describe("runCliTurnCompactionLifecycle", () => {
       "CLI transcript compaction failed for test-provider/test-model: contradictory result",
     );
   });
+
+  it.each(["admitted", "current"] as const)(
+    "refreshes the CLI compaction budget with the %s plugin generation",
+    async (source) => {
+      const createSettings = createPreparedEmbeddedAgentSettingsManager;
+      const checkBudget = shouldPreemptivelyCompactBeforePrompt;
+      const pluginRoot = path.join(tmpDir, "settings-bundle");
+      await fs.mkdir(pluginRoot);
+      const settingsFile = path.join(pluginRoot, "settings.json");
+      const createSnapshot = (cache: ReturnType<typeof createPluginCache>) =>
+        withPluginCache(cache, () =>
+          createPluginMetadataSnapshotFixture({
+            plugins: [
+              {
+                id: "settings-bundle",
+                rootDir: pluginRoot,
+                format: "bundle",
+                settingsFiles: ["settings.json"],
+              },
+            ],
+          }),
+        );
+      await using initialCache = createPluginCache();
+      await using replacementCache = createPluginCache();
+      await fs.writeFile(settingsFile, JSON.stringify({ compaction: { reserveTokens: 20_000 } }));
+      const scenario = await prepareCompactionScenario({
+        tmpDir,
+        suffix: `settings-${source}`,
+        cfg: { plugins: { entries: { "settings-bundle": { enabled: true } } } },
+        sessionEntry: { contextTokens: 128_000, totalTokens: 100_000 },
+        deps: {
+          createPreparedEmbeddedAgentSettingsManager: createSettings,
+          shouldPreemptivelyCompactBeforePrompt: checkBudget,
+          ensureContextEnginesInitialized: vi.fn(),
+        },
+      });
+      const run = (snapshot: ReturnType<typeof createSnapshot>) =>
+        source === "admitted"
+          ? scenario.run({
+              pluginGeneration: {
+                remoteCatalog: null,
+                configuredCatalogEntries: [],
+                inlineProviderModels: [],
+                pluginMetadataSnapshot: snapshot,
+              },
+            })
+          : withPluginMetadataSnapshotScope(snapshot, () => scenario.run(), {
+              trustConfigIdentity: true,
+            });
+      try {
+        const initial = createSnapshot(initialCache);
+        await run(initial);
+        expect(scenario.compactCalls).toHaveLength(0);
+        await fs.writeFile(settingsFile, JSON.stringify({ compaction: { reserveTokens: 32_000 } }));
+        await run(initial);
+        expect(scenario.compactCalls).toHaveLength(0);
+        await run(createSnapshot(replacementCache));
+        expect(scenario.compactCalls).toHaveLength(1);
+        expect(scenario.compactCalls[0]?.currentTokenCount).toBe(100_000);
+      } finally {
+        clearPreparedEmbeddedAgentSettings([scenario.sessionId]);
+      }
+    },
+  );
 
   it("compacts over-budget CLI transcripts and clears external CLI resume state", async () => {
     const taskCwd = path.join(tmpDir, "task-repo");

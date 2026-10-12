@@ -72,14 +72,71 @@ multiple active Gateways would require a separate ownership and coordination
 design. A shared database alone does not make process-local writer queues,
 session lifecycles, or host-owned leases safe across Gateway instances.
 
-`pnpm db:postgres:gen --out /tmp/openclaw-postgres` derives PostgreSQL DDL and a
-portability report from the authoritative canonical SQLite `.sql` files. On an
-isolated Testbox with a disposable `postgres:17` container named `pgprep`, apply
-each generated `*.postgres.sql` file with
-`docker exec -i pgprep psql -U postgres -v ON_ERROR_STOP=1 < <file>`, then rerun
-the generator with `--verify-psql "docker exec -i pgprep psql -U postgres"` to
-compare catalogs. Review every reported omission; this proves DDL readiness,
-not runtime backend support or a choice of per-agent PostgreSQL topology.
+### Shared-state PostgreSQL schema generation
+
+`pnpm db:postgres:gen` regenerates the committed eager schema, named lazy
+fragments, dependency manifest, and portability reports in
+`src/state/postgres-schema.generated/`. `pnpm db:postgres:check` verifies their
+freshness and the generator's unit contracts. PostgreSQL **16 or newer** is
+required for `IS JSON`; the conformance job currently uses PostgreSQL 17.
+The detailed JSON diagnostic report stays in memory by default. An explicit
+`pnpm db:postgres:gen --out <diagnostic-directory>` exports it alongside the
+generated files; `portability-report.json` is not a tracked artifact.
+
+The canonical SQLite schema and feature-local DDL remain authoritative. The
+feature declarations in `src/state/openclaw-state-feature-schema.ts` supply both
+the SQLite ensures and the generator. Their DDL providers preserve existing
+SQLite statement bytes and first-use timing, including the profile owner's two
+installation phases. The manifest lists each fragment's tables, indexes, and
+fragment dependencies. `activation` distinguishes first-use fragments from
+version-additive fragments: a fresh bootstrap or version migration installs the
+latter, while an existing same-version store leaves them to its feature owner.
+A PostgreSQL owner installs dependencies first, then the
+fragment's tables and indexes, then its foreign keys, in the same transaction.
+In particular, `user_background_images` depends on `user_profiles`; its cascading
+foreign key is retained and installed only after both tables exist. Generating a
+fragment does not activate PostgreSQL shared-state runtime support.
+
+Both engines use the same shared-state schema version (currently 21). Every
+future version change must supply both engines' forward migration and catalog
+equivalence proof together. JSON stays canonical: a query/index projection is
+derived once in TypeScript and committed in the same statement as its JSON.
+See the [accepted design](https://github.com/openclaw/openclaw/issues/169254).
+
+Generation refuses unsupported shared-state tables, columns, defaults, CHECKs,
+indexes, and foreign keys with their exact source and reason. Text uses C
+collation. Text length maps to `char_length`, byte length to `octet_length`, and
+null-safe SQLite `IS` comparisons to `IS [NOT] DISTINCT FROM`. Supported GLOB
+patterns use case-sensitive regular expressions with C collation; an unsupported
+pattern or LIKE expression fails generation rather than changing case rules.
+SQLite rowid aliases become identity columns: PostgreSQL adds a primary-key
+index that SQLite does not report, and sequence allocation is not a rowid
+compatibility promise. Data portability, including PostgreSQL's rejection of
+NUL text, belongs to the separate port preflight.
+
+The SQLite-only allow-list contains only these pure `instr(column, char(0)) = 0`
+subpredicates: `node_worker_launches.{launch_id,environment_id,session_id,run_id,
+result_json,error_text}` and `node_worker_turns.{turn_id,run_id,result_json,error_text}`.
+**PostgreSQL text cannot hold NUL; the guard is enforced by the type.** All
+surrounding length, JSON, and newline constraints remain CHECKs, preserving NULL
+semantics. These are ten subpredicates; six CHECKs reported `instr` as their first
+unsupported construct, while four more guards were hidden behind byte casts.
+
+The two `acp_sessions` indexes `idx_acp_sessions_resume_agent` and
+`idx_acp_sessions_resume_acpx` are separately recorded as `pendingPromotion`,
+never as SQLite-only exceptions. The v22 promotion follow-up (PR4b, alongside
+receipt cursors) replaces JSON-extract indexing with promoted columns derived
+using `readJsonObjectMembers` and first-duplicate-wins semantics. No other index
+is admitted to this pending list.
+
+The CI **PostgreSQL conformance** job bootstraps the generated eager schema and
+all fragments into an isolated schema on a real server, then compares every
+table's columns, types, nullability, defaults, primary/unique keys, CHECK count,
+index count, and foreign keys (including actions and deferrability) against the
+SQLite catalog. It reports the two pending indexes explicitly. Locally run
+`pnpm db:postgres:gen --check-connection '<disposable PostgreSQL DSN>'`; the check
+removes its isolated schema afterward. This proves DDL equivalence, not runtime
+SQL/concurrency conformance or a choice of per-agent PostgreSQL topology.
 
 `pnpm check:database-dialect-ratchet` keeps mechanical, design, and engine-maintenance counts shrink-only against the Git base by scanning only differing production `.ts`/`.mts`/`.sql` files under `src/`, `extensions/`, and `packages/` (excluding tests and fixtures); `--staged` reads the index, `--full-tree` reports totals, and the `sqliteStringSet` owner subset is reported within mechanical debt.
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
@@ -2588,6 +2645,11 @@ yielding between batches. Cache writes wait outside the agent writer FIFO until
 foreground work drains, then commit one session at a time. Report reads use their
 separate worker lane and return partial or stale totals during backfill. Restart
 rediscovers unfinished sessions from their committed checkpoints.
+Expected refresh cancellation during shutdown logs at debug level; refresh or cleanup failures still warn.
+After in-process DDL, worker admission publishes its validated schema even if a
+retained reader adopted another wrapper of the previous shared receipt while it
+was pending. The received schema and physical database proof must remain valid;
+JavaScript wrapper identity does not establish a newer schema revision.
 Append-only refreshes resume after the checkpoint sequence and decode each new
 page once. The transcript owner's existing rewrite watermark invalidates the
 checkpoint after a rewrite; branch changes rebuild from the visible ancestry.

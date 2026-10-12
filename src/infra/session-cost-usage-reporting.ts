@@ -1,24 +1,42 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { isToolCallContentType } from "../chat/tool-content.js";
-import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import {
+  isPrimarySessionTranscriptFileName,
+  isSessionArchiveArtifactName,
+  parseSessionArchiveTimestamp,
+} from "../config/sessions/artifacts.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  resolveSessionFilePathCore,
+  resolveSessionTranscriptsDirForAgent,
+} from "../config/sessions/paths.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
+import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sleep } from "../utils/sleep.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
-  readTranscriptRecords,
-  readTranscriptRecordsBestEffort,
-  resolveUsageSessionSource,
-} from "./session-cost-usage-collection.js";
-import {
   withUsageCostIncognitoScope,
   captureUsageCostIncognitoBinding,
+  readIncognitoUsageTranscript,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
 import {
@@ -408,4 +426,234 @@ export async function loadSessionLogs(
     logs.sort((a, b) => a.timestamp - b.timestamp);
     return logs.length > limit ? logs.slice(-limit) : logs;
   });
+}
+
+async function* readTranscriptRecords(
+  filePath: string,
+  incognito?: UsageCostIncognitoBinding,
+): AsyncGenerator<Record<string, unknown>> {
+  const marker = parseSqliteSessionFileMarker(filePath);
+  if (incognito && !marker) {
+    throw new Error("Usage actor transcript requires its captured SQLite marker");
+  }
+  if (marker) {
+    const memory = getSessionActorStorageBinding(marker);
+    let events: unknown[];
+    if (memory) {
+      const rows = await memory.actor.storage!.read(
+        {
+          type: "session.usage.snapshot",
+          input: { sessionIds: [marker.sessionId], includeEvents: true },
+        },
+        memory.authority,
+      );
+      events = (rows[0]?.events ?? []).map(({ eventJson }): unknown => JSON.parse(eventJson));
+    } else if (incognito) {
+      events = await readIncognitoUsageTranscript(incognito, marker);
+    } else {
+      events = await loadSessionTranscriptEvents(marker);
+    }
+    for (const event of selectVisibleTranscriptEvents(events)) {
+      incognito?.actor.assertCurrent();
+      incognito?.authority.assertCurrent();
+      if (isRecord(event)) {
+        yield event;
+      }
+    }
+    incognito?.actor.assertCurrent();
+    incognito?.authority.assertCurrent();
+    return;
+  }
+  // Durable byte-offset scans own their checkpoint reader. Diagnostic history
+  // shares the canonical transcript stream and materializes archive bytes once.
+  const transcriptPath = materializeSessionArchiveForRead(filePath);
+  for await (const line of streamSessionTranscriptLines(transcriptPath)) {
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (isRecord(parsed)) {
+        yield parsed;
+      }
+    } catch {
+      // Historical transcripts can contain malformed records.
+    }
+  }
+}
+
+async function* readTranscriptRecordsBestEffort(
+  filePath: string,
+  incognito?: UsageCostIncognitoBinding,
+): AsyncGenerator<Record<string, unknown>> {
+  try {
+    yield* readTranscriptRecords(filePath, incognito);
+  } catch (error) {
+    if (parseSqliteSessionFileMarker(filePath)) {
+      throw error;
+    }
+    // Diagnostic readers return the records available before a stream failure.
+    // Durable cache scans use the strict reader so partial data is never marked fresh.
+  }
+}
+
+export async function resolveUsageSessionSource(input: {
+  sessionId?: string;
+  sessionFile?: string;
+  agentId: string;
+  incognito?: UsageCostIncognitoBinding;
+  sessionTarget?: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
+}): Promise<{ sessionFile: string; entry?: SessionEntry } | undefined> {
+  const params = { ...input, incognito: captureUsageCostIncognitoBinding(input) };
+  const signal = getAsyncWorkSignal();
+  const assertCurrent = () => signal?.throwIfAborted();
+  assertCurrent();
+  const sessionId = normalizeOptionalString(params.sessionId);
+  const target = params.sessionTarget;
+  if (target) {
+    const agentId = normalizeOptionalString(target.agentId);
+    const targetSessionId = normalizeOptionalString(target.sessionId);
+    const sessionKey = normalizeOptionalString(target.sessionKey);
+    const storePath = normalizeOptionalString(target.storePath);
+    if (!agentId || !targetSessionId || !sessionKey || !storePath) {
+      return undefined;
+    }
+    const targetKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+    if (
+      (sessionId !== undefined && targetSessionId !== sessionId) ||
+      agentId !== params.agentId ||
+      (targetKeyAgentId && targetKeyAgentId !== agentId)
+    ) {
+      return undefined;
+    }
+    const memory = getSessionActorStorageBinding({ agentId, sessionKey, storePath });
+    if (memory) {
+      const entry = await memory.actor.storage!.read(
+        { type: "session.entry.read", input: {} },
+        memory.authority,
+      );
+      if (entry && entry.sessionId !== targetSessionId) {
+        return undefined;
+      }
+      return {
+        entry,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId,
+          sessionId: targetSessionId,
+          storePath: memory.path,
+        }),
+      };
+    }
+    if (params.incognito) {
+      const { actor, authority } = params.incognito;
+      const selected = params.incognito.target;
+      if (
+        actor.agentId !== agentId ||
+        actor.path !== path.resolve(storePath) ||
+        (selected && (selected.sessionKey !== sessionKey || selected.sessionId !== targetSessionId))
+      ) {
+        throw new Error("Usage session source belongs to another actor");
+      }
+      params.incognito.retainSource?.(sessionKey);
+      const read = await actor.sessions.read(authority, { sessionKey }, signal);
+      if (read.entry && read.entry.sessionId !== targetSessionId) {
+        return undefined;
+      }
+      read.claim.assertCurrent();
+      return {
+        entry: read.entry,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId,
+          sessionId: targetSessionId,
+          storePath: actor.path,
+        }),
+      };
+    }
+    return withSessionEntryReadOnlyInWorker(
+      { agentId, sessionKey, storePath, projection: "list" },
+      assertCurrent,
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        // A retained transcript can outlive its metadata row, but never its successor.
+        if (read.value && read.value.sessionId !== targetSessionId) {
+          return undefined;
+        }
+        const physicalPath =
+          owner.scope?.storePath ??
+          (await prepareSqliteTargetFromSessionStorePath(storePath, { agentId }, signal)).path;
+        owner.assertCurrent();
+        return {
+          entry: read.value,
+          sessionFile: formatSqliteSessionFileMarker({
+            agentId,
+            sessionId: targetSessionId,
+            storePath: physicalPath,
+          }),
+        };
+      },
+    );
+  }
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (sqliteMarker) {
+    if (
+      sqliteMarker.agentId !== params.agentId ||
+      (sessionId && sqliteMarker.sessionId !== sessionId)
+    ) {
+      return undefined;
+    }
+    return { sessionFile: formatSqliteSessionFileMarker(sqliteMarker) };
+  }
+
+  const candidate =
+    params.sessionFile ??
+    (sessionId
+      ? resolveSessionFilePathCore(sessionId, undefined, {
+          agentId: params.agentId,
+        })
+      : undefined);
+
+  if (candidate && fs.existsSync(candidate)) {
+    return { sessionFile: candidate };
+  }
+  if (!sessionId) {
+    return candidate ? { sessionFile: candidate } : undefined;
+  }
+
+  try {
+    const sessionsDir = candidate
+      ? path.dirname(candidate)
+      : resolveSessionTranscriptsDirForAgent(params.agentId);
+    const baseFileName = `${sessionId}.jsonl`;
+    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter((entry) => {
+      return (
+        entry.isFile() &&
+        (entry.name === baseFileName ||
+          entry.name.startsWith(`${baseFileName}.reset.`) ||
+          entry.name.startsWith(`${baseFileName}.deleted.`))
+      );
+    });
+
+    const primary = entries.find((entry) => entry.name === baseFileName);
+    if (primary) {
+      return { sessionFile: path.join(sessionsDir, primary.name) };
+    }
+
+    const archiveTimestamp = (name: string) =>
+      parseSessionArchiveTimestamp(name, "deleted") ??
+      parseSessionArchiveTimestamp(name, "reset") ??
+      0;
+    const latestArchive = entries
+      .filter((entry) => isSessionArchiveArtifactName(entry.name))
+      .map((entry) => entry.name)
+      .toSorted((a, b) => archiveTimestamp(b) - archiveTimestamp(a) || b.localeCompare(a))[0];
+
+    const sessionFile = latestArchive ? path.join(sessionsDir, latestArchive) : candidate;
+    return sessionFile ? { sessionFile } : undefined;
+  } catch {
+    return candidate ? { sessionFile: candidate } : undefined;
+  }
 }

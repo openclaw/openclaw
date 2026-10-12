@@ -689,6 +689,25 @@ describe("buildAgentSystemPrompt", () => {
     expect(boundary).toBeGreaterThan(prompt.indexOf("### Deferred Tool Schemas"));
     expect(prompt.slice(0, boundary)).toContain(toolSchemaDirectoryPrompt);
   });
+
+  it("keeps changing Code Mode catalogs after the stable prompt-cache prefix", () => {
+    const prompts = ["calendar.create", "calendar.create\ncalendar.list"].map(
+      (toolSchemaDirectoryPrompt) =>
+        renderPrompt({
+          toolNames: ["exec", "wait"],
+          codeModeActive: true,
+          toolSchemaDirectoryPrompt,
+        }),
+    );
+    const [first, next] = prompts.map((prompt) => {
+      const boundary = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+      return { prefix: prompt.slice(0, boundary), suffix: prompt.slice(boundary) };
+    });
+    expect(next!.prefix).toBe(first!.prefix);
+    expect(first!.prefix).not.toContain("calendar.create");
+    expect(first!.suffix).toContain("calendar.create");
+    expect(next!.suffix).toContain("calendar.list");
+  });
 });
 
 describe("watched sessions prompt surfaces", () => {

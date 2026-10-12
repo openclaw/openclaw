@@ -168,6 +168,7 @@ export async function prepareWorkerTurnPrompt(params: {
       hadSessionFile: transcriptState.hasBootstrapTranscriptState,
     });
     const settings = createPreparedEmbeddedAgentSettingsManager({
+      sessionId: turn.sessionId,
       cwd: turn.cwd ?? turn.workspaceDir,
       agentDir: preparedModelRuntime.agentDir,
       cfg: turn.config,

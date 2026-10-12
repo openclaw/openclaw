@@ -351,7 +351,11 @@ export async function createAgentAccountingPersistenceFixture({
 }
 
 export function observeCompletionCommands(
-  options: { hideCommittedReceipt?: boolean; beforeCommit?: () => void } = {},
+  options: {
+    hideCommittedReceipt?: boolean;
+    beforeCommit?: () => void;
+    afterRead?: () => void | Promise<void>;
+  } = {},
 ) {
   const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
   const commands: string[] = [];
@@ -371,7 +375,13 @@ export function observeCompletionCommands(
               run({
                 execute(command, commandOptions) {
                   commands.push(command.type);
-                  return worker.execute(command, commandOptions);
+                  const result = worker.execute(command, commandOptions);
+                  return command.type === "session.actor.read" && options.afterRead
+                    ? result.then(async (value) => {
+                        await options.afterRead?.();
+                        return value;
+                      })
+                    : result;
                 },
               }),
             runOptions,

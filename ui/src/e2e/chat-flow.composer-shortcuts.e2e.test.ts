@@ -425,7 +425,9 @@ suite.define(() => {
           followUpMode === "steer"
             ? "Steer ⏎ · Queue ⌘/Ctrl+Enter"
             : "Queue ⏎ · Steer ⌘/Ctrl+Enter";
-        const tooltipContent = primary.locator("..").locator("wa-tooltip .tooltip-content");
+        const tooltipContent = primary
+          .locator("..")
+          .locator(".tooltip-surface[popover] .tooltip-content");
         await expect
           .poll(async () => (await tooltipContent.textContent())?.replace(/\s+/gu, ""))
           .toBe(tooltip.replace(/\s+/gu, ""));

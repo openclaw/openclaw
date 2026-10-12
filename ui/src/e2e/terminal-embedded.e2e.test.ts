@@ -330,18 +330,17 @@ suite.define(() => {
         .evaluate((close) => {
           const header = close.closest<HTMLElement>(".tp-header");
           const tab = close.previousElementSibling;
-          const tabBase = tab?.shadowRoot?.querySelector<HTMLElement>("[part~='base']");
           if (!header) {
             throw new Error("Terminal close control must stay inside the tab header");
           }
-          if (!tabBase) {
+          if (!(tab instanceof HTMLElement) || !tab.matches('[role="tab"]')) {
             throw new Error("Terminal close control must follow a rendered tab surface");
           }
           const headerBounds = header.getBoundingClientRect();
           const closeBounds = close.getBoundingClientRect();
-          const tabBounds = tabBase.getBoundingClientRect();
+          const tabBounds = tab.getBoundingClientRect();
           const closeStyle = getComputedStyle(close);
-          const tabStyle = getComputedStyle(tabBase);
+          const tabStyle = getComputedStyle(tab);
           return {
             backgroundColor: tabStyle.backgroundColor,
             borderBottomWidth: tabStyle.borderBottomWidth,
