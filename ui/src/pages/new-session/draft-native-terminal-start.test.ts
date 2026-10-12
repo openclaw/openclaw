@@ -85,7 +85,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     "primary submission retains $catalogId output and exit that precede the native start response",
     async ({ catalogId, exitCode, signal, exitLabel }) => {
       const controller = createTerminalController();
-      const outputWritten = createDeferred<void>();
+      const outputWritten = createDeferred();
       controller.write.mockImplementation(() => outputWritten.resolve());
       nativeTerminalController.mockResolvedValueOnce(controller);
       const { context, flow, request } = createDraftFixture({
