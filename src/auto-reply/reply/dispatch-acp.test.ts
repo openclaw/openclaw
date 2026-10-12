@@ -35,6 +35,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyDispatchRun } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { registerAcpMediaPreprocessingTests } from "./dispatch-acp.media.test-support.js";
 import { expectAcpSessionParticipantInput } from "./dispatch-acp.participant.test-support.js";
 import { runDispatch } from "./dispatch-acp.test-support.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
@@ -367,6 +368,15 @@ function mockVisibleTextTurn(text = "visible") {
 }
 
 describe("tryDispatchAcpReplyCore", () => {
+  registerAcpMediaPreprocessingTests({
+    mediaUnderstandingMocks,
+    managerMocks,
+    auditMocks,
+    routeMocks,
+    transcriptMocks,
+    runTurnCall,
+    requireRecord,
+  });
   it("records an accepted channel input in the canonical participant store", async () => {
     await expectAcpSessionParticipantInput(sessionKey, async () => {
       await runDispatch({ bodyForAgent: "hello", ctxOverrides: { SenderId: "participant" } });
@@ -979,29 +989,6 @@ describe("tryDispatchAcpReplyCore", () => {
     expectTranscript({
       terminalOutcome: expect.objectContaining({ reason: "failed", status: "error" }),
     });
-  });
-
-  it("passes the ACP agent directory without declaring host-path access", async () => {
-    const agentDir = "/tmp/acp-agent";
-    await runDispatch({
-      bodyForAgent: "describe image",
-      cfg: createAcpTestConfig({
-        agents: { entries: { "codex-acp": { agentDir } } },
-        channels: { imessage: { attachmentRoots: ["/tmp/acp-inbound"] } },
-      }),
-      ctxOverrides: {
-        Provider: "imessage",
-        Surface: "imessage",
-        MediaPath: "/tmp/acp-inbound/image.png",
-        MediaType: "image/png",
-      },
-    });
-    const input = requireRecord(
-      mediaUnderstandingMocks.applyMediaUnderstanding.mock.calls[0]?.[0],
-      "media understanding",
-    );
-    expect(input.agentDir).toBe(agentDir);
-    expect(input.selfServeLocalPaths).toBeUndefined();
   });
 
   it.each([["unknown", "application/pdf"]] as const)(

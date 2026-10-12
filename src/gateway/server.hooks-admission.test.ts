@@ -606,9 +606,23 @@ describe("gateway hook admission", () => {
     },
   );
 
-  test("returns typed admission failures and leaves the idempotency key retryable", async () => {
+  test("returns typed admission failures and leaves the idempotency key retryable", async ({
+    signal,
+  }) => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
+      const failureNotice =
+        createDeferred<ReturnType<typeof sessionEventHandoff.enqueueSessionEventForHost>>();
+      const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+      vi.spyOn(sessionEventHandoff, "enqueueSessionEventForHost").mockImplementation(
+        (text, options) => {
+          const receipt = enqueue(text, options);
+          if (options.source === "hook") {
+            failureNotice.resolve(receipt);
+          }
+          return receipt;
+        },
+      );
       cronIsolatedRun.mockClear();
       cronIsolatedRun
         .mockResolvedValueOnce({
@@ -632,6 +646,10 @@ describe("gateway hook admission", () => {
       expect(conflict.status).toBe(409);
       const conflictBody = (await conflict.json()) as { ok?: boolean; runId?: string };
       expect(conflictBody.ok).toBe(false);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      // The immediate failure notice can create the initially absent store. Join that
+      // real work so retries test cron admission, not a concurrent physical-store change.
+      await withinTest((await withinTest(failureNotice.promise, signal)).settled, signal);
 
       const gatewayFailure = await request();
       expect(gatewayFailure.status).toBe(502);
@@ -641,6 +659,7 @@ describe("gateway hook admission", () => {
       };
       expect(gatewayFailureBody.ok).toBe(false);
       expect(gatewayFailureBody.runId).not.toBe(conflictBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
 
       const admitted = await request();
       expect(admitted.status, await admitted.clone().text()).toBe(200);

@@ -78,6 +78,7 @@ export type BuildTelegramMessageContextParams = {
   replyChain?: TelegramReplyChainEntry[];
   promptContext?: TelegramPromptContextEntry[];
   storeAllowFrom: string[];
+  abortSignal?: AbortSignal;
   options?: TelegramMessageContextOptions;
   bot: Bot;
   cfg: OpenClawConfig;

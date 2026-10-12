@@ -108,6 +108,85 @@ describe("getTelegramSequentialKey", () => {
     expect(getTelegramSequentialKey(input)).toEqual(expected);
   });
 
+  it.each([
+    {
+      name: "DM abort",
+      chat: mockChat({ id: 123, type: "private" }),
+      message: {},
+      text: "/stop",
+      middlewareLane: "telegram:123:control",
+      ingressLane: "telegram:123",
+    },
+    {
+      name: "forum abort addressed to this bot",
+      chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+      message: { message_thread_id: 9, is_topic_message: true },
+      text: "/stop@openclaw_bot!",
+      middlewareLane: "telegram:-100:control",
+      ingressLane: "telegram:-100:topic:9",
+    },
+    {
+      name: "DM abort with bot topics enabled",
+      chat: mockChat({ id: 123, type: "private" }),
+      message: { message_thread_id: 9 },
+      text: "stop",
+      hasTopicsEnabled: true,
+      middlewareLane: "telegram:123:control",
+      ingressLane: "telegram:123:topic:9",
+    },
+    {
+      name: "DM abort with bot topics disabled",
+      chat: mockChat({ id: 123, type: "private" }),
+      message: { message_thread_id: 9 },
+      text: "/stop",
+      middlewareLane: "telegram:123:control",
+      ingressLane: "telegram:123",
+    },
+    {
+      name: "channel Direct Messages abort",
+      chat: mockChat({ id: -100, type: "supergroup", is_direct_messages: true }),
+      message: {
+        message_thread_id: 99,
+        direct_messages_topic: { topic_id: 9, user: { id: 1 } as never },
+      },
+      text: "/stop",
+      middlewareLane: "telegram:-100:control",
+      ingressLane: "telegram:-100:topic:9",
+    },
+    {
+      name: "foreign-bot abort",
+      chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+      message: { message_thread_id: 9, is_topic_message: true },
+      text: "/stop@some_other_bot",
+      middlewareLane: "telegram:-100:topic:9",
+      ingressLane: "telegram:-100:topic:9",
+    },
+    ...["/status", "/approve exec:def456 allow-once"].map((text) => ({
+      name: `unchanged control ${text}`,
+      chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+      message: { message_thread_id: 9, is_topic_message: true },
+      text,
+      middlewareLane: "telegram:-100:control",
+      ingressLane: "telegram:-100:control",
+    })),
+  ])("keeps middleware concurrency while deriving the durable lane for $name", (testCase) => {
+    const ctx = {
+      me: {
+        username: "openclaw_bot",
+        has_topics_enabled: "hasTopicsEnabled" in testCase && testCase.hasTopicsEnabled,
+      } as never,
+      message: mockMessage({
+        chat: testCase.chat,
+        ...testCase.message,
+        text: testCase.text,
+      }),
+    };
+    expect(getTelegramSequentialKey(ctx)).toBe(testCase.middlewareLane);
+    expect(getTelegramSequentialKey(ctx, { abortUsesConversationLane: true })).toBe(
+      testCase.ingressLane,
+    );
+  });
+
   it("keeps malformed message updates on the unknown lane", () => {
     expect(getTelegramSequentialKey({ message: {} as Message })).toBe("telegram:unknown");
   });

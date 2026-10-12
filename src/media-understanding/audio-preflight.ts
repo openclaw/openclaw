@@ -27,7 +27,9 @@ export async function transcribeFirstAudio(params: {
   agentDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
+  signal?: AbortSignal;
 }): Promise<string | undefined> {
+  params.signal?.throwIfAborted();
   const { ctx, cfg } = params;
 
   const audioConfig = cfg.tools?.media?.audio;
@@ -55,6 +57,7 @@ export async function transcribeFirstAudio(params: {
     const cache = createMediaAttachmentCache(media, {
       localPathRoots,
       ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     let transcript: string | undefined;
     try {
@@ -68,13 +71,16 @@ export async function transcribeFirstAudio(params: {
         providerRegistry,
         config: cfg.tools?.media?.audio,
         activeModel,
+        ...(params.signal ? { signal: params.signal } : {}),
       });
+      params.signal?.throwIfAborted();
       transcript = result.outputs
         .find((entry) => entry.kind === "audio.transcription")
         ?.text?.trim();
     } finally {
       await cache.cleanup();
     }
+    params.signal?.throwIfAborted();
     if (!transcript) {
       return undefined;
     }
@@ -85,9 +91,11 @@ export async function transcribeFirstAudio(params: {
         cfg,
         transcript,
         format: audioConfig.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+        ...(params.signal ? { signal: params.signal } : {}),
       });
     }
 
+    params.signal?.throwIfAborted();
     // Persist transcription state on the matching fact so later normalization
     // cannot shift or lose it through a parallel index list.
     const facts = normalizeMediaFacts(ctx.media);
@@ -105,6 +113,7 @@ export async function transcribeFirstAudio(params: {
 
     return transcript;
   } catch (err) {
+    params.signal?.throwIfAborted();
     // Preflight cannot block message handling; mention checks can still run on text-only input.
     if (shouldLogVerbose()) {
       logVerbose(`audio-preflight: transcription failed: ${String(err)}`);

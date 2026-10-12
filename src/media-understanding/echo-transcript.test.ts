@@ -149,6 +149,39 @@ describe("sendTranscriptEcho", () => {
     });
   });
 
+  it("does not send if the turn is stopped while loading the message runtime", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Turn stopped", "AbortError");
+    const running = sendTranscriptEcho({
+      ctx: createCtx(),
+      cfg: EMPTY_CONFIG,
+      transcript: "late transcript",
+      signal: controller.signal,
+    });
+    controller.abort(reason);
+
+    await expect(running).rejects.toBe(reason);
+    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("preserves caller cancellation instead of swallowing it as a delivery failure", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Turn stopped", "AbortError");
+    mockDeliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      expect(params.signal).toBe(controller.signal);
+      controller.abort(reason);
+      throw new Error("transport closed");
+    });
+    await expect(
+      sendTranscriptEcho({
+        ctx: createCtx(),
+        cfg: EMPTY_CONFIG,
+        transcript: "transcript",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+  });
+
   it("swallows delivery failures", async () => {
     mockDeliverOutboundPayloads.mockRejectedValueOnce(new Error("delivery timeout"));
 

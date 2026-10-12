@@ -74,6 +74,7 @@ const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
 
 export async function resolveTelegramInboundBody(params: {
   nativeCommandNames?: ReadonlyMap<string, string>;
+  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   primaryCtx: TelegramContext;
   msg: TelegramContext["message"];
@@ -237,6 +238,7 @@ export async function resolveTelegramInboundBody(params: {
 
   if (needsPreflightTranscription) {
     try {
+      params.abortSignal?.throwIfAborted();
       const { transcribeFirstAudio } = await loadMediaUnderstandingRuntime();
       const tempCtx: MsgContext = {
         Provider: "telegram",
@@ -251,8 +253,11 @@ export async function resolveTelegramInboundBody(params: {
         ctx: tempCtx,
         cfg,
         agentDir: undefined,
+        ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       });
+      params.abortSignal?.throwIfAborted();
     } catch (err) {
+      params.abortSignal?.throwIfAborted();
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
     }
   }

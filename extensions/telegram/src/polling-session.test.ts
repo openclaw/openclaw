@@ -1328,22 +1328,23 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("lets isolated ingress control updates bypass an active spooled turn", async () => {
+  it("lets isolated ingress control updates bypass an adopted spooled turn", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const events: string[] = [];
-      let releaseRegularTurn: (() => void) | undefined;
-      const regularTurnDone = new Promise<void>((resolve) => {
-        releaseRegularTurn = resolve;
-      });
+      let regularTurnSignal: AbortSignal | undefined;
+      const regularTurnDone = createDeferred<void>();
       await writeSpooledTestUpdates(tempDir, [forumUpdate(42, "summarize this")]);
       const { runPromise, stopWorker } = startIsolatedIngressSession({
         abort,
         stateDir: tempDir,
         handleUpdate: async (update) => {
           if (update.update_id === 42) {
+            const lifecycle = expectDefined(getTelegramSpooledReplayLifecycle(), "lifecycle");
+            regularTurnSignal = lifecycle.abortSignal;
+            await lifecycle.onAdopted();
             events.push("regular:start");
-            await regularTurnDone;
+            await regularTurnDone.promise;
             events.push("regular:end");
           } else if (update.update_id === 43) {
             events.push("status");
@@ -1357,18 +1358,17 @@ describe("TelegramPollingSession", () => {
         await waitForTelegramTestState(() => expect(events).toEqual(["regular:start"]));
         await writeSpooledTestUpdates(tempDir, [
           forumUpdate(43, "/status"),
-          forumUpdate(44, "/stop@vacs_tars_bot"),
+          forumUpdate(44, "/stop@openclaw_bot"),
         ]);
         await waitForTelegramTestState(() =>
           expect(events).toEqual(["regular:start", "status", "stop"]),
         );
+        expect(regularTurnSignal?.aborted).toBe(false);
         expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-        releaseRegularTurn?.();
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
+        regularTurnDone.resolve();
+        await waitForTelegramTestState(() => expect(events.at(-1)).toBe("regular:end"));
       } finally {
-        releaseRegularTurn?.();
+        regularTurnDone.resolve();
         abort.abort();
         stopWorker();
         await runPromise;

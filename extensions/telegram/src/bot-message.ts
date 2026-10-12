@@ -49,6 +49,7 @@ type TelegramMessageProcessorDeps = Omit<
   | "primaryCtx"
   | "allMedia"
   | "storeAllowFrom"
+  | "abortSignal"
   | "options"
   | "cfg"
   | "historyLimit"
@@ -177,23 +178,47 @@ export const createTelegramMessageProcessor = (
         : undefined;
     const ingressDebugEnabled = shouldLogVerbose();
     const ingressContextStartMs = ingressReceivedAtMs ? Date.now() : undefined;
-    const context = await buildTelegramMessageContext({
-      ...contextOptions,
-      nativeCommandNames: deps.nativeCommandNames,
-      primaryCtx,
-      allMedia,
-      replyMedia,
-      replyChain,
-      promptContext,
-      storeAllowFrom,
-      options,
-      cfg: turnCfg,
-      ownerAgentId: opts.ownerAgentId,
-      ...turnSettings,
-      runtime: contextRuntime,
-      sessionRuntime,
-      upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
-    });
+    // Preflight audio runs before turn adoption; retain its existing ingress owner.
+    const contextAbortSignals = [
+      turnContext.spooledReplayParticipant?.abortSignal,
+      turnContext.spooledReplayAbortSignal,
+      getTelegramSpooledReplayLifecycle()?.abortSignal,
+      options?.isolateSpooledReplaySettlement
+        ? undefined
+        : getTelegramSpooledReplayDeferredParticipant()?.abortSignal,
+    ].filter((signal): signal is AbortSignal => signal !== undefined);
+    const contextAbortSignal =
+      contextAbortSignals.length > 1
+        ? AbortSignal.any(contextAbortSignals)
+        : contextAbortSignals[0];
+    let context: Awaited<ReturnType<typeof buildTelegramMessageContext>>;
+    try {
+      contextAbortSignal?.throwIfAborted();
+      context = await buildTelegramMessageContext({
+        ...contextOptions,
+        nativeCommandNames: deps.nativeCommandNames,
+        primaryCtx,
+        allMedia,
+        replyMedia,
+        replyChain,
+        promptContext,
+        storeAllowFrom,
+        abortSignal: contextAbortSignal,
+        options,
+        cfg: turnCfg,
+        ownerAgentId: opts.ownerAgentId,
+        ...turnSettings,
+        runtime: contextRuntime,
+        sessionRuntime,
+        upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
+      });
+      contextAbortSignal?.throwIfAborted();
+    } catch (error) {
+      if (contextAbortSignal?.aborted) {
+        return abortedProcessingResult(contextAbortSignal, "telegram context preparation aborted");
+      }
+      throw error;
+    }
     if (!context) {
       if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
         logVerbose(

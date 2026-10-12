@@ -71,18 +71,13 @@ import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slas
 import {
   applyLinkUnderstandingIfNeeded,
   applyMediaUnderstandingIfNeeded,
-  hasExplicitAudioUnderstandingConfig,
   hasLinkCandidate,
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { prepareInternalGetReplyOptions, withExtractedFileImages } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import {
-  hasInboundAudio,
-  hasInboundMedia,
-  hasInboundMediaForUnderstanding,
-} from "./inbound-media.js";
+import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -450,10 +445,6 @@ export async function getReplyFromConfig(
   const utilityModelSelectionLocked = isModelSelectionLocked(preprocessingState?.sessionEntry);
 
   if (mediaUnderstandingRequested) {
-    const shouldApplyLockedAudio =
-      utilityModelSelectionLocked &&
-      hasInboundAudio(finalized) &&
-      hasExplicitAudioUnderstandingConfig(cfg);
     // Native harnesses receive images directly, but generic file attachments
     // still need host extraction. Only explicitly configured STT runs when locked.
     const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
@@ -464,15 +455,11 @@ export async function getReplyFromConfig(
         // Cache and classify now; the final provider and owner policy are
         // resolved later, immediately before the embedded turn starts.
         selfServeLocalPaths: false,
-        ...(utilityModelSelectionLocked
-          ? {
-              processingMode: shouldApplyLockedAudio
-                ? ("audio-and-files" as const)
-                : ("files-only" as const),
-            }
-          : {}),
+        signal: optsWithSkillFilter?.abortSignal,
+        modelSelectionLocked: utilityModelSelectionLocked,
       }),
     );
+    assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
     if (mediaResult?.extractedFileImages.length) {
       extractedFileImages = mediaResult.extractedFileImages;
     }

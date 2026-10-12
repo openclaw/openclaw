@@ -65,11 +65,18 @@ export function resolveTelegramAdoptionStallTimeoutMs(params: {
   return DEFAULT_INGRESS_ADOPTION_STALL_MS;
 }
 
-function telegramSpooledLaneKey(update: unknown, botInfo?: TelegramBotInfo): string {
-  return getTelegramSequentialKey({
-    update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
-    ...(botInfo ? { me: botInfo } : {}),
-  });
+function telegramSpooledLaneKey(
+  update: unknown,
+  botInfo?: TelegramBotInfo,
+  abortUsesConversationLane = true,
+): string {
+  return getTelegramSequentialKey(
+    {
+      update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
+      ...(botInfo ? { me: botInfo } : {}),
+    },
+    { abortUsesConversationLane },
+  );
 }
 
 function requireTelegramSpooledUpdateId(update: unknown): number {
@@ -221,16 +228,27 @@ function canReconcileTelegramLegacyLane(params: {
     return false;
   }
   const baseLaneKey = `telegram:${chatId}`;
+  const legacyAbortControlLane =
+    params.storedLaneKey === `${baseLaneKey}:control` &&
+    params.derivedLaneKey !== params.storedLaneKey &&
+    telegramSpooledLaneKey(update, params.botInfo, false) === params.storedLaneKey &&
+    telegramSpooledLaneKey(update, params.botInfo) === params.derivedLaneKey;
   if (
     callback === undefined &&
-    params.derivedLaneKey === `${baseLaneKey}:control` &&
-    telegramSpooledLaneKey(update, params.botInfo) === params.derivedLaneKey
+    (legacyAbortControlLane ||
+      (params.derivedLaneKey === `${baseLaneKey}:control` &&
+        telegramSpooledLaneKey(update, params.botInfo) === params.derivedLaneKey))
   ) {
     if (
       (!isPrivateChat && !isGroupChat && !(chatType === "channel" && chatId < 0)) ||
       (threadId !== undefined && !hasValidThreadId)
     ) {
       return false;
+    }
+    // Older queues serialized aborts with controls. Only an abort whose current
+    // topic resolver selects this exact conversation may leave that legacy lane.
+    if (legacyAbortControlLane) {
+      return true;
     }
     // Reuse the topic owner: channel Direct Messages use direct_messages_topic,
     // not message_thread_id. Authorization still runs in the replayed handler.

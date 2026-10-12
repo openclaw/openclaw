@@ -1,12 +1,20 @@
 import { webhookCallback } from "grammy";
+import type { Update } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as configMutation from "openclaw/plugin-sdk/config-mutation";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  addChannelAllowFromStoreEntry,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import { createRequireRecord, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  createRequireRecord,
+  resetSystemEventsForTest,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
@@ -21,10 +29,12 @@ import {
   groupChat,
   groupCommand,
   publishTelegramTestConfig,
+  nextTelegramTestMessageId,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { startTelegramCallbackQueryAnswer } from "./callback-query-answer-state.js";
 import { getTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import { getCachedSticker } from "./sticker-cache.js";
+import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 
 const { loginExecutor } = vi.hoisted(() => ({ loginExecutor: vi.fn(async () => false) }));
 vi.mock("./bot-native-command-login.js", () => ({ executeTelegramLoginCommand: loginExecutor }));
@@ -775,5 +785,125 @@ describe("createTelegramBot typed command pipeline", () => {
     expect(await getCachedSticker(lateStickerId)).toMatchObject({
       description: "A sticker after webhook expiry",
     });
+  });
+});
+
+describe("Telegram durable ingress voice cancellation", () => {
+  it("aborts DM voice preflight when native /stop arrives without cancelling another chat", async ({
+    signal: testSignal,
+  }) => {
+    const bot = await createBot(true, true, {
+      commands: { native: true, text: true },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], streaming: { mode: "off" } },
+      },
+      tools: { media: { audio: { enabled: true, echoTranscript: true } } },
+    });
+    const runtime = getTelegramRuntime();
+    setTelegramRuntime({
+      ...runtime,
+      state: {
+        ...runtime.state,
+        openChannelIngressQueue: (options) =>
+          createChannelIngressQueueForTests({ ...options, channelId: "telegram" }),
+      },
+    });
+    const monitor = createTelegramTransportIngressMonitor({
+      bot,
+      accountId: "default",
+      botInfo: bot.botInfo,
+    });
+    const cleanup = createDeferred<void>();
+    const voiceStarted = createDeferred<AbortSignal | undefined>();
+    const otherVoiceStarted = createDeferred<AbortSignal | undefined>();
+    for (const started of [voiceStarted, otherVoiceStarted]) {
+      harness.transcribeFirstAudio.mockImplementationOnce(async ({ signal }) => {
+        const aborted = createDeferred<void>();
+        const onAbort = () => aborted.resolve();
+        signal?.addEventListener("abort", onAbort, { once: true });
+        if (signal?.aborted) {
+          onAbort();
+        }
+        started.resolve(signal);
+        try {
+          await Promise.race([aborted.promise, cleanup.promise]);
+          signal?.throwIfAborted();
+          return undefined;
+        } finally {
+          signal?.removeEventListener("abort", onAbort);
+        }
+      });
+    }
+    const stopUpdate = { update_id: 8103, message: commandMessage("/stop") } satisfies Update;
+    const stopHandled = createDeferred<void>();
+    const voiceHandled = createDeferred<void>();
+    const handleUpdate = bot.handleUpdate.bind(bot);
+    const handleUpdateSpy = vi.spyOn(bot, "handleUpdate").mockImplementation(async (update) => {
+      try {
+        await handleUpdate(update);
+        if (update.update_id === stopUpdate.update_id) {
+          stopHandled.resolve();
+        }
+      } catch (error) {
+        if (update.update_id === stopUpdate.update_id) {
+          stopHandled.reject(error);
+        }
+        throw error;
+      } finally {
+        if (update.update_id === 8101) {
+          voiceHandled.resolve();
+        }
+      }
+    });
+    const voiceUpdate = (updateId: number, chatId: number): Update => ({
+      update_id: updateId,
+      message: {
+        message_id: nextTelegramTestMessageId(),
+        date: 1736380800,
+        chat: { ...chat, id: chatId },
+        from: { ...from, id: chatId },
+        voice: {
+          file_id: `voice-${updateId}`,
+          file_unique_id: `voice-unique-${updateId}`,
+          duration: 1,
+        },
+      },
+    });
+    // Updates enter the same durable transport owner as ordinary Telegram JSON.
+    const admit = (update: Update) => monitor.admit(structuredClone(update));
+    try {
+      monitor.start();
+      await expect(admit(voiceUpdate(8101, chat.id))).resolves.toMatchObject({ kind: "durable" });
+      const voiceSignal = await withinTest(voiceStarted.promise, testSignal);
+      expect(voiceSignal).toBeInstanceOf(AbortSignal);
+      expect(voiceSignal?.aborted).toBe(false);
+
+      await expect(admit(voiceUpdate(8102, chat.id + 1))).resolves.toMatchObject({
+        kind: "durable",
+      });
+      const otherVoiceSignal = await withinTest(otherVoiceStarted.promise, testSignal);
+      expect(otherVoiceSignal).toBeInstanceOf(AbortSignal);
+
+      await expect(admit(stopUpdate)).resolves.toMatchObject({ kind: "durable" });
+      await withinTest(stopHandled.promise, testSignal);
+
+      expect(otherVoiceSignal?.aborted).toBe(false);
+      expect(voiceSignal?.aborted).toBe(true);
+      await withinTest(voiceHandled.promise, testSignal);
+      expect(harness.replySpy).not.toHaveBeenCalled();
+      expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([
+        [
+          "sendMessage",
+          expect.objectContaining({ chat_id: String(chat.id), text: expect.any(String) }),
+        ],
+      ]);
+    } finally {
+      // Shutdown owns cancellation if an assertion fails before /stop reaches the provider.
+      const stopping = monitor.stop();
+      cleanup.resolve();
+      await stopping;
+      handleUpdateSpy.mockRestore();
+      setTelegramRuntime(runtime);
+    }
   });
 });

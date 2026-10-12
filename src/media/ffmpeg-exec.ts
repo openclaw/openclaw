@@ -13,6 +13,7 @@ type MediaExecOptions = {
   maxBufferBytes?: number;
   input?: Buffer | string;
   stdinFileDescriptor?: number;
+  signal?: AbortSignal;
 };
 
 function resolveExecOptions(
@@ -24,6 +25,7 @@ function resolveExecOptions(
   }
   return {
     input: options?.input,
+    ...(options?.signal ? { signal: options.signal } : {}),
     ...(options?.stdinFileDescriptor !== undefined
       ? { stdinFileDescriptor: options.stdinFileDescriptor }
       : {}),

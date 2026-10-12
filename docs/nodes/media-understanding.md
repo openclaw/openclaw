@@ -140,6 +140,7 @@ See [Tools and custom providers](/gateway/config-tools) for profiles, env vars, 
 
 ## Rules and behavior
 
+- Stopping a reply cancels its media and document preprocessing, including downloads, provider requests, and local CLI commands. No further fallback models or attachments are started, and late results are discarded without sending transcript echoes. Temporary files stay available until the work using them has exited, then are removed.
 - Media exceeding `maxBytes` skips that model and tries the next one.
 - Audio files under 1024 bytes are treated as empty/corrupt and skipped before transcription; the agent gets a fixed placeholder transcript instead.
 - If the active primary image model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image into the model directly. MiniMax is an exception: `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` always route image understanding through the plugin-owned `MiniMax-VL-01` media provider, even if legacy MiniMax M2.x chat metadata claims image input (only `MiniMax-M3` and later are treated as natively vision-capable).
