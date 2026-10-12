@@ -41,9 +41,14 @@ export function formatApprovalRequest(approval: PendingApproval): string {
   switch (approval.type) {
     case "dm":
       if (approval.clubId !== undefined) {
+        // A club message claiming the owner is queued without originalMessage, so approval only
+        // updates the allowlist and never processes that message; the notice must not promise a reply.
+        const replayLine = approval.originalMessage
+          ? `The message is answered as an unverified group DM sender, never as ${approval.requestingShip}.`
+          : `The message is not kept, so it will not be answered; have ${approval.requestingShip} send it again in a normal direct message to get a reply.`;
         return (
           `New group DM message claiming to be from ${approval.requestingShip} (unverified; group DM ${approval.clubId}):${preview}\n\n` +
-          `Approving adds ${approval.requestingShip} to the DM allowlist. The message is answered as an unverified group DM sender, never as ${approval.requestingShip}.\n` +
+          `Approving adds ${approval.requestingShip} to the DM allowlist. ${replayLine}\n` +
           `Reply "approve", "deny", or "block" (ID: ${approval.id})`
         );
       }
