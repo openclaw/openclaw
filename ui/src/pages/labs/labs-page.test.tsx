@@ -73,25 +73,31 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   };
 }
 
-async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
+async function mountPage(
+  sourceConfig: Record<string, unknown>,
+  basePath = "",
+): Promise<{
   page: LabsPageElement;
   unmount: () => void;
   runtimeConfig: ReturnType<typeof createRuntimeConfig>;
   gateway: ReturnType<typeof createGateway>;
+  context: { navigate: ReturnType<typeof vi.fn> };
 }> {
   const runtimeConfig = createRuntimeConfig(sourceConfig);
   const gateway = createGateway();
+  const navigate = vi.fn();
   const context = {
-    basePath: "",
+    basePath,
     gateway: gateway.gateway,
     runtimeConfig,
+    navigate,
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
   const { container: page, unmount } = mountSolid(() => <LabsPage />, {
     wrapper: provider.wrapper,
   });
   await waitForSolid(() => expect(page.querySelector(".settings-page")).not.toBeNull());
-  return { page, unmount, runtimeConfig, gateway };
+  return { page, unmount, runtimeConfig, gateway, context: { navigate } };
 }
 
 function labRow(page: LabsPageElement, title: string) {
@@ -242,6 +248,14 @@ describe("LabsPage", () => {
       expectedPatch: { desktop: { host: { enabled: false } } },
       note: "labs: update hostDesktop",
     },
+    {
+      label: "Advisor",
+      sourceConfig: {
+        plugins: { entries: { advisor: { enabled: true, config: { everyTurns: 3 } } } },
+      },
+      expectedPatch: { plugins: { entries: { advisor: { enabled: null } } } },
+      note: "labs: update advisor",
+    },
   ])(
     "restores the default through the canonical patch flow when disabling $label",
     async (testCase) => {
@@ -322,6 +336,12 @@ describe("LabsPage", () => {
       expectedPatch: { cloudWorkers: { desktop: true } },
       note: "labs: update workerDesktop",
     },
+    {
+      label: "Advisor",
+      sourceConfig: {},
+      expectedPatch: { plugins: { entries: { advisor: { enabled: true } } } },
+      note: "labs: update advisor",
+    },
   ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
     const toggle = labToggle(page, testCase.label);
@@ -335,6 +355,26 @@ describe("LabsPage", () => {
       raw: testCase.expectedPatch,
       note: testCase.note,
     });
+  });
+
+  it("opens Advisor settings from Configure without toggling the lab", async () => {
+    const { page, context, runtimeConfig } = await mountPage({}, "/ui");
+    const link = labRow(page, "Advisor").querySelector<HTMLAnchorElement>(
+      '.settings-row__control a[aria-label="Configure Advisor"]',
+    );
+    expect(link?.textContent?.trim()).toBe("Configure");
+    expect(link?.getAttribute("href")).toBe("/ui/settings/plugins/advisor?view=settings");
+
+    link!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+
+    expect(context.navigate).toHaveBeenCalledExactlyOnceWith("plugin-settings", {
+      pathname: "/ui/settings/plugins/advisor",
+      search: "?view=settings",
+      hash: "",
+    });
+    // The row toggles on plain clicks; its own links must not flip the switch.
+    expect(labToggle(page, "Advisor").checked).toBe(false);
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
   it("shows default provenance", async () => {

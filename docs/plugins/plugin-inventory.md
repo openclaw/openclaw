@@ -50,13 +50,15 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-66 plugins
+67 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
 - **[active-memory](/plugins/reference/active-memory)** (`openclaw`) - included in OpenClaw. Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
+
+- **[advisor](/plugins/reference/advisor)** (`@openclaw/advisor`) - included in OpenClaw. Experimental: periodically reviews a conversation's recent agent work and gives the agent one short correction on its next turn.
 
 - **[agentsapi](/plugins/reference/agentsapi)** (`@openclaw/agentsapi`) - included in OpenClaw. OpenAI Agents API harness with hosted or self-hosted sessions.
 

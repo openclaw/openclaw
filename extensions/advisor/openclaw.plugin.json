@@ -1,0 +1,58 @@
+{
+  "id": "advisor",
+  "categories": [
+    "agent-orchestration"
+  ],
+  "name": "Advisor",
+  "description": "Experimental: periodically reviews a conversation's recent agent work and gives the agent one short correction on its next turn.",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
+  "configGroups": [
+    {
+      "id": "reviews",
+      "title": "Reviews",
+      "order": 10,
+      "properties": ["model", "everyTurns", "everyMinutes"]
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "everyTurns": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1000,
+        "default": 10
+      },
+      "everyMinutes": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1440,
+        "default": 20
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "everyTurns": {
+      "label": "Review every N turns",
+      "help": "Review after this many completed agent turns in a conversation. 0 turns this trigger off."
+    },
+    "everyMinutes": {
+      "label": "Review every N minutes",
+      "help": "Review after this many minutes of accumulated agent run time in a conversation. 0 turns this trigger off."
+    },
+    "model": {
+      "label": "Advisor model",
+      "placeholder": "openai/gpt-6.1-sol",
+      "help": "Optional provider/model for reviews. Leave empty to use the agent's model. To use another model, also turn on Allow Plugin Subagent Model Override and add this model to Plugin Subagent Allowed Models."
+    }
+  },
+  "version": "2026.9.9"
+}

@@ -3,6 +3,8 @@ import { en } from "./en.ts";
 
 const enLabs = {
   labsPage: {
+    configure: "Configure",
+    configureFeature: "Configure {name}",
     decisionAssistance: {
       title: "Decision assistance",
       description:
@@ -26,6 +28,11 @@ const enLabs = {
       title: "Tool Search for all models",
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
+    },
+    advisor: {
+      title: "Advisor",
+      description:
+        "Every few turns or minutes of agent work, an advisor model reads the conversation's recent work and, if it spots avoidable work (drifting from the request, repeated or stalled tool calls), gives the agent one short correction on its next turn. Adds model calls.",
     },
     chatBubbles: {
       title: "Speech bubbles",
