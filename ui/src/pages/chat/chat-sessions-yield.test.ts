@@ -230,6 +230,43 @@ describe("sessions_yield transcript projection", () => {
       });
     });
 
+    it("keeps the request clock while waiting, including a second handoff", () => {
+      const waiting = {
+        runActive: false,
+        runWorking: false,
+        subagentWait: { startedAt: 2_500, runId: "parent-run" },
+      };
+      expect(status([asked, ...separateHistory], waiting)).toMatchObject({
+        waitingOn: "subagents",
+        startedAt: 1_000,
+        request,
+      });
+      const again = separateHistory.map((message) => ({
+        ...message,
+        runId: "second-run",
+        timestamp: message.timestamp + 1_000,
+      }));
+      expect(
+        status([asked, ...separateHistory, ...again], {
+          ...waiting,
+          subagentWait: { startedAt: 3_500, runId: "second-run" },
+        }),
+      ).toMatchObject({
+        waitingOn: "subagents",
+        startedAt: 1_000,
+        request: { askedAt: 1_000, runIds: ["parent-run", "second-run"] },
+      });
+      // Missing or ambiguous request history must not invent a total-turn clock.
+      expect(status(separateHistory, waiting)).not.toHaveProperty("request");
+      const unrelated = {
+        role: "assistant",
+        runId: "other-run",
+        timestamp: 1_500,
+        content: "Done.",
+      };
+      expect(status([asked, unrelated, ...separateHistory], waiting)).not.toHaveProperty("request");
+    });
+
     it("is recognized before the pane knows its run id", () => {
       resetWorkingProgress();
       const items = buildChatItems(
