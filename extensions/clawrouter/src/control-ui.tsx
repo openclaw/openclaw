@@ -85,14 +85,21 @@ const mountPool: ControlUiView = (container, initialContext) => {
     return `${integer.format(value)} minor units${currency ? ` (${currency})` : ""}`;
   }
 
-  function windowLabel(value: string | undefined) {
+  function windowLabel(window: { window?: string; id?: string; models?: string[] | null }) {
+    const value = window.window ?? window.id;
     if (!value) {
       return "Quota window";
     }
     if (value === "5h" || value === "5_hour" || value === "five_hour") {
       return "5-hour";
     }
-    if (value === "weekly" || value === "7d") {
+    // ClawRouter scopes per-model weekly windows (for example Fable) to model families.
+    const families = window.models?.filter(Boolean) ?? [];
+    if (families.length) {
+      const names = families.map((family) => family.charAt(0).toUpperCase() + family.slice(1));
+      return `${names.join(", ")} weekly`;
+    }
+    if (value === "weekly" || value === "7d" || value === "seven_day") {
       return "Weekly";
     }
     return value.replaceAll("_", " ");
@@ -221,14 +228,14 @@ const mountPool: ControlUiView = (container, initialContext) => {
                 {(window) => (
                   <div class="clawrouter-pool__window">
                     <div class="clawrouter-pool__window-heading">
-                      <strong>{windowLabel(window.window ?? window.id)}</strong>
+                      <strong>{windowLabel(window)}</strong>
                       <span>{remaining(window.remainingPercent)}</span>
                     </div>
                     {window.remainingPercent !== undefined ? (
                       <progress
                         max="100"
                         value={window.remainingPercent}
-                        aria-label={`${windowLabel(window.window ?? window.id)} quota remaining`}
+                        aria-label={`${windowLabel(window)} quota remaining`}
                       />
                     ) : null}
                     <p class="clawrouter-pool__hint">
