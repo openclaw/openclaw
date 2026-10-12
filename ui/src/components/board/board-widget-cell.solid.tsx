@@ -22,7 +22,6 @@ import {
   boardChromeRowPx,
   exactBoardWidgetHeightPx,
 } from "../../lib/board/grid.ts";
-import type { BoardWidget } from "../../lib/board/types.ts";
 import {
   CORE_BOARD_WIDGET_ELEMENTS,
   getPluginWidgetKindContribution,
