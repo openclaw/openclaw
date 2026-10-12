@@ -7,7 +7,7 @@ import { formatUpdateCleanupCommand } from "./update-maintenance.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
 import type { StepFactory } from "./update-runner-git-commands.js";
-import type { CommandRunner } from "./update-runner-types.js";
+import type { CommandRunner, UpdateRunResult } from "./update-runner-types.js";
 
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 
@@ -172,4 +172,42 @@ export async function cleanupGitPreflight(
     });
   }
   return removed;
+}
+
+/** Settle owned artifacts before exposing either the update result or its failure. */
+export async function settleGitUpdateCleanup(
+  update: () => Promise<UpdateRunResult>,
+  cleanup: () => Promise<void>,
+  reportingFailures: unknown[],
+): Promise<UpdateRunResult> {
+  let outcome: { result: UpdateRunResult } | { error: unknown };
+  try {
+    outcome = { result: await update() };
+  } catch (error) {
+    outcome = { error };
+  }
+  // Do not use an async finally: its rejection would erase the initiating failure.
+  let cleanupFailure: { cause: unknown } | undefined;
+  try {
+    await cleanup();
+  } catch (error) {
+    cleanupFailure = { cause: error };
+  }
+  if (cleanupFailure) {
+    if ("error" in outcome) {
+      throw new AggregateError(
+        [outcome.error, ...reportingFailures, cleanupFailure.cause],
+        "Git update and cleanup failed",
+        { cause: outcome.error },
+      );
+    }
+    throw cleanupFailure.cause;
+  }
+  if ("error" in outcome) {
+    if (reportingFailures.length > 0) {
+      throw new GitCleanupReportingError(outcome.error, reportingFailures);
+    }
+    throw outcome.error;
+  }
+  return outcome.result;
 }

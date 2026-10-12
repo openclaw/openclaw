@@ -268,15 +268,16 @@ function primaryUpdateFailure(error: unknown): unknown {
   // Cleanup aggregation retains the initiating failure as cause. Secondary
   // diagnostics must not change its admission/revocation classification.
   const seen = new Set<unknown>();
+  let current = error;
   while (
-    error instanceof GitCleanupReportingError &&
-    error.cause !== undefined &&
-    !seen.has(error)
+    current instanceof GitCleanupReportingError &&
+    current.cause !== undefined &&
+    !seen.has(current)
   ) {
-    seen.add(error);
-    error = error.cause;
+    seen.add(current);
+    current = current.cause;
   }
-  return error;
+  return current;
 }
 
 export function createUpdateCommandFailureResult(

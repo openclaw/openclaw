@@ -33,10 +33,14 @@ it.each(["none", "start", "complete"] as const)(
         runGitDoctor: doctor,
         progress: {
           onStepStart: ({ name }) => {
-            if (reportingFails === "start" && name === "preflight-cleanup") throw reporting;
+            if (reportingFails === "start" && name === "preflight-cleanup") {
+              throw reporting;
+            }
           },
           onStepComplete: ({ name }) => {
-            if (reportingFails === "complete" && name === "preflight-cleanup") throw reporting;
+            if (reportingFails === "complete" && name === "preflight-cleanup") {
+              throw reporting;
+            }
           },
         },
       });
@@ -70,10 +74,14 @@ it("keeps a successful update successful when cleanup reporting is unavailable",
   const result = await fixture.run({
     progress: {
       onStepStart: ({ name }) => {
-        if (name === "preflight-cleanup") throw new Error("offline maintenance");
+        if (name === "preflight-cleanup") {
+          throw new Error("offline maintenance");
+        }
       },
       onStepComplete: ({ name }) => {
-        if (name === "preflight-cleanup") throw new Error("completion reporting unavailable");
+        if (name === "preflight-cleanup") {
+          throw new Error("completion reporting unavailable");
+        }
       },
     },
   });
@@ -103,7 +111,9 @@ it("preserves uncertain process cleanup and the original failure without removin
       },
       progress: {
         onStepStart: ({ name }) => {
-          if (name === "preflight-cleanup") throw uncertain;
+          if (name === "preflight-cleanup") {
+            throw uncertain;
+          }
         },
       },
     })
