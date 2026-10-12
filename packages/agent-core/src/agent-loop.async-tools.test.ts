@@ -60,6 +60,91 @@ function recordMessage(event: AgentEvent, messages: AgentMessage[]) {
   }
 }
 
+it.each(["batch", "streamed", "terminal-async", "terminal-sync", "replay"] as const)(
+  "executes each duplicate-id tool occurrence (%s)",
+  async (mode) => {
+    const streamed = mode !== "batch";
+    const response = createAssistantMessageEventStream();
+    const calls = [
+      { ...call("reused-provider-id", streamed), name: "first" },
+      { ...call("reused-provider-id", streamed && mode !== "terminal-sync"), name: "second" },
+    ];
+    const first = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "first result" }],
+      details: {},
+    }));
+    const second = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "second result" }],
+      details: {},
+    }));
+    const persisted: AgentMessage[] = [];
+    let requests = 0;
+    const run = runAgentLoop(
+      [{ role: "user", content: "execute both calls", timestamp: 0 }],
+      { systemPrompt: "", messages: [], tools: [tool("first", first), tool("second", second)] },
+      { model, convertToLlm: (messages) => messages as Context["messages"] },
+      (event) => recordMessage(event, persisted),
+      undefined,
+      () => {
+        if (++requests === 1) {
+          return response;
+        }
+        const final = createAssistantMessageEventStream();
+        final.push({ type: "done", reason: "stop", message: assistant([]) });
+        final.end();
+        return final;
+      },
+    );
+    response.push({ type: "start", partial: assistant([]) });
+    if (streamed) {
+      for (const [contentIndex, toolCall] of calls.entries()) {
+        if (contentIndex > 0 && mode.startsWith("terminal-")) {
+          break;
+        }
+        const event = {
+          type: "toolcall_end" as const,
+          contentIndex,
+          toolCall,
+          partial: assistant(
+            calls.slice(0, contentIndex + 1).map((item) => Object.assign({}, item)),
+          ),
+        };
+        response.push(event);
+        if (mode === "replay") {
+          response.push(event);
+        }
+      }
+    }
+    response.push({
+      type: "done",
+      reason: "toolUse",
+      message: assistant(
+        calls.map((item) => Object.assign({}, item)),
+        "toolUse",
+      ),
+    });
+    response.end();
+    const result = await run;
+    expect(result).toEqual(persisted);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(result.filter((message) => message.role === "toolResult")).toMatchObject([
+      {
+        toolCallId: "reused-provider-id",
+        toolName: "first",
+        content: [{ type: "text", text: "first result" }],
+        isError: false,
+      },
+      {
+        toolCallId: "reused-provider-id",
+        toolName: "second",
+        content: [{ type: "text", text: "second result" }],
+        isError: false,
+      },
+    ]);
+  },
+);
+
 it.each(["mixed-parallel", "deferred-exclusive"] as const)(
   "preserves %s scheduling for streamed async calls",
   async (mode) => {

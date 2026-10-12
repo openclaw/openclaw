@@ -303,14 +303,14 @@ async function runLoop(
       const { message } = streamed;
 
       const providerFailed = message.stopReason === "error" || message.stopReason === "aborted";
-      const remainingToolCalls = providerFailed
-        ? []
-        : message.content.filter(
-            (item): item is AgentToolCall =>
-              item.type === "toolCall" &&
-              !streamed.executedIds.has(item.id) &&
-              (message.stopReason === "toolUse" || item.async === true),
-          );
+      const remainingToolCalls =
+        providerFailed || streamed.admittedToolCallCount > 0
+          ? []
+          : message.content.filter(
+              (item): item is AgentToolCall =>
+                item.type === "toolCall" &&
+                (message.stopReason === "toolUse" || item.async === true),
+            );
       const terminalToolBatch =
         remainingToolCalls.length > 0
           ? await executeToolCalls(
@@ -323,7 +323,7 @@ async function runLoop(
               toolPlan,
               remainingToolCalls,
               undefined,
-              streamed.executedIds.size > 0,
+              streamed.admittedToolCallCount > 0,
             )
           : undefined;
       const batches = [...streamed.batches, ...(terminalToolBatch ? [terminalToolBatch] : [])];
