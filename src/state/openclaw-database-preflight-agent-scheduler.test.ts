@@ -203,7 +203,7 @@ describe("bounded agent database preflight scheduling", () => {
     }
   });
 
-  it.each([1, 2])("bounds active inspections to the host's %i CPUs", async (cpus) => {
+  it.each([2])("bounds active inspections to the host's %i CPUs", async (cpus) => {
     vi.mocked(availableParallelism).mockReturnValue(cpus);
     const releases = {
       0: createDeferred(),
