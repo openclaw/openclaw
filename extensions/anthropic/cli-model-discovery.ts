@@ -1,4 +1,5 @@
 import { addAbortListener } from "node:events";
+import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -111,7 +112,7 @@ export async function discoverClaudeCliModels(params: {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         maxTokens: 128_000,
         thinkingLevelMap: {
-          off: null,
+          off: requiresClaudeMandatoryAdaptiveThinking({ id }) ? null : "off",
           minimal: null,
           ...Object.fromEntries(
             NATIVE_EFFORT_LEVELS.map((level) => [level, levels.includes(level) ? level : null]),
