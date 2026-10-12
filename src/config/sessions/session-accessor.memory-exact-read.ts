@@ -1,15 +1,11 @@
 import path from "node:path";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
-  captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import {
-  attachSessionEntrySnapshots,
-  type SessionEntryProjection,
-} from "./session-entry-snapshot-values.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 
 /** An exact reader borrows the selected owner; absence never opens or acquires a backend. */
 export function captureMemoryExactSessionReader(scope: {
@@ -57,31 +53,13 @@ export function captureMemoryExactSessionReader(scope: {
       },
     };
   }
-  const captured = captureSessionActorStorageOwner({ ...scope, agentId })!;
-  const owner = captured.owner;
   return {
-    source: owner
-      ? { agentId, path: owner.path, databaseIdentity: owner.identity.incarnation }
-      : undefined,
-    read(sessionKey: string, projection?: SessionEntryProjection) {
-      const entry = owner?.readSession(sessionKey, captured.authority)?.entry;
-      return entry && attachSessionEntrySnapshots(entry, {}, projection);
-    },
-    entries(projection?: SessionEntryProjection) {
-      return (owner?.listSessions(captured.authority) ?? []).flatMap((state) =>
-        state.entry
-          ? [
-              {
-                sessionKey: state.target.sessionKey,
-                entry: attachSessionEntrySnapshots(state.entry, {}, projection),
-              },
-            ]
-          : [],
-      );
-    },
+    source: undefined,
+    read: (_sessionKey: string, _projection?: SessionEntryProjection) => undefined,
+    entries: (_projection?: SessionEntryProjection) => [],
     assertCurrent() {
       selected.actor.assertReadable();
-      captured.authority.assertCurrent();
+      selected.authority.assertCurrent();
     },
   };
 }

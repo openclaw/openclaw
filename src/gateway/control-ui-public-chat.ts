@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { buildControlUiPublicSessionCardPath } from "@openclaw/session-url-contract/public-share";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -136,6 +137,9 @@ export async function serveControlUiPublicChat(params: {
       shareId: share.id,
     };
     const offset = Number(offsetText);
+    const { mintExistingPublicSessionShareToken } =
+      await import("./control-ui-public-session-token.js");
+    const token = await mintExistingPublicSessionShareToken(locator);
     return await servePublicSessionRepresentation({
       ...params,
       locator,
@@ -156,7 +160,9 @@ export async function serveControlUiPublicChat(params: {
         clientAuthBasePath,
         assetBasePath: basePath,
         canonicalUrl: `${origin}${url.pathname}`,
-        cardUrl: `${origin}${basePath}/share/card.png`,
+        cardUrl: token
+          ? `${origin}${buildControlUiPublicSessionCardPath({ basePath, token })}`
+          : `${origin}${basePath}/share/card.png`,
       },
       olderUrl: (olderOffset) => `${url.pathname}?offset=${olderOffset}`,
       unavailable,

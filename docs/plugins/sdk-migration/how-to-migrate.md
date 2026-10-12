@@ -265,6 +265,17 @@ readers and current-owner checks. The service exposes `listBySessionAsync`,
 synchronous fallback. External adapters remain responsible for their own
 storage, currentness, and committed publication.
 
+For channel route ownership, replace `resolveConversationRouteOwner` and
+`prepareConversationRouteOwners` with `prepareConversationRouteOwnersAsync`.
+Await its `inspectBindings(refs)` callback during preparation, then return one
+synchronous resolver per input. The callback returns a reader for the prepared
+binding facts; invoke that reader inside the resolver so committed binding
+changes invalidate ownership before an external effect. Do not retain the
+preparation callback after returning. The Gateway releases the facts after
+selection or delivery. Discord, Matrix, Slack, and Telegram use this contract for all bundled
+route ownership reads; deprecated synchronous hooks remain for external plugins
+until the next Plugin SDK major and warn when called.
+
 The original synchronous keyed stores, opaque `update`/`deleteIf` callbacks,
 binding managers, and adapter registrations remain compatibility APIs. They
 preserve synchronous commit-before-return and callback ordering, and are
@@ -887,10 +898,12 @@ User-turn transcript recorders also provide optional
 `completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
 Await processing completion before publishing its outcome. Completion records
 processing separately from transcript consumption; it does not append or consume
-the pending input. The synchronous `completeProcessing` callback shipped in
-`v2026.9.8` retains its immediate result for existing SDK consumers. The host
-uses that legacy callback only when a supplied recorder has no async companion,
-never after an async failure or an undefined async result.
+the pending input. Bundled callers complete through the awaited methods. Host-created recorders
+retain the deprecated synchronous `completeProcessing` adapter and its immediate
+return and transaction semantics until the next Plugin SDK major. Using it warns
+once per plugin. Replace it with `completeProcessingAsync`. The host also accepts
+plugin-supplied legacy callbacks when a recorder has no async companion, never
+after an async failure or an undefined async result.
 
 `finishPendingInput(disposition)` still revokes prompt custody synchronously.
 After calling it, await `waitForPendingInputSettlement()` when available before

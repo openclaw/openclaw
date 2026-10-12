@@ -157,6 +157,12 @@ answer once. This does not change provider replay. A run ID is provenance, not
 write authorization; the existing session checks still apply. If no source run
 is supplied, correlation retains the latest-message behavior.
 
+SQLite resolves delivery idempotency keys through their index independently of
+run correlation. Run correlation reads assistant messages from the producing
+run's indexed input onward; for a legacy run without that input identity, it
+searches only the most recent 4,096 transcript events. Settle those legacy
+deliveries promptly rather than relying on a full-history text search.
+
 ## Bounded model context
 
 Use `await SessionManager.openModelContextAsync(...)` from

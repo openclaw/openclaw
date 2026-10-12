@@ -22,12 +22,6 @@ import type {
   SessionTranscriptCorrectionInput,
 } from "./session-transcript-mutation.types.js";
 
-export type SessionActorMemoryWorkerTranscriptLedger = {
-  environmentId: string;
-  nextSeq: number;
-  receipts: Map<number, { requestHash: string; outcome: WorkerTranscriptCommitOutcome }>;
-};
-
 type Target = { scope: SessionTranscriptWriteScope & { sessionId: string } };
 export type SessionActorMemoryReportsReads = {
   "session.transcript.messageFacts": {
@@ -86,7 +80,3 @@ export type SessionActorMemoryReportsWrites = {
     };
   };
 };
-type Operations = SessionActorMemoryReportsReads & SessionActorMemoryReportsWrites;
-export type SessionActorMemoryReportsCommand = {
-  [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
-}[keyof Operations];

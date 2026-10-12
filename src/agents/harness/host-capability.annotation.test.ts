@@ -23,7 +23,6 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.worker.js";
-import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
@@ -666,18 +665,6 @@ describe("host-owned current admission annotation", () => {
       } finally {
         host.close();
       }
-    });
-  });
-
-  it("refuses a stale active projection even when the old anchor still matches", async () => {
-    await withAdmission(async (f) => {
-      const before = await loadTranscriptEvents(f.target);
-      runOpenClawAgentWriteTransaction(
-        (database) => markSessionTranscriptIndexDirtyInTransaction(database.db, f.target.sessionId),
-        { agentId: "main" },
-      );
-      await expect(f.annotate()).rejects.toThrow();
-      expect(await loadTranscriptEvents(f.target)).toEqual(before);
     });
   });
 

@@ -104,6 +104,7 @@ second reviewer by default. Do not add another mandatory CLI review pass.
 Reopen review for substantive changes or unresolved concerns, not a patch-identical
 rebase or a mechanical head change. Address real human/bot findings and explain
 rejected ones; bot scores and Rank-up lists do not create separate obligations.
+ClawSweeper reviews advisory. Never wait for bot comment before landing.
 
 Use the current PR template. Lead with the plain-language problem and concrete
 user impact; keep the explanation short and leave implementation inventories in
