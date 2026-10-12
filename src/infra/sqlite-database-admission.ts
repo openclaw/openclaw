@@ -4,13 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { OPENCLAW_DATABASE_SEAL_SCHEMA } from "../state/openclaw-database-seal-schema.js";
 import { hasErrnoCode } from "./errno.js";
-import {
-  invalidateSqliteCleanCloseSeal,
-  readSqliteCleanCloseSeal,
-  writeSqliteCleanCloseSeal,
-} from "./sqlite-clean-close-seal.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   SqliteDatabaseGenerationSlot,
@@ -30,6 +24,10 @@ import {
   type SqliteDatabaseAdmissionExchange as Exchange,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
+import {
+  integrityVerificationKey,
+  SqliteDatabaseCleanCloseSeals,
+} from "./sqlite-database-admission-seal.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
@@ -67,97 +65,8 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
   exchange: new AsyncLocalStorage<Exchange>(),
   exchanging: false,
   publication: 0,
-  sealsRead: new WeakSet<Admission>(),
+  seals: new SqliteDatabaseCleanCloseSeals(publishFact),
 }));
-
-const integrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
-  name: "sqlite.full-verification",
-  read: (value) => (typeof value === "number" && Number.isSafeInteger(value) ? value : undefined),
-};
-
-// Only completed validation facts cross a restart. Row caches and live authority
-// are deliberately excluded; their owners reconstruct them from current state.
-const sealedKeys = new Set([
-  "sqlite-schema",
-  "sqlite.full-verification",
-  "state.schema-version",
-  "state.runtime-schema",
-  "state.integrity",
-  "agent.completed-validation",
-  "agent.canonical-validation-receipt",
-  "agent.schema-metadata",
-]);
-
-function encodeSealValue(_key: string, value: unknown): unknown {
-  if (value instanceof Map) return { sealType: "map", entries: [...value] };
-  if (value instanceof Set) return { sealType: "set", entries: [...value] };
-  if (value instanceof SharedArrayBuffer) {
-    return { sealType: "shared", entries: [...new Int32Array(value)] };
-  }
-  return value;
-}
-
-function decodeSealValue(_key: string, value: unknown): unknown {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !("sealType" in value) ||
-    !("entries" in value) ||
-    !Array.isArray(value.entries)
-  )
-    return value;
-  if (value.sealType === "map") return new Map(value.entries);
-  if (value.sealType === "set") return new Set(value.entries);
-  if (value.sealType === "shared") {
-    const shared = new SharedArrayBuffer(value.entries.length * Int32Array.BYTES_PER_ELEMENT);
-    new Int32Array(shared).set(value.entries);
-    return shared;
-  }
-  return value;
-}
-
-function loadCleanCloseSeal(record: Admission): void {
-  // Only descriptor custody can admit restart proof. Workers consume the host's
-  // shared facts; rereading a seal there could revive an explicitly revoked fact.
-  if (threadId !== 0) return;
-  if (state.sealsRead.has(record)) return;
-  state.sealsRead.add(record);
-  const seal = readSqliteCleanCloseSeal(
-    record.location,
-    OPENCLAW_DATABASE_SEAL_SCHEMA,
-    fs.fstatSync(record.descriptor, { bigint: true }),
-  );
-  if (!seal || typeof seal.facts !== "string") return;
-  try {
-    const facts: unknown = JSON.parse(seal.facts, decodeSealValue);
-    if (
-      !Array.isArray(facts) ||
-      !facts.every(
-        (entry) =>
-          Array.isArray(entry) &&
-          entry.length === 3 &&
-          sealedKeys.has(entry[0]) &&
-          typeof entry[1] === "boolean",
-      ) ||
-      !facts.some(
-        ([name, , value]) => name === integrityVerificationKey.name && value === seal.verifiedAt,
-      ) ||
-      !facts.some(([name, , value]) => name === schemaAdmission.name && schemaAdmission.read(value))
-    )
-      return;
-    for (const [name, schemaDependent, value] of facts) {
-      publishFact(
-        record,
-        { name, schemaDependent },
-        value,
-        readSqliteDatabaseFactRevision(record, schemaDependent),
-      );
-    }
-    Atomics.store(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.sealPresent, 1);
-  } catch {
-    // A complete envelope with unusable facts is still a cache miss.
-  }
-}
 
 export function readSqliteDatabaseCleanClose(location: string): boolean {
   const record = pathAdmission(location);
@@ -167,16 +76,9 @@ export function readSqliteDatabaseCleanClose(location: string): boolean {
   );
 }
 
-function clearCleanCloseSeal(location: string, record?: Admission): void {
-  invalidateSqliteCleanCloseSeal(record?.location ?? location);
-  if (record) {
-    Atomics.store(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.sealPresent, 0);
-  }
-}
-
 /** Maintenance can invalidate restart proof while retaining its freshly checked runtime facts. */
 export function invalidateSqliteDatabaseCleanClose(location: string): void {
-  clearCleanCloseSeal(location, pathAdmission(location));
+  state.seals.invalidate(location, pathAdmission(location));
 }
 
 export function readSqliteDatabaseIntegrityVerification(
@@ -194,44 +96,13 @@ export function recordSqliteDatabaseIntegrity(database: DatabaseSync): void {
   publishSqliteDatabaseAdmission(database, integrityVerificationKey, Date.now());
 }
 
-/** Capture admitted facts before close; publish only after the owner's successful TRUNCATE and native close. */
+/** Capture admitted facts before close; publish only after successful TRUNCATE and native close. */
 export function prepareSqliteDatabaseCleanClose(database: DatabaseSync): () => boolean {
-  const record = admission(database);
-  if (!record || database.isTransaction) return () => false;
-  const verifiedAt = getSqliteDatabaseAdmission(database, integrityVerificationKey);
-  if (verifiedAt === undefined) return () => false;
-  const facts = [...record.facts].filter(
-    ([name, fact]) => sealedKeys.has(name) && valid(record, fact),
+  return state.seals.prepare(
+    database,
+    admission(database),
+    getSqliteDatabaseAdmission(database, integrityVerificationKey),
   );
-  if (!facts.some(([name]) => name === "sqlite-schema")) return () => false;
-  const serialized = JSON.stringify(
-    facts.map(([name, fact]) => [name, fact.schemaDependent, fact.value]),
-    encodeSealValue,
-  );
-  return () => {
-    if (database.isOpen || isRetired(record) || facts.some(([, fact]) => !valid(record, fact)))
-      return false;
-    try {
-      const file = fs.fstatSync(record.descriptor, { bigint: true });
-      if (identity(fs.statSync(record.location, { bigint: true })) !== record.identity)
-        return false;
-      const written = writeSqliteCleanCloseSeal(
-        record.location,
-        OPENCLAW_DATABASE_SEAL_SCHEMA,
-        file,
-        { verifiedAt, facts: serialized },
-      );
-      Atomics.store(
-        new Int32Array(record.generation),
-        SqliteDatabaseGenerationSlot.sealPresent,
-        written ? 1 : 0,
-      );
-      return written;
-    } catch {
-      // Sealing is an optimization after successful native disposal.
-      return false;
-    }
-  };
 }
 
 const scopedWrites = createSqliteDatabaseWriteReceipts({
@@ -288,7 +159,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   const retainedPrevious = previous && !isRetired(previous) ? previous : undefined;
   if (retainedPrevious) {
     state.registry.observeLocation(location, key);
-    loadCleanCloseSeal(retainedPrevious);
+    state.seals.load(retainedPrevious);
     return;
   }
   // A worker's unmanaged descriptors close on exit and can release sibling SQLite POSIX locks.
@@ -308,19 +179,19 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
     opened,
   );
   state.registry.observeLocation(location, record.identity);
-  loadCleanCloseSeal(record);
+  state.seals.load(record);
 }
 
 function pathAdmission(location: string): Admission | undefined {
   const retained = state.registry.forLocation(location);
   if (retained) {
-    loadCleanCloseSeal(retained);
+    state.seals.load(retained);
     return retained;
   }
   exchange(location);
   const shared = state.registry.forLocation(location);
   if (shared) {
-    loadCleanCloseSeal(shared);
+    state.seals.load(shared);
     return shared;
   }
   try {
@@ -399,7 +270,7 @@ export function prepareSqliteDatabaseAdmission(
         descriptor,
         opened,
       );
-      state.sealsRead.add(record);
+      state.seals.markCreated(record);
       if (prepareSqliteDatabaseAdmission(filename) !== record.identity) {
         throw new Error("SQLite database changed identity during file creation", { cause: error });
       }
@@ -576,7 +447,7 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
   ) {
     // Unlink before effect. A crash/torn publication can only force revalidation;
     // changed WAL or file metadata rejects any unlink lost during power failure.
-    clearCleanCloseSeal(record.location, record);
+    state.seals.invalidate(record.location, record);
   }
   scopedWrites.begin(database, unscoped);
   if (state.dataWriters.has(database)) {
@@ -782,7 +653,7 @@ export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
   // A close failure can report corruption after native disposal; keep revocation on that file.
   const record = state.connections.get(database) ?? admission(database);
   if (record) {
-    clearCleanCloseSeal(record.location, record);
+    state.seals.invalidate(record.location, record);
     const cell = new Int32Array(record.generation);
     Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);
     Atomics.add(cell, SqliteDatabaseGenerationSlot.factRevision, 1);
@@ -792,7 +663,7 @@ export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
 
 export function revokeSqliteDatabaseAdmissionsForPath(location: string): void {
   const record = pathAdmission(location);
-  clearCleanCloseSeal(location, record);
+  state.seals.invalidate(location, record);
   if (record) {
     const cell = new Int32Array(record.generation);
     Atomics.add(cell, SqliteDatabaseGenerationSlot.schemaRevision, 1);

@@ -1,15 +1,21 @@
 // Native open/close and physical identity admission share one owner.
 import type { DatabaseSync } from "node:sqlite";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
-import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  registerNodeSqliteDisposeCallback,
+} from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import { prepareSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
+import { cancelSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { OpenClawStateDatabase, StateDatabaseHandle } from "./openclaw-state-db-contract.js";
 
 const identities = resolveGlobalSingleton(
   Symbol.for("openclaw.stateNativeIdentities"),
@@ -88,4 +94,44 @@ export function closeTrackedStateDatabase(database: DatabaseSync): void {
   if (database.isOpen) {
     database.close();
   }
+}
+
+/** Finish all native close stages even when a previous stage failed. */
+export function closeStateDatabaseHandle(
+  database: StateDatabaseHandle,
+  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
+): { errors: unknown[]; cleanupPending: boolean } {
+  const errors: unknown[] = [];
+  const publishSeal = prepareSqliteDatabaseCleanClose(database.db);
+  let checkpointed = false;
+  try {
+    void cancelSqliteWalWriteAdmission(database.db);
+    checkpointed =
+      database.walMaintenance?.close(options) === true && options?.checkpointMode !== "PASSIVE";
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    clearNodeSqliteKyselyCacheForDatabase(database.db);
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    closeTrackedStateDatabase(database.db);
+  } catch (error) {
+    errors.push(error);
+  }
+  let cleanupPending = false;
+  if (!database.db.isOpen) {
+    try {
+      database.afterClose?.();
+    } catch (error) {
+      errors.push(error);
+      cleanupPending = true;
+    }
+  }
+  if (checkpointed && errors.length === 0 && !cleanupPending) {
+    publishSeal();
+  }
+  return { errors, cleanupPending };
 }

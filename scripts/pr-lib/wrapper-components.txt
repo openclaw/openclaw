@@ -1033,6 +1033,7 @@ src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-record.ts
+src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
 src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
