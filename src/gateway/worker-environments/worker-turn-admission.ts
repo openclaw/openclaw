@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createSessionPlacementSettlementClosedAbortError } from "../../agents/run-termination.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import type {
-  LocalTurnPlacementClaim,
-  RequiredSessionPlacementAdmission,
-} from "../../agents/session-placement-admission.types.js";
+import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.types.js";
 import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -21,6 +18,7 @@ import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
+import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { workerInferencePlacement } from "./inference-placement.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -34,7 +32,7 @@ import {
 } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import type { WorkerRuntimeRefreshInFlight } from "./provider-runtime-refresh.js";
-import type { WorkerEnvironmentService } from "./service.js";
+import type { WorkerTurnLauncherOptions } from "./worker-turn-launcher.types.js";
 import { captureWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 import {
   projectWorkspaceResultConflict,
@@ -46,12 +44,30 @@ import {
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
 /** Required policy uses current placement facts at the existing turn-admission boundary. */
-export function createRequiredWorkerTurnAdmission(options: {
-  placements: WorkerSessionPlacementStore;
-  environments: Pick<WorkerEnvironmentService, "get">;
-  withRequiredSession?: RequiredSessionPlacementAdmission;
-}) {
+export function createRequiredWorkerTurnAdmission(options: WorkerTurnLauncherOptions) {
   return {
+    async recoverInterruptedTurn(
+      placement: WorkerSessionPlacementRecord,
+      turn: SessionPlacementTurnParams,
+      assertCurrent: () => void,
+    ): Promise<WorkerSessionPlacementRecord> {
+      if (placement.state !== "active" || !options.isInterruptedTurn?.(placement)) {
+        return placement;
+      }
+      const signal = AbortSignal.timeout(Math.min(WORKER_ADMISSION_DEADLINE_MS, turn.timeoutMs));
+      await options.waitForAdmissionNode({
+        placement,
+        signal: turn.abortSignal ? AbortSignal.any([turn.abortSignal, signal]) : signal,
+        assertCurrent,
+      });
+      await options.reconcileActivePlacement(placement.environmentId);
+      const recovered = await options.placements.getAsync(placement.sessionId);
+      assertCurrent();
+      if (!recovered) {
+        throw new Error("Worker restart recovery lost placement");
+      }
+      return recovered;
+    },
     usesWorkerInference: async (identity: Omit<LocalTurnPlacementClaim, "runId">) => {
       const projection = await options.placements.readProjection([identity.sessionId], {
         current: true,

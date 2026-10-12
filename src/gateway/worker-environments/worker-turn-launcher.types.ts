@@ -19,6 +19,7 @@ export type WorkerTurnLauncherOptions = {
     sessionKey: string;
   }) => Promise<WorkerSessionWorkspace>;
   reconcileActivePlacement: (environmentId: string) => Promise<void>;
+  isInterruptedTurn?: (placement: WorkerSessionPlacementRecord) => boolean;
   waitForAdmissionNode: (params: {
     placement: ActiveWorkerPlacement;
     signal: AbortSignal;
