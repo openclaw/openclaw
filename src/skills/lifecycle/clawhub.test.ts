@@ -263,6 +263,28 @@ describe("skills-clawhub", () => {
     expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
   });
 
+  it("rejects non-GitHub resolutions for skills-sh references", async () => {
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "weather",
+      installKind: "archive",
+      trust: { state: "not-scanned-by-clawhub" },
+      archive: {
+        version: "1.0.0",
+        downloadUrl: "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
+      },
+    });
+
+    const result = await installTestSkill(testWorkspaceDir, "skills-sh:openclaw/skills/weather");
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Skill "weather" did not resolve to an unscanned, commit-pinned GitHub source.',
+    });
+    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
+    expect(downloadClawHubGitHubSkillArchiveMock).not.toHaveBeenCalled();
+  });
+
   it.each([{ state: "scanned-by-clawhub" }])(
     "rejects skills-sh resolutions without the external unscanned trust state",
     async (trust) => {
@@ -334,6 +356,34 @@ describe("skills-clawhub", () => {
     });
     expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bypasses ClawHub trust checks for official skill install resolutions", async () => {
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "agentreceipt",
+      channel: "official",
+      isOfficial: true,
+      installKind: "archive",
+      archive: {
+        version: "1.0.0",
+        downloadUrl: "https://clawhub.ai/api/v1/download?slug=agentreceipt&version=1.0.0",
+      },
+    });
+    fetchClawHubSkillSecurityVerdictsMock.mockRejectedValueOnce(new Error("should not be called"));
+
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt");
+
+    expectInstalledSkill(result, {
+      slug: "agentreceipt",
+      version: "1.0.0",
+      targetDir: path.join(testWorkspaceDir, "skills", "agentreceipt"),
+    });
+    expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
+    expect(installPolicyInput()).toMatchObject({
+      origin: { registry: "https://clawhub.ai" },
+      source: { kind: "clawhub", authority: "official", mutable: false, network: true },
+    });
   });
 
   it("prints the ClawHub audit and installs releases with a Review outcome", async () => {

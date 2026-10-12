@@ -61,6 +61,30 @@ function prepareCase(memory: MemoryCase, wiki: WikiCase) {
 describe("memory_get corpus outcomes", () => {
   it.each([
     {
+      name: "keeps a memory hit while reporting a successful wiki lookup",
+      memory: memoryHit,
+      wiki: wikiHit,
+      expected: {
+        ...memoryHit,
+        corpora: [
+          { corpus: "memory", outcome: "ok" },
+          { corpus: "wiki", outcome: "ok" },
+        ],
+      },
+    },
+    {
+      name: "falls through from a memory miss to wiki content",
+      memory: memoryMiss,
+      wiki: wikiHit,
+      expected: {
+        ...wikiPayload,
+        corpora: [
+          { corpus: "memory", outcome: "ok" },
+          { corpus: "wiki", outcome: "ok" },
+        ],
+      },
+    },
+    {
       name: "returns not found when wiki misses and memory is unavailable",
       memory: new Error("memory unavailable"),
       wiki: null,

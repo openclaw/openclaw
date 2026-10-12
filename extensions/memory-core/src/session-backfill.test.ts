@@ -669,6 +669,77 @@ describe("runSessionBackfill", () => {
     }
   });
 
+  it("stages idempotently, converges duplicate facts, and rolls back staged artifacts", async () => {
+    const workspaceDir = await createIsolatedWorkspace("apply-");
+    await seedCanonicalTranscript("repeat", [
+      {
+        role: "user",
+        content: "The preferred editor is Nova",
+        timestamp: "2026-03-01T10:00:00.000Z",
+        owner: true,
+      },
+      {
+        role: "user",
+        content: "The preferred editor is Nova",
+        timestamp: "2026-03-01T11:00:00.000Z",
+        owner: true,
+      },
+    ]);
+
+    const first = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
+      timezone: "UTC",
+    });
+    const afterFirst = await readShortTermRecallEntries({ workspaceDir });
+    const firstContentHash = hashStagedContent(afterFirst);
+
+    // Count-level proof stays stable across the sibling claim-key implementation.
+    expect(first.stagedEntries).toBe(1);
+    expect(afterFirst).toHaveLength(1);
+    expect(afterFirst[0]?.snippet).toBe("The preferred editor is Nova");
+
+    const second = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
+      timezone: "UTC",
+    });
+    expect(second.candidateCount).toBe(0);
+    expect(second.stagedEntries).toBe(0);
+    expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(1);
+
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    expect(await fs.readFile(dreamsPath, "utf-8")).toContain("openclaw:dreaming:backfill-entry");
+
+    const rollback = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      rollback: true,
+    });
+    expect(rollback.rollback).toEqual({
+      removedDiaryEntries: 1,
+      removedStagedEntries: 1,
+    });
+    expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(0);
+    expect(await fs.readFile(dreamsPath, "utf-8")).not.toContain(
+      "openclaw:dreaming:backfill-entry",
+    );
+    const reapplied = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      apply: true,
+      nowMs: Date.parse("2026-03-02T12:00:00.000Z"),
+      timezone: "UTC",
+    });
+    const afterReapply = await readShortTermRecallEntries({ workspaceDir });
+    expect(reapplied.candidateCount).toBe(2);
+    expect(hashStagedContent(afterReapply)).toBe(firstContentHash);
+  });
+
   it("resets agent ingestion state when legacy staged entries have no rewind journal", async () => {
     const workspaceDir = await createIsolatedWorkspace("legacy-rollback-");
     await seedCanonicalTranscript("legacy", [

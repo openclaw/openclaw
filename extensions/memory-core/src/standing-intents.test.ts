@@ -506,6 +506,37 @@ describe("standing intents", () => {
     ).toMatchObject({ status: "done", fireCount: 1, lastFiredAt: 1_000 });
   });
 
+  it("does not consume fire budgets for intents that do not fit hidden context", async () => {
+    const intents: Awaited<ReturnType<typeof createStandingIntent>>[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      intents.push(
+        await createStandingIntent({
+          agentId: "main",
+          description: `${String(index)}${"x".repeat(499)}`,
+          triggerKeywords: ["bounded trigger"],
+          maxFires: 1,
+          nowMs: index + 1,
+        }),
+      );
+    }
+
+    const matches = await matchStandingIntents({
+      agentId: "main",
+      prompt: "bounded trigger",
+      nowMs: 10_000,
+    });
+    const stored = await listStandingIntents({ agentId: "main", nowMs: 10_000 });
+
+    expect(matches).toHaveLength(2);
+    expect(buildStandingIntentContext(matches)?.length).toBeLessThanOrEqual(
+      INTENT_INJECTION_MAX_CHARS,
+    );
+    expect(stored.find((intent) => intent.id === intents[2]?.id)).toMatchObject({
+      status: "armed",
+      fireCount: 0,
+    });
+  });
+
   it("uses anti-nagging defaults and bounds hidden injection", async () => {
     const intent = await createStandingIntent({
       agentId: "main",
