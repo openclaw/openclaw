@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -475,6 +476,26 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     await repairHooksTokenReuseGatewayAuth(state.candidate, process.env),
     `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
     { emitWarnings: false },
+  );
+
+  const { repairSystemAgentWorkspacePin } =
+    await import("./doctor/shared/system-agent-workspace-repair.js");
+  // authoredConfig keeps include-resolved authored values (env refs intact); parsed only has the
+  // root file, so an agents.defaults $include would otherwise freeze the resolved absolute path.
+  const parsedAgents = isRecord(snapshot.parsed) ? snapshot.parsed.agents : undefined;
+  const parsedDefaults = isRecord(parsedAgents) ? parsedAgents.defaults : undefined;
+  const authoredDefaultWorkspace =
+    snapshot.authoredConfig?.agents?.defaults?.workspace ??
+    (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
+  const systemAgentWorkspace = await repairSystemAgentWorkspacePin(state.candidate, process.env, {
+    includeOwnsRoster,
+    authoredDefaultWorkspace:
+      typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
+  });
+  explicitSetPaths.push(...(systemAgentWorkspace.explicitSetPaths ?? []));
+  applyConfigMutation(
+    systemAgentWorkspace,
+    `Run "${doctorFixCommand}" to pin the system agent's workspace.`,
   );
 
   if (shouldRepair) {

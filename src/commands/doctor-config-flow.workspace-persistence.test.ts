@@ -3,7 +3,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readAgentRosterProperty } from "../agents/agent-roster.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { saveCronJobsStore } from "../cron/store.js";
@@ -356,6 +362,163 @@ describe("Doctor workspace persistence", () => {
         expect(snapshot.config.agents?.ownership).toBe("explicit");
         expect(snapshot.config.agents?.entries?.main?.workspace).toBe(workspace);
       });
+    });
+  });
+
+  it("does not pin a converged system agent whose files are only in the shared workspace", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const workspace = path.join(home, "shared-workspace");
+        await fs.mkdir(path.join(workspace, "memory"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "SOUL.md"), "root persona");
+        const configPath = await writeOpenClawConfig(home, {
+          agents: {
+            ownership: "explicit",
+            defaults: { workspace, systemAgent: { agentId: "main" } },
+            entries: { main: {}, dev: {} },
+          },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        const before = (await readConfigFileSnapshot()).config;
+        expect(resolveAgentWorkspaceDir(before, "main")).toBe(path.join(workspace, "main"));
+
+        await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+
+        const after = (await readConfigFileSnapshot()).config;
+        expect(after.agents?.entries?.main?.workspace).toBeUndefined();
+        expect(resolveAgentWorkspaceDir(after, "main")).toBe(path.join(workspace, "main"));
+        expect(await fs.readFile(path.join(workspace, "SOUL.md"), "utf8")).toBe("root persona");
+      });
+    });
+  });
+
+  it("pins a converged system agent to its directory and keeps the authored env root", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const workspace = path.join(home, "shared-workspace");
+      await withEnvAsync(
+        { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", WORKSPACE_ROOT: workspace },
+        async () => {
+          await fs.mkdir(path.join(workspace, "main", "memory"), { recursive: true });
+          await fs.writeFile(path.join(workspace, "main", "SOUL.md"), "agent persona");
+          const configPath = await writeOpenClawConfig(home, {
+            agents: {
+              ownership: "explicit",
+              defaults: { workspace: "${WORKSPACE_ROOT}", systemAgent: { agentId: "main" } },
+              entries: { main: {}, dev: {} },
+            },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+
+          await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+
+          const written = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+            agents: { defaults: { workspace: string }; entries: Record<string, any> };
+          };
+          expect(written.agents.defaults.workspace).toBe("${WORKSPACE_ROOT}");
+          expect(written.agents.entries.main.workspace).toBe("${WORKSPACE_ROOT}/main");
+          const after = (await readConfigFileSnapshot()).config;
+          expect(resolveAgentWorkspaceDir(after, "main")).toBe(path.join(workspace, "main"));
+          const launch = listConfiguredOwnerInputs(after, workspace).find(
+            (input) => input.agentId === "main",
+          );
+          expect(launch?.workspaceDir).toBe(path.join(workspace, "main"));
+          expect(resolveAgentWorkspaceDir(after, "dev")).toBe(path.join(workspace, "dev"));
+        },
+      );
+    });
+  });
+
+  it("leaves a converged system agent unpinned while it has a stored CLI-backend conversation", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const workspace = path.join(home, "shared-workspace");
+        await fs.mkdir(path.join(workspace, "main", "memory"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "main", "SOUL.md"), "agent persona");
+        const configPath = await writeOpenClawConfig(home, {
+          agents: {
+            ownership: "explicit",
+            defaults: { workspace, systemAgent: { agentId: "main" } },
+            entries: { main: {}, dev: {} },
+          },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        await upsertSessionEntryCore(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+          },
+          {
+            sessionId: "main-local",
+            updatedAt: Date.now(),
+            cliSessionBindings: { "claude-cli": { sessionId: "claude-native-1" } },
+          },
+        );
+        closeOpenClawStateDatabaseForTest();
+
+        await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+
+        const after = (await readConfigFileSnapshot()).config;
+        expect(after.agents?.entries?.main?.workspace).toBeUndefined();
+        const launch = listConfiguredOwnerInputs(after, workspace).find(
+          (input) => input.agentId === "main",
+        );
+        expect(launch?.workspaceDir).toBe(workspace);
+        expect(
+          loadSessionEntryReadOnly({
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+          })?.cliSessionBindings?.["claude-cli"]?.sessionId,
+        ).toBe("claude-native-1");
+      });
+    });
+  });
+
+  it("keeps the authored env root when agents.defaults comes from an include", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const workspace = path.join(home, "shared-workspace");
+      const moved = path.join(home, "moved-workspace");
+      await withEnvAsync(
+        { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", WORKSPACE_ROOT: workspace },
+        async () => {
+          await fs.mkdir(path.join(workspace, "main", "memory"), { recursive: true });
+          await fs.writeFile(path.join(workspace, "main", "SOUL.md"), "agent persona");
+          await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
+          await fs.writeFile(
+            path.join(home, ".openclaw", "defaults.json5"),
+            '{ workspace: "${WORKSPACE_ROOT}", systemAgent: { agentId: "main" } }\n',
+          );
+          const configPath = await writeOpenClawConfig(home, {
+            agents: {
+              ownership: "explicit",
+              defaults: { $include: "./defaults.json5" },
+              entries: { main: {}, dev: {} },
+            },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+
+          await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+
+          const written = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+            agents: { defaults: Record<string, unknown>; entries: Record<string, any> };
+          };
+          expect(written.agents.defaults).toEqual({ $include: "./defaults.json5" });
+          expect(written.agents.entries.main.workspace).toBe("${WORKSPACE_ROOT}/main");
+          const after = (await readConfigFileSnapshot()).config;
+          expect(resolveAgentWorkspaceDir(after, "main")).toBe(path.join(workspace, "main"));
+          expect(resolveAgentWorkspaceDir(after, "dev")).toBe(path.join(workspace, "dev"));
+
+          process.env.WORKSPACE_ROOT = moved;
+          const reloaded = (await readConfigFileSnapshot()).config;
+          expect(resolveAgentWorkspaceDir(reloaded, "main")).toBe(path.join(moved, "main"));
+          expect(resolveAgentWorkspaceDir(reloaded, "dev")).toBe(path.join(moved, "dev"));
+        },
+      );
     });
   });
 
