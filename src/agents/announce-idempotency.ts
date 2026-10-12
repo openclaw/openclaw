@@ -12,3 +12,8 @@ export function buildAnnounceIdFromChildRun(params: {
 export function buildAnnounceIdempotencyKey(announceId: string): string {
   return `announce:${announceId}`;
 }
+
+/** Completion turns run under their announce key, so saved replies keep that run id. */
+export function isAnnounceIdempotencyKey(value: string | undefined): boolean {
+  return value?.startsWith("announce:") === true;
+}

@@ -42,7 +42,7 @@ it.each([false, true])(
 it("keeps a transient session notice at the top of the native user prompt", () => {
   const session = { mode: "reuse", sessionId: "native-session" } as const;
   const note = "[OpenClaw: Messages occurred outside this Claude session.]";
-  const render = createCliCurrentPromptRenderer({}, session, { gap: note });
+  const render = createCliCurrentPromptRenderer({}, session, { sessionGapContext: note });
   expect(render("Read the latest token.")).toBe(`${note}\n\nRead the latest token.`);
   expect(render("Read the latest token.", true)).toBe(`${note}\n\nRead the latest token.`);
   expect(createCliCurrentPromptRenderer({}, session)("Read the latest token.")).toBe(
@@ -51,15 +51,15 @@ it("keeps a transient session notice at the top of the native user prompt", () =
 });
 
 const unseenTurns = [{ prompt: "Child result: CHILD_RESULT", reply: "Relayed." }];
-const cliSessionBinding = { sessionId: "native-bound", unseenTurns };
+const currentInboundContext = { text: "Conversation info" };
 const historyWriter = {} as CliHistoryWriter;
 
 describe("CLI resume user context", () => {
   it("puts the drift note before exchanges the resumed session missed", () => {
     const render = createCliCurrentPromptRenderer(
-      { currentInboundContext: { text: "Conversation info" }, cliSessionBinding },
+      { currentInboundContext },
       { mode: "reuse-with-drift", sessionId: "native-bound", drift: { reasons: ["prompt-tools"] } },
-      { writer: historyWriter },
+      { unseenTurns, writer: historyWriter },
     );
 
     expect(render("ask")).toBe(
@@ -72,15 +72,12 @@ describe("CLI resume user context", () => {
     );
   });
 
-  it.each([
-    { name: "a fresh session", session: { mode: "invalidate", invalidatedReason: "mcp" } },
-    { name: "another native session", session: { mode: "reuse", sessionId: "native-other" } },
-  ] as const)("leaves $name to recover from saved history", ({ session }) => {
+  it("leaves a fresh session to recover from saved history", () => {
     expect(
       createCliCurrentPromptRenderer(
-        { currentInboundContext: { text: "Conversation info" }, cliSessionBinding },
-        session,
-        { writer: historyWriter },
+        { currentInboundContext },
+        { mode: "invalidate", invalidatedReason: "mcp" },
+        { unseenTurns, writer: historyWriter },
       )("ask"),
     ).toBe("Conversation info\n\nask");
   });
@@ -88,8 +85,9 @@ describe("CLI resume user context", () => {
   it("withholds missed exchanges without the history account boundary", () => {
     expect(
       createCliCurrentPromptRenderer(
-        { currentInboundContext: { text: "Conversation info" }, cliSessionBinding },
+        { currentInboundContext },
         { mode: "reuse", sessionId: "native-bound" },
+        { unseenTurns },
       )("ask"),
     ).toBe("Conversation info\n\nask");
   });

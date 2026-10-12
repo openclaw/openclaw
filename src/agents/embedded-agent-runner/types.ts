@@ -3,7 +3,6 @@ import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-ru
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type {
   CliSessionBinding,
-  CliSessionUnseenTurn,
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
@@ -65,8 +64,6 @@ export type EmbeddedAgentMeta = {
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
   clearCliSessionBinding?: boolean;
-  /** A preserved conversation turn the bound native session did not run; its binding owner may carry it. */
-  cliUnseenTurn?: CliSessionUnseenTurn;
   compactionCount?: number;
   /**
    * Token count estimate after the most recent successful auto-compaction.

@@ -16,6 +16,7 @@ import {
   type InputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -305,7 +306,8 @@ describe("Claude CLI completion announce continuity", () => {
   async function runCompletionAfterFirstTurn() {
     const first = await runTurn({ runId: "run-requester-1", body: "Spawn the docs review." });
     const completion = await runTurn({
-      runId: "run-completion-1",
+      // Direct completion delivery runs under the announce key and saves no user row.
+      runId: `announce:v1:${CHILD_KEY}:child-run-1`,
       body: `A background task finished. Child result: ${CHILD_RESULT}. Process the completion update now.`,
       opts: completionOpts,
     });
@@ -369,6 +371,23 @@ describe("Claude CLI completion announce continuity", () => {
             params.opts?.inputProvenance as InputProvenance | undefined,
           ),
           opts: params.opts,
+          // Mirrors the Gateway: user-sent turns save their own row; completions do not.
+          ...(params.opts?.inputProvenance
+            ? {}
+            : {
+                userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+                  input: { text: params.body, idempotencyKey: `${params.runId}:user` },
+                  target: {
+                    sessionId: REQUESTER_SESSION_ID,
+                    expectedSessionId: REQUESTER_SESSION_ID,
+                    sessionKey: REQUESTER_KEY,
+                    sessionEntry,
+                    agentId: "main",
+                    storePath,
+                    config,
+                  },
+                }),
+              }),
           messageChannel: "webchat",
         }),
       );
@@ -417,7 +436,7 @@ describe("Claude CLI completion announce continuity", () => {
     const resumedContext = await readNativeTranscript(next.sessionId);
     expect(resumedContext).toContain(CHILD_RESULT);
     expect(resumedContext).toContain(ANNOUNCE_REPLY);
-    expect(getCliSessionBinding(requesterEntry(), "claude-cli")?.unseenTurns).toBeUndefined();
+    expect(next.prompt).toContain("may have run in a separate session");
 
     // The carried exchange enters the native session once.
     const later = await runTurn({ runId: "run-requester-3", body: "Thanks." });
@@ -431,35 +450,48 @@ describe("Claude CLI completion announce continuity", () => {
     expect(completion.reply).toBe(ANNOUNCE_REPLY);
     const binding = getCliSessionBinding(requesterEntry(), "claude-cli");
     expect(binding?.authEpoch).toBeUndefined();
-    expect(binding?.unseenTurns).toBeUndefined();
 
     const next = await runTurn({ runId: "run-requester-2", body: "What did the review find?" });
     expect(next).toMatchObject({ resumed: true, sessionId: binding?.sessionId });
     expect(next.prompt).not.toContain(CHILD_RESULT);
     expect(next.prompt).not.toContain(ANNOUNCE_REPLY);
+    // Content stays withheld, but the resumed session learns the exchange exists.
+    expect(next.prompt).toContain("1 messages occurred outside this Claude session");
   });
 
-  it("refuses the saved exchange after an identity-less login is reassigned", async () => {
-    await seedRequester({
+  it.each([
+    {
+      name: "an identity-less login",
       id: IDENTITYLESS_PROFILE_ID,
-      credential: identitylessLogin("synthetic-login-a"),
-    });
-    await runCompletionAfterFirstTurn();
+      before: identitylessLogin("synthetic-login-a"),
+      after: identitylessLogin("synthetic-login-b"),
+      resumed: true,
+    },
+    {
+      name: "a named account whose credential is replaced",
+      id: ACCOUNT_PROFILE_ID,
+      before: { type: "token", provider: "anthropic", token: "synthetic-account-a" },
+      after: { type: "token", provider: "anthropic", token: "synthetic-account-b" },
+      resumed: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    id: string;
+    before: AuthProfileCredential;
+    after: AuthProfileCredential;
+    resumed: boolean;
+  }>)("withholds the saved exchange from $name", async ({ id, before, after, resumed }) => {
+    await seedRequester({ id, credential: before });
+    const { completion } = await runCompletionAfterFirstTurn();
+    expect(completion.reply).toBe(ANNOUNCE_REPLY);
     const binding = getCliSessionBinding(requesterEntry(), "claude-cli");
-    expect(binding?.unseenTurns?.[0]?.reply).toBe(ANNOUNCE_REPLY);
 
-    // Another account's token under the same profile keeps native reuse but cannot own history.
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: { [IDENTITYLESS_PROFILE_ID]: identitylessLogin("synthetic-login-b") },
-      },
-      state.agentDir(),
-    );
+    // The new credential cannot own the saved history, whether or not native reuse survives.
+    saveAuthProfileStore({ version: 1, profiles: { [id]: after } }, state.agentDir());
     const next = await runTurn({ runId: "run-requester-2", body: "What did the review find?" });
-    expect(next).toMatchObject({ resumed: true, sessionId: binding?.sessionId });
+    expect(next.resumed).toBe(resumed);
+    expect(next.sessionId === binding?.sessionId).toBe(resumed);
     expect(next.prompt).not.toContain(CHILD_RESULT);
     expect(next.prompt).not.toContain(ANNOUNCE_REPLY);
-    expect(getCliSessionBinding(requesterEntry(), "claude-cli")?.unseenTurns).toBeUndefined();
   });
 });

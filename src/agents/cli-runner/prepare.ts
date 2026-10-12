@@ -1538,7 +1538,7 @@ async function prepareCliRunContextWithinReadFence(
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
-      const notes = { gap: sessionPromptContext?.sessionGapContext, writer: cliHistoryWriter };
+      const notes = { ...sessionPromptContext, writer: cliHistoryWriter };
       const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession, notes);
       const preferResumableText =
         params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);

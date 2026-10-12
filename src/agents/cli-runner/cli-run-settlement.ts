@@ -3,10 +3,6 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  annotateInterSessionPromptText,
-  isPreservedConversationTurnInputProvenance,
-} from "../../sessions/input-provenance.js";
-import {
   externalCliDiscoveryForProviderAuth,
   loadAuthProfileStoreForRuntime,
   markAuthProfileFailure,
@@ -19,7 +15,6 @@ import {
 } from "../cli-auth-epoch.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import {
-  buildCliSessionUnseenTurn,
   shouldClearFailedCliSessionBinding,
   shouldClearInterruptedCliSessionBinding,
 } from "../cli-session.js";
@@ -535,22 +530,6 @@ export function buildCliRunResult(params: {
       ? runParams.cliSessionBinding.reseedReceipt
       : undefined;
   const reseedReceipt = createdReseedReceipt ?? preservedReseedReceipt;
-  // A preserved conversation turn that ran outside the bound native session is
-  // invisible to it; report the exchange so the binding owner can carry it.
-  const unseenTurn =
-    persistedCliSessionId &&
-    runParams.cliSessionBinding &&
-    persistedCliSessionId !== runParams.cliSessionBinding.sessionId &&
-    context.contextEngineTurnPrompt !== undefined &&
-    isPreservedConversationTurnInputProvenance(runParams.inputProvenance)
-      ? buildCliSessionUnseenTurn({
-          prompt: annotateInterSessionPromptText(
-            context.contextEngineTurnPrompt,
-            runParams.inputProvenance,
-          ),
-          reply: finalAssistantVisibleText ?? "",
-        })
-      : undefined;
   const agentSessionId =
     terminalInterruption || unflushed
       ? ""
@@ -658,7 +637,6 @@ export function buildCliRunResult(params: {
               },
             }
           : {}),
-        ...(unseenTurn ? { cliUnseenTurn: unseenTurn } : {}),
         ...(cliSessionBindingCleared ? { clearCliSessionBinding: true } : {}),
       },
     },

@@ -408,7 +408,6 @@ export async function verifyCliBackendAnnounceContinuity({
   const binding = () =>
     getCliSessionBinding(loadGatewaySessionEntryReadOnly(announce.sessionKey).entry, "claude-cli");
   const boundCliSessionId = () => binding()?.sessionId;
-  const pendingExchanges = binding()?.unseenTurns?.length ?? 0;
   const boundBefore = boundCliSessionId();
   if (!boundBefore) {
     throw new Error("CLI announce probe has no bound Claude session");
@@ -445,7 +444,6 @@ export async function verifyCliBackendAnnounceContinuity({
     boundCliSessionId: boundBefore,
     userTurns: userTexts.length,
     historyAuthorized,
-    pendingExchanges,
     carriedCompletion: carried !== undefined,
     followUpReply: extractPayloadText(followUp.result),
   });
@@ -453,6 +451,7 @@ export async function verifyCliBackendAnnounceContinuity({
   expect(userTexts.some((text) => text.startsWith("[Inter-session message]"))).toBe(false);
   if (!historyAuthorized) {
     expect(carried, "an unowned login must not replay the completion exchange").toBeUndefined();
+    expect(userTexts.at(-1)).toContain("occurred outside this Claude session");
     return;
   }
   expect(carried, "resumed Claude session lacks the completion exchange").toBeDefined();

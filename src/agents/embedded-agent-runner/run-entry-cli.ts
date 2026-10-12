@@ -5,10 +5,7 @@ import {
 } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import {
-  persistCliSessionBindingResult,
-  settlePreservedCliSessionTurn,
-} from "../cli-session-store.js";
+import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import { createAgentRunSupersededAbortError } from "../run-termination.js";
@@ -61,14 +58,19 @@ export function withAdmittedCliCandidate(
       ) {
         throw createAgentRunSupersededAbortError();
       }
-      const cliSessionBinding = getCliSessionBinding(sessionEntry, params.provider);
       return run({
         sessionEntry,
-        cliSessionBinding,
+        cliSessionBinding: getCliSessionBinding(sessionEntry, params.provider),
         assertSettlementCurrent,
         settleResult: async ({ result, expectedSession, sessionStore, preserveBinding }) => {
           const classification = params.classifyResult?.(result);
-          const storeTarget = {
+          if (
+            preserveBinding ||
+            (classification && result.meta.agentMeta?.clearCliSessionBinding !== true)
+          ) {
+            return result;
+          }
+          return persistCliSessionBindingResult({
             agentId: params.claim.agentId,
             provider: params.provider,
             sessionKey: target?.sessionKey,
@@ -78,19 +80,7 @@ export function withAdmittedCliCandidate(
             sessionStore,
             assertSettlementCurrent,
             abortSignal: params.admission?.abortSignal,
-          };
-          if (preserveBinding) {
-            return classification
-              ? result
-              : settlePreservedCliSessionTurn({
-                  ...storeTarget,
-                  boundCliSessionId: cliSessionBinding?.sessionId,
-                });
-          }
-          if (classification && result.meta.agentMeta?.clearCliSessionBinding !== true) {
-            return result;
-          }
-          return persistCliSessionBindingResult(storeTarget);
+          });
         },
       });
     },

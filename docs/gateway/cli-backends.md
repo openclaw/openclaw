@@ -379,16 +379,22 @@ to disk. No migration or update repair is required.
 
 Some turns keep the requester's native binding while running in a separate native
 session, such as a sub-agent completion whose restricted tool set gives it a
-different MCP configuration. OpenClaw keeps that turn's prompt and reply on the
-binding (each capped at 2,000 characters, newest 8 turns) and prepends them once,
-as a marked context block, to the next turn that resumes the bound session. The
-separate turn's tool restrictions are unchanged. A fresh session recovers the same
-exchange from saved history instead, and chat history shows each turn once.
+different MCP configuration. When the next ordinary turn resumes the bound session,
+OpenClaw reads the completion replies saved in the session transcript since that
+session's last ordinary Claude reply (with each completion prompt when the
+transcript saved it) and prepends them, as a marked context block, to that turn
+(newest 8, each capped at 2,000 characters). Nothing
+new is stored: the context comes from the canonical transcript, so restarts,
+upgrades, and rollbacks keep the same behavior. A completion that resumed the
+bound session itself can appear once more as quoted context. The separate turn's
+tool restrictions are unchanged. A fresh session recovers the same exchange from
+saved history instead, and chat history shows each turn once.
 Like saved-history recovery, this replay requires the
 [history account boundary](#history-account-boundaries) of the resuming turn. An
-opaque native login keeps no exchange, and an identity-less OAuth credential or a
-changed account withholds and drops it; the resumed session then has only its own
-native history.
+opaque native login, an identity-less OAuth credential, or a changed account gets
+no saved text; the turn gets only the metadata-only session-gap note, which counts
+the completion turns and adds the `sessions_history` hint when that tool is
+available.
 
 ### History account boundaries
 
