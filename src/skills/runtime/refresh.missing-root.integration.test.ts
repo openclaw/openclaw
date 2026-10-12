@@ -163,6 +163,9 @@ it("re-admits a replaced workspace and observes subsequent skill edits and remov
   // The old Root may fail closed; its automatic retry joins retirement before
   // admitting the replacement. The broader previous authority can reconcile in place.
   await Promise.allSettled(subscriptions.map((subscription) => subscription.reconcile()));
+  await Promise.all(
+    [...pathWatchers.values()].filter((state) => state.replacing).map((state) => state.close()),
+  );
   await ready();
   await advance(500);
   expect(
