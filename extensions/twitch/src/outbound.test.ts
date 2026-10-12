@@ -523,6 +523,35 @@ describe("outbound", () => {
       },
     );
 
+    it.each(["#", "   "])(
+      "should keep the default-channel fallback for empty-normalizing target %j",
+      async (to) => {
+        const { sendMessageTwitchInternal } = await import("./send.js");
+
+        setupAccountContext();
+        vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+          messageId: "msg-fallback",
+          receipt: twitchTestReceipt("msg-fallback"),
+        });
+
+        await twitchOutbound.sendText!({
+          cfg: mockConfig,
+          to,
+          text: "Hello!",
+          accountId: "default",
+        });
+
+        expect(sendMessageTwitchInternal).toHaveBeenCalledWith({
+          channel: "testchannel",
+          text: "Hello!",
+          cfg: mockConfig,
+          account: mockAccount,
+          accountId: "default",
+          clientManager: undefined,
+        });
+      },
+    );
+
     it("uses configured defaultAccount when accountId is omitted", async () => {
       const { sendMessageTwitchInternal } = await import("./send.js");
 
