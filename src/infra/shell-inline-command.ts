@@ -184,26 +184,22 @@ export function resolveInlineCommandMatch(
       break;
     }
     const comparableToken = options.allowCombinedC ? token : lower;
-    if (flags.has(comparableToken)) {
-      const valueTokenIndex = i + 1 < argv.length ? i + 1 : null;
-      if (options.restValueFlags?.has(comparableToken)) {
-        const command = argv
-          .slice(i + 1)
-          .map((arg) => arg.trim())
-          .join(" ")
-          .trim();
-        return { command: command ? command : null, valueTokenIndex };
-      }
-      const command = argv[i + 1]?.trim();
-      return { command: command ? command : null, valueTokenIndex };
-    }
-    const combined = options.allowCombinedC ? parseCombinedCommandFlag(token) : null;
-    if (combined) {
-      if (combined.attachedCommand !== null) {
+    const exact = flags.has(comparableToken);
+    const combined = !exact && options.allowCombinedC ? parseCombinedCommandFlag(token) : null;
+    if (exact || combined) {
+      if (combined && combined.attachedCommand !== null) {
         return { command: combined.attachedCommand.trim() || null, valueTokenIndex: i };
       }
-      const valueTokenIndex = i + 1 + combined.separateValueCount;
-      const command = argv[valueTokenIndex]?.trim();
+      const commandIndex = i + 1 + (combined?.separateValueCount ?? 0);
+      const valueTokenIndex = !combined && commandIndex >= argv.length ? null : commandIndex;
+      const command =
+        exact && options.restValueFlags?.has(comparableToken)
+          ? argv
+              .slice(i + 1)
+              .map((arg) => arg.trim())
+              .join(" ")
+              .trim()
+          : argv[commandIndex]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }
     if (options.valueOptions?.has(lower)) {

@@ -317,11 +317,9 @@ describe("native check launchers in paths with spaces", () => {
           ],
           {
             compiler: false,
-            dependencies: ["tsx", "@openclaw/fs-safe", "json5", "p-map", "koffi"],
+            dependencies: ["tsx", "@openclaw/fs-safe", "json5", "p-map", "@openclaw/proc-safe"],
           },
         );
-        const nativeJob = "src/process/supervisor/service-child-windows-job-native.ts";
-        write(root, nativeJob, fs.readFileSync(path.join(sourceRoot, nativeJob), "utf8"));
         const compiler = script === "run-tsgo-core-test-shards.mts";
         const workload = compiler
           ? "node_modules/typescript/compiler.mjs"

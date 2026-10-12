@@ -7,7 +7,7 @@ import {
   testWorkerLaunchInput,
   TEST_WORKER_ENDPOINT,
 } from "../node-host/node-worker-supervisor.test-support.js";
-import { completeWorkerLaunchDescriptor, buildWorkerConnectParams } from "./launch-descriptor.js";
+import { parseWorkerLaunchDescriptor, buildWorkerConnectParams } from "./launch-descriptor.js";
 import type { NativeInferenceStartup } from "./native-inference-startup.js";
 import * as connections from "./worker-connection.js";
 import type { WorkerConnectionState } from "./worker-connection.js";
@@ -38,10 +38,10 @@ afterEach(() => {
 
 function fixture(native = true) {
   const root = tempDirs.make("native-admission-authority-");
-  const descriptor = completeWorkerLaunchDescriptor(
-    testWorkerLaunchInput(root, "authority-turn").descriptor,
-    TEST_WORKER_ENDPOINT,
-  );
+  const descriptor = parseWorkerLaunchDescriptor({
+    ...testWorkerLaunchInput(root, "authority-turn").descriptor,
+    connectionEndpoint: TEST_WORKER_ENDPOINT,
+  });
   if (native) {
     descriptor.assignment.inference = "runtime-local";
   }

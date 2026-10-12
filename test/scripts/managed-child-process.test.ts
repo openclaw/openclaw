@@ -1123,6 +1123,9 @@ const child = Object.assign(new EventEmitter(), {
   stdin: null, stdout: null, stderr: null,
   kill() { throw new Error("must signal the owned group"); },
 });
+Object.defineProperty(child, "stdio", {
+  get: () => [child.stdin, child.stdout, child.stderr, null],
+});
 Date.now = () => now;
 process.kill = (pid, signal) => {
   assert.equal(pid, -child.pid);
@@ -1669,6 +1672,9 @@ const child = Object.assign(new EventEmitter(), {
   pid: 12345, exitCode: null, signalCode: null,
   stdin: null, stdout: outputs[0], stderr: outputs[1],
   kill() { throw new Error("must signal the owned group"); },
+});
+Object.defineProperty(child, "stdio", {
+  get: () => [child.stdin, child.stdout, child.stderr, null],
 });
 cp.spawn = () => child;
 process.kill = (pid, signal) => {

@@ -10,6 +10,7 @@ import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
@@ -150,6 +151,8 @@ export async function runUpdatedInstallGatewayCommand(
     assertCurrent?: () => void;
     definitionRecovery?: UpdateServiceDefinitionRecovery;
     onWarnings?: (warnings: string[]) => void;
+    /** Receives each completed probe or child phase with its measured wall time. */
+    onTimedStep?: (step: UpdateStepResult) => void;
     onGatewayStartAttempted?: () => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
@@ -205,6 +208,7 @@ export async function runUpdatedInstallGatewayCommand(
   }
   if (executor) {
     let definitionBackupSupported = false;
+    const checkStartedAtMs = Date.now();
     if (
       !params.result.root ||
       !(await isUpdatedInstallGatewayExecutorSupported({
@@ -231,6 +235,13 @@ export async function runUpdatedInstallGatewayCommand(
       );
     }
     assertCurrent();
+    params.onTimedStep?.({
+      name: "managed-service-executor-check",
+      command: "openclaw gateway install --update-executor check --json",
+      cwd: params.result.root,
+      durationMs: Math.max(0, Date.now() - checkStartedAtMs),
+      exitCode: 0,
+    });
     if (installing && params.definitionRecovery && !definitionBackupSupported) {
       params.definitionRecovery.preserved = true;
       const message =
@@ -274,12 +285,22 @@ export async function runUpdatedInstallGatewayCommand(
       ...(params.signal ? { signal: params.signal } : {}),
     });
   };
+  const childStartedAtMs = Date.now();
   const res = executor
     ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
     : await runChild();
   assertCurrent();
   const exited = res.termination === "exit" && res.signal === null && !res.killed;
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
+  if (exited && res.code === 0) {
+    params.onTimedStep?.({
+      name: `managed-service-${action}`,
+      command: ["openclaw", ...args].join(" "),
+      cwd: params.result.root ?? "",
+      durationMs: Math.max(0, Date.now() - childStartedAtMs),
+      exitCode: 0,
+    });
+  }
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
   if (installing && response) {
     const warnings = Array.isArray(response.warnings)

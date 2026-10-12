@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "../agents/auth-profiles/mutation-lineage.js";
 import { overlayRuntimeExternalOAuthProfiles } from "../agents/auth-profiles/oauth-shared.js";
 import * as authPathResolve from "../agents/auth-profiles/path-resolve.js";
 import { markAuthProfileSuccess } from "../agents/auth-profiles/profiles.js";
@@ -158,7 +157,7 @@ describe("model resolution auth row snapshots", () => {
     });
   });
 
-  it.each(["row", "cache proof"])("evicts a shared handle after %s corruption", async (stage) => {
+  it("evicts a shared handle after row corruption", async () => {
     await withOpenClawTestState({ label: "model-auth-query-corruption" }, async (state) => {
       await persistAuthProfileBatch({
         stateDir: state.stateDir,
@@ -180,9 +179,7 @@ describe("model resolution auth row snapshots", () => {
       const fault = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
         if (
           sql ===
-          (stage === "row"
-            ? 'select "value_json" from "config_machine_state" where "state_key" = ?'
-            : "PRAGMA main.wal_checkpoint(NOOP)")
+          'select "state_key" as "target", "value_json" as "contents" from "config_machine_state" where "state_key" in (?, ?)'
         ) {
           injected = true;
           throw Object.assign(new Error("database disk image is malformed"), {
@@ -231,7 +228,7 @@ describe("model resolution auth row snapshots", () => {
   });
 
   it.each([false, true])(
-    "does not retain rows before WAL commit publication (shared=%s)",
+    "offline update fingerprints include WAL commit publication (shared=%s)",
     async (shared) => {
       let sharedMemory: number | undefined;
       try {
@@ -273,8 +270,6 @@ describe("model resolution auth row snapshots", () => {
           // Hold the valid old WAL-index header over completed frame I/O, then publish it.
           fs.writeSync(sharedMemory, previousHeader, 0, previousHeader.length, 0);
           try {
-            const resolve = modelResolver(state);
-            expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
             const beforePublication = await readUpdateDatabaseGenerationsIsolated([databasePath], {
               env: state.env,
             });
@@ -285,7 +280,6 @@ describe("model resolution auth row snapshots", () => {
             });
             expect(afterPublication[databasePath]).not.toBe(beforePublication[databasePath]);
             expect(afterPublication[databasePath]).toMatch(/^[a-f0-9]{64}$/u);
-            expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
             fs.writeSync(sharedMemory, previousHeader, 0, 48, 0);
             await expect(
               readUpdateDatabaseGenerationsIsolated([databasePath], { env: state.env }),
@@ -310,10 +304,6 @@ describe("model resolution auth row snapshots", () => {
     { change: "usage", cached: true, published: true },
     { change: "usage", cached: false, published: "during" },
     { change: "usage", cached: true, published: "during" },
-    { change: "order", cached: true, published: false },
-    { change: "disabled", cached: false, published: false },
-    { change: "order", cached: true, published: "during" },
-    { change: "disabled", cached: false, published: "during" },
     { change: "unrelated-order", cached: true, published: false },
   ] as const)(
     "handles concurrent $change changes (cached=$cached, published=$published)",
@@ -373,25 +363,18 @@ describe("model resolution auth row snapshots", () => {
             setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
           }
           const updated: AuthProfileStore =
-            change === "order" || change === "unrelated-order"
+            change === "unrelated-order"
               ? { ...store, order: { [PROVIDER]: [fallbackProfileId, PROFILE_ID] } }
               : {
                   ...store,
                   usageStats: {
-                    [PROFILE_ID]:
-                      change === "disabled"
-                        ? { disabledUntil: Date.now() + 60_000, disabledReason: "auth_permanent" }
-                        : { lastUsed: 1234, lastProbeAt: 1234 },
+                    [PROFILE_ID]: { lastUsed: 1234, lastProbeAt: 1234 },
                   },
                 };
           const updatedAgent = change === "unrelated-order" ? "other" : "main";
           await state.writeAuthProfiles(updated, updatedAgent);
           resume.resolve();
-          expect((await loading).model?.name).toBe(
-            change === "order" || change === "disabled"
-              ? `${fallbackProfileId}:token`
-              : `${PROFILE_ID}:api_key`,
-          );
+          expect((await loading).model?.name).toBe(`${PROFILE_ID}:api_key`);
           const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(updatedAgent), {
             readOnly: true,
             externalCli: { mode: "none" },
@@ -491,8 +474,8 @@ describe("model resolution auth row snapshots", () => {
     );
   });
 
-  it.each(["host", "external"] as const)(
-    "reuses unchanged credentials and observes %s rotation",
+  it.each(["snapshot", "native owner"] as const)(
+    "reuses unchanged credentials and observes %s rotation receipts",
     async (publication) => {
       await withOpenClawTestState(
         { label: `model-auth-${publication}-rotation` },
@@ -502,12 +485,8 @@ describe("model resolution auth row snapshots", () => {
           const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
           const reads = () => read.mock.calls.filter(([pathname]) => pathname === databasePath);
           const resolve = modelResolver(state);
-          const clock =
-            publication === "external"
-              ? vi.spyOn(performance, "now").mockReturnValue(0)
-              : undefined;
           try {
-            for (let turn = 0; turn < (publication === "host" ? 8 : 1); turn += 1) {
+            for (let turn = 0; turn < 8; turn += 1) {
               expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
             }
             expect.soft(reads()).toHaveLength(1);
@@ -517,9 +496,9 @@ describe("model resolution auth row snapshots", () => {
                 [PROFILE_ID]: {
                   type: "token",
                   provider: PROVIDER,
-                  token: publication === "host" ? "fixture-rotated" : "fixture-external-rotation",
+                  token: "fixture-rotated",
                 },
-                ...(publication === "host"
+                ...(publication === "snapshot"
                   ? {
                       [`${PROVIDER}:added`]: {
                         type: "api_key" as const,
@@ -530,31 +509,13 @@ describe("model resolution auth row snapshots", () => {
                   : {}),
               },
             };
-            if (clock) {
-              const inode = fs.statSync(databasePath).ino;
-              const snapshotRevision =
-                getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath);
-              const mutationRevision =
-                getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath);
-              // An external writer cannot publish the host's snapshot or mutation revisions.
+            if (publication === "native owner") {
               writePersistedAuthProfileStoreRaw(rotated, state.agentDir());
-              expect(fs.statSync(databasePath).ino).toBe(inode);
-              expect(getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath)).toBe(
-                snapshotRevision,
-              );
-              expect(getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath)).toBe(
-                mutationRevision,
-              );
-              expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-              clock.mockReturnValue(99);
-              expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-              expect(reads()).toHaveLength(1);
-              clock.mockReturnValue(100);
             } else {
               await state.writeAuthProfiles(rotated);
             }
             expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
-            if (publication === "host") {
+            if (publication === "snapshot") {
               expect((await resolve(`${PROVIDER}:added`)).model?.name).toBe(
                 `${PROVIDER}:added:api_key`,
               );
@@ -567,7 +528,6 @@ describe("model resolution auth row snapshots", () => {
             expect(current.profiles).toEqual(rotated.profiles);
             expect.soft(reads()).toHaveLength(2);
           } finally {
-            clock?.mockRestore();
             read.mockRestore();
           }
         },

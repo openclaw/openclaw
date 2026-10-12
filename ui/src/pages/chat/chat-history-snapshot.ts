@@ -22,6 +22,7 @@ import {
   readChatSessionSnapshot,
   readChatHistoryCursor,
   setChatHistoryCursor,
+  projectChatTranscriptMetadata,
 } from "./session-message-cache.ts";
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
@@ -175,6 +176,7 @@ export function reconcileHistoryTail(options: {
 export function commitCurrentChatHistorySnapshot(
   state: ChatState,
   deltaCursor?: string | null,
+  sessionInfo?: GatewaySessionRow,
 ): void {
   if (deltaCursor !== undefined) {
     setChatHistoryCursor(state, deltaCursor ?? undefined);
@@ -187,6 +189,11 @@ export function commitCurrentChatHistorySnapshot(
   const agentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
+  const previous = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+    sessionKey,
+    agentId,
+  });
+  const retained = previous?.sessionId === (state.currentSessionId ?? null) ? previous : undefined;
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,
@@ -196,6 +203,10 @@ export function commitCurrentChatHistorySnapshot(
       ...(state.chatDisplayedLeafEntryId !== undefined
         ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
         : {}),
+      transcriptMetadata: sessionInfo
+        ? projectChatTranscriptMetadata(sessionInfo)
+        : retained?.transcriptMetadata,
+      progressCard: retained?.progressCard,
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination,
       sessionId: state.currentSessionId ?? null,

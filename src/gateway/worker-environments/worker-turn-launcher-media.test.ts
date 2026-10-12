@@ -2,11 +2,12 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
 } from "../../../test/helpers/image-fixtures.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -22,6 +23,7 @@ import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
@@ -45,6 +47,8 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
 } from "./worker-turn-launcher.test-support.js";
+
+afterAll(closeStateDatabaseForTest);
 
 function harness(assistantText = "image received") {
   const launches: WorkerLaunchPlan[] = [];
@@ -125,7 +129,7 @@ describe("cloud turn media boundary", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(async () => {
     vi.restoreAllMocks();
-    await cleanupWorkerTurnLauncherTest();
+    await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
   });
 
   it.each(["relative", "absolute"] as const)(
@@ -643,6 +647,7 @@ describe("cloud turn media boundary", () => {
       if (closure === "unrelated") {
         await operation;
         expect(rig.launches).toHaveLength(1);
+        await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
         expect(transferSignal?.aborted).toBe(true);
         input.preparedRunAdmission.close();
       } else {

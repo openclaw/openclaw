@@ -258,16 +258,15 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   );
 
   it.each([
-    { name: "automatic replies", delivery: {}, directMessage: false },
-    { name: "forced message replies", delivery: { forceMessageTool: true }, directMessage: true },
+    { name: "automatic replies", delivery: {} },
+    { name: "forced message replies", delivery: { forceMessageTool: true } },
     {
       name: "message-tool-only replies",
       delivery: { sourceReplyDeliveryMode: "message_tool_only" as const },
-      directMessage: true,
     },
   ])(
     "keeps browser callable through automatic Tool Search for $name with lean disabled",
-    async ({ delivery, directMessage }) => {
+    async ({ delivery }) => {
       let calls = 0;
       const browser = {
         ...createStubTool("browser"),
@@ -302,7 +301,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           "tool_describe",
           "tool_call",
           "read",
-          ...(directMessage ? ["message"] : []),
+          "message",
         ]);
         expect(surface.promptToolPolicy.apply().callableToolNames).toContain("browser");
         const call = expectDefined(
@@ -499,6 +498,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         TOOL_DESCRIBE_RAW_TOOL_NAME,
         TOOL_CALL_RAW_TOOL_NAME,
         "read",
+        "message",
       ];
       expect(first.compactTools(availableTools).tools.map((tool) => tool.name)).toEqual(expected);
       expect(second.compactTools(availableTools).tools.map((tool) => tool.name)).toEqual(expected);

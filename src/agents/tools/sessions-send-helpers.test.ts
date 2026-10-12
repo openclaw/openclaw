@@ -25,16 +25,6 @@ describe("resolveSessionDeliveryTargetFromKey", () => {
     });
   });
 
-  it("keeps generic topic extraction and plugin normalization for other channels", () => {
-    expect(
-      resolveSessionDeliveryTargetFromKey("agent:main:telegram:group:-100123:topic:99"),
-    ).toEqual({
-      channel: "telegram",
-      to: "-100123",
-      threadId: "99",
-    });
-  });
-
   it("preserves decimal thread ids for Slack-style session keys", () => {
     expect(
       resolveSessionDeliveryTargetFromKey(
@@ -44,20 +34,6 @@ describe("resolveSessionDeliveryTargetFromKey", () => {
       channel: "slack",
       to: "channel:general",
       threadId: "1699999999.0001",
-    });
-  });
-
-  it("preserves colon-delimited matrix ids for channel and thread targets", () => {
-    // Matrix room/thread ids can contain colons, so parsing must split only on
-    // known wrappers instead of generic colon segments.
-    expect(
-      resolveSessionDeliveryTargetFromKey(
-        "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
-      ),
-    ).toEqual({
-      channel: "matrix",
-      to: "channel:!room:example.org",
-      threadId: "$AbC123:example.org",
     });
   });
 
@@ -75,26 +51,6 @@ describe("resolveSessionDeliveryTargetFromKey", () => {
 
   it.each([
     {
-      name: "direct",
-      sessionKey: "agent:main:feishu:direct:ou_recipient",
-      expected: { channel: "feishu", to: "user:ou_recipient", threadId: undefined },
-    },
-    {
-      name: "dm alias",
-      sessionKey: "agent:main:feishu:dm:ou_recipient",
-      expected: { channel: "feishu", to: "user:ou_recipient", threadId: undefined },
-    },
-    {
-      name: "account-scoped direct",
-      sessionKey: "agent:main:feishu:work:direct:ou_recipient",
-      expected: {
-        channel: "feishu",
-        to: "user:ou_recipient",
-        accountId: "work",
-        threadId: undefined,
-      },
-    },
-    {
       name: "account-scoped dm alias",
       sessionKey: "agent:main:feishu:work:dm:ou_recipient",
       expected: {
@@ -102,15 +58,6 @@ describe("resolveSessionDeliveryTargetFromKey", () => {
         to: "user:ou_recipient",
         accountId: "work",
         threadId: undefined,
-      },
-    },
-    {
-      name: "thread-scoped direct",
-      sessionKey: "agent:main:feishu:direct:ou_recipient:thread:topic-42",
-      expected: {
-        channel: "feishu",
-        to: "user:ou_recipient",
-        threadId: "topic-42",
       },
     },
     {

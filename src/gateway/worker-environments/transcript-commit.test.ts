@@ -29,6 +29,7 @@ import {
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
@@ -49,7 +50,6 @@ import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import {
   applyPreparedTranscriptCommit,
   prepareTranscriptCommit,
-  type TranscriptCommitInput,
 } from "./transcript-commit.kernel.js";
 import {
   createInterruptedCommitter,
@@ -62,6 +62,7 @@ import {
   SESSION_ID,
   ZERO_USAGE,
 } from "./transcript-commit.test-support.js";
+import type { TranscriptCommitInput } from "./transcript-commit.types.js";
 
 type WorkerTranscriptCommitter = ReturnType<typeof createWorkerTranscriptCommitter>;
 
@@ -257,7 +258,7 @@ describe("worker transcript commit application", () => {
     ]);
   });
 
-  it("rejects a role-redacted suffix after an already persisted prefix", async () => {
+  it("preserves a tool-result suffix after an already persisted prefix despite logging patterns", async () => {
     const prefixMessage = {
       role: "user" as const,
       content: [{ type: "text" as const, text: "Already persisted worker input" }],
@@ -275,28 +276,25 @@ describe("worker transcript commit application", () => {
     };
     await manager.appendMessageAsync(persistedMessage);
     const entriesBefore = structuredClone(manager.getEntries());
-    const leafBefore = manager.getLeafId();
-    const entryBefore = structuredClone(
-      loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath }),
-    );
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     cfg = { ...cfg, logging: { redactPatterns: ["^toolResult$"] } };
 
-    // Check durable state for both thrown errors and returned refusals.
-    const [settled] = await Promise.allSettled([committer.commit({ ...ADMITTED_OWNER, request })]);
+    const outcome = await committer.commit({ ...ADMITTED_OWNER, request });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`expected tool-result suffix commit, received ${outcome.reason}`);
+    }
 
     const reopened = await SessionManager.openAsync(sessionTarget);
-    expect(reopened.getEntries()).toEqual(entriesBefore);
-    expect(reopened.getLeafId()).toBe(leafBefore);
-    expect(loadSessionEntry({ agentId: "main", sessionKey: SESSION_KEY, storePath })).toEqual(
-      entryBefore,
-    );
-    expect(updates).toEqual([]);
-    expect(settled).toEqual({
-      status: "fulfilled",
-      value: { ok: false, reason: "invalid-batch" },
+    const entries = reopened.getEntries();
+    expect(entries.slice(0, entriesBefore.length)).toEqual(entriesBefore);
+    expect(entries).toHaveLength(request.messages.length);
+    expect(reopened.getLeafId()).toBe(outcome.result.newLeafId);
+    expect(reopened.getLeafEntry()).toMatchObject({
+      message: { role: "toolResult", content: [{ type: "text", text: "Workspace ready." }] },
     });
+    expect(updates).toHaveLength(request.messages.length - entriesBefore.length);
   });
 
   it("admits an overlapping agent input without invalidating the active worker transcript", async () => {
@@ -503,7 +501,9 @@ describe("worker transcript commit application", () => {
       .filter((entry) => entry.id !== baseLeafId);
     const committedEntryIds = committedEntries.map((entry) => entry.id);
     expect(committedEntryIds).toHaveLength(request.messages.length);
-    expect(JSON.stringify(committedEntries)).not.toContain("sk-abcdef1234567890xyz");
+    expect(committedEntries[0]).toMatchObject({
+      message: { content: request.messages[0]?.content },
+    });
 
     const firstCommitted = committedEntries[0];
     if (firstCommitted?.type !== "message") {
@@ -593,23 +593,18 @@ describe("worker transcript commit application", () => {
     );
     let current = true;
     let refusedCommit = false;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            request.stage === "commit" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.identity) &&
-            request.facts.identity.nativeLocation === databasePath
-          ) {
-            refusedCommit = true;
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.identity) &&
+        request.facts.identity.nativeLocation === databasePath
+      ) {
+        refusedCommit = true;
+        current = false;
+      }
+      admit(request, grant);
+    });
     const updates: InternalSessionTranscriptUpdate[] = [];
     unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
     const request = createRequest();

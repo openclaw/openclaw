@@ -4,6 +4,10 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionStoreTarget } from "../config/sessions/session-store-target-runtime.js";
@@ -28,8 +32,6 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -42,7 +44,6 @@ import type { MessageToolRunOutcomeWorkerOperations } from "./message-tool-run-o
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 /** Records one bounded completion fact before the run's owner retires. */
@@ -57,6 +58,7 @@ export async function recordMessageToolRunOutcome(params: {
   occurredAt: number;
   storePath?: string;
   env?: NodeJS.ProcessEnv;
+  sessionActor?: SessionActorStorageBinding;
 }): Promise<void> {
   const values: MessageToolRunOutcomeInsert = {
     run_id: params.runId,
@@ -68,6 +70,17 @@ export async function recordMessageToolRunOutcome(params: {
     run_status: params.runStatus,
     occurred_at: params.occurredAt,
   };
+  const memory = getSessionActorStorageBinding(params);
+  if (memory) {
+    const result = await memory.actor.storage!.mutate(
+      { type: "session.messageToolOutcome.record", input: values },
+      memory.authority,
+    );
+    if (result.kind === "rolled-back") {
+      throw new Error(result.error.message);
+    }
+    return;
+  }
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = { ...params, env };
@@ -109,45 +122,16 @@ export async function recordMessageToolRunOutcome(params: {
   }
   const storePath = scope.storePath ?? resolveOpenClawAgentSqlitePath(scope);
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = new Map(
-    candidates
-      .filter((candidate) => !candidate.scope)
-      .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
-        return [identity.canonicalPath, identity] as const;
-      }),
-  );
   const admission = resolveSqliteWriteAdmissionScope({ ...scope, storePath });
-  const shared = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(env));
   // Retain discovery custody before queuing; close must not turn waiting work into a fresh open.
   await withSessionHistoryWorkerReadCandidates(candidates, async (custody) => {
-    const assertCaptured = () => {
-      custody.assertCurrent();
-      shared.admission.assertCurrent();
-    };
+    const assertCaptured = () => custody.assertCurrent();
     const prepare = () =>
       withSessionStoreTarget(
         { agentId: scope.agentId, storePath, env, candidates },
         async (target, owner) => {
           const options = { ...target.database, env };
-          const identity =
-            identities.get(options.path) ?? readDatabasePathIdentitySync(options.path);
-          if (!identities.has(options.path) && identity.key.startsWith("file:")) {
-            throw new Error("Message-tool outcome target appeared after source capture");
-          }
-          const execution = captureOpenClawAgentDatabaseExecution(
-            options,
-            identity.key.startsWith("file:")
-              ? {
-                  expectedIdentity: {
-                    kind: "file",
-                    physicalIdentity: identity.key.slice("file:".length),
-                    nativeLocation: identity.canonicalPath,
-                    birthtime: identity.birthtime,
-                  },
-                }
-              : { expectedCreationIdentity: identity },
-          );
+          const execution = captureOpenClawAgentDatabaseExecution(options);
           const assertCurrent = () => {
             assertCaptured();
             owner.assertCurrent();
@@ -192,19 +176,15 @@ export async function recordMessageToolRunOutcome(params: {
                       input: undefined,
                     },
                   );
-                await worker.run(async (writer) => {
-                  for (const command of [
-                    { type: "prepare", input: undefined },
-                    { type: "record", input: values },
-                  ] as const) {
-                    const result = await writer.execute(command);
-                    if (!result.ok) {
-                      const error = new Error("Message-tool outcome transaction failed");
-                      retainOpenClawStateWorkerErrorPayload(error, result.error);
-                      throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
-                    }
-                  }
-                }, assertCurrent);
+                const result = await worker.execute(
+                  { type: "record", input: values },
+                  assertCurrent,
+                );
+                if (!result.ok) {
+                  const error = new Error("Message-tool outcome transaction failed");
+                  retainOpenClawStateWorkerErrorPayload(error, result.error);
+                  throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+                }
               },
               true,
             );

@@ -4,6 +4,7 @@ import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artif
 import { loadCombinedSessionStoreForGatewayCore as loadGatewaySessionStore } from "../config/sessions/combined-store-gateway.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 export {
   formatSessionTranscriptMemoryHitKey,
@@ -19,17 +20,44 @@ export type {
   SessionTranscriptReadParams,
 } from "./session-transcript-memory-hit.js";
 
-/** Loads the cross-session plugin view without process-only incognito rows. */
+/** @deprecated Await loadCombinedSessionStoreForGatewayAsync. Removal: next Plugin SDK major. */
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
   opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
 ) {
-  // This published view has no projection option; installed plugins receive complete entries.
-  const result = loadGatewaySessionStore(cfg, {
-    ...opts,
-    includeIncognito: false,
-    projection: "full",
+  warnPluginSdkDeprecation({
+    family: "session-transcript-store",
+    method: "loadCombinedSessionStoreForGateway",
+    replacement: "loadCombinedSessionStoreForGatewayAsync",
+    compatibility: "The synchronous loader retains its complete session-entry return value.",
   });
+  // This published view has no projection option; installed plugins receive complete entries.
+  return publicSessionStore(
+    loadGatewaySessionStore(cfg, {
+      ...opts,
+      includeIncognito: false,
+      projection: "full",
+    }),
+  );
+}
+
+/** Loads the complete cross-session plugin view through the existing database worker. */
+export async function loadCombinedSessionStoreForGatewayAsync(
+  cfg: OpenClawConfig,
+  opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
+) {
+  const { loadCombinedSessionStoreForGatewayCoreAsync } =
+    await import("../config/sessions/combined-store-gateway-read.js");
+  return publicSessionStore(
+    await loadCombinedSessionStoreForGatewayCoreAsync(cfg, {
+      ...opts,
+      includeIncognito: false,
+      projection: "full",
+    }),
+  );
+}
+
+function publicSessionStore(result: ReturnType<typeof loadGatewaySessionStore>) {
   return {
     storePath: result.storePath,
     // Plugin search hits can be re-persisted into durable transcripts, so the

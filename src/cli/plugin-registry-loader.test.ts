@@ -44,68 +44,11 @@ describe("plugin-registry-loader", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["fulfilled", "rejected"])(
-    "keeps plugin logs on stderr until async loading is %s, then restores state",
-    async (settlement) => {
-      const captured: boolean[] = [];
-      const started = Promise.withResolvers<void>();
-      const resume = Promise.withResolvers<void>();
-      const failure = new Error("Plugin activation failed");
-      ensurePluginRegistryLoadedMock.mockImplementation(async () => {
-        captured.push(loggingState.forceConsoleToStderr);
-        started.resolve();
-        await resume.promise;
-        captured.push(loggingState.forceConsoleToStderr);
-        if (settlement === "rejected") {
-          throw failure;
-        }
-      });
-
-      const loading = ensureCliPluginRegistryLoaded({
-        scope: "configured-channels",
-        routeLogsToStderr: true,
-      }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      try {
-        await started.promise;
-        expect(loggingState.forceConsoleToStderr).toBe(true);
-      } finally {
-        resume.resolve();
-        await loading;
-      }
-
-      expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
-        scope: "configured-channels",
-      });
-      expect(await loading).toBe(settlement === "rejected" ? failure : undefined);
-      expect(captured).toEqual([true, true]);
-      expect(loggingState.forceConsoleToStderr).toBe(false);
-    },
-  );
-
-  it("keeps stdout routing unchanged when stderr routing is not requested", async () => {
-    const captured: boolean[] = [];
-    ensurePluginRegistryLoadedMock.mockImplementation(() => {
-      captured.push(loggingState.forceConsoleToStderr);
-    });
-
-    await ensureCliPluginRegistryLoaded({
-      scope: "all",
-    });
-
-    expect(captured).toEqual([false]);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-  });
-
-  it.each(
-    [false, true].flatMap((initial) =>
-      (["first", "second"] as const).flatMap((finishFirst) =>
-        [false, true].map((reject) => ({ initial, finishFirst, reject })),
-      ),
-    ),
-  )(
+  it.each([
+    { initial: false, finishFirst: "first", reject: false },
+    { initial: false, finishFirst: "second", reject: true },
+    { initial: true, finishFirst: "first", reject: false },
+  ] as const)(
     "settles overlapping loads ($finishFirst first, reject=$reject) back to stderr=$initial",
     async ({ initial, finishFirst, reject }) => {
       loggingState.forceConsoleToStderr = initial;

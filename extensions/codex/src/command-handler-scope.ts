@@ -11,7 +11,7 @@ import {
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
 } from "./app-server/session-binding.js";
-import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
+import { assertCodexHostOwnerCurrent, type CodexCommandContext } from "./command-authorization.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
@@ -44,14 +44,19 @@ export async function resolveControlTarget(ctx: PluginCommandContext) {
 
 type CommandAppServerScope = Pick<
   CodexControlRequestOptions,
-  "assertCurrent" | "authProfileId" | "sessionId" | "sessionKey" | "startOptions" | "storePath"
+  | "assertCurrent"
+  | "assertCurrentAsync"
+  | "authProfileId"
+  | "sessionId"
+  | "sessionKey"
+  | "startOptions"
+  | "storePath"
 > & { agentId: string; agentDir: string };
 
 export async function resolvePreparedCodexCommandAuthority(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  ctx: CodexCommandContext,
 ) {
-  const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const sessionId = ctx.sessionId;
   const sessionKey = ctx.sessionKey;
@@ -61,6 +66,7 @@ export async function resolvePreparedCodexCommandAuthority(
     (sessionKey
       ? resolveStorePath(ctx.config.session?.store, { agentId: sessionAgentId })
       : undefined);
+  const target = await resolveControlTarget(ctx);
   const sessionIdentity = sessionId
     ? sessionBindingIdentity({
         sessionId,
@@ -100,6 +106,13 @@ export async function resolvePreparedCodexCommandAuthority(
     assertSource();
   });
   assertCurrent();
+  const assertCurrentAsync = async () => {
+    await ctx.assertNativePolicyCurrent?.();
+    await resolvedTarget?.authority.withCurrent(assertCurrent);
+    if (!resolvedTarget) {
+      assertCurrent();
+    }
+  };
   return {
     target,
     binding,
@@ -109,6 +122,8 @@ export async function resolvePreparedCodexCommandAuthority(
     storePath,
     assertHostCurrent,
     assertCurrent,
+    assertCurrentAsync,
+    mutationSource: composeSessionEntryCommitGuards([assertCurrent, ctx.nativePolicySource]),
     assertMutationCurrent: composeSessionEntryCommitGuards([assertCurrent], (assertSource) => {
       assertCodexHostOwnerCurrent(ctx);
       assertSource();
@@ -135,7 +150,7 @@ export async function resolveCommandAppServerContext(
   const authProfileId =
     binding?.connectionScope === "supervision"
       ? undefined
-      : resolveCodexAppServerAuthProfileIdForAgent({
+      : await resolveCodexAppServerAuthProfileIdForAgent({
           authProfileId: binding?.authProfileId ?? target?.requestedAuthProfileId,
           agentDir,
           config: ctx.config,
@@ -147,6 +162,7 @@ export async function resolveCommandAppServerContext(
     agentDir,
     config: ctx.config,
     assertCurrent: authority.assertCurrent,
+    assertCurrentAsync: authority.assertCurrentAsync,
   });
   const scope: CommandAppServerScope = {
     agentId: target?.agentId ?? fallback.agentId,
@@ -159,6 +175,7 @@ export async function resolveCommandAppServerContext(
     ...(authority.sessionId ? { sessionId: authority.sessionId } : {}),
     ...(authority.storePath ? { storePath: authority.storePath } : {}),
     assertCurrent: authority.assertCurrent,
+    assertCurrentAsync: authority.assertCurrentAsync,
   };
   return { scope, target, binding };
 }

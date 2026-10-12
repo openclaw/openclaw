@@ -51,11 +51,12 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     defaults: params.defaults,
   });
 
-  const authPasswordReason = (() => {
+  const localReason = (kind: "token" | "password") => {
     if (!auth) {
       return "gateway.auth is not configured.";
     }
-    if (plan.passwordCanWin) {
+    const password = kind === "password";
+    if (password && plan.passwordCanWin) {
       return plan.authMode === "password"
         ? 'gateway.auth.mode is "password".'
         : "no token source can win, so password auth can win.";
@@ -63,38 +64,22 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     if (
       plan.authMode === "token" ||
       plan.authMode === "none" ||
-      plan.authMode === "trusted-proxy"
+      plan.authMode === "trusted-proxy" ||
+      (!password && plan.authMode === "password")
     ) {
       return `gateway.auth.mode is "${plan.authMode}".`;
     }
     if (plan.envToken) {
       return "gateway token env var is configured.";
     }
-    if (plan.localToken.configured) {
-      return "gateway.auth.token is configured.";
-    }
-    if (plan.remoteToken.configured) {
-      return "gateway.remote.token is configured.";
-    }
-    return "token auth can win.";
-  })();
-
-  const authTokenReason = (() => {
-    if (!auth) {
-      return "gateway.auth is not configured.";
-    }
-    if (plan.authMode === "token") {
-      return 'gateway.auth.mode is "token".';
-    }
-    if (
-      plan.authMode === "password" ||
-      plan.authMode === "none" ||
-      plan.authMode === "trusted-proxy"
-    ) {
-      return `gateway.auth.mode is "${plan.authMode}".`;
-    }
-    if (plan.envToken) {
-      return "gateway token env var is configured.";
+    if (password) {
+      if (plan.localToken.configured) {
+        return "gateway.auth.token is configured.";
+      }
+      if (plan.remoteToken.configured) {
+        return "gateway.remote.token is configured.";
+      }
+      return "token auth can win.";
     }
     if (plan.envPassword) {
       return "gateway password env var is configured.";
@@ -103,7 +88,9 @@ export function evaluateGatewayAuthSurfaceStates(params: {
       return "gateway.auth.password is configured.";
     }
     return "token auth can win (mode is unset and no password source is configured).";
-  })();
+  };
+  const authPasswordReason = localReason("password");
+  const authTokenReason = localReason("token");
 
   const remoteSurfaceReason = [
     plan.remoteMode && 'gateway.mode is "remote"',

@@ -215,7 +215,7 @@ export type UserTurnTranscriptRecorder = {
     authority?: import("../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   }) => Promise<boolean>;
   getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
-  /** Released synchronous SDK contract; internal recorders use completeProcessingAsync. */
+  /** @deprecated Await completeProcessingAsync; synchronous compatibility ends at the next Plugin SDK major. */
   completeProcessing?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome | undefined;
   completeProcessingAsync?: (
     outcome: AgentRunTerminalOutcome,
@@ -233,6 +233,11 @@ export type UserTurnTranscriptRecorder = {
   /** Confirms exact-run steering provenance after transcript commitment is proven. */
   confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
+  /** Freeze model-facing text on the canonical user record before its first provider dispatch. */
+  captureModelPromptProjection?: (
+    text: string,
+    assertCurrent: () => void,
+  ) => Promise<PersistedUserTurnMessage>;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */
   setAdmissionHandler?: (

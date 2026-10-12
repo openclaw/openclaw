@@ -114,7 +114,8 @@ function updateRef(
   update: { status: PersistedClawMcpServerRef["status"]; error?: string },
   options: OpenClawStateDatabaseOptions & { nowMs?: number },
 ): PersistedClawMcpServerRef {
-  const updated = { ...ref, ...update, updatedAtMs: options.nowMs ?? Date.now() };
+  const { error: _error, ...retained } = ref;
+  const updated = { ...retained, ...update, updatedAtMs: options.nowMs ?? Date.now() };
   runOpenClawStateWriteTransaction(({ db }) => {
     executeSqliteQuerySync(
       db,

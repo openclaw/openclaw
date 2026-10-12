@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
   clawPackageLifecycleLeaseKey,
@@ -223,15 +224,11 @@ describe("Claw provenance worker writes", () => {
     "rolls back a package claim when caller authority retires at %s admission",
     async (stage) => {
       const ref = packageFixture();
-      const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       let retired = false;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          originalAdmission((request, grant) => {
-            retired ||= request.stage === stage;
-            admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, admit) => {
+        retired ||= request.stage === stage;
+        admit(request, grant);
+      });
       const error = new Error("Package removal owner retired.");
       await withPackageLease(ref, async (lease) => {
         await expect(

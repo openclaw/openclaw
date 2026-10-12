@@ -13,11 +13,11 @@ import {
   loadedCronStoreFromRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
+import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
+  claimCronRunReceiptForTest,
   finishCronRunReceiptAsync,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptForTest } from "../cron/store/run-receipt-store.test-support.js";
+} from "../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { buildCronExecOperationBinding } from "../gateway/operator-approval-standing-grants.js";
 import {
@@ -490,11 +490,9 @@ describe("cron standing grants", () => {
           throw new Error("synthetic native launch failure");
         }
       });
-      let revoke: Promise<unknown> | undefined;
       if (intervention === "revoke") {
-        revoke = revokeCronStandingGrant({ grantId: grant!.grantId, revokedBy: "operator" }).then(
-          () => order.push("revoked"),
-        );
+        await revokeCronStandingGrant({ grantId: grant!.grantId, revokedBy: "operator" });
+        order.push("revoked");
       } else if (intervention === "cancel") {
         controller.abort();
       } else if (intervention === "policy deny" || intervention === "policy ask") {
@@ -514,7 +512,7 @@ describe("cron standing grants", () => {
           },
         });
       } else if (intervention === "fallback") {
-        // A proven no-initiation retry reacquires its interval without another consume.
+        // A proven no-initiation retry revalidates without another consume.
         result.releaseSpawn?.("retry");
         await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
       }
@@ -540,9 +538,9 @@ describe("cron standing grants", () => {
         result.initiateSpawn?.(launch);
         expect(launch).toHaveBeenCalledOnce();
       }
-      await revoke;
       if (intervention === "revoke") {
-        expect(order).toEqual(["launch", "revoked"]);
+        // Revocation after committed consumption does not fence a checked native launch.
+        expect(order).toEqual(["revoked", "launch"]);
       }
       expect(readGrantUseCounts()).toEqual([1]);
     },

@@ -9,11 +9,22 @@ import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 // Artwork consumes invalidation only, not payloads that some stores also publish.
 type ChangeSource = { subscribe: (listener: () => void) => () => void };
 
-/** Personal artwork follows its source; the status owner remains independent. */
+async function decodeFaviconImage(url: string): Promise<HTMLImageElement> {
+  const image = new Image();
+  image.src = url;
+  await image.decode();
+  if (!image.naturalWidth || !image.naturalHeight) {
+    throw new Error("Favicon artwork has no dimensions");
+  }
+  return image;
+}
+
+/** Personal and theme artwork share one lifecycle; the status owner remains independent. */
 export function connectControlUiFaviconArtwork(context: {
   gateway: ApplicationContext["gateway"];
   theme: ChangeSource & {
     settings: Pick<ApplicationContext["theme"]["settings"], "tabIcon">;
+    branding: Pick<ApplicationContext["theme"]["branding"], "lobsterdex" | "brandIcon" | "artwork">;
   };
   agents: ChangeSource & {
     state: Pick<ApplicationContext["agents"]["state"], "agentsList">;
@@ -40,7 +51,11 @@ export function connectControlUiFaviconArtwork(context: {
       return;
     }
     const scope = gatewayPresentationScope(context.gateway);
-    const mode = context.theme.settings.tabIcon ?? "default";
+    const branding = context.theme.branding;
+    const themeSource = branding.artwork?.icons?.[branding.brandIcon]?.url;
+    const preference = context.theme.settings.tabIcon ?? "default";
+    // Theme suppression is presentation-only; switching back restores the saved choice.
+    const mode = !branding.lobsterdex && preference.startsWith("lobster:") ? "default" : preference;
     const shape = agentTabIconShape(mode);
     const lobsterId = mode.startsWith("lobster:") ? mode.slice("lobster:".length) : null;
     if (!lobsterId) {
@@ -61,6 +76,7 @@ export function connectControlUiFaviconArtwork(context: {
       mode,
       shape !== null ? agentId : null,
       source,
+      themeSource,
       shape !== null ? avatarRevision : lobsterId ? lobsterRevision : null,
     ]);
     if (sourceKey === nextKey) {
@@ -68,15 +84,39 @@ export function connectControlUiFaviconArtwork(context: {
     }
     sourceKey = nextKey;
     retireImage();
-    if (!lobsterId && (shape === null || !source)) {
-      applyControlUiFaviconImage(null);
-      return;
-    }
     // Never leave the previous agent's image visible while the new identity resolves.
     applyControlUiFaviconImage(null);
     const generation = request;
     const current = () =>
       !disposed && generation === request && scope === gatewayPresentationScope(context.gateway);
+    const applyThemeArtwork = async () => {
+      if (!themeSource || !current()) {
+        return;
+      }
+      try {
+        const { fetchPluginThemeArtworkBlobUrl } = await import("../pages/plugins/icon-loader.ts");
+        if (!current()) {
+          return;
+        }
+        const url = await fetchPluginThemeArtworkBlobUrl({ url: themeSource });
+        if (!current()) {
+          return;
+        }
+        if (!url) {
+          sourceKey = "";
+          return;
+        }
+        const image = await decodeFaviconImage(url);
+        if (current()) {
+          applyControlUiFaviconImage(image);
+        }
+      } catch {
+        if (current()) {
+          sourceKey = "";
+          applyControlUiFaviconImage(null);
+        }
+      }
+    };
     if (lobsterId) {
       void Promise.all([
         import("../components/lobster-favicon.ts"),
@@ -94,18 +134,23 @@ export function connectControlUiFaviconArtwork(context: {
         })
         .then((image) => {
           if (current()) {
-            applyControlUiFaviconImage(image);
+            if (image) {
+              applyControlUiFaviconImage(image);
+            } else {
+              void applyThemeArtwork();
+            }
           }
         })
         .catch(() => {
           if (current()) {
             sourceKey = "";
-            applyControlUiFaviconImage(null);
+            void applyThemeArtwork();
           }
         });
       return;
     }
     if (!source || shape === null) {
+      void applyThemeArtwork();
       return;
     }
     const resolved = source.startsWith("/") ? resolveAvatarImageUrl(source) : source;
@@ -118,23 +163,18 @@ export function connectControlUiFaviconArtwork(context: {
         if (!url) {
           throw new Error("Agent avatar unavailable");
         }
-        const image = new Image();
-        image.src = url;
-        await image.decode();
-        if (!current()) {
-          return;
+        const image = await decodeFaviconImage(url);
+        if (current()) {
+          applyControlUiFaviconImage(image, shape);
         }
-        if (!image.naturalWidth || !image.naturalHeight) {
-          throw new Error("Agent avatar has no dimensions");
-        }
-        applyControlUiFaviconImage(image, shape);
       })
       .catch(() => {
         if (current()) {
           // Retry a failed source on the next publication, without a timer or a stale lease.
           sourceKey = "";
-          retireImage();
-          applyControlUiFaviconImage(null);
+          releaseImage();
+          releaseImage = () => {};
+          void applyThemeArtwork();
         }
       });
   }

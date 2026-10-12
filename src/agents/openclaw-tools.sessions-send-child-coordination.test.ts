@@ -264,6 +264,15 @@ describe("sessions_send child coordination", () => {
       const previous = () => getSubagentRunByRunId("steer-A")!;
       const queueB = vi.fn(async () => {});
       const handleB = createEmbeddedRunHandle({ runId: "steer-B", queueMessage: queueB });
+      handleB.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (_text, options, assertCurrent) => {
+          assertCurrent();
+          await queueB();
+          options?.onQueueAccepted?.(true);
+        },
+      };
       const completePrevious = async (delivered = false) => {
         await mutateSubagentRuns(["steer-A"], (rows) => {
           const current = rows.get("steer-A");
@@ -307,6 +316,15 @@ describe("sessions_send child coordination", () => {
         }
       });
       const handleA = createEmbeddedRunHandle({ runId: "steer-A", queueMessage: queueA });
+      handleA.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (_text, options, assertCurrent) => {
+          assertCurrent();
+          await queueA();
+          options?.onQueueAccepted?.(true);
+        },
+      };
       setActiveEmbeddedRun(sessionId, handleA, childSessionKey);
       const deliver = sendDelivery.trySessionsSendActiveRunDelivery;
       const admission = vi
@@ -823,6 +841,7 @@ describe("sessions_send child coordination", () => {
         (params: Parameters<typeof metadataRead.readAcpSessionMetaForEntry>[0]) =>
           metadataRead.readAcpSessionMetaForEntry({ ...params, databasePath }),
       );
+      await writeEntry(peerKey, { sessionId: "peer-session", updatedAt: 1 });
       await writeEntry(reusedKey, currentEntry);
       const result = await send(requesterKey, targetKey, direction === "target" ? 0 : 1);
       await settleSessionWork();
@@ -863,8 +882,18 @@ describe("sessions_send child coordination", () => {
     "sessions_send does not start reply turns for $name after timeoutSeconds=$timeoutSeconds",
     async ({ requesterKey, entry, timeoutSeconds, targetKey = "agent:main:main" }) => {
       await writeEntry(requesterKey, { sessionId: "child", updatedAt: 1, ...entry });
+      await writeEntry(targetKey, { sessionId: "target", updatedAt: 1 });
       mockGatewayReply({ status: "timeout" });
       const result = await send(requesterKey, targetKey, timeoutSeconds);
+      if (entry.spawnedBy) {
+        expect(result.details).toMatchObject({
+          status: "forbidden",
+          error: "Session communication ancestry is invalid.",
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        expect(calls.map((call) => call.method)).toEqual(["sessions.resolve"]);
+        return;
+      }
       expect(result.details).toMatchObject({
         status: "accepted",
         delivery: { status: "skipped" },

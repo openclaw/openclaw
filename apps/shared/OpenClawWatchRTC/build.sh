@@ -10,7 +10,7 @@ rtc_sdk="$1"
 rtc_output="$2"
 shift 2
 rtc_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-rtc_toolchain=nightly-2026-10-01
+rtc_toolchain=nightly-2026-10-02
 
 if ! command -v cargo >/dev/null || ! command -v rustup >/dev/null; then
   echo "Watch voice requires Rust. Install rustup, then: rustup toolchain install $rtc_toolchain --profile minimal --component rust-src" >&2

@@ -3,6 +3,7 @@ import type { AgentDeletionSessionStoreSafetyInput } from "../agents/agent-delet
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 import type { AgentDeletionJournalTransport } from "../state/agent-deletion-journal-transport.js";
+import type { AgentDeletionJournalEntry } from "../state/agent-deletion-journal.types.js";
 import { clawMonitorCleanupBindingSchema } from "./monitor-cleanup-contract.js";
 import { MAX_CLAW_MANIFEST_BYTES } from "./source-limits.js";
 
@@ -82,6 +83,18 @@ export const clawRemovalJournalResultSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), journal: journal.nullable() }).strict(),
   z.object({ ok: z.literal(false), error: z.string() }).strict(),
 ]);
+
+/** The released Claw transport represents only its existing retirement flow. */
+export function serializeClawRemovalJournal(entry: AgentDeletionJournalEntry | null | undefined) {
+  if (!entry) {
+    return null;
+  }
+  if (entry.phase !== "retiring") {
+    throw new Error(`Agent ${entry.agentId} deletion is still draining.`);
+  }
+  const { phase: _phase, ...wireJournal } = entry;
+  return wireJournal;
+}
 
 type ClawRemovalJournalRequest = z.infer<typeof clawRemovalJournalRequestSchema>;
 export type ClawRemovalJournalWorkerInput = {

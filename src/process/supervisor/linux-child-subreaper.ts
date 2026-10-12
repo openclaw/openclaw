@@ -1,19 +1,12 @@
 import type { ChildProcess } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import {
+  becomeChildSubreaper,
+  inspectChildWaitState,
+  isChildSubreaper,
+  reapChild,
+} from "@openclaw/proc-safe/reaper";
 import { hasErrnoCode } from "../../infra/errno.js";
-
-const PR_SET_CHILD_SUBREAPER = 36;
-const PR_GET_CHILD_SUBREAPER = 37;
-const P_ALL = 0;
-const P_PID = 1;
-const WNOHANG = 1;
-const WEXITED = 4;
-const WNOWAIT = 0x0100_0000;
-// Non-SIGCHLD clone children are otherwise invisible to an ECHILD observation.
-const WALL = 0x4000_0000;
-const ECHILD = 10;
-const EINTR = 4;
 
 function childPids(): number[] {
   const children = new Set<number>();
@@ -48,28 +41,9 @@ export function acquireLinuxChildSubreaper() {
       "Linux child ownership requires the built process owner, without a source loader",
     );
   }
-  // This module is host-owned, never a native dependency of the portable worker archive.
-  const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
-  const libc = koffi.load(null);
-  const prctl = libc.func(
-    "int prctl(int, unsigned long, unsigned long, unsigned long, unsigned long)",
-  );
-  const getSubreaper = libc.func(
-    "int prctl(int, _Out_ int *, unsigned long, unsigned long, unsigned long)",
-  );
-  // Linux permits a null siginfo pointer. WNOWAIT checks wait ownership without
-  // consuming libuv's direct-child status or releasing an adopted child's PID.
-  const waitid = libc.func("int waitid(int, unsigned int, void *, int)");
-  const waitpid = libc.func("int waitpid(int, int *, int)");
-  const fail = (operation: string, errno = koffi.errno()): never => {
-    throw new Error("Linux child ownership " + operation + " failed (errno " + errno + ")");
-  };
-  if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) !== 0) {
-    fail("admission");
-  }
-  const admitted = [0];
-  if (getSubreaper(PR_GET_CHILD_SUBREAPER, admitted, 0, 0, 0) !== 0 || admitted[0] !== 1) {
-    fail("admission verification");
+  becomeChildSubreaper();
+  if (!isChildSubreaper()) {
+    throw new Error("Linux child ownership admission verification failed");
   }
   const libuvChildren = new Set<number>();
   const signaledChildren = new Map<number, "SIGTERM" | "SIGKILL">();
@@ -92,20 +66,6 @@ export function acquireLinuxChildSubreaper() {
     throw new Error("Linux child ownership requires a dedicated owner without existing children");
   }
   let closed = false;
-  const owns = (pid: number): boolean => {
-    for (;;) {
-      if (waitid(P_PID, pid, null, WEXITED | WNOHANG | WNOWAIT | WALL) === 0) {
-        return true;
-      }
-      const errno = koffi.errno();
-      if (errno === ECHILD) {
-        return false;
-      }
-      if (errno !== EINTR) {
-        fail("child wait", errno);
-      }
-    }
-  };
   return {
     retainLibuvChild,
     /** Discovery selects candidates; a retained kernel wait pins every signal target. */
@@ -114,11 +74,18 @@ export function acquireLinuxChildSubreaper() {
         return true;
       }
       for (const pid of childPids()) {
-        if (!owns(pid)) {
+        // WNOWAIT retains wait ownership until the synchronous signal/reap completes.
+        const state = inspectChildWaitState(pid);
+        if (state.kind === "none") {
           continue;
         }
         const previousSignal = signaledChildren.get(pid);
-        if (signal && previousSignal !== signal && previousSignal !== "SIGKILL") {
+        if (
+          state.kind === "running" &&
+          signal &&
+          previousSignal !== signal &&
+          previousSignal !== "SIGKILL"
+        ) {
           try {
             // No await, reap, or event-loop callback may cross this ownership/signal pair.
             process.kill(pid, signal);
@@ -129,30 +96,13 @@ export function acquireLinuxChildSubreaper() {
           }
           signaledChildren.set(pid, signal);
         }
-        if (libuvChildren.has(pid)) {
-          continue;
-        }
-        const reaped = waitpid(pid, null, WNOHANG | WALL);
-        if (reaped === pid) {
+        if (state.kind === "exited" && !libuvChildren.has(pid) && reapChild(pid)) {
           signaledChildren.delete(pid);
-        } else if (reaped < 0) {
-          const errno = koffi.errno();
-          if (errno === ECHILD) {
-            signaledChildren.delete(pid);
-          } else if (errno !== EINTR) {
-            fail("adopted child reap", errno);
-          }
         }
       }
-      if (waitid(P_ALL, 0, null, WEXITED | WNOHANG | WNOWAIT | WALL) === 0) {
+      // Only ECHILD proves extinction; running and retained exit statuses do not.
+      if (inspectChildWaitState().kind !== "none") {
         return false;
-      }
-      const errno = koffi.errno();
-      if (errno === EINTR) {
-        return false;
-      }
-      if (errno !== ECHILD) {
-        fail("extinction observation", errno);
       }
       closed = true;
       return true;

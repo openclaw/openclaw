@@ -28,6 +28,7 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -128,6 +129,7 @@ describe("canonical SQLite metadata reads", () => {
     }
     loadSessionEntryReadOnly(scope);
     const database = openOpenClawAgentDatabase(scope);
+    markCanonicalSessionValidationPending(database, [sibling]);
     database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
       JSON.stringify({
         sessionId: sibling,

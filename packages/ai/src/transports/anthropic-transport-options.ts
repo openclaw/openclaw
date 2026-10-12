@@ -152,3 +152,33 @@ export function applyAnthropicThinkingOptions(
   resolved.thinkingBudgetTokens = thinkingEnabled ? adjusted.thinkingBudget : undefined;
   return reasoning;
 }
+
+/**
+ * Largest completion a request may ask for once transport thinking options
+ * apply, for callers that size the prompt before dispatch. Claude transports
+ * (Anthropic Messages, Vertex, Bedrock, Bedrock Mantle) may add a thinking
+ * budget to `maxTokens`, capped at the model's output limit; some add it even
+ * for adaptive models, and their Claude detection is plugin-owned, so every
+ * request on these APIs reserves the default budget for its level. Other
+ * transports keep `maxTokens` as the total output limit. Over-reserving only
+ * shrinks the prompt; it never overflows the window.
+ */
+export function resolveCompletionTokenReservation(
+  model: Model,
+  maxTokens: number,
+  reasoning: SimpleStreamOptions["reasoning"],
+): number {
+  if (
+    !reasoning ||
+    reasoning === "off" ||
+    (model.api !== "anthropic-messages" && model.api !== "bedrock-converse-stream")
+  ) {
+    return maxTokens;
+  }
+  // The standalone provider keeps `max`; the managed transport narrows it to `high`.
+  return adjustMaxTokensForThinking(
+    maxTokens,
+    resolvePositiveAnthropicTokenLimit(model.maxTokens) ?? Number.POSITIVE_INFINITY,
+    reasoning,
+  ).maxTokens;
+}

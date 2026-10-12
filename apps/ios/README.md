@@ -60,7 +60,7 @@ build compiles the native Watch WebRTC library. Install the official
 and standard-library sources:
 
 ```bash
-rustup toolchain install nightly-2026-10-01 --profile minimal --component rust-src
+rustup toolchain install nightly-2026-10-02 --profile minimal --component rust-src
 ```
 
 Both `rustup` and the rustup-managed `cargo` shim must be on the build's `PATH`.
@@ -80,7 +80,7 @@ phase's `PATH`; exporting it in a terminal alone does not configure Xcode.
 Verify the pinned Cargo is reachable from the build environment:
 
 ```bash
-cargo +nightly-2026-10-01 --version
+cargo +nightly-2026-10-02 --version
 ```
 
 `apps/shared/OpenClawWatchRTC/build.sh` uses that exact toolchain with

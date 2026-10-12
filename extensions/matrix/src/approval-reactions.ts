@@ -90,7 +90,7 @@ function readPersistedTarget(target: unknown): MatrixApprovalReactionTarget | nu
 }
 
 function openPersistentMatrixApprovalReactionStore() {
-  return getOptionalMatrixRuntime()?.state.openKeyedStore<PersistedMatrixApprovalReactionTarget>({
+  return getOptionalMatrixRuntime()?.state.openKeyedStoreV2<PersistedMatrixApprovalReactionTarget>({
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,

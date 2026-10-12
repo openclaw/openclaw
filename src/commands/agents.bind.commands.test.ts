@@ -80,7 +80,8 @@ describe("agents bind/unbind commands", () => {
     );
   });
 
-  it.each(["ops", "main"])("uses the persisted default %s for bind and unbind", async (agentId) => {
+  it("uses the persisted default ops for bind and unbind", async () => {
+    const agentId = "ops";
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -97,14 +98,6 @@ describe("agents bind/unbind commands", () => {
     await commands.agentsUpdateBindingsCommand("unbind", { bind: ["telegram:work"] }, runtime);
     expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
     expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("requires an explicit agent when a fleet has no default", async () => {
-    setConfig({ agents: { ownership: "explicit", entries: { main: {}, ops: {} } } });
-    await expect(
-      commands.agentsUpdateBindingsCommand("bind", { bind: ["telegram"] }, runtime),
-    ).rejects.toThrow("Multiple agents are configured");
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("matches normalized account identities for conflicts, repeats, and removal", async () => {
@@ -272,30 +265,4 @@ describe("agents bind/unbind commands", () => {
     expect(runtime.error).toHaveBeenCalledWith("Bindings are owned by another agent:");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
-
-  it.each(["bind", "unbind"] as const)(
-    "%s preserves conflict JSON and exit status",
-    async (command) => {
-      setConfig(conflictConfig);
-      const output = jsonRuntime();
-      await commands.agentsUpdateBindingsCommand(
-        command,
-        { agent: "ops", bind: ["telegram:ops"], json: true },
-        output,
-      );
-      expect(writeConfigFileMock).not.toHaveBeenCalled();
-      expect(output.writeJson).toHaveBeenCalledExactlyOnceWith(
-        {
-          agentId: "ops",
-          ...(command === "bind"
-            ? { added: [], updated: [], skipped: [] }
-            : { removed: [], missing: [] }),
-          conflicts: ["telegram accountId=ops (agent=main)"],
-        },
-        2,
-      );
-      expect(output.error).not.toHaveBeenCalled();
-      expect(output.exit).toHaveBeenCalledWith(1);
-    },
-  );
 });

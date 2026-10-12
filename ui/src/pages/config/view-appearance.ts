@@ -9,6 +9,7 @@ import {
 } from "../../app/settings.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -39,6 +40,7 @@ import {
 } from "./view-appearance-preferences.ts";
 import { renderTabIconSection } from "./view-tab-icon.ts";
 import type { ConfigProps } from "./view-types.ts";
+import "./appearance-background.ts";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -184,7 +186,7 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
         <div class="settings-row settings-row--stacked">
           <div class="settings-typography-preview">
             <div class="settings-typography-preview__caption">
-              ${t("configView.appearance.fonts.previewCaption")}
+              ${t("configView.appearance.fonts.brandedPreviewCaption", { brand: currentThemeBranding().brandName })}
             </div>
             <p class="settings-typography-preview__prose">
               ${t("configView.appearance.fonts.previewProse")}
@@ -476,6 +478,8 @@ export function renderAppearanceSection(props: ConfigProps) {
           </div>
         </div>
       </section>
+
+      <openclaw-appearance-background></openclaw-appearance-background>
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
         ${renderSettingsSectionHeader(t("configView.appearance.accent"))}

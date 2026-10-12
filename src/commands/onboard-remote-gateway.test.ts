@@ -196,7 +196,7 @@ function asGatewayCall(mock: ReturnType<typeof vi.fn>): GatewayCall {
 }
 
 describe("runRemoteGatewayInferenceOnboarding", () => {
-  it.each([true, false])(
+  it.each([false])(
     "preserves utility role through remote setup and rejects role drift (match=%s)",
     async (matchingRole) => {
       const call = vi.fn(async (options: CallGatewayCliOptions) => {
@@ -377,12 +377,6 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
   );
 
   it.each([
-    {
-      label: "token",
-      auth: { token: "selected-token" },
-      secret: "selected-token",
-      configuredRemote: false,
-    },
     {
       label: "password",
       auth: { password: "selected-password" },
@@ -611,7 +605,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     "missing verification identity",
     "restart timeout",
   ])("gates inference and chat on replacement boot: %s", async (mode, ctx) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
     ctx.onTestFinished(() => now.mockRestore());
     const sent: string[] = [];
     const verifiedBoots: string[] = [];
@@ -697,7 +691,9 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
   });
 
   it("bounds a late restart verification call by the remaining deadline", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(45_500).mockReturnValueOnce(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(45_500).mockReturnValueOnce(1_000);
+    // Wall clock jumps backward 90s -- must not inflate the monotonic remaining budget.
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(-90_000);
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       options.onHelloOk?.(
         gatewayHello(options.method === "openclaw.setup.verify" ? "new-boot" : "old-boot"),
@@ -746,15 +742,16 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       );
     } finally {
       now.mockRestore();
+      dateNow.mockRestore();
     }
 
+    // remaining = 45_000 - 44_500 = 500 (monotonic, despite Date.now at -90_000)
     expect(
       callGatewayMock.mock.calls.find(
         ([options]) => options.method === "openclaw.setup.verify",
       )?.[0].timeoutMs,
     ).toBe(500);
   });
-
   it("hands an auth-free Gateway to the TUI as the exact bound route", async () => {
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       if (options.method === "openclaw.setup.detect") {

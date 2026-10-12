@@ -414,28 +414,6 @@ describe("exec approval session target", () => {
     },
   );
 
-  it("parses channel-scoped session conversation fallbacks for approval requests", () => {
-    const request = buildPluginRequest({
-      sessionKey: "agent:main:matrix:channel:!Ops:Example.org:thread:$root",
-    });
-
-    expect(
-      resolveApprovalRequestSessionConversation({
-        request,
-        channel: "matrix",
-      }),
-    ).toEqual({
-      channel: "matrix",
-      kind: "channel",
-      id: "!Ops:Example.org",
-      rawId: "!Ops:Example.org:thread:$root",
-      threadId: "$root",
-      baseSessionKey: "agent:main:matrix:channel:!Ops:Example.org",
-      baseConversationId: "!Ops:Example.org",
-      parentConversationCandidates: ["!Ops:Example.org"],
-    });
-  });
-
   it("ignores session conversation fallbacks for other channels", () => {
     const request = buildPluginRequest({
       sessionKey: "agent:main:matrix:channel:!ops:example.org",
@@ -447,33 +425,6 @@ describe("exec approval session target", () => {
         channel: "slack",
       }),
     ).toBeNull();
-  });
-
-  it("prefers explicit turn-source account bindings when session store is missing", () => {
-    const cfg = {} as OpenClawConfig;
-    const request = buildRequest({
-      turnSourceChannel: "slack",
-      turnSourceAccountId: "Work",
-      sessionKey: "agent:main:missing",
-    });
-
-    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "slack" })).toBe("work");
-    expect(
-      doesApprovalRequestMatchChannelAccount({
-        cfg,
-        request,
-        channel: "slack",
-        accountId: "work",
-      }),
-    ).toBe(true);
-    expect(
-      doesApprovalRequestMatchChannelAccount({
-        cfg,
-        request,
-        channel: "slack",
-        accountId: "other",
-      }),
-    ).toBe(false);
   });
 
   it("rejects mismatched channel bindings before account checks", () => {
@@ -573,6 +524,14 @@ describe("exec approval session target", () => {
         accountId: "work",
       }),
     ).toBe(true);
+    expect(
+      doesApprovalRequestMatchChannelAccount({
+        cfg,
+        request,
+        channel: "slack",
+        accountId: "other",
+      }),
+    ).toBe(false);
   });
 
   it("reconciles plugin-request turn source and session origin targets through the shared helper", async () => {

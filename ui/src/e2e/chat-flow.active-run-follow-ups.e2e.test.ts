@@ -294,9 +294,7 @@ suite.define(() => {
       await steerElement?.dispose();
       expect(steerBounds).not.toBeNull();
       expect(streamingBounds).not.toBeNull();
-      expect(steerBounds!.y).toBeGreaterThanOrEqual(
-        streamingBounds!.y + streamingBounds!.height - 1,
-      );
+      expect(streamingBounds!.y).toBeGreaterThanOrEqual(steerBounds!.y + steerBounds!.height - 1);
       const durableFinalMessage = {
         role: "assistant",
         content: [{ text: finalText, type: "text" }],
@@ -398,7 +396,7 @@ suite.define(() => {
   });
 
   it.each(["before", "after"] as const)(
-    "keeps unsaved stream text together before its steer when history resolves %s the live event",
+    "keeps accepted steers before the unsaved tail when history resolves %s the live event",
     async (historyOrder) => {
       const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
@@ -486,7 +484,7 @@ suite.define(() => {
                 .locator(".chat-bubble .chat-text")
                 .evaluateAll((bubbles) => bubbles.map((bubble) => bubble.textContent?.trim())),
             )
-            .toEqual([initialText, `${beforeText}\n${afterText}`, steerText]);
+            .toEqual([initialText, steerText, `${beforeText}\n${afterText}`]);
         } finally {
           const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
           const artifactDir = artifactDirParent
@@ -505,7 +503,7 @@ suite.define(() => {
     },
   );
 
-  it("replaces unsaved text with saved rows and keeps commentary and the live tail before its steer", async () => {
+  it("keeps an accepted steer between saved output and its live continuation through reconnect", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const runId = "run-steer-split";
@@ -583,38 +581,39 @@ suite.define(() => {
         messageSeq: 5,
         sessionKey: "agent:main:main",
       });
-      await expect.poll(bubbleTexts).toEqual([initialText, beforeText, steerText]);
+      await expect.poll(bubbleTexts).toEqual([initialText, steerText, beforeText]);
       await capture("retained-prefix");
 
+      const savedMessages = [
+        userMessage,
+        {
+          role: "assistant",
+          content: "A",
+          timestamp: startedAt,
+          __openclaw: { id: "split-a", runId, seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: commentaryText,
+          timestamp: startedAt + 1_000,
+          __openclaw: { id: "split-commentary", runId, seq: 3 },
+          openclawStreamFallback: {
+            itemId: "split-commentary-item",
+            source: "segment",
+            replacementText: commentaryText,
+            runId,
+          },
+        },
+        {
+          role: "assistant",
+          content: "B",
+          timestamp: startedAt + 2_000,
+          __openclaw: { id: "split-b", runId, seq: 4 },
+        },
+        steerMessage,
+      ];
       await gateway.setMethodResponse("chat.history", {
-        messages: [
-          userMessage,
-          {
-            role: "assistant",
-            content: "A",
-            timestamp: startedAt,
-            __openclaw: { id: "split-a", runId, seq: 2 },
-          },
-          {
-            role: "assistant",
-            content: commentaryText,
-            timestamp: startedAt + 1_000,
-            __openclaw: { id: "split-commentary", runId, seq: 3 },
-            openclawStreamFallback: {
-              itemId: "split-commentary-item",
-              source: "segment",
-              replacementText: commentaryText,
-              runId,
-            },
-          },
-          {
-            role: "assistant",
-            content: "B",
-            timestamp: startedAt + 2_000,
-            __openclaw: { id: "split-b", runId, seq: 4 },
-          },
-          steerMessage,
-        ],
+        messages: savedMessages,
         inFlightRun: {
           runId,
           startedAt,
@@ -655,13 +654,48 @@ suite.define(() => {
             "A",
             commentaryText,
             "B",
+            steerText,
             latestCommentaryText,
             afterText,
-            steerText,
           ]);
       } finally {
         await capture("recovered-continuation");
       }
+      const savedAfter = [
+        ...savedMessages,
+        {
+          role: "assistant",
+          content: latestCommentaryText,
+          __openclaw: { id: "saved-latest-commentary", runId, seq: 6 },
+          openclawStreamFallback: {
+            itemId: "split-latest-commentary",
+            source: "segment",
+            replacementText: latestCommentaryText,
+            runId,
+          },
+        },
+        {
+          role: "assistant",
+          content: afterText,
+          __openclaw: { id: "saved-answer", runId, seq: 7 },
+        },
+      ];
+      await gateway.setMethodResponse("chat.history", {
+        messages: savedAfter,
+        sessionInfo: { ...sessionInfo, activeRunIds: [], hasActiveRun: false },
+      });
+      await page.reload();
+      await expect
+        .poll(bubbleTexts)
+        .toEqual([
+          initialText,
+          "A",
+          commentaryText,
+          "B",
+          steerText,
+          latestCommentaryText,
+          afterText,
+        ]);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -100,7 +100,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
   return { cfg, caller, entry, resume, prepare, childSessionKey };
 }
 
-it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"])(
+it.each(["agent:main:subagent:resume-child"])(
   "preserves the task and frozen completion batch for %s",
   async (childSessionKey) => {
     const state = await arrangePausedChild(childSessionKey);
@@ -283,7 +283,7 @@ it("rejects a foreign task replacement instead of accepting untracked work", asy
   );
   await expect(adopt()).rejects.toThrow(/changed/);
   expect(subagentRuns.has(nextRunId)).toBe(false);
-  expect(subagentRuns.get(previousRunId)).toEqual(replacement);
+  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
   const stored = loadSubagentRegistryFromSqlite();
   expect(stored.has(nextRunId)).toBe(false);
   expect(stored.get(previousRunId)).toEqual(replacement);

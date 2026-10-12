@@ -1,33 +1,29 @@
-import type { Options } from "execa";
 import {
   decodeExecaMessage,
   encodeExecaMessage,
   type EncodedExecaMessage,
   type ExecaMessageOutput,
 } from "./execa-message.js";
+import type { CommandSpawnOptions } from "./execa-types.js";
 
 export type BrokerOutputOption = "pipe" | "ignore" | "inherit" | { file: string };
 
-export type BrokerExecaOptions = Pick<
-  Options,
-  | "buffer"
-  | "detached"
-  | "encoding"
-  | "extendEnv"
-  | "forceKillAfterDelay"
-  | "killDescendants"
-  | "killSignal"
-  | "maxBuffer"
-  | "reject"
-  | "stripFinalNewline"
-  | "timeout"
-  | "windowsHide"
-  | "windowsVerbatimArguments"
+export type BrokerExecaOptions = Omit<
+  CommandSpawnOptions,
+  | "cancelSignal"
+  | "cleanup"
+  | "ipc"
+  | "cwd"
+  | "env"
+  | "shell"
+  | "stdin"
+  | "stdout"
+  | "stderr"
+  | "stdio"
 > & {
   executionDeadlineMs?: number;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  input?: string | Uint8Array;
   shell?: false;
   stdin?: "pipe" | "ignore" | "inherit";
   stdout?: BrokerOutputOption;

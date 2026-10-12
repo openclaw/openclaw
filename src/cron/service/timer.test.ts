@@ -9,10 +9,7 @@ import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../../test-utils/gateway-scheduler-clock.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { advanceCronActiveJobGeneration } from "../active-jobs.js";
 import * as runHistory from "../store/run-history.js";
@@ -128,14 +125,12 @@ describe("cron service timer seam coverage", () => {
     const { storePath } = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
-    const clock = createGatewaySchedulerClock(now);
 
     const jobWithoutExplicitOwner = createDueMainJob({ now, wakeMode: "next-heartbeat" });
     delete jobWithoutExplicitOwner.sessionKey;
     await writeCronStoreSnapshot({ storePath, jobs: [jobWithoutExplicitOwner] });
 
     const state = createCronServiceState({
-      scheduler: createTestGatewayScheduler(clock.clock),
       storePath,
       defaultAgentId: "stale-default",
       resolveDefaultAgentId: () => "ops",
@@ -179,7 +174,7 @@ describe("cron service timer seam coverage", () => {
     expect(task.endedAt).toBe(now);
     expect(task.cleanupAfter).toBe(now + 7 * 24 * 60 * 60_000);
 
-    expect(clock.armedAtMs).toBe(now + 60_000);
+    expect((await cronStatus(state)).nextWakeAtMs).toBe(now + 60_000);
   });
 
   it("does not dispatch payload work when trigger evaluation resolves after cancellation", async () => {

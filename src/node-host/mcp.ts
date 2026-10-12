@@ -9,6 +9,7 @@ import {
   type ListToolsResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -308,13 +309,7 @@ export async function startNodeHostMcpManager(
   };
 
   const scheduleRetry = (state: NodeHostMcpServerState): void => {
-    if (
-      closed ||
-      lifecycleSignal.aborted ||
-      states.get(state.serverName) !== state ||
-      state.retryTimer ||
-      state.current
-    ) {
+    if (closed || lifecycleSignal.aborted || state.retryTimer || state.current) {
       return;
     }
     const delayMs = state.retryDelayMs;
@@ -580,15 +575,16 @@ export async function startNodeHostMcpManager(
             { cause: error },
           );
         }
+        const message = truncateUtf16Safe(formatErrorMessage(error), NODE_MCP_ERROR_MAX_CHARS);
         if (
           error &&
           typeof error === "object" &&
           "code" in error &&
           error.code === ErrorCode.RequestTimeout
         ) {
-          throw new NodeHostMcpError("MCP_TOOL_TIMEOUT", formatMcpError(error), { cause: error });
+          throw new NodeHostMcpError("MCP_TOOL_TIMEOUT", message, { cause: error });
         }
-        throw new NodeHostMcpError("MCP_TOOL_ERROR", formatMcpError(error), { cause: error });
+        throw new NodeHostMcpError("MCP_TOOL_ERROR", message, { cause: error });
       }
     },
     async close() {

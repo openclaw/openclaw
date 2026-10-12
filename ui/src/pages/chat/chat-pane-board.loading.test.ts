@@ -9,6 +9,7 @@ import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { openSlot } from "./sidebar-layout.ts";
+import "../../components/board/board-view.ts";
 
 type BoardTestPane = HTMLElement & {
   context: ApplicationContext;
@@ -76,6 +77,8 @@ describe("chat pane board loading states", () => {
     const provider = pane.resolveBoardProvider();
     try {
       draw();
+      const view = container.querySelector("openclaw-board-view")!;
+      await view.updateComplete;
       const skeleton = container.querySelector("openclaw-panel-loading-skeleton");
       await skeleton?.updateComplete;
       expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("board");
@@ -84,8 +87,10 @@ describe("chat pane board loading states", () => {
       complete(snapshot);
       await vi.waitFor(() => expect(provider.hasLoadedSnapshot).toBe(true));
       draw();
+      await view.updateComplete;
+      await view.updateComplete;
       expect(container.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
-      expect(container.querySelector("openclaw-board-view")).not.toBeNull();
+      expect(container.querySelector("openclaw-board-view")).toBe(view);
     } finally {
       cleanup();
     }

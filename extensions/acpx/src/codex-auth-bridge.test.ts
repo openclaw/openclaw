@@ -9,6 +9,7 @@ import {
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GENERATED_ADAPTER_ORPHAN_SCENARIO } from "./adapter-wrapper-script.test-support.js";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
@@ -169,7 +170,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.85.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.85.1"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
@@ -188,7 +189,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it.each([
     { agent: "codex", packageName: "codex-acp", version: "2.1.1" },
-    { agent: "claude", packageName: "claude-agent-acp", version: "0.85.0" },
+    { agent: "claude", packageName: "claude-agent-acp", version: "0.85.1" },
   ] as const)(
     "launches $agent after its captured adapter is removed",
     async ({ agent, packageName, version }) => {
@@ -240,36 +241,36 @@ describe("prepareAcpxCodexAuthConfig", () => {
     },
   );
 
-  it("keeps the orphaned wrapper alive long enough to force-kill the child process group", async () => {
-    const { generated, prepare } = createWrapperFixture();
-
-    await prepare();
-
-    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('killChildTree("SIGTERM")');
-    expect(wrapper).toContain('killChildTree("SIGKILL", { force: true })');
-    expect(wrapper).toMatch(
-      /forceKillTimer = setTimeout\(\(\) => \{\s*killChildTree\("SIGKILL", \{ force: true \}\);\s*childExitCode = 1;/s,
-    );
-    expect(wrapper).toMatch(
-      /child\.on\("exit", \(code, signal\) => \{\s*if \(parentWatcher\) \{\s*clearInterval\(parentWatcher\);\s*\}\s*if \(orphanCleanupStarted\) \{\s*return;\s*\}/s,
-    );
-    expect(wrapper).toMatch(
-      /child\.on\("close", \(\) => \{\s*finishStderrLog\(\);\s*process\.exit\(childExitCode\);/s,
-    );
-    expect(wrapper).not.toMatch(
-      /forceKillTimer = setTimeout\(\(\) => killChildTree\("SIGKILL"\), 1_500\);\s*forceKillTimer\.unref\?\.\(\);\s*process\.exit\(1\);/s,
-    );
-    // Orphan detection must trigger on any PPID change, not only when the new
-    // PPID is init (1). Systemd user services and container init reparent
-    // orphaned processes to a session manager or container init (PID != 1),
-    // and the older `process.ppid !== 1` guard would silently leak the codex
-    // adapter tree there.
-    expect(wrapper).not.toContain("process.ppid !== 1");
-    expect(wrapper).toMatch(
-      /setInterval\(\(\) => \{[\s\S]*?if \(process\.ppid === originalParentPid\) \{\s*return;\s*\}/,
-    );
-  });
+  it.each(["before-orphan", "after-orphan"])(
+    "keeps orphan cleanup owned when the direct child exits %s",
+    async (exitOrder) => {
+      const { root, generated, prepare } = createWrapperFixture();
+      await prepare();
+      const scenario = path.join(root, "orphan-scenario.mjs");
+      await fs.writeFile(scenario, GENERATED_ADAPTER_ORPHAN_SCENARIO);
+      const { stdout } = await execFileAsync(
+        process.execPath,
+        [scenario, generated.wrapperPath, exitOrder],
+        {
+          env: { PATH: process.env.PATH, HOME: root, USERPROFILE: root },
+        },
+      );
+      expect(JSON.parse(stdout)).toEqual({
+        initialSignals: [],
+        orphanSignals: [[-42, "SIGTERM"]],
+        finalSignals: [
+          [-42, "SIGTERM"],
+          [-42, "SIGKILL"],
+        ],
+        timerReferenced: true,
+        timerStillArmedAfterChildClose: true,
+        listenersRetainedBeforeEscalation: true,
+        repeatSignalHandled: true,
+        exitCode: 1,
+        listenersRetired: true,
+      });
+    },
+  );
 
   it("uses the bundled Claude ACP dependency by default when it is installed", async () => {
     const { generatedClaude: generated, prepare } = createWrapperFixture();
@@ -336,6 +337,34 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
     expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
   });
+
+  it.each([
+    { config: "not-json", override: "{}", diagnostic: "CODEX_CONFIG must be a valid JSON object" },
+    { config: "{}", override: "[]", diagnostic: "invalid generated Codex ACP startup config" },
+  ])(
+    "rejects invalid startup configuration before launching the adapter: $diagnostic",
+    async ({ config, override, diagnostic }) => {
+      const { root, generated, prepare } = createWrapperFixture();
+      process.env.CODEX_HOME = path.join(root, "empty-codex-home");
+      const marker = path.join(root, "adapter-started");
+      const installedBinPath = path.join(root, "codex-acp-bin.mjs");
+      await fs.writeFile(
+        installedBinPath,
+        `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(marker)}, "started");`,
+      );
+      await prepare({ resolveInstalledCodexAcpBinPath: async () => installedBinPath });
+      await expect(
+        execFileAsync(
+          process.execPath,
+          [generated.wrapperPath, OPENCLAW_CODEX_CONFIG_ARG, override],
+          {
+            env: { ...process.env, CODEX_CONFIG: config },
+          },
+        ),
+      ).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining(diagnostic) });
+      await expectPathMissing(marker);
+    },
+  );
 
   it("writes API-key auth into the isolated Codex ACP home when env auth is present", async () => {
     const { root, stateDir, generated, prepare } = createWrapperFixture();

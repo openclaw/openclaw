@@ -7,6 +7,7 @@ import {
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
@@ -54,11 +55,8 @@ export async function loadChatHistory(
   const client = state.client;
   const sessions = state.sessions;
   const connectionEpoch = state.connectionEpoch;
-  const connectionIsCurrent = () =>
-    state.connected &&
-    state.client === client &&
-    state.sessions === sessions &&
-    state.connectionEpoch === connectionEpoch;
+  const ownsConnection = captureChatConnectionOwner(state);
+  const connectionIsCurrent = () => ownsConnection() && state.sessions === sessions;
   const agentIsCurrent = () =>
     !isUiSelectedGlobalSessionKey(state, sessionKey) ||
     resolveUiSelectedSessionAgentId(state) === requestAgentId;

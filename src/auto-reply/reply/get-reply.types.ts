@@ -43,6 +43,8 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Settles attribution before tool effects; model preparation may run concurrently. */
+  awaitSessionDiffBaseline?: () => Promise<void>;
   /** Producer callbacks follow this occurrence through queueing and delivery. */
   internalEventExecution?: SessionEventExecution;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
@@ -142,15 +144,12 @@ export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | un
   return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;
 }
 
-/** Reply resolver signature used by dispatchers and tests for dependency injection. */
-export type GetReplyFromConfig = (
+type ReplyResolver<Options extends GetReplyOptions> = (
   ctx: MsgContext,
-  opts?: GetReplyOptions,
+  opts?: Options,
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
 
-export type InternalGetReplyFromConfig = (
-  ctx: MsgContext,
-  opts?: InternalGetReplyOptions,
-  configOverride?: OpenClawConfig,
-) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
+/** Reply resolver signature used by dispatchers and tests for dependency injection. */
+export type GetReplyFromConfig = ReplyResolver<GetReplyOptions>;
+export type InternalGetReplyFromConfig = ReplyResolver<InternalGetReplyOptions>;

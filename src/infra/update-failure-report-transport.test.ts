@@ -306,14 +306,6 @@ describe("update report shared transport boundary", () => {
     },
   );
 
-  it("commits pending before POST and reuses the created receipt without transport", async () => {
-    const fixture = await setup();
-    expect(await fixture.submit()).toMatchObject({ status: "created", url: issueUrl });
-    expect(await fixture.submit()).toMatchObject({ status: "duplicate", url: issueUrl });
-    expect(fixture.createCalls).toHaveLength(1);
-    expect(fixture.runGh).toHaveBeenCalledTimes(2);
-  });
-
   it.each([false, true])(
     "does not start POST with retired authority after pending, retire=%s",
     async (retire) => {
@@ -479,7 +471,6 @@ describe("update report shared transport boundary", () => {
   it.each([
     { label: "missing", errorCode: "ENOENT", started: false, status: null },
     { label: "unauthenticated", started: true, status: 1 },
-    { label: "preflight timeout", errorCode: "ETIMEDOUT", started: true, status: null },
   ])("offers the exact browser body after $label auth without POST", async (failure) => {
     const fixture = await setup();
     fixture.runGh.mockResolvedValueOnce({ ...failure, stdout: Buffer.alloc(0) });

@@ -23,10 +23,8 @@ import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/pl
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentAuthDiscovery from "./agent-auth-discovery.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import {
-  getPreparedModelCatalogWorkerPoolSnapshot,
-  PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-} from "./prepared-model-catalog-worker.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
+import { getPreparedModelCatalogWorkerPoolSnapshot } from "./prepared-model-catalog-worker.js";
 import { writeFixturePlugin, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
 import {
   getPreparedModelFullCatalogAuth,

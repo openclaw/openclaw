@@ -191,7 +191,7 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
 }
 
 describe("assistant commentary grouping", () => {
-  it("keeps all target-run tool output above a textless steer", () => {
+  it("keeps later target-run tool output after an accepted steer", () => {
     const toolCallId = "call-after-steer";
     const items = buildItems({
       runId: "active-run",
@@ -230,10 +230,10 @@ describe("assistant commentary grouping", () => {
     const segmentIndex = items.findIndex((item) => itemText(item).includes("After steer"));
     const toolIndex = items.findIndex((item) => itemText(item).includes("Tool after steer"));
 
-    expect(segmentIndex).toBeGreaterThan(-1);
+    expect(steerIndex).toBeGreaterThan(-1);
     expect(toolIndex).toBeGreaterThan(-1);
-    expect(segmentIndex).toBeLessThan(steerIndex);
-    expect(toolIndex).toBeLessThan(steerIndex);
+    expect(segmentIndex).toBeGreaterThan(steerIndex);
+    expect(toolIndex).toBeGreaterThan(segmentIndex);
   });
 
   const reconnectingSend = queuedSend(
@@ -1435,7 +1435,7 @@ describe("buildCachedChatItems", () => {
       nextText: ["Standalone preamble", "After tool.", "Continued. Again."],
     },
     {
-      name: "whole live reply above a steer",
+      name: "whole live reply after an accepted steer",
       liveOnly: true,
       props: {
         runId: "active-run",

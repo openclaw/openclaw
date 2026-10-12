@@ -409,9 +409,10 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
 export function loadPluginPublicSurfaceModuleSync(
   params: PluginModuleBoundaryParams & {
     loadModule: (modulePath: string) => unknown;
+    capturedSource?: true;
   },
 ): object {
-  const instance = resolvePublicSurfaceInstance(params);
+  const instance = params.capturedSource ? undefined : resolvePublicSurfaceInstance(params);
   if (instance) {
     // SAFETY: Public-surface entrypoints have object exports; the instance owns this exact source.
     return instance.loadModule(params.modulePath) as object;

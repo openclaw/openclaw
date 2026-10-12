@@ -3,7 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { hasSessionTranscriptMessageInDatabase } from "../../../config/sessions/session-accessor.sqlite-transcript-metadata-read.js";
-import { replaceTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { createTranscriptEventInserter } from "../../../config/sessions/transcript-payload.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
@@ -149,11 +150,14 @@ it.each([
       replaceSessionEntrySync(sessionTarget, { sessionId: sessionTarget.sessionId, updatedAt: 1 });
       // Imported or malformed raw rows can lack the optional identity projection.
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      database.db
-        .prepare(
-          "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 0, ?, 1)",
-        )
-        .run(sessionTarget.sessionId, raw);
+      createTranscriptEventInserter(
+        database.db,
+        sessionTarget.sessionId,
+      )({
+        seq: 0,
+        eventJson: raw,
+        createdAt: 1,
+      });
       if (identityId) {
         database.db
           .prepare(

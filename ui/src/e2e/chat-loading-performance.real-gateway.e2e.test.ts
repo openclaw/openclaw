@@ -105,7 +105,11 @@ const suite = createControlUiE2eSuite({
   name: "Control UI chat loading performance with a real Gateway",
   startServerBeforeBrowser: true,
   async startServer() {
-    const owner = await createOpenClawTestInstance({ name: "chat-loading-performance" });
+    const owner = await createOpenClawTestInstance({
+      name: "chat-loading-performance",
+      // Avatar updates wait for the config-reload owner's application receipt.
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: "0" },
+    });
     instance = owner;
     try {
       const workspace = owner.state.path("workspace");
@@ -179,7 +183,8 @@ suite.define(() => {
     const cliJson = async (args: string[]): Promise<Record<string, unknown>> => {
       const result = await owner.cli(["--no-color", ...args]);
       if (result.code !== 0) {
-        const diagnostic = result.stderr
+        const diagnostic = [result.stderr, result.stdout]
+          .join("\n")
           .replaceAll(owner.gatewayToken, "[redacted fixture token]")
           .replaceAll(owner.hookToken, "[redacted fixture token]");
         throw new Error(
@@ -381,17 +386,6 @@ suite.define(() => {
             ) {
               return;
             }
-            if (
-              ![
-                "chat.startup",
-                "chat.history",
-                "sessions.resolve",
-                "agents.list",
-                "agent.identity.get",
-              ].includes(frame.method)
-            ) {
-              return;
-            }
             const params = isRecord(frame.params) ? frame.params : {};
             const metric: RpcMetric = {
               requestId: frame.id,
@@ -571,11 +565,11 @@ suite.define(() => {
               selectedPane.evaluate((element) => {
                 const pane = element as HTMLElement & {
                   loadingOlder: boolean;
-                  historyIntentConsumed: boolean;
+                  historyIntentTimer: number | null;
                 };
                 return {
                   loadingOlder: pane.loadingOlder,
-                  historyIntentConsumed: pane.historyIntentConsumed,
+                  historyIntentConsumed: pane.historyIntentTimer !== null,
                 };
               }),
             )

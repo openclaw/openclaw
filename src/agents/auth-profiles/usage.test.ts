@@ -45,11 +45,6 @@ const resolveApiKeyForProfileMock = vi.hoisted(() =>
 
 let resolveApiKeyForProfileSpy: MockInstance<typeof oauth.resolveApiKeyForProfile> | undefined;
 
-vi.mock("./store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./store.js")>()),
-  resolvePersistedAuthProfileOwnerAgentDir: (await import("./usage-fixture.test-support.js"))
-    .storeMocks.resolvePersistedAuthProfileOwnerAgentDir,
-}));
 // mock-isolation: Exercise quota planning and the real reducer without persistence workers.
 vi.mock("./usage-write.js", async () => ({
   withAuthProfileUsage: (await import("./usage-fixture.test-support.js")).usageMocks
@@ -59,19 +54,22 @@ vi.mock("./usage-write.js", async () => ({
 vi.mock("./store-runtime.js", async () => {
   const { storeMocks: mocks } = await import("./usage-fixture.test-support.js");
   return {
-    loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
+    loadAuthProfileStoreWithoutExternalProfilesAsync:
+      mocks.loadAuthProfileStoreWithoutExternalProfilesAsync,
+    resolvePersistedAuthProfileOwnerAgentDirAsync:
+      mocks.resolvePersistedAuthProfileOwnerAgentDirAsync,
     updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
     saveAuthProfileStore: mocks.saveAuthProfileStore,
   };
 });
 
 beforeEach(() => {
-  storeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
-  storeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(
-    (params: { agentDir?: string }) => params.agentDir,
+  storeMocks.resolvePersistedAuthProfileOwnerAgentDirAsync.mockReset();
+  storeMocks.resolvePersistedAuthProfileOwnerAgentDirAsync.mockImplementation(
+    async (params: { agentDir?: string }) => params.agentDir,
   );
   storeMocks.saveAuthProfileStore.mockReset();
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
+  storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockReset();
   storeMocks.updateAuthProfileStoreWithLock.mockReset();
   resetAuthProfileUsageMocks();
   fetchMock.mockReset();
@@ -386,7 +384,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     mockLock?: boolean;
   }): Promise<void> {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
-    storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue(params.store);
+    storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue(params.store);
     if (params.mockLock !== false) {
       mockLockedUpdateForStore(params.store);
     }

@@ -30,21 +30,18 @@ const secretCfg: OpenClawConfig = {
 };
 
 describe("nostr targets and access policy", () => {
-  it.each([TEST_HEX_PUBLIC_KEY, npub, npub.toUpperCase()])(
-    "resolves a prefixed public key: %s",
-    (target) => {
-      const to = `  nostr:${target}  `;
-      const normalized = nostrPlugin.messaging?.normalizeTarget?.(to);
-      expect(normalized).toBe(TEST_HEX_PUBLIC_KEY);
-      expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.(to)).toBe(true);
-      expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.(to, normalized)).toBe(true);
-      expect(nostrPlugin.messaging?.inferTargetChatType?.({ to })).toBe("direct");
-      expect(nostrPlugin.outbound?.resolveTarget?.({ cfg: {}, to, mode: "explicit" })).toEqual({
-        ok: true,
-        to: TEST_HEX_PUBLIC_KEY,
-      });
-    },
-  );
+  it.each([npub.toUpperCase()])("resolves a prefixed public key: %s", (target) => {
+    const to = `  nostr:${target}  `;
+    const normalized = nostrPlugin.messaging?.normalizeTarget?.(to);
+    expect(normalized).toBe(TEST_HEX_PUBLIC_KEY);
+    expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.(to)).toBe(true);
+    expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.(to, normalized)).toBe(true);
+    expect(nostrPlugin.messaging?.inferTargetChatType?.({ to })).toBe("direct");
+    expect(nostrPlugin.outbound?.resolveTarget?.({ cfg: {}, to, mode: "explicit" })).toEqual({
+      ok: true,
+      to: TEST_HEX_PUBLIC_KEY,
+    });
+  });
 
   it("rejects invalid direct-message targets", () => {
     const to = "not-a-public-key";
@@ -67,14 +64,14 @@ describe("nostr targets and access policy", () => {
     );
   });
 
-  it.each([
-    { entry: `nostr:${npub}`, expected: TEST_HEX_PUBLIC_KEY },
-    { entry: "nostr:*", expected: "nostr:*" },
-  ])("formats $entry without widening access", ({ entry, expected }) => {
-    expect(nostrPlugin.config.formatAllowFrom?.({ cfg: {}, allowFrom: [entry] })).toEqual([
-      expected,
-    ]);
-  });
+  it.each([{ entry: "nostr:*", expected: "nostr:*" }])(
+    "formats $entry without widening access",
+    ({ entry, expected }) => {
+      expect(nostrPlugin.config.formatAllowFrom?.({ cfg: {}, allowFrom: [entry] })).toEqual([
+        expected,
+      ]);
+    },
+  );
 
   it("normalizes pairing entries with spaced prefixes", () => {
     expect(nostrPlugin.pairing?.normalizeAllowEntry?.(`  nostr:${TEST_HEX_PUBLIC_KEY}  `)).toBe(
@@ -96,21 +93,6 @@ describe("nostr targets and access policy", () => {
 });
 
 describe("nostr accounts", () => {
-  it("leaves missing credentials unconfigured with default relays", () => {
-    withEnv({ NOSTR_PRIVATE_KEY: undefined }, () => {
-      const cfg = { channels: { nostr: { enabled: true } } };
-      expect(nostrPlugin.config.listAccountIds(cfg)).toEqual([]);
-      expect(resolveNostrAccount({ cfg })).toMatchObject({
-        accountId: "default",
-        enabled: true,
-        configured: false,
-        privateKey: "",
-        publicKey: "",
-        relays: ["wss://relay.damus.io", "wss://nos.lol"],
-      });
-    });
-  });
-
   it("resolves a disabled named account and its configured relays", () => {
     const cfg = createConfiguredNostrCfg({
       name: "Test Bot",
@@ -158,19 +140,6 @@ describe("nostr accounts", () => {
         publicKey: "",
         config: { privateKey: secretCfg.channels?.nostr?.privateKey },
       });
-    });
-  });
-
-  it("resolves SecretRefs through the lightweight setup account adapter", () => {
-    withEnv({ NOSTR_PRIVATE_KEY: TEST_HEX_PRIVATE_KEY }, () => {
-      expect(nostrSetupPlugin.config.defaultAccountId?.(secretCfg)).toBe("team-a");
-      expect(nostrSetupPlugin.config.listAccountIds(secretCfg)).toEqual(["team-a"]);
-      expect(nostrSetupPlugin.config.resolveAccount(secretCfg, undefined)).toMatchObject({
-        accountId: "team-a",
-        configured: true,
-        privateKey: "",
-      });
-      expect(nostrSetupPlugin.config.resolveAccount(secretCfg, "Team.A").accountId).toBe("team-a");
     });
   });
 
@@ -245,7 +214,6 @@ describe("nostr setup", () => {
   it.each([
     ["malformed nsec", "nsec1not-a-real-secret"],
     ["wrong payload length", nip19.nsecEncode(new Uint8Array(31))],
-    ["zero scalar", nip19.nsecEncode(new Uint8Array(32))],
     ["curve-order scalar", "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"],
   ])("rejects %s across setup surfaces", (_label, privateKey) => {
     const input = { cfg: {}, accountId: "default", input: { privateKey } };

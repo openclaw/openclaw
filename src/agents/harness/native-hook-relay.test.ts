@@ -44,29 +44,14 @@ import {
   registerNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
 } from "./native-hook-relay.js";
+import {
+  clearNativeHookRelaysForTests,
+  createNativeHookRelayPermissionRequestFixture as createPermissionRequestFixture,
+} from "./native-hook-relay.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-native-relay-policy-");
 
 const NATIVE_HOOK_RELAY_EXEC_PREFIX = process.platform === "win32" ? "" : "exec ";
-
-function createPermissionRequestFixture(
-  relayId: string,
-  toolUseId: string,
-  toolInput: Record<string, unknown> = { command: "git status" },
-): Parameters<typeof invokeNativeHookRelay>[0] {
-  return {
-    provider: "codex",
-    relayId,
-    event: "permission_request",
-    rawPayload: {
-      hook_event_name: "PermissionRequest",
-      cwd: "/repo",
-      tool_name: "Bash",
-      tool_use_id: toolUseId,
-      tool_input: toolInput,
-    },
-  };
-}
 
 function registerRelay(overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {}) {
   return registerNativeHookRelay({
@@ -121,7 +106,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
 });
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
@@ -1314,7 +1299,7 @@ describe("native hook relay registry", () => {
     const records = [
       { pid: 9_999_991, state: "dead", expired: false },
       { pid: 9_999_992, state: "expired", expired: true },
-      { pid: 9_999_994, state: "live", expired: false },
+      { pid: process.ppid, state: "live", expired: false },
       { pid: 9_999_995, state: "protected", expired: false },
     ];
     const relayIds = await Promise.all(
@@ -1329,7 +1314,7 @@ describe("native hook relay registry", () => {
       if (pid === 9_999_995) {
         throw Object.assign(new Error("permission denied"), { code: "EPERM" });
       }
-      if (pid !== 9_999_992 && pid !== 9_999_994) {
+      if (pid !== 9_999_992 && pid !== process.ppid) {
         throw Object.assign(new Error("missing process"), { code: "ESRCH" });
       }
       return true;
@@ -2252,7 +2237,6 @@ describe("native hook relay registry", () => {
       throw new Error("Object.keys should not be used for permission fingerprints");
     });
     try {
-      expect(testing.permissionRequestToolInputKeyFingerprintForTests(toolInput)).toContain("key-");
       const fingerprint = testing.permissionRequestContentFingerprintForTests(request);
       expect(fingerprint).toMatch(/^[a-f0-9]{64}$/);
       expect(fingerprint).not.toBe(

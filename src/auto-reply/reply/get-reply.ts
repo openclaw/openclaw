@@ -31,7 +31,6 @@ import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
@@ -41,7 +40,7 @@ import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
@@ -103,7 +102,7 @@ import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
-import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
+import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -117,83 +116,21 @@ const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
 );
 const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
 
-function canSelfServeLocalPaths(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey?: string;
-  workspaceDir: string;
-  provider: string;
-  model: string;
-  opts?: GetReplyOptions;
-  senderIsOwner: boolean;
-  spawnedBy?: string;
-  stagedPathsAvailable: boolean;
-}): boolean {
-  if (params.opts?.disableTools === true) {
-    return false;
-  }
-  const policySessionKey = resolveRuntimePolicySessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-  });
-  const sandboxed = resolveSandboxRuntimeStatus({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    classificationSessionKey: policySessionKey,
-  }).sandboxed;
-  if (
-    (sandboxed && !params.stagedPathsAvailable) ||
-    (!sandboxed &&
-      !resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId }))
-  ) {
-    return false;
-  }
-  const capabilityProfile = resolveConversationCapabilityProfile({
-    config: params.cfg,
-    sessionKey: policySessionKey,
-    runSessionKey: policySessionKey === params.sessionKey ? undefined : params.sessionKey,
-    agentId: params.agentId,
-    agentAccountId: params.ctx.AccountId,
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel: params.ctx.OriginatingChannel,
-      provider: params.ctx.Provider ?? params.ctx.Surface,
-    }),
-    conversationToolPolicy: params.ctx.ConversationToolPolicy,
-    groupId: resolveGroupSessionKey(params.ctx)?.id,
-    groupChannel:
-      normalizeOptionalString(params.ctx.GroupChannel) ??
-      normalizeOptionalString(params.ctx.GroupSubject),
-    groupSpace: normalizeOptionalString(params.ctx.GroupSpace),
-    spawnedBy: params.spawnedBy,
-    senderId: normalizeOptionalString(params.ctx.SenderId),
-    senderName: normalizeOptionalString(params.ctx.SenderName),
-    senderUsername: normalizeOptionalString(params.ctx.SenderUsername),
-    senderE164: normalizeOptionalString(params.ctx.SenderE164),
-    senderIsOwner: params.senderIsOwner,
-    modelProvider: params.provider,
-    modelId: params.model,
-    workspaceDir: params.workspaceDir,
-    runtimeToolAllowlist: params.opts?.toolsAllow,
-    inheritRuntimeToolAllowlist: true,
-    inputProvenance: params.ctx.InputProvenance,
-  });
-  return (
-    projectConversationToolNames({
-      capabilityProfile,
-      toolNames: ["read"],
-      warn: () => {},
-    }).length === 1
-  );
-}
-
 export async function getReplyFromConfig(
   ctx: MsgContext,
   options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  return withReplySessionDiffBaseline((baseline) =>
+    resolveReplyFromConfig(ctx, options, configOverride, baseline),
+  );
+}
+
+async function resolveReplyFromConfig(
+  ctx: MsgContext,
+  options: GetReplyOptions | undefined,
+  configOverride: OpenClawConfig | undefined,
+  baseline: ReplyDiffBaseline,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const opts = prepareInternalGetReplyOptions(options, ctx);
   const isFastTestEnv = isFastTestRuntimeEnv();
@@ -593,24 +530,9 @@ export async function getReplyFromConfig(
     }
     throw error;
   }
-  if (!useFastTestBootstrap) {
-    try {
-      await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
-        prepareReplySessionDiffBaseline({
-          agentId,
-          workspaceDir,
-          sessionState,
-        }),
-      );
-    } catch (error) {
-      if (isSessionWorkStartInvalidatedError(error)) {
-        throw error;
-      }
-      logVerbose(
-        `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
+  const awaitSessionDiffBaseline = useFastTestBootstrap
+    ? undefined
+    : baseline.start({ agentId, workspaceDir, sessionState }, traceGetReplyPhase);
   const {
     sessionCtx,
     sessionEntry,
@@ -649,9 +571,11 @@ export async function getReplyFromConfig(
   const turnToolOverrides = admittedSessionSettings
     ? admittedSessionSettings.toolOverrides
     : sessionEntry.toolOverrides;
-  const optsWithSessionSkillOverrides = turnToolOverrides?.skills
-    ? { ...optsWithCommandQueueOverride, skillOverrides: turnToolOverrides.skills }
-    : optsWithCommandQueueOverride;
+  const optsWithSessionSkillOverrides = {
+    ...optsWithCommandQueueOverride,
+    ...(turnToolOverrides?.skills ? { skillOverrides: turnToolOverrides.skills } : {}),
+    ...(awaitSessionDiffBaseline ? { awaitSessionDiffBaseline } : {}),
+  };
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
@@ -701,7 +625,6 @@ export async function getReplyFromConfig(
         resetTriggered,
         bodyStripped,
         sessionCtx,
-        ctx: finalized,
         sessionEntryHandle,
         defaultProvider,
         defaultModel,
@@ -757,7 +680,7 @@ export async function getReplyFromConfig(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
   );
-  const storedModelOverride = resolveStoredModelOverride({
+  const storedModelOverride = await resolveStoredModelOverrideAsync({
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -873,7 +796,6 @@ export async function getReplyFromConfig(
     requestedRouteResolution,
     modelState,
     resolveModelLevels,
-    contextTokens,
     inlineStatusRequested,
     directiveAck,
   } = directiveResult.result;
@@ -891,6 +813,10 @@ export async function getReplyFromConfig(
     }
     const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
     const action = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
+    await resolvedOpts?.awaitSessionDiffBaseline?.();
+    assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+    resolvedOpts?.operatorAuthority?.assertCurrent();
+    command.assertOwnerCurrent?.();
     await emitResetCommandHooks({
       action,
       agentId,
@@ -957,7 +883,8 @@ export async function getReplyFromConfig(
       resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
       provider,
       model,
-      contextTokens,
+      contextTokens: directiveResult.result.contextTokens,
+      contextTokenProjection: directiveResult.result.contextTokenProjection,
       directiveAck,
       abortedLastRun,
       skillFilter: mergedSkillFilter,
@@ -1048,7 +975,6 @@ export async function getReplyFromConfig(
     !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
-    const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
     const stagingSessionEntry =
       sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
     const stagingWorkspaceDir =
@@ -1078,8 +1004,8 @@ export async function getReplyFromConfig(
           })
         ).snapshot
       : undefined;
-    const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
-      stageSandboxMedia({
+    const stageResult = await traceGetReplyPhase("reply.stage_media", async () =>
+      (await stageSandboxMediaRuntimeLoader.load()).stageSandboxMedia({
         ctx,
         sessionCtx,
         cfg,
@@ -1088,31 +1014,68 @@ export async function getReplyFromConfig(
         workspaceDir: stagingWorkspaceDir,
         skillsSnapshot: stagingSkillsSnapshot,
         abortSignal: optsWithSkillFilter?.abortSignal,
+        awaitSessionDiffBaseline: resolvedOpts?.awaitSessionDiffBaseline,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;
   }
 
-  if (
-    enableLocalPathSelfServe &&
-    canSelfServeLocalPaths({
+  if (enableLocalPathSelfServe && resolvedOpts?.disableTools !== true) {
+    const policySessionKey = resolveRuntimePolicySessionKey({
+      cfg,
+      agentId,
       ctx: sessionCtx,
+      sessionKey,
+    });
+    const sandboxed = resolveSandboxRuntimeStatus({
       cfg,
       agentId,
       sessionKey,
-      workspaceDir,
-      provider: runProvider,
-      model: runModel,
-      opts: resolvedOpts,
-      senderIsOwner: command.senderIsOwner,
-      spawnedBy: normalizeOptionalString(sessionEntry.spawnedBy),
-      stagedPathsAvailable: stagedAttachmentPaths.size > 0,
-    })
-  ) {
-    enableLocalPathSelfServe(
-      [finalized, sessionCtx],
-      stagedAttachmentPaths.size > 0 ? stagedAttachmentPaths : undefined,
-    );
+      classificationSessionKey: policySessionKey,
+    }).sandboxed;
+    if (
+      (sandboxed && stagedAttachmentPaths.size > 0) ||
+      (!sandboxed && resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId }))
+    ) {
+      const capabilityProfile = resolveConversationCapabilityProfile({
+        config: cfg,
+        sessionKey: policySessionKey,
+        runSessionKey: policySessionKey === sessionKey ? undefined : sessionKey,
+        agentId,
+        agentAccountId: sessionCtx.AccountId,
+        messageProvider: resolveOriginMessageProvider({
+          originatingChannel: sessionCtx.OriginatingChannel,
+          provider: sessionCtx.Provider ?? sessionCtx.Surface,
+        }),
+        conversationToolPolicy: sessionCtx.ConversationToolPolicy,
+        groupId: resolveGroupSessionKey(sessionCtx)?.id,
+        groupChannel:
+          normalizeOptionalString(sessionCtx.GroupChannel) ??
+          normalizeOptionalString(sessionCtx.GroupSubject),
+        groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
+        spawnedBy: normalizeOptionalString(sessionEntry.spawnedBy),
+        senderId: normalizeOptionalString(sessionCtx.SenderId),
+        senderName: normalizeOptionalString(sessionCtx.SenderName),
+        senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
+        senderE164: normalizeOptionalString(sessionCtx.SenderE164),
+        senderIsOwner: command.senderIsOwner,
+        modelProvider: runProvider,
+        modelId: runModel,
+        workspaceDir,
+        runtimeToolAllowlist: resolvedOpts?.toolsAllow,
+        inheritRuntimeToolAllowlist: true,
+        inputProvenance: sessionCtx.InputProvenance,
+      });
+      if (
+        projectConversationToolNames({ capabilityProfile, toolNames: ["read"], warn: () => {} })
+          .length === 1
+      ) {
+        enableLocalPathSelfServe(
+          [finalized, sessionCtx],
+          stagedAttachmentPaths.size > 0 ? stagedAttachmentPaths : undefined,
+        );
+      }
+    }
   }
 
   logResolverTiming("milestone", "before_run_prepared_reply");

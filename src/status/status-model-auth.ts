@@ -1,5 +1,5 @@
 import { resolveAuthProfileDisplayLabel } from "../agents/auth-profiles.js";
-import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { resolveModelAuthLabelAsync } from "../agents/model-auth-label.js";
 import { prepareModelCatalogDecisions } from "../agents/model-catalog-decisions.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { getPreparedModelRuntimeAuthStore } from "../agents/prepared-model-runtime-auth.js";
@@ -65,7 +65,7 @@ export function createStatusModelResolver(params: {
     const authLabel = hasAuthOverride
       ? selection.authLabelOverride
       : usesHostAuth
-        ? resolveModelAuthLabel({
+        ? await resolveModelAuthLabelAsync({
             provider,
             acceptedProviderIds: selection.acceptedProviderIds,
             cfg: params.cfg,
@@ -73,6 +73,7 @@ export function createStatusModelResolver(params: {
             agentDir: params.agentDir,
             workspaceDir: params.workspaceDir,
             includeExternalProfiles: false,
+            authStore,
           })
         : "unknown";
     if (!decisions?.isCurrent() || !authStore) {

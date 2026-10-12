@@ -5,6 +5,11 @@ import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { readStartupEntryState } from "./schtasks-runtime.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import {
+  getServiceInspectionClock,
+  runServiceInspectionGuard,
+  withServiceInspectionBudget,
+} from "./service-inspection-budget.js";
+import {
   assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
@@ -57,105 +62,109 @@ export async function readGatewayServiceState(
   service: GatewayService,
   input: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
-  if (input.windowsStartupEntry !== undefined) {
-    if (service.readCommand !== readScheduledTaskCommand) {
-      throw new Error("Startup file inspection requires the Windows service adapter.");
+  return await withServiceInspectionBudget<Promise<GatewayServiceState>>(async (budget) => {
+    if (input.windowsStartupEntry !== undefined) {
+      if (service.readCommand !== readScheduledTaskCommand) {
+        throw new Error("Startup file inspection requires the Windows service adapter.");
+      }
+      return readStartupEntryState(input.windowsStartupEntry, input);
     }
-    return readStartupEntryState(input.windowsStartupEntry, input);
-  }
-  const timeoutMs =
-    input.timeoutMs ?? (service.readCommand === readSystemdServiceExecStart ? 5000 : undefined);
-  const inspectionDeadline = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
-  let args = { ...input, timeoutMs };
-  const baseEnv = args.env ?? process.env;
-  const supplied = args.systemdInstallation;
-  const selected = supplied?.kind === "system" || supplied?.kind === "user" ? supplied : undefined;
-  try {
-    if (
-      !args.systemdReadTarget &&
-      (selected || service.readCommand === readSystemdServiceExecStart)
-    ) {
-      if (inspectionDeadline !== undefined && performance.now() >= inspectionDeadline) {
+    const timeoutMs =
+      input.timeoutMs ?? (service.readCommand === readSystemdServiceExecStart ? 5000 : undefined);
+    const inspectionDeadline = timeoutMs === undefined ? undefined : budget.now() + timeoutMs;
+    let args = { ...input, timeoutMs };
+    const baseEnv = args.env ?? process.env;
+    const supplied = args.systemdInstallation;
+    const selected =
+      supplied?.kind === "system" || supplied?.kind === "user" ? supplied : undefined;
+    try {
+      if (
+        !args.systemdReadTarget &&
+        (selected || service.readCommand === readSystemdServiceExecStart)
+      ) {
+        if (inspectionDeadline !== undefined && budget.now() >= inspectionDeadline) {
+          throw new ServiceInspectionDeadlineError();
+        }
+        const installation =
+          selected ??
+          (await findSystemdGatewayInstallation(baseEnv, {
+            requireLoaded: args.requireLoadedCommand,
+            loadForInspection: args.loadForInspection,
+            timeoutMs:
+              inspectionDeadline === undefined ? undefined : inspectionDeadline - budget.now(),
+          }));
+        if (installation.kind === "dueling" && args.requireEffective && args.requireLoadedCommand) {
+          throw new ServiceOwnershipRefusalError("systemd-competing-managers");
+        }
+        const target =
+          installation.kind === "system"
+            ? installation.system
+            : installation.kind === "user" || installation.kind === "dueling"
+              ? installation.user
+              : undefined;
+        args = { ...args, systemdInstallation: installation, systemdReadTarget: target };
+      }
+      if (inspectionDeadline !== undefined && budget.now() >= inspectionDeadline) {
         throw new ServiceInspectionDeadlineError();
       }
-      const installation =
-        selected ??
-        (await findSystemdGatewayInstallation(baseEnv, {
-          requireLoaded: args.requireLoadedCommand,
-          loadForInspection: args.loadForInspection,
-          timeoutMs:
-            inspectionDeadline === undefined ? undefined : inspectionDeadline - performance.now(),
-        }));
-      if (installation.kind === "dueling" && args.requireEffective && args.requireLoadedCommand) {
-        throw new ServiceOwnershipRefusalError("systemd-competing-managers");
+      if (
+        service.readCommand === readSystemdServiceExecStart &&
+        args.systemdReadTarget?.scope !== "system" &&
+        args.requireEffective &&
+        args.requireLoadedCommand &&
+        !args.systemdReadBinding
+      ) {
+        const deadline = inspectionDeadline ?? budget.now() + 5000;
+        return await withSystemdServiceReadBinding(
+          baseEnv,
+          () => admitSystemdServiceReadBinding(baseEnv, deadline, args.systemdReadTarget?.unitName),
+          (binding) => {
+            const remaining = deadline - budget.now();
+            if (remaining <= 0) {
+              throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+            }
+            return readGatewayServiceStateWithBinding(
+              service,
+              { ...args, systemdReadBinding: binding, timeoutMs: remaining },
+              deadline,
+            );
+          },
+          deadline,
+        );
       }
-      const target =
-        installation.kind === "system"
-          ? installation.system
-          : installation.kind === "user" || installation.kind === "dueling"
-            ? installation.user
-            : undefined;
-      args = { ...args, systemdInstallation: installation, systemdReadTarget: target };
-    }
-    if (inspectionDeadline !== undefined && performance.now() >= inspectionDeadline) {
-      throw new ServiceInspectionDeadlineError();
-    }
-    if (
-      service.readCommand === readSystemdServiceExecStart &&
-      args.systemdReadTarget?.scope !== "system" &&
-      args.requireEffective &&
-      args.requireLoadedCommand &&
-      !args.systemdReadBinding
-    ) {
-      const deadline = inspectionDeadline ?? performance.now() + 5000;
-      return await withSystemdServiceReadBinding(
-        baseEnv,
-        () => admitSystemdServiceReadBinding(baseEnv, deadline, args.systemdReadTarget?.unitName),
-        (binding) => {
-          const remaining = deadline - performance.now();
-          if (remaining <= 0) {
-            throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
-          }
-          return readGatewayServiceStateWithBinding(
-            service,
-            { ...args, systemdReadBinding: binding, timeoutMs: remaining },
-            deadline,
-          );
+      return await readGatewayServiceStateWithBinding(service, args, inspectionDeadline);
+    } catch (error) {
+      if (args.requireEffective || !(error instanceof ServiceInspectionDeadlineError)) {
+        throw error;
+      }
+      return deadlineDiagnosticState(
+        {
+          ...(args.systemdInstallation ? { systemdInstallation: args.systemdInstallation } : {}),
+          installed: false,
+          loadState: deadlineLoadState(error),
+          running: false,
+          env: baseEnv,
+          command: null,
         },
-        deadline,
+        error,
       );
     }
-    return await readGatewayServiceStateWithBinding(service, args, inspectionDeadline);
-  } catch (error) {
-    if (args.requireEffective || !(error instanceof ServiceInspectionDeadlineError)) {
-      throw error;
-    }
-    return deadlineDiagnosticState(
-      {
-        ...(args.systemdInstallation ? { systemdInstallation: args.systemdInstallation } : {}),
-        installed: false,
-        loadState: deadlineLoadState(error),
-        running: false,
-        env: baseEnv,
-        command: null,
-      },
-      error,
-    );
-  }
+  });
 }
 
 async function readGatewayServiceStateWithBinding(
   service: GatewayService,
   args: ReadGatewayServiceStateArgs,
-  deadline = performance.now() + 5000,
+  deadline = getServiceInspectionClock()() + 5000,
 ): Promise<GatewayServiceState> {
+  const now = getServiceInspectionClock();
   const baseEnv = args.env ?? process.env;
   const { timeoutMs, systemdReadBinding, systemdReadTarget } = args;
   const remainingTimeoutMs = () => {
     if (timeoutMs === undefined) {
       return undefined;
     }
-    const remaining = deadline - performance.now();
+    const remaining = deadline - now();
     if (remaining <= 0) {
       throw new ServiceInspectionDeadlineError();
     }
@@ -225,7 +234,7 @@ async function readGatewayServiceStateWithBinding(
       ? { ...mergedEnv, OPENCLAW_TASK_SCRIPT: command.sourcePath }
       : mergedEnv;
   // Reject persisted selector drift before invoking the native service manager.
-  args.validateEnvBeforeStatusRead?.(env);
+  runServiceInspectionGuard(() => args.validateEnvBeforeStatusRead?.(env));
   // Strict user-unit absence still needs the platform owner's system-scope proof.
   if (
     !absent &&
@@ -235,7 +244,7 @@ async function readGatewayServiceStateWithBinding(
     command === null
   ) {
     systemdReadBinding?.verify();
-    const remaining = deadline - performance.now();
+    const remaining = deadline - now();
     if (remaining <= 0) {
       throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
@@ -246,7 +255,7 @@ async function readGatewayServiceStateWithBinding(
         return false;
       });
     systemdReadBinding?.verify();
-    if (performance.now() >= deadline) {
+    if (now() >= deadline) {
       throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
   }
@@ -371,7 +380,7 @@ async function readGatewayServiceStateWithBinding(
     ...(definitionMutationCapability ? { definitionMutationCapability } : {}),
     runtime,
   };
-  if (timeoutMs !== undefined && performance.now() >= deadline) {
+  if (timeoutMs !== undefined && now() >= deadline) {
     const error = new ServiceInspectionDeadlineError();
     if (args.requireEffective) {
       throw error;

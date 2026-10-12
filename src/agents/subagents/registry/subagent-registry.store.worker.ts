@@ -54,12 +54,10 @@ export function readSubagentRunsInWorker(
   command: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>,
 ): Extract<OpenClawStateReadResult, { type: "subagents.runs" }> {
   if (command.scope.kind === "maintenance") {
-    const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
     return {
       type: command.type,
       projection: "maintenance",
-      runs: maintenance.runs,
-      maintenanceDigest: maintenance.digest,
+      runs: loadSubagentMaintenanceRunsInDatabase({ db }),
     };
   }
   if (command.scope.kind === "descendants") {
@@ -71,8 +69,7 @@ export function readSubagentRunsInWorker(
     return {
       type: command.type,
       runs: descendants.runs,
-      descendantBasis: {
-        digest: descendants.digest,
+      descendants: {
         sessionKeys: descendants.sessionKeys,
         runIds: descendants.runIds,
       },

@@ -1,7 +1,4 @@
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -91,6 +88,16 @@ export function captureSessionEntryCurrentRead(
   if (owner.incognito) {
     return captureIncognitoSessionEntryCurrentRead(owner.incognito, sessionKey);
   }
+  if (owner.kind === "incognito") {
+    return {
+      kind: "missing",
+      assertSourceCurrent: owner.assertCurrent,
+      readCurrent() {
+        owner.assertCurrent();
+        return undefined;
+      },
+    };
+  }
   if (owner.kind === "native") {
     return captureNativeSessionEntryCurrentRead(scope);
   }
@@ -137,20 +144,16 @@ export function captureSessionEntryCurrentRead(
     databaseBirthtime: identity.birthtime,
     sessionKey,
   });
-  const assertSourceCurrent = () => {
-    assertExistingDatabaseIdentity(source.path, identity.key, identity.birthtime);
-    assertLogicalSourceCurrent();
-  };
   const options = { agentId: source.agentId, path: source.path, env: readScope.env };
   return {
     kind: "file",
     source,
-    assertSourceCurrent,
+    assertSourceCurrent: assertLogicalSourceCurrent,
     async readCurrent() {
       const entry = await withSessionHistoryWorkerDatabase(options, (reader) =>
         reader.readEntryCurrent({ scope: readScope, source }),
       );
-      assertSourceCurrent();
+      assertLogicalSourceCurrent();
       return entry;
     },
   };

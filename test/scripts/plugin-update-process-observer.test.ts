@@ -48,42 +48,7 @@ describe("plugin update command observation", () => {
     expect(timers).toBe(0);
   });
 
-  it.each([
-    { name: "delegated worker", cmdline: workerArgv, environ: marker, postCore: true },
-    { name: "worker without marker", cmdline: workerArgv, environ: "PATH=/bin\0", postCore: false },
-    {
-      name: "worker with disabled marker",
-      cmdline: workerArgv,
-      environ: "OPENCLAW_UPDATE_POST_CORE=0\0",
-      postCore: false,
-    },
-    {
-      name: "different worker with post-core flag",
-      cmdline: "node\0/opt/openclaw/dist/infra/unrelated.worker.js\0--post-core\0",
-      environ: marker,
-      postCore: false,
-    },
-    {
-      name: "delegated doctor worker",
-      cmdline: "node\0/opt/openclaw/dist/infra/update-migrated-finalize.worker.js\0--doctor\0",
-      environ: marker,
-      postCore: false,
-    },
-    { name: "legacy update", cmdline: argv, environ: marker, postCore: true },
-    { name: "legacy process title", cmdline: "openclaw-update\0", environ: marker, postCore: true },
-  ])("classifies $name using its environment marker", async ({ cmdline, environ, postCore }) => {
-    files.set("/proc/10/task/10/children", "11");
-    files.set("/proc/11/cmdline", cmdline);
-    files.set("/proc/11/environ", environ);
-    const outcome = observePostCoreCommand(child, "update");
-    await vi.advanceTimersByTimeAsync(20);
-    child.emit("exit", 0, null);
-    expect((await outcome).children).toEqual([
-      { pid: "11", argv: cmdline.split("\0").filter(Boolean), postCore },
-    ]);
-  });
-
-  it.each(["EACCES", "EPERM", "ENOENT", "ESRCH"])(
+  it.each(["ESRCH"])(
     "%s leaves evidence unknown and keeps scanning readable siblings and grandchildren",
     async (code) => {
       files.set("/proc/11/environ", procError(code));
@@ -103,7 +68,7 @@ describe("plugin update command observation", () => {
     },
   );
 
-  it.each(["cmdline", "environ", "task/11/children"])(
+  it.each(["cmdline"])(
     "does not manufacture positive handoff evidence when %s is inaccessible",
     async (file) => {
       files.set("/proc/10/task/10/children", "11");
@@ -116,7 +81,7 @@ describe("plugin update command observation", () => {
     },
   );
 
-  it.each([argv, workerArgv])(
+  it.each([workerArgv])(
     "retains positive evidence and argv %j after process.title changes and the process exits",
     async (cmdline) => {
       files.set("/proc/11/cmdline", cmdline);

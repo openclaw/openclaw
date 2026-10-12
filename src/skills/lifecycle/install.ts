@@ -47,18 +47,12 @@ function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInst
   };
 }
 
-function buildNodeInstallCommand(prefs: SkillsInstallPreferences): string[] {
-  switch (prefs.nodeManager) {
-    case "pnpm":
-      return ["pnpm", "add", "-g", "--ignore-scripts"];
-    case "yarn":
-      return ["yarn", "global", "add", "--ignore-scripts"];
-    case "bun":
-      return ["bun", "add", "-g", "--ignore-scripts"];
-    default:
-      return ["npm", "install", "-g", "--ignore-scripts"];
-  }
-}
+const DEFAULT_NODE_INSTALL_COMMAND = ["npm", "install", "-g", "--ignore-scripts"];
+const NODE_INSTALL_COMMANDS = new Map([
+  ["pnpm", ["pnpm", "add", "-g", "--ignore-scripts"]],
+  ["yarn", ["yarn", "global", "add", "--ignore-scripts"]],
+  ["bun", ["bun", "add", "-g", "--ignore-scripts"]],
+]);
 
 // Strict allowlist patterns to prevent option injection and malicious package names.
 const SAFE_BREW_FORMULA = /^[a-z0-9][a-z0-9+._@-]*(\/[a-z0-9][a-z0-9+._@-]*){0,2}$/;
@@ -103,7 +97,7 @@ function buildInstallCommand(
         spec.package,
         "node package",
         SAFE_NODE_PACKAGE,
-        buildNodeInstallCommand(prefs),
+        NODE_INSTALL_COMMANDS.get(prefs.nodeManager) ?? DEFAULT_NODE_INSTALL_COMMAND,
       );
     case "go":
       return buildValidatedInstallCommand(spec.module, "go module", SAFE_GO_MODULE, [
@@ -121,9 +115,10 @@ function buildInstallCommand(
   }
 }
 
-async function resolveBrewPrefixBinDir(
+async function resolveBrewBinDir(
   timeoutMs: number,
   brewExe: string,
+  fallbackDirs: readonly string[] = ["/opt/homebrew/bin", "/usr/local/bin"],
 ): Promise<string | undefined> {
   const prefixResult = await runCommandSafely([brewExe, "--prefix"], {
     timeoutMs: Math.min(timeoutMs, 30_000),
@@ -134,16 +129,7 @@ async function resolveBrewPrefixBinDir(
       return path.join(prefix, "bin");
     }
   }
-  return undefined;
-}
-
-async function resolveBrewBinDir(timeoutMs: number, brewExe: string): Promise<string | undefined> {
-  const prefixBin = await resolveBrewPrefixBinDir(timeoutMs, brewExe);
-  if (prefixBin) {
-    return prefixBin;
-  }
-
-  for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
+  for (const candidate of fallbackDirs) {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -393,22 +379,17 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
       return brewOnPath ? { ready: true } : { ready: false, reason: "uv" };
     }
     case "go": {
+      let ready: boolean;
       if (hasBinary("go")) {
-        return (await isGoUsableForAutoInstall())
-          ? { ready: true }
-          : { ready: false, reason: "go" };
+        ready = await isGoUsableForAutoInstall();
+      } else if (brewOnPath) {
+        ready = true;
+      } else if (brewExe) {
+        ready = Boolean(await resolveBrewBinDir(10_000, brewExe, []));
+      } else {
+        ready = hasBinary("apt-get") && (await resolveAptCommandAccess()).available;
       }
-      if (brewOnPath) {
-        return { ready: true };
-      }
-      if (brewExe) {
-        return (await resolveBrewPrefixBinDir(10_000, brewExe))
-          ? { ready: true }
-          : { ready: false, reason: "go" };
-      }
-      return hasBinary("apt-get") && (await resolveAptCommandAccess()).available
-        ? { ready: true }
-        : { ready: false, reason: "go" };
+      return ready ? { ready: true } : { ready: false, reason: "go" };
     }
     default:
       return { ready: true };

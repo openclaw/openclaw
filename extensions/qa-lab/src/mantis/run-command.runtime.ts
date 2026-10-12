@@ -43,13 +43,14 @@ const [expectedDevice, expectedInode, command, ...args] = process.argv.slice(1);
 const current = fs.lstatSync(".", { bigint: true });
 if (!current.isDirectory() || current.dev !== BigInt(expectedDevice) || current.ino !== BigInt(expectedInode)) {
   process.stderr.write("Mantis owner-bound command refused a replaced working directory\n");
-  process.exit(78);
+  process.exitCode = 78;
+} else {
+  const result = spawnSync(command, args, { stdio: "inherit", windowsHide: true });
+  if (result.error) {
+    throw result.error;
+  }
+  process.exitCode = result.status ?? 1;
 }
-const result = spawnSync(command, args, { stdio: "inherit", windowsHide: true });
-if (result.error) {
-  throw result.error;
-}
-process.exit(result.status ?? 1);
 `;
 
 function resolveQaCommandTimeoutMs(scenarioId: string): number {

@@ -114,25 +114,24 @@ export function createSlackNativeDataBaseTextConsumer(baseText: string): (text: 
   };
 }
 
-function appendSlackNativeDataFallback(
+function appendSlackBlockFallback(
   text: string,
   blocks: readonly unknown[] | undefined,
   render: (value: unknown) => string | undefined,
 ): string {
-  const base = text.trim();
-  const consumeFromBase = createSlackNativeDataBaseTextConsumer(base);
-  const dataTexts: string[] = [];
+  const consumeFromBase = createSlackNativeDataBaseTextConsumer(text);
+  const parts = [text];
   for (const block of blocks ?? []) {
     const dataText = render(block);
     if (!dataText) {
       continue;
     }
-    if (!comparableText(dataText) || consumeFromBase(dataText)) {
+    if (isSlackNativeDataBlock(block) && consumeFromBase(dataText)) {
       continue;
     }
-    dataTexts.push(dataText);
+    parts.push(dataText);
   }
-  return [base, ...dataTexts].filter(Boolean).join("\n\n");
+  return parts.filter((part) => part.trim()).join("\n\n");
 }
 
 export function renderSlackNativeDataPlainTextBlock(value: unknown): string | undefined {
@@ -151,23 +150,17 @@ export function buildSlackNativeDataAccessibilityText(
   text: string,
   blocks?: readonly unknown[],
 ): string {
-  const parts = [text];
-  const consumeFromBase = createSlackNativeDataBaseTextConsumer(text);
-  for (const block of blocks ?? []) {
-    const isNativeData = isSlackNativeDataBlock(block);
-    const rendered =
+  return appendSlackBlockFallback(
+    text,
+    blocks,
+    (block) =>
       renderSlackNativeDataPlainTextBlock(block) ??
       renderSlackBlockFallbackText(block, {
         nativeDataFormat: "plain",
         includeSelectOptions: true,
       }) ??
-      (isNativeData ? SLACK_MALFORMED_NATIVE_DATA_FALLBACK : undefined);
-    if (!rendered || (isNativeData && consumeFromBase(rendered))) {
-      continue;
-    }
-    parts.push(rendered);
-  }
-  return parts.filter((part) => part.trim()).join("\n\n");
+      (isSlackNativeDataBlock(block) ? SLACK_MALFORMED_NATIVE_DATA_FALLBACK : undefined),
+  );
 }
 
 /** Preserve every native data block's content once when Slack requires a text-only retry. */
@@ -175,7 +168,7 @@ export function appendSlackNativeDataFallbackText(
   text: string,
   blocks?: readonly unknown[],
 ): string {
-  return appendSlackNativeDataFallback(text, blocks, (block) =>
+  return appendSlackBlockFallback(text.trim(), blocks, (block) =>
     isSlackNativeDataBlock(block) ? renderSlackBlockFallbackText(block) : undefined,
   );
 }
@@ -185,5 +178,5 @@ export function appendSlackNativeDataPlainTextFallback(
   text: string,
   blocks?: readonly unknown[],
 ): string {
-  return appendSlackNativeDataFallback(text, blocks, renderSlackNativeDataPlainTextBlock);
+  return appendSlackBlockFallback(text.trim(), blocks, renderSlackNativeDataPlainTextBlock);
 }

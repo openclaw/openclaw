@@ -99,12 +99,6 @@ type AgentScopedPolicyTarget = {
   readonly overlay: Record<string, unknown>;
 };
 
-type ChannelScopedPolicyTarget = {
-  readonly scopeName: string;
-  readonly channelId: string;
-  readonly overlay: Record<string, unknown>;
-};
-
 export function scopedPolicyOverlays(
   policy: unknown,
 ): readonly (readonly [string, Record<string, unknown>])[] {
@@ -121,16 +115,6 @@ export function agentScopedPolicyTargets(policy: unknown): readonly AgentScopedP
     normalizePolicySelectorValues(overlay.agentIds, "agentIds").map((agentId) => ({
       scopeName,
       agentId,
-      overlay,
-    })),
-  );
-}
-
-export function channelScopedPolicyTargets(policy: unknown): readonly ChannelScopedPolicyTarget[] {
-  return scopedPolicyOverlays(policy).flatMap(([scopeName, overlay]) =>
-    normalizePolicySelectorValues(overlay.channelIds, "channelIds").map((channelId) => ({
-      scopeName,
-      channelId,
       overlay,
     })),
   );
@@ -238,7 +222,7 @@ function duplicateScopedFieldFinding(
   return undefined;
 }
 
-function scopedPolicyFields(
+export function scopedPolicyFields(
   scopeName: string,
   overlay: Record<string, unknown>,
   selector: PolicyScopeSelectorKind,

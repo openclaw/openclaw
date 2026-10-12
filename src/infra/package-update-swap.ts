@@ -52,7 +52,6 @@ import {
   resolveStagedPackageSwapTarget,
 } from "./package-update-swap-target.js";
 import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
-import { FreeBsdPkgOwnershipError } from "./update-freebsd-pkg-ownership.js";
 import { verifyPackageUpdateRecovery } from "./update-global.js";
 import {
   finalizeNativePackageStage,
@@ -60,6 +59,7 @@ import {
 } from "./update-native-package-stage.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+import { SystemPackageOwnershipError } from "./update-system-package-ownership.js";
 
 export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
@@ -706,7 +706,7 @@ export async function swapStagedPackageInstall(
     }
     if (
       error instanceof PackageUpdateActivationError ||
-      error instanceof FreeBsdPkgOwnershipError
+      error instanceof SystemPackageOwnershipError
     ) {
       if (activation && !retained && !liveMutationStarted) {
         const refusal = error instanceof PackageUpdateActivationError ? error.cause : error;

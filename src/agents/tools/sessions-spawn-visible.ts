@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
@@ -25,7 +26,9 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
+import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
 import { resolveAgentIdentity } from "../identity.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnAdmission } from "../spawn-plan.js";
@@ -43,7 +46,7 @@ import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
 } from "../subagents/spawn/subagent-spawn-plan.js";
-import { readRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
+import { resolveRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
@@ -238,19 +241,33 @@ export async function maybeSpawnVisibleSession(params: {
     agentSessionKey: params.options?.agentSessionKey,
     completionOwnerKey: params.options?.completionOwnerKey,
   });
-  const assertActive =
-    params.options?.assertActive ?? (() => params.options?.signal?.throwIfAborted());
+  let assertDelegationCurrent: (() => void) | undefined = undefined;
+  const assertActive = composeSessionSourceAssertion([params.options?.assertActive], (source) => {
+    source();
+    params.options?.signal?.throwIfAborted();
+    assertDelegationCurrent?.();
+  });
   const requesterTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
     key: ownership.completionRequesterSessionKey,
     agentId: params.options?.requesterAgentIdOverride,
     assertActive,
   });
-  assertActive();
-  const requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
-  const completionRequesterSessionId = requesterEntry?.sessionId;
-  const completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
+  const completionEntry = requesterTarget.store[requesterTarget.canonicalKey];
+  const completionRequesterSessionId = completionEntry?.sessionId;
+  const completionRequesterLifecycleRevision = completionEntry?.lifecycleRevision;
   const requesterKey = ownership.controllerSessionKey;
+  const controllerTarget =
+    requesterKey === ownership.completionRequesterSessionKey
+      ? requesterTarget
+      : await resolveGatewaySessionStoreTargetInWorker({
+          cfg,
+          key: requesterKey,
+          agentId: params.options?.requesterAgentIdOverride,
+          assertActive,
+        });
+  assertActive();
+  const requesterEntry = controllerTarget.store[controllerTarget.canonicalKey];
   const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
     cfg,
     agentId: params.options?.requesterAgentIdOverride,
@@ -296,6 +313,23 @@ export async function maybeSpawnVisibleSession(params: {
   if (!admission.ok) {
     return { status: "forbidden", error: admission.error };
   }
+  const delegation = prepareNativeDelegatedToolPolicy({
+    config: cfg,
+    requesterAgentId,
+    targetAgentId,
+    requesterSessionKey: requesterKey,
+    context: params.options,
+  });
+  const delegatedToolPolicy = delegation.policy;
+  assertDelegationCurrent = delegation.assertCurrent;
+  assertActive();
+  if (placement && delegatedToolPolicy) {
+    return {
+      status: "forbidden",
+      error:
+        "Delegated tool targets require Gateway-side native execution; cloud placement cannot enforce the live grant.",
+    };
+  }
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -304,6 +338,7 @@ export async function maybeSpawnVisibleSession(params: {
     cfg,
     sessionKey: requesterKey,
     agentId: requesterAgentId,
+    preparedSessionEntry: requesterEntry ?? null,
   });
   // Gateway creation inherits the exact parent's requirement before admitting a child run.
   const childRuntimeSandboxed =
@@ -311,6 +346,7 @@ export async function maybeSpawnVisibleSession(params: {
     resolveSandboxRuntimeStatus({
       cfg,
       sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+      preparedSessionEntry: null,
     }).sandboxed;
   const requesterSandboxed = params.options?.sandboxed === true || requesterRuntime.sandboxed;
   if (!childRuntimeSandboxed && (requesterSandboxed || params.sandbox === "require")) {
@@ -349,17 +385,9 @@ export async function maybeSpawnVisibleSession(params: {
     inheritedModel:
       targetAgentId === requesterAgentId
         ? (params.options?.requesterModel ??
-          (
-            await readRequesterPreferences({
-              cfg,
-              requesterInternalKey: requesterKey,
-              requesterAgentId,
-              assertActive,
-            })
-          ).model)
+          resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }).model)
         : undefined,
   });
-  assertActive();
   if (modelPlan.status === "error") {
     return { status: "error", error: modelPlan.error };
   }
@@ -375,7 +403,6 @@ export async function maybeSpawnVisibleSession(params: {
           hasFallbackOrigin: initialSessionPatch.modelOverrideFallbackOriginModel !== undefined,
         }
       : undefined;
-  assertActive();
   const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
     resolveAdmission,
@@ -420,6 +447,7 @@ export async function maybeSpawnVisibleSession(params: {
               version: 1,
               allow: [...(params.options?.inheritedToolAllowlist ?? [])],
               deny: [...(params.options?.inheritedToolDenylist ?? [])],
+              ...(delegatedToolPolicy ? { delegatedToolPolicy } : {}),
             },
             ...(inheritedModel ? { resolvedModel: inheritedModel } : {}),
           },
@@ -467,13 +495,15 @@ export async function maybeSpawnVisibleSession(params: {
         ...(worktreeName ? { worktreeName } : {}),
         ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
       };
-      response = placement
-        ? await createGatewayCall("sessions.create", createParams, {
-            signal: params.options?.signal,
-            sessionMutationCommitGuard: params.options?.assertActive,
-            timeoutMs: null,
-          })
-        : await createGatewayCall("sessions.create", createParams);
+      response = await runWithAgentToolSourceExecutionScope(assertActive, () =>
+        placement
+          ? createGatewayCall("sessions.create", createParams, {
+              signal: params.options?.signal,
+              sessionMutationCommitGuard: assertActive,
+              timeoutMs: null,
+            })
+          : createGatewayCall("sessions.create", createParams),
+      );
     } catch (error) {
       const missingScope = readMissingScopeErrorDetails(
         error && typeof error === "object" && "details" in error ? error.details : undefined,
@@ -532,21 +562,25 @@ export async function maybeSpawnVisibleSession(params: {
           launchAgent: async (request, assertDispatchCurrent) => {
             if (params.options?.callGateway) {
               assertDispatchCurrent();
-              return await cloudGatewayCall("agent", request, {
-                sessionMutationCommitGuard: assertDispatchCurrent,
-                timeoutMs: null,
-              });
+              return await runWithAgentToolSourceExecutionScope(assertActive, () =>
+                cloudGatewayCall("agent", request, {
+                  sessionMutationCommitGuard: assertDispatchCurrent,
+                  timeoutMs: null,
+                }),
+              );
             }
             return (
-              await callNativeSubagentGateway(
-                {
-                  method: "agent",
-                  params: request,
-                  assertDispatchCurrent,
-                  timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-                },
-                undefined,
-                resolveGatewayContext,
+              await runWithAgentToolSourceExecutionScope(assertActive, () =>
+                callNativeSubagentGateway(
+                  {
+                    method: "agent",
+                    params: request,
+                    assertDispatchCurrent,
+                    timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
+                  },
+                  undefined,
+                  resolveGatewayContext,
+                ),
               )
             ).response;
           },

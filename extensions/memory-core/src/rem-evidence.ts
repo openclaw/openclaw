@@ -671,16 +671,9 @@ export function previewGroundedRemForFile(params: {
   }
 
   const reflections: GroundedRemPreviewItem[] = [];
-  const seenReflections = new Set<string>();
   const addReflection = (eligible: boolean, text: string, refs: string[] | undefined) => {
-    if (!eligible || !refs?.length) {
-      return;
-    }
-    const normalized = normalizeWhitespace(text);
-    const key = normalized.toLowerCase();
-    if (normalized && !seenReflections.has(key)) {
-      seenReflections.add(key);
-      reflections.push({ text: normalized, refs });
+    if (eligible && refs?.length) {
+      reflections.push({ text, refs });
     }
   };
   const relationshipFacts = facts.filter((item) => REM_STABLE_PERSON_SIGNAL_RE.test(item.text));

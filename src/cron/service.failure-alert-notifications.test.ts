@@ -92,7 +92,7 @@ describe("CronService failure notification delivery", () => {
     });
     const runner = startHeartbeatRunner({ cfg, readCurrentConfig: () => cfg, runOnce });
     const store = await makeStorePath();
-    const resolveOriginDeliveryContext = vi.fn(() => deliveryContext);
+    const resolveOriginDeliveryContext = vi.fn(async () => deliveryContext);
     const sendCronFailureAlert = vi.fn(async (params) => {
       await params.onDeliverySettled({
         delivered: false,

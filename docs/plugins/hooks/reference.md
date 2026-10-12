@@ -34,15 +34,15 @@ modifications explicitly instead of relying on in-place mutation.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option                  | Effect                                                                                                                                                                                                                                                 |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `matcher`               | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
-| `priority`              | Ordering; higher runs first.                                                                                                                                                                                                                           |
-| `registrationId`        | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
-| `timeoutMs`             | Per-handler asynchronous await budget. Expiry applies the hook's failure policy below; it does not cancel the handler or its side effects. Omit to use the runner's default, if any.                                                                   |
-| `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
-| `eligibleDispatchKinds` | For `reply_dispatch` only, limits host dispatch to `agent`, `acp`, or both. Omit to handle all dispatch kinds.                                                                                                                                         |
-| `requiresToolAuthority` | For `before_prompt_build` only, runs the handler after the host finalizes the current turn's tool surface and supplies ephemeral `ctx.toolAuthority`. Use this for context retrieval that must follow tool policy.                                     |
+| Option                  | Effect                                                                                                                                                                                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `matcher`               | Non-empty list of standard OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
+| `priority`              | Ordering; higher runs first.                                                                                                                                                                                                                          |
+| `registrationId`        | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                      |
+| `timeoutMs`             | Per-handler asynchronous await budget. Expiry applies the hook's failure policy below; it does not cancel the handler or its side effects. Omit to use the runner's default, if any.                                                                  |
+| `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                 |
+| `eligibleDispatchKinds` | For `reply_dispatch` only, limits host dispatch to `agent`, `acp`, or both. Omit to handle all dispatch kinds.                                                                                                                                        |
+| `requiresToolAuthority` | For `before_prompt_build` only, runs the handler after the host finalizes the current turn's tool surface and supplies ephemeral `ctx.toolAuthority`. Use this for context retrieval that must follow tool policy.                                    |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
 hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
@@ -90,7 +90,7 @@ The standard runner applies these defaults **per handler**:
 
 | Hooks                                                                                                          | Default timeout                     | On thrown error or timeout                                       |
 | -------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
-| `before_agent_run`, `before_tool_call`, `before_install`                                                       | 15 seconds                          | Fail closed: block the run, tool call, or install                |
+| `before_agent_run`, `before_tool_call`, `before_install`                                                       | 15 seconds                          | Block the run, tool call, or install                             |
 | `before_agent_finalize`, `before_prompt_build`, `message_sending`, `reply_payload_sending`, `resolve_exec_env` | 15 seconds                          | Log and skip the failed handler; retain other successful results |
 | `agent_end`, `before_compaction`, `after_compaction`, `skill_changed`                                          | 30 seconds                          | Log and continue                                                 |
 | `channel_pairing_requested`                                                                                    | 2 seconds                           | Log and continue                                                 |
@@ -101,7 +101,7 @@ The standard runner applies these defaults **per handler**:
 An emitter can impose a tighter overall lifecycle budget, such as the
 shutdown `session_end` drain below. A timeout only bounds an asynchronous
 await; it cannot interrupt synchronous JavaScript. For a policy requirement,
-use a fail-closed gate rather than assuming an observation or delivery hook
+use a gate that blocks the operation on error rather than assuming an observation or delivery hook
 will reject the operation on failure.
 
 For claim hooks, continuing means trying the next handler. The caller decides
@@ -123,7 +123,7 @@ contracts above; a modifying hook is not an observation hook.
 
 | Hook                            | Kind    | Purpose                                                                                                                         |
 | ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `before_model_resolve`          | Modify  | Override provider or model before session messages load                                                                         |
+| `before_model_resolve`          | Modify  | Override provider, model, or the run's fallback chain before session messages load                                              |
 | `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                                      |
 | `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment                     |
 | `before_agent_run`              | Gate    | Inspect prompt and session messages before model submission; node turns gate Gateway input before worker-local context assembly |
@@ -169,6 +169,15 @@ suppress an ordinary agent turn before model input without retaining the
 original prompt in transcript, use `before_agent_run` on a supported runner.
 To short-circuit an agent turn with a synthetic reply or silence, use
 `before_agent_reply`.
+
+For heartbeat turns, `before_agent_reply` receives
+`ctx.heartbeatEventQueueSessionKey` when the host knows the underlying
+system-event queue. This can differ from `ctx.sessionKey` for an isolated
+heartbeat run. Use the supplied key for event lookup; do not derive a base
+session by removing a `:heartbeat` suffix because a configured session can be
+named `heartbeat`. The field is optional for older hosts. Without it, plugins
+can inspect only `ctx.sessionKey`; they cannot infer an isolated run's base
+queue. The field identifies an existing queue and grants no additional access.
 
 <a id="sessions-and-compaction" />
 

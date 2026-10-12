@@ -106,9 +106,11 @@ function hasLegacyVectorTable(db: DatabaseSync): boolean {
   return tableHasColumns(db, LEGACY_MEMORY_VECTOR_TABLE, ["id", "embedding"]);
 }
 
-function tableRowCount(db: DatabaseSync, tableName: string): number {
+function tableRowCount(db: DatabaseSync, tableName: string, query = ""): number {
   const row = db
-    .prepare(`SELECT COUNT(*) AS count FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${tableName}`)
+    .prepare(
+      `SELECT COUNT(*) AS count FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${tableName} AS legacy ${query}`,
+    )
     .get() as { count?: unknown } | undefined;
   return Number(row?.count ?? 0);
 }
@@ -128,28 +130,22 @@ function readLegacyVectorEntries(db: DatabaseSync, tolerateInvalid: boolean): nu
 }
 
 function assertLegacyDerivedRowsCopied(db: DatabaseSync, tableName: string, query: string): void {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS missing FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${tableName} AS legacy ${query}`,
-    )
-    .get() as { missing?: unknown } | undefined;
-  if (Number(row?.missing ?? 0) > 0) {
+  if (tableRowCount(db, tableName, query) > 0) {
     throw new LegacyMemoryDerivedRowsConflictError(tableName);
   }
 }
 
 function assertLegacyVectorRowsReferenceChunks(db: DatabaseSync): void {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS missing
-       FROM ${LEGACY_MEMORY_SIDECAR_SCHEMA}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
-       WHERE NOT EXISTS (
+  if (
+    tableRowCount(
+      db,
+      LEGACY_MEMORY_VECTOR_TABLE,
+      `WHERE NOT EXISTS (
          SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
          WHERE chunk.id = legacy.id
        )`,
-    )
-    .get() as { missing?: unknown } | undefined;
-  if (Number(row?.missing ?? 0) > 0) {
+    ) > 0
+  ) {
     throw new Error(`legacy memory ${LEGACY_MEMORY_VECTOR_TABLE} rows reference missing chunks`);
   }
 }

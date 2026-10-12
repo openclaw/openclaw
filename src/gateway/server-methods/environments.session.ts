@@ -10,8 +10,10 @@ import {
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { authorizeSessionSharingTarget } from "../session-sharing.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import type { WorkerEnvironmentSessionIdentity } from "../worker-environments/session-attachment.js";
 import { captureSessionEnvironmentToolPolicy } from "./environments.session-tool-policy.js";
@@ -57,6 +59,17 @@ export function resolveSessionEnvironmentCaller(
   );
   if (!selected.ok) {
     throw new Error(selected.error.message);
+  }
+  if (
+    isIncognitoSessionKey(
+      resolveSessionStoreIdentity({
+        cfg: context.getRuntimeConfig(),
+        sessionKey,
+        agentId: selected.agentId,
+      }).canonicalKey,
+    )
+  ) {
+    throw new Error("A persistent conversation is required for an attached environment");
   }
   const readTarget = () =>
     loadAccessorSessionEntryForGatewayTarget({

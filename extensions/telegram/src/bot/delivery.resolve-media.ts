@@ -86,20 +86,21 @@ function resolveMediaMetadata(msg: TelegramMediaContext["message"]) {
       msg.photo?.[msg.photo.length - 1] ??
       msg.video ??
       msg.video_note ??
+      msg.animation ??
       msg.document ??
       msg.audio ??
       msg.voice,
     fileName:
+      msg.animation?.file_name ??
       msg.document?.file_name ??
       msg.audio?.file_name ??
-      msg.video?.file_name ??
-      msg.animation?.file_name,
+      msg.video?.file_name,
     mimeType:
       msg.audio?.mime_type ??
       msg.voice?.mime_type ??
       msg.video?.mime_type ??
-      msg.document?.mime_type ??
-      msg.animation?.mime_type,
+      msg.animation?.mime_type ??
+      msg.document?.mime_type,
   };
 }
 

@@ -1,12 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { constants, DatabaseSync, StatementSync } from "node:sqlite";
+import { constants, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
-import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -109,7 +109,7 @@ describe("session upstream links", () => {
       expect(read()?.threadId).toBe(`thread-${key}`);
       update.run("local-replacement", key);
       expect(read()?.threadId).toBe("local-replacement");
-      const foreign = new DatabaseSync(databasePath);
+      const foreign = openNodeSqliteDatabase(databasePath);
       try {
         foreign
           .prepare("UPDATE session_upstream_links SET thread_id = ? WHERE session_key = ?")
@@ -133,7 +133,7 @@ describe("session upstream links", () => {
         db.exec("ROLLBACK");
       }
       expect(read()?.threadId).toBe("foreign-replacement");
-      runSqlitePinnedReadSnapshotSync(db, () => {
+      runSqliteReadSnapshotSync(db, () => {
         const before = count();
         expect(read()?.threadId).toBe("foreign-replacement");
         expect(read()?.threadId).toBe("foreign-replacement");
@@ -220,7 +220,7 @@ describe("session upstream links", () => {
     ).toBeUndefined();
   });
 
-  it("observes foreign source changes and rolls back a revoked commit grant", async () => {
+  it("observes source changes and rejects stale initialization", async () => {
     const database = createDatabaseOptions();
     const sourceKey = "agent:main:adopted:source";
     upsertLink(sourceKey, "claude", database);
@@ -259,42 +259,6 @@ describe("session upstream links", () => {
         sourceCurrent,
       ),
     ).rejects.toThrow("source changed");
-    let revoked = false;
-    const admission = operationAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, ...args) =>
-        admission(
-          (request, grant) => {
-            if (request.stage === "commit") {
-              revoked = true;
-            }
-            admit(request, grant);
-          },
-          ...args,
-        ),
-    );
-    await expect(
-      deleteSessionUpstreamLinkAsync(child.sessionKey, child.agentId, {
-        ...database,
-        expected: readSessionUpstreamLinkInDatabase(
-          openOpenClawStateDatabase(database).db,
-          child.sessionKey,
-          child.agentId,
-        ),
-        assertCommitAllowed: () => {
-          if (revoked) {
-            throw new Error("initializer revoked");
-          }
-        },
-      }),
-    ).rejects.toThrow("initializer revoked");
-    expect(
-      readSessionUpstreamLinkInDatabase(
-        openOpenClawStateDatabase(database).db,
-        child.sessionKey,
-        child.agentId,
-      ),
-    ).toBeDefined();
     expect(
       readSessionUpstreamLinkInDatabase(
         openOpenClawStateDatabase(database).db,

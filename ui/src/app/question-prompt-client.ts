@@ -44,11 +44,8 @@ export function unregisterQuestionClientOwner(
   owner: QuestionClientResolutionOwner,
 ): void {
   const owners = resolutionOwnersByClient.get(client);
-  if (!owners) {
-    return;
-  }
-  owners.delete(owner);
-  if (owners.size === 0) {
+  owners?.delete(owner);
+  if (owners?.size === 0) {
     resolutionOwnersByClient.delete(client);
     invalidateQuestionList(client);
   }

@@ -18,7 +18,6 @@ export function inspectPluginSourceDependencies(
   const packageRoots = new Set<string>();
   const unresolved: Array<{ source: string; specifier: string }> = [];
   const references: Array<{ source: string; specifier: string; target: string }> = [];
-  const checks: Array<() => void> = [];
   const seenEntries = new Set<string>();
   for (const entry of entries) {
     const source = fs.realpathSync(entry.entryFile);
@@ -123,8 +122,6 @@ export function inspectPluginSourceDependencies(
           packageRoots.add(original);
         }
       }
-      artifact.assertSourceCurrent();
-      checks.push(artifact.assertSourceCurrent);
     } finally {
       artifact.dispose();
     }
@@ -136,11 +133,6 @@ export function inspectPluginSourceDependencies(
     ),
     unresolved,
     references,
-    assertSourceCurrent: () => {
-      for (const check of checks) {
-        check();
-      }
-    },
   };
 }
 
@@ -150,7 +142,6 @@ export function inspectPluginGenerationSources(
 ) {
   const bySource = new Map<string, string>();
   const digests = new Map<string, string>();
-  const checks: Array<() => void> = [];
   for (const entry of entries) {
     if (digests.has(entry.pluginId)) {
       continue;
@@ -162,7 +153,6 @@ export function inspectPluginGenerationSources(
       try {
         digest = artifact.sourceDigest;
         bySource.set(key, digest);
-        checks.push(artifact.assertSourceCurrent);
       } finally {
         artifact.dispose();
       }
@@ -171,10 +161,5 @@ export function inspectPluginGenerationSources(
   }
   return {
     sourceDigests: Object.fromEntries(digests),
-    assertSourceCurrent: () => {
-      for (const check of checks) {
-        check();
-      }
-    },
   };
 }

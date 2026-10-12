@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
+import { loadPluginRegistryHandle } from "./loader.js";
 import {
   createPluginCache,
   invalidatePluginCacheMetadata,
@@ -58,6 +59,58 @@ function preparePolicy(root: string, version: string) {
 const canonicalize = () => canonicalizeProviderModelId("policy-fixture", "authored-id");
 
 describe("provider policy generations", () => {
+  it.each([false, true])("reuses completed private registry policies (missing=%s)", (missing) => {
+    const bundled = tempDirs.make("openclaw-policy-private-");
+    const root = path.join(bundled, "policy-fixture");
+    fs.mkdirSync(root);
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}');
+    fs.writeFileSync(
+      path.join(root, "index.js"),
+      'module.exports = { id: "policy-fixture", register() {} };',
+    );
+    fs.writeFileSync(
+      path.join(root, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "policy-fixture",
+        configSchema: { type: "object", additionalProperties: false },
+      }),
+    );
+    if (!missing) {
+      fs.writeFileSync(
+        path.join(root, "provider-policy-api.js"),
+        'exports.normalizeModelCatalogId = () => "private-model";',
+      );
+    }
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundled);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    const registry = loadPluginRegistryHandle({
+      config: {
+        plugins: {
+          allow: ["policy-fixture"],
+          entries: { "policy-fixture": { enabled: true } },
+          slots: { memory: "none" },
+        },
+      },
+      onlyPluginIds: ["policy-fixture"],
+      cache: false,
+    });
+    records.push(...registry.plugins);
+    expect(registry.plugins).toEqual([
+      expect.objectContaining({ id: "policy-fixture", status: "loaded" }),
+    ]);
+    const candidates = vi.spyOn(
+      publicSurfaceLoader,
+      "loadBundledPluginPublicArtifactModuleFromCandidatesSync",
+    );
+    withPluginRuntimeRegistryScope(registry, () => {
+      for (let index = 0; index < 3; index++) {
+        expect(canonicalize()).toBe(missing ? "authored-id" : "private-model");
+      }
+    });
+    expect(candidates).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retain published registries through surviving policy caches", async () => {
     class RetiredRegistry {
       readonly fixtureLabel = "RetiredRegistry";
@@ -119,17 +172,17 @@ describe("provider policy generations", () => {
       withPluginCache(firstCache, () => withPluginRuntimeRegistryScope(next, canonicalize)),
     ).toBe("replacement");
     expect(readFirst()).toBe("first");
-    expect(candidates).toHaveBeenCalledTimes(4);
+    expect(candidates).toHaveBeenCalledTimes(3);
     invalidatePluginCacheMetadata(firstCache);
     expect(readFirst()).toBe("first");
-    expect(candidates).toHaveBeenCalledTimes(5);
+    expect(candidates).toHaveBeenCalledTimes(4);
     stageActivePluginRegistry(first, "republished", "default");
     expect(readFirst()).toBe("first");
-    expect(candidates).toHaveBeenCalledTimes(6);
+    expect(candidates).toHaveBeenCalledTimes(5);
 
     getPluginInstance(firstRecord)!.quiesce();
     expect(readFirst()).toBe("first");
-    expect(candidates).toHaveBeenCalledTimes(6);
+    expect(candidates).toHaveBeenCalledTimes(5);
   });
 
   it("does not retain an absent policy while an unpublished registry is assembled", () => {

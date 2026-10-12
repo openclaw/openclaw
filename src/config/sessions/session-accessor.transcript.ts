@@ -6,6 +6,7 @@ import type {
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
 import { trimSessionTranscriptInWorker } from "./session-manual-compact.js";
 import {
@@ -42,27 +43,20 @@ export {
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
 export { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
-export { loadTranscriptEvents } from "./session-transcript-events.js";
+export { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 export {
-  loadTranscriptSuffixEventsBoundedSync,
-  readPreviousIndexedTranscriptEventSync,
-} from "./session-accessor.sqlite-suffix-read.js";
-export {
-  rewriteAssistantTranscriptMessageForRun,
-  rewriteTranscriptMessageAtAnchor,
-} from "./session-accessor.sqlite-transcript-message-rewrite.js";
-export { readSessionTranscriptMessageByEventId } from "./session-accessor.sqlite-transcript-store.js";
+  rewritePreparedAssistantTranscriptMessageForRun as rewriteAssistantTranscriptMessageForRun,
+  rewritePreparedTranscriptMessageAtAnchor as rewriteTranscriptMessageAtAnchor,
+} from "./session-message-rewrite.js";
 export {
   appendTranscriptEvent,
-  appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
-  replaceTranscriptEvents,
-  replaceTranscriptEventsSync,
   replaceSessionWithBranchedTranscript,
   replaceTranscriptSuffixEventsSync,
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,
+  withTranscriptWriteSequence,
   withTranscriptWriteTransaction,
 } from "./session-accessor.sqlite-transcript-write.js";
 
@@ -103,6 +97,10 @@ export async function trimSessionTranscriptForManualCompact(
   },
 ): Promise<SessionTranscriptManualTrimResult> {
   const authority = params.authority;
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (!authority && incognito) {
+    return trimPreparedSessionTranscriptForManualCompact(scope, params);
+  }
   if (!authority) {
     return withSessionTranscriptReadSource(
       scope,
@@ -141,6 +139,51 @@ export async function trimSessionTranscriptForManualCompact(
       throw new SessionWorkStartChangedError("Session changed before compaction. Retry.");
     }
   };
+  if (incognito) {
+    const { actor } = incognito;
+    const expected = authority.expectedSource;
+    if (
+      expected &&
+      (expected.path !== actor.path ||
+        expected.agentId !== actor.agentId ||
+        expected.databaseIdentity !== actor.identity.incarnation)
+    ) {
+      throw new Error("Session compaction changed its physical actor");
+    }
+    return actor.sessions.withSharedState(async () => {
+      const source = await prepareSessionSourceAuthority(authority.source);
+      try {
+        if (
+          source.nativeSource ||
+          source.hasOpaqueCheck ||
+          source.checks.some(
+            ({ predicate }) =>
+              predicate.source.path !== actor.path ||
+              predicate.source.agentId !== actor.agentId ||
+              predicate.source.databaseIdentity !== actor.identity.incarnation,
+          )
+        ) {
+          throw new Error("Incognito compaction requires source authority prepared for its actor");
+        }
+        const assertCurrent = () => {
+          incognito.authority.assertCurrent();
+          authority.assertHostCurrent();
+          (source.assertPreparedCurrent ?? source.assertCurrent)();
+        };
+        assertCurrent();
+        return await trimPreparedSessionTranscriptForManualCompact(scope, params, {
+          assertEntryCurrent,
+          assertCurrent,
+          assertCommitCurrent: assertCurrent,
+          source,
+          // The actor never owns a cold archive; native restoration remains below.
+          restore: async () => {},
+        });
+      } finally {
+        await releaseSessionSourceAuthorities([source]);
+      }
+    });
+  }
   return withSessionTranscriptReadSource(
     scope,
     (captured) =>

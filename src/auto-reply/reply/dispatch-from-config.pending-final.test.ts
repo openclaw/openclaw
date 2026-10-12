@@ -18,7 +18,7 @@ import {
   clearPendingFinalDeliveryAfterSuccess,
   suppressPendingFinalDelivery,
 } from "./dispatch-from-config.pending-final.js";
-import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-claim.js";
+import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
 
 // Fixture writes must not schedule retention work into the cleanup request census.
 // mock-isolation: Fixture seed writes must not schedule retention requests into this census.

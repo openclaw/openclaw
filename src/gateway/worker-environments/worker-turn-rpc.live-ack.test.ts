@@ -27,7 +27,7 @@ async function recoveredTurn(ackedSeq = 5) {
   await previous.store.updateAckCursors({ claim: previous.claim, liveEvent: ackedSeq });
   const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
   const placementStore = createWorkerSessionPlacementGate(placements, {
-    rejectExistingWorkerClaims: true,
+    recoveryPlacements: await placements.listAsync(),
   });
   expect(placementStore.validateWorkerTurn(previous.claim)).toBe(false);
   await placements.acceptWorkspaceResult(previous.claim);
@@ -150,7 +150,7 @@ describe("worker live ACK ownership", () => {
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
 
 describe("worker ACK ordering", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
 
   it.each(["transcript", "terminal"] as const)(
     "does not return a successful %s ACK when persistence rejects",

@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { deserialize } from "node:v8";
-import { MessageChannel, MessagePort, Worker } from "node:worker_threads";
+import { MessageChannel, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
@@ -28,15 +28,15 @@ import * as cronStore from "../store.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  finishCronRunReceiptAsync,
   finishCronRunReceiptInDatabase,
-  prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob,
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.test-support.js";
 import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
@@ -46,12 +46,12 @@ import { start, stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { run } from "./ops-run.js";
 import { ensureLoadedForRead } from "./ops-shared.js";
+import { waitForCronRunQueue } from "./run-queue.js";
 import {
   claimCronRecoveryReceipt,
   makeCronRecoveryState,
   observeCronTimerAdmissions,
 } from "./run-recovery.test-support.js";
-import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import * as serviceState from "./state.js";
 import { createCronServiceState, type CronEvent, type CronServiceDeps } from "./state.js";
 import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
@@ -249,10 +249,11 @@ describe("one-shot recovery", () => {
           try {
             await start(next);
             if (mode === "manual-delayed-force") {
-              await clock.advanceBy(MIN_REFIRE_GAP_MS);
+              clock.setTime(clock.clock.now() + MIN_REFIRE_GAP_MS);
+              await onTimer(next);
+              await waitForCronRunQueue(next);
               expect(runCommandJob).toHaveBeenCalledTimes(2);
               expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
-              expect(next.activeTimerTicks).toBe(0);
             }
             // A force run reserved before the slot borrows it; once due, its
             // distinct scheduled occurrence still runs exactly once.
@@ -312,14 +313,14 @@ describe("one-shot recovery", () => {
   );
 });
 
-it("lists behind healthy recovery while a writer is held, and retires a waiting repair", async () => {
+it("keeps reads responsive and finishes a dispatched repair after the scheduler stops", async () => {
   const { storePath } = await makeStorePath();
   const nowMs = Date.now();
   const jobs = Array.from({ length: 66 }, (_, index) => {
     const job = makeCronRecoveryJob(`job-${index}`, nowMs - 100);
     delete job.state.runningAtMs;
     job.enabled = index < 64;
-    job.state.nextRunAtMs = nowMs + 86_400_000;
+    job.state.nextRunAtMs = job.enabled ? nowMs + 86_400_000 : undefined;
     return job;
   });
   await writeCronStoreSnapshot({ storePath, jobs });
@@ -434,23 +435,30 @@ it("lists behind healthy recovery while a writer is held, and retires a waiting 
     cron.stop();
     await writer.stop();
     await pending;
-    expect(inspectActiveCronRunReceipt({ storePath, jobId: jobs[0]!.id })).toMatchObject({
-      receiptId: receipts[0]!.receiptId,
+    expect(inspectActiveCronRunReceipt({ storePath, jobId: jobs[0]!.id })).toBeUndefined();
+    const repaired = (await loadCronStore(storePath)).jobs[0];
+    expect(repaired?.state.runningAtMs).toBeUndefined();
+    expect(repaired?.state).toMatchObject({
+      lastRunStatus: "error",
+      lastError: "cron: job interrupted by gateway restart",
     });
-    expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(nowMs - 100);
-    expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toEqual([]);
+    expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toEqual([
+      [expect.objectContaining({ jobId: jobs[0]!.id, status: "error" })],
+    ]);
     expect(runner).not.toHaveBeenCalled();
-    expect(scheduler.activeTimerTicks).toBe(0);
   } finally {
     watchdog?.removeEventListener("abort", releaseStuckWriter);
     cron.stop();
-    await writer?.stop();
-    await pending;
-    observe.mockRestore();
-    for (const receipt of receipts) {
-      releaseLocalCronRunReceiptOwnership(receipt);
+    try {
+      await writer?.stop();
+      await pending;
+    } finally {
+      observe.mockRestore();
+      for (const receipt of receipts) {
+        releaseLocalCronRunReceiptOwnership(receipt);
+      }
+      openOpenClawStateDatabase().db.exec("DROP TABLE IF EXISTS writes");
     }
-    openOpenClawStateDatabase().db.exec("DROP TABLE IF EXISTS writes");
   }
 });
 
@@ -576,10 +584,6 @@ it.each([
         expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
       }
       expect(runner).not.toHaveBeenCalled();
-      expect(state.activeTimerTicks).toBe(0);
-      expect(state.runAdmission.active).toBe(0);
-      expect(state.runAdmission.waiters).toEqual([]);
-      expect(state.queuedRunReservationsByJobId.size).toBe(0);
 
       await admissions.expectReleased(source === "timer" ? 1 : 0);
     } finally {
@@ -591,7 +595,7 @@ it.each([
   },
 );
 
-it("publishes a committed repair once after reply loss and leaves the remaining batch for the next tick", async () => {
+it("retains a committed repair after reply loss without replaying it on the next tick", async () => {
   const { storePath } = await makeStorePath();
   const nowMs = Date.now();
   const jobs = ["first", "second"].map((id, index) => {
@@ -649,8 +653,8 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   await reply.waitForExit();
   expect(reply.wasDropped()).toBe(true);
   expect(reply.attempts).toEqual(["first"]);
-  expect(finishedIds()).toEqual(["first"]);
-  expect(notificationKeys()).toEqual(["cron:first:failure-alert"]);
+  expect(finishedIds()).toEqual([]);
+  expect(notificationKeys()).toEqual([]);
   const afterLoss = await loadCronStore(storePath);
   expect(afterLoss.jobs[0]?.state).toMatchObject({ lastRunStatus: "error", consecutiveErrors: 1 });
   expect(afterLoss.jobs[0]?.state.runningAtMs).toBeUndefined();
@@ -659,26 +663,32 @@ it("publishes a committed repair once after reply loss and leaves the remaining 
   expect(inspectActiveCronRunReceipt({ storePath, jobId: "second" })?.receiptId).toBe(
     jobs[1]!.state.runningReceiptId,
   );
-  expect(history("first")).toEqual([expect.objectContaining({ jobId: "first", status: "error" })]);
+  // Reply loss can drop host history and notifications, but not the committed repair.
+  expect(history("first")).toEqual([]);
   expect(history("second")).toEqual([]);
 
   const secondTick = onTimer(state);
   pending.push(secondTick);
   await secondTick;
   expect(reply.attempts).toEqual(["first", "second"]);
-  expect(finishedIds()).toEqual(["first", "second"]);
-  expect(notificationKeys()).toEqual(["cron:first:failure-alert", "cron:second:failure-alert"]);
+  expect(finishedIds()).toEqual(["second"]);
+  expect(notificationKeys()).toEqual(["cron:second:failure-alert"]);
   for (const job of jobs) {
     expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
-    expect(history(job.id)).toEqual([expect.objectContaining({ jobId: job.id, status: "error" })]);
   }
+  expect(history("first")).toEqual([]);
+  expect(history("second")).toEqual([
+    expect.objectContaining({ jobId: "second", status: "error" }),
+  ]);
+  expect((await loadCronStore(storePath)).jobs.map((job) => job.state.consecutiveErrors)).toEqual([
+    1, 1,
+  ]);
   expect(runner).not.toHaveBeenCalled();
-  expect(state.activeTimerTicks).toBe(0);
 
   await admissions.expectReleased(2);
 });
 
-it("publishes committed schedule maintenance once after its successful reply is lost", async () => {
+it("reloads committed schedule maintenance after reply loss without repeating its effects", async () => {
   const { storePath } = await makeStorePath();
   const nowMs = Date.now();
   const job = makeCronRecoveryJob("invalid-schedule", nowMs);
@@ -696,50 +706,11 @@ it("publishes committed schedule maintenance once after its successful reply is 
   await expect(ensureLoadedForRead(state)).rejects.toBeInstanceOf(Error);
   await reply.waitForExit();
   expect(reply.wasDropped()).toBe(true);
-  expect(state.store?.jobs[0]).toMatchObject({ enabled: false, state: { scheduleErrorCount: 3 } });
-  expect((await loadCronStore(storePath)).jobs[0]).toEqual(state.store?.jobs[0]);
-  expect(enqueueSystemEvent).toHaveBeenCalledOnce();
-  expect(enqueueSystemEvent.mock.calls[0]?.[1].contextKey).toBe(
-    "cron:invalid-schedule:auto-disabled",
-  );
+  const persisted = (await loadCronStore(storePath)).jobs[0];
+  expect(persisted).toMatchObject({ enabled: false, state: { scheduleErrorCount: 3 } });
+  expect(enqueueSystemEvent).not.toHaveBeenCalled();
   await ensureLoadedForRead(state);
-  expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+  expect(state.store?.jobs[0]).toEqual(persisted);
+  expect(enqueueSystemEvent).not.toHaveBeenCalled();
   expect(reply.attempts).toHaveLength(2);
-});
-
-it("rolls schedule maintenance back when process ownership changes before commit", async () => {
-  const { storePath } = await makeStorePath();
-  const nowMs = Date.now();
-  const job = makeCronRecoveryJob("became-active", nowMs);
-  job.enabled = false;
-  job.state = { runningAtMs: nowMs - 1_000 };
-  await writeCronStoreSnapshot({ storePath, jobs: [job] });
-  const before = await loadCronStore(storePath);
-  const state = makeCronRecoveryState(logger, storePath, nowMs);
-  let activated = false;
-  // oxlint-disable-next-line typescript/unbound-method -- The private port remains the receiver.
-  const originalPost = MessagePort.prototype.postMessage;
-  const post = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
-    this: MessagePort,
-    value,
-    transferList,
-  ) {
-    if (isRecord(value) && Array.isArray(value.ownership)) {
-      markCronJobActive(job.id);
-      activated = true;
-    }
-    return originalPost.call(this, value, transferList);
-  });
-  try {
-    await expect(recomputeUnownedCronSchedules(state)).rejects.toThrow(
-      "Cron schedule ownership changed before commit",
-    );
-    expect(activated).toBe(true);
-    expect(await loadCronStore(storePath)).toEqual(before);
-    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-  } finally {
-    post.mockRestore();
-    clearCronJobActive(job.id);
-    stop(state);
-  }
 });

@@ -2,14 +2,23 @@
 import { access, chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { SemVer } from "semver";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
+import * as desktopAppPaths from "./desktop-app-paths.js";
 import {
+  assertInstalledCodexAppServerVersion,
+  INSTALLED_CODEX_PROBE_TIMEOUT_MS,
+  rejectInstalledCodexAppServer,
   resolveManagedCodexAppServerStartOptions,
+  resolveManagedCodexClientVersion,
   resolveManagedCodexNativeCommand,
   setManagedCodexPluginRoot,
 } from "./managed-binary.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function startOptions(
   commandSource: CodexAppServerStartOptions["commandSource"],
@@ -66,30 +75,6 @@ describe("managed Codex app-server binary", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it.each([
-    { arch: "x64", triple: "x86_64-apple-darwin" },
-    { arch: "arm64", triple: "aarch64-apple-darwin" },
-  ] as const)(
-    "resolves the $arch native artifact behind the managed npm launcher",
-    ({ arch, triple }) => {
-      const packageJsonPath = `/repo/extensions/codex/node_modules/@openai/codex-darwin-${arch}/package.json`;
-      const expected = `/repo/extensions/codex/node_modules/@openai/codex-darwin-${arch}/vendor/${triple}/bin/codex`;
-
-      expect(
-        resolveManagedCodexNativeCommand("/repo/extensions/codex/node_modules/.bin/codex", {
-          platform: "darwin",
-          arch,
-          resolvePackageJson: (packageName, packageRoot) =>
-            packageName === `@openai/codex-darwin-${arch}` &&
-            packageRoot === "/repo/extensions/codex/node_modules/@openai/codex"
-              ? packageJsonPath
-              : undefined,
-          pathExists: (candidate) => candidate === expected,
-        }),
-      ).toBe(expected);
-    },
-  );
-
   it("resolves native dependencies from the real package behind an isolated install shim", async () => {
     const installRoot = await realpath(
       await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-isolated-")),
@@ -135,10 +120,8 @@ describe("managed Codex app-server binary", () => {
     }
   });
 
-  it.each([
-    MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
-    MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND,
-  ])("reports the desktop bundle binary %s as its native artifact", (command) => {
+  it("reports the signed desktop bundle binary as its native artifact", () => {
+    const command = MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND;
     expect(
       resolveManagedCodexNativeCommand(command, {
         platform: "darwin",
@@ -168,88 +151,24 @@ describe("managed Codex app-server binary", () => {
     },
   );
 
-  it.each(["source", "bundled"])(
-    "selects the owner-local package ahead of a stale ancestor shim (%s)",
-    async (layout) => {
-      const installRoot = path.join(root, "node_modules", "openclaw");
-      const pluginRoot =
-        layout === "source"
-          ? path.join(installRoot, "extensions", "codex")
-          : path.join(installRoot, "dist", "extensions", "codex");
-      const launcher = await writePackageLauncher(pluginRoot);
-      await writeExecutable(managedCommandPath(installRoot, "linux"));
-      await writePackageLauncher(installRoot);
-      setManagedCodexPluginRoot(pluginRoot);
-
-      await expect(
-        resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-          platform: "linux",
-        }),
-      ).resolves.toEqual({
-        ...startOptions("managed"),
-        command: launcher,
-        commandSource: "resolved-managed",
-      });
-    },
-  );
-
-  it.each(["linux", "win32"] as const)(
-    "resolves the isolated npm generation package without a local shim (%s)",
-    async (platform) => {
-      const generation = path.join(
-        root,
-        "npm",
-        "projects",
-        "openclaw-codex-fixture--g-0123456789abcdef",
-      );
-      const pluginRoot = path.join(generation, "node_modules", "@openclaw", "codex");
-      await mkdir(pluginRoot, { recursive: true });
-      const launcher = await writePackageLauncher(generation);
-      // The flat project and an ancestor shim do not own this plugin's dependency.
-      await writePackageLauncher(path.join(root, "npm", "projects", "openclaw-codex-fixture"));
-      await writeExecutable(managedCommandPath(root, platform));
-
-      await expect(
-        resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-          platform,
-          pluginRoot,
-        }),
-      ).resolves.toEqual({
-        ...startOptions("managed"),
-        command: launcher,
-        commandSource: "resolved-managed",
-      });
-    },
-  );
-
-  it("resolves dependencies above a compiled plugin entry without reconstructing roots", async () => {
-    const pluginRoot = path.join(root, "dist", "extensions", "codex");
-    await mkdir(pluginRoot, { recursive: true });
-    const launcher = await writePackageLauncher(root);
-    await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-        platform: "linux",
-        pluginRoot,
-      }),
-    ).resolves.toMatchObject({ command: launcher, commandSource: "resolved-managed" });
-  });
-
-  it("resolves the pnpm-linked owner dependency ahead of an ancestor shim", async () => {
-    const pluginRoot = path.join(root, "extensions", "codex");
-    const storeRoot = path.join(root, "node_modules", ".pnpm", "codex-slot");
-    const launcher = await writePackageLauncher(storeRoot);
-    const scope = path.join(pluginRoot, "node_modules", "@openai");
-    await mkdir(scope, { recursive: true });
-    await symlink(
-      path.dirname(path.dirname(launcher)),
-      path.join(scope, "codex"),
-      process.platform === "win32" ? "junction" : "dir",
+  it("resolves the isolated npm generation package without a local shim on Windows", async () => {
+    const platform = "win32";
+    const generation = path.join(
+      root,
+      "npm",
+      "projects",
+      "openclaw-codex-fixture--g-0123456789abcdef",
     );
-    await writeExecutable(managedCommandPath(root, "linux"));
+    const pluginRoot = path.join(generation, "node_modules", "@openclaw", "codex");
+    await mkdir(pluginRoot, { recursive: true });
+    const launcher = await writePackageLauncher(generation);
+    // The flat project and an ancestor shim do not own this plugin's dependency.
+    await writePackageLauncher(path.join(root, "npm", "projects", "openclaw-codex-fixture"));
+    await writeExecutable(managedCommandPath(root, platform));
 
     await expect(
       resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-        platform: "linux",
+        platform,
         pluginRoot,
       }),
     ).resolves.toEqual({
@@ -288,37 +207,26 @@ describe("managed Codex app-server binary", () => {
   });
 
   it.each([
-    { order: "package-only", desktop: "both" },
-    { order: "package-first", desktop: "both" },
-    { order: "desktop-first", desktop: "both" },
-    { order: "desktop-first", desktop: "signed" },
-    { order: "desktop-first", desktop: "legacy" },
-    { order: "desktop-first", desktop: "none" },
+    {
+      order: "package-only",
+      desktopCommands: [
+        MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
+        MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      ],
+    },
+    { order: "desktop-first", desktopCommands: [MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND] },
   ] as const)(
-    "honors macOS $order ordering with $desktop desktop bundles",
-    async ({ order, desktop }) => {
+    "honors macOS $order ordering with desktop bundles present",
+    async ({ order, desktopCommands }) => {
       const launcher = await writePackageLauncher(root);
-      const desktopCommands =
-        desktop === "both"
-          ? [MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND]
-          : desktop === "signed"
-            ? [MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND]
-            : desktop === "legacy"
-              ? [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND]
-              : [];
-      const commands =
-        order === "package-only"
-          ? [launcher]
-          : order === "package-first"
-            ? [launcher, ...desktopCommands]
-            : [...desktopCommands, launcher];
+      const commands = order === "package-only" ? [launcher] : [...desktopCommands, launcher];
       await expect(
         resolveManagedCodexAppServerStartOptions(startOptions("managed", order), {
           platform: "darwin",
           pluginRoot: root,
           pathExists: async (candidate) =>
             candidate.startsWith("/Applications/")
-              ? desktopCommands.includes(candidate)
+              ? desktopCommands.some((command) => command === candidate)
               : access(candidate).then(
                   () => true,
                   () => false,
@@ -351,5 +259,357 @@ describe("managed Codex app-server binary", () => {
         platform: "linux",
       }),
     ).rejects.toThrow("Codex plugin root is unavailable");
+  });
+});
+
+// Same slot test/setup.shared.ts seeds; managed-binary.ts captured this object.
+const installedState = (globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.codexInstalledAppServer")
+] as {
+  selection?: Promise<unknown>;
+  selected?: { command: string; nativeCommand: string; version: string };
+  rejected?: string;
+};
+
+const NATIVE_TRIPLES: Record<string, string> = {
+  "linux-x64": "x86_64-unknown-linux-musl",
+  "linux-arm64": "aarch64-unknown-linux-musl",
+  "darwin-x64": "x86_64-apple-darwin",
+  "darwin-arm64": "aarch64-apple-darwin",
+};
+const NEWER = new SemVer(CODEX_APP_SERVER_VERSION).inc("minor").version;
+
+describe.skipIf(process.platform === "win32")("installed Codex selection", () => {
+  let root: string;
+  let bin: string;
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-installed-")));
+    bin = path.join(root, "prefix", "bin");
+    await mkdir(bin, { recursive: true });
+    vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
+    // Each case makes this process's first decision.
+    delete installedState.selection;
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    installedState.selection = Promise.resolve(undefined);
+    delete installedState.selected;
+    delete installedState.rejected;
+    setManagedCodexPluginRoot(undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** npm global layout: bin/codex -> lib/node_modules/@openai/codex/bin/codex.js. */
+  async function installNpmCodex(versionScript: string) {
+    const target = `${process.platform}-${process.arch}`;
+    const packageRoot = path.join(root, "prefix", "lib", "node_modules", "@openai", "codex");
+    const platformRoot = path.join(packageRoot, "node_modules", "@openai", `codex-${target}`);
+    const native = path.join(platformRoot, "vendor", NATIVE_TRIPLES[target]!, "bin", "codex");
+    const launcher = await writePackageLauncher(path.join(root, "prefix", "lib"));
+    await mkdir(path.dirname(native), { recursive: true });
+    await writeFile(
+      path.join(platformRoot, "package.json"),
+      JSON.stringify({ name: `@openai/codex-${target}` }),
+    );
+    await writeFile(native, `#!/bin/sh\n${versionScript}\n`);
+    await chmod(native, 0o755);
+    await symlink(launcher, path.join(bin, "codex"));
+    expect(path.dirname(path.dirname(launcher))).toBe(packageRoot);
+    return { launcher, native };
+  }
+
+  /** Makes this process's decision: what discovery reports and what managed starts use. */
+  async function select(
+    probes: {
+      probeHandshake?: (command: string) => Promise<string | undefined>;
+      runVersion?: (nativeCommand: string) => Promise<string>;
+    } = {},
+    selectionTimeoutMs?: number,
+  ) {
+    const clientVersion = await resolveManagedCodexClientVersion("package-first", {
+      probes: { env: { PATH: bin }, probeHandshake: async () => NEWER, ...probes },
+      selectionTimeoutMs,
+    });
+    return { clientVersion, selected: installedState.selected };
+  }
+  const BUNDLED = { clientVersion: CODEX_APP_SERVER_VERSION, selected: undefined };
+
+  function expectChoice(message: string) {
+    expect(embeddedAgentLog.info).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(message));
+  }
+
+  it("selects a newer npm-installed Codex after its version and handshake probes", async () => {
+    const { launcher, native } = await installNpmCodex(`echo "codex-cli ${NEWER}"`);
+    const probeHandshake = vi.fn(async () => NEWER);
+
+    await expect(select({ probeHandshake })).resolves.toEqual({
+      clientVersion: NEWER,
+      selected: { command: launcher, nativeCommand: native, version: NEWER },
+    });
+    expect(probeHandshake).toHaveBeenCalledExactlyOnceWith(launcher);
+    expectChoice(
+      `Codex app-server: using installed ${path.join(bin, "codex")} ${NEWER} (newer than bundled ${CODEX_APP_SERVER_VERSION})`,
+    );
+  });
+
+  it.each([
+    { output: `echo "codex-cli ${CODEX_APP_SERVER_VERSION}"`, reason: "is not newer" },
+    { output: 'echo "codex-cli 0.149.0"', reason: "0.149.0 is not newer" },
+    { output: `echo "codex-cli ${NEWER}-alpha.4"`, reason: "is a prerelease" },
+    { output: 'echo "codex-cli 1.0.0"', reason: "1.0.0 is a different major version" },
+    { output: 'echo "garbage"', reason: "did not report a parseable version" },
+    { output: "exit 3", reason: "--version failed: Version check failed (3)" },
+  ])("keeps the bundled package when the installed Codex $reason", async ({ output, reason }) => {
+    await installNpmCodex(output);
+    const probeHandshake = vi.fn(async () => NEWER);
+
+    await expect(select({ probeHandshake })).resolves.toEqual(BUNDLED);
+    expect(probeHandshake).not.toHaveBeenCalled();
+    expectChoice(`Codex app-server: using bundled ${CODEX_APP_SERVER_VERSION} (installed `);
+    expectChoice(reason);
+  });
+
+  it("keeps the bundled package without a codex on PATH", async () => {
+    await expect(select()).resolves.toEqual(BUNDLED);
+    expectChoice(`Codex app-server: using bundled ${CODEX_APP_SERVER_VERSION} (no codex on PATH)`);
+  });
+
+  it.each([
+    {
+      name: "fails the handshake",
+      probe: async () => {
+        throw new Error("timed out after 15000 ms");
+      },
+      reason: "failed the app-server handshake: timed out after 15000 ms",
+    },
+    {
+      name: "reports another app-server version",
+      probe: async () => CODEX_APP_SERVER_VERSION,
+      reason: `reported ${CODEX_APP_SERVER_VERSION} from app-server`,
+    },
+  ])("keeps the bundled package when a newer Codex $name", async ({ probe, reason }) => {
+    await installNpmCodex(`echo "codex-cli ${NEWER}"`);
+
+    await expect(select({ probeHandshake: probe })).resolves.toEqual(BUNDLED);
+    expectChoice(reason);
+  });
+
+  it("reserves bundled startup time across the complete cold selection", async () => {
+    await installNpmCodex(`echo "codex-cli ${NEWER}"`);
+    const probeHandshake = vi.fn(async () => NEWER);
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      await expect(
+        select({
+          runVersion: async () => {
+            vi.advanceTimersByTime(INSTALLED_CODEX_PROBE_TIMEOUT_MS + 1);
+            return `codex-cli ${NEWER}`;
+          },
+          probeHandshake,
+        }),
+      ).resolves.toEqual(BUNDLED);
+      expect(probeHandshake).not.toHaveBeenCalled();
+      expectChoice("selection timed out before the app-server handshake");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns the bundled pin within a caller's shorter selection budget and ignores late success", async () => {
+    await installNpmCodex(`echo "codex-cli ${NEWER}"`);
+    const entered = createDeferred<void>();
+    const completed = createDeferred<string>();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const selected = select(
+        {
+          runVersion: async () => `codex-cli ${NEWER}`,
+          probeHandshake: async () => {
+            entered.resolve();
+            return completed.promise;
+          },
+        },
+        100,
+      );
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(selected).resolves.toEqual(BUNDLED);
+      completed.resolve(NEWER);
+      await expect(select()).resolves.toEqual(BUNDLED);
+      expectChoice("installed Codex selection exceeded its startup budget");
+    } finally {
+      completed.resolve(NEWER);
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects script wrappers that are not the official npm launcher", async () => {
+    await writeFile(path.join(bin, "codex"), `#!/bin/sh\necho "codex-cli ${NEWER}"\n`);
+    await chmod(path.join(bin, "codex"), 0o755);
+
+    await expect(select()).resolves.toEqual(BUNDLED);
+    expectChoice("is not a native Codex executable or the official @openai/codex launcher");
+  });
+
+  it("accepts a standalone native Codex as its own native artifact", async () => {
+    const standalone = path.join(root, "standalone", "bin", "codex");
+    await mkdir(path.dirname(standalone), { recursive: true });
+    await writeFile(standalone, "\u007fELF native fixture");
+    await chmod(standalone, 0o755);
+    await symlink(standalone, path.join(bin, "codex"));
+    const runVersion = vi.fn(async () => `codex-cli ${NEWER}\n`);
+
+    await expect(select({ runVersion })).resolves.toEqual({
+      clientVersion: NEWER,
+      selected: { command: standalone, nativeCommand: standalone, version: NEWER },
+    });
+    expect(runVersion).toHaveBeenCalledExactlyOnceWith(standalone);
+  });
+
+  it("does not adopt a desktop-owned binary found through a PATH symlink", async () => {
+    const desktop = path.join(root, "Codex.app", "Contents", "Resources", "codex");
+    await mkdir(path.dirname(desktop), { recursive: true });
+    await writeFile(desktop, "\u007fELF native fixture");
+    await chmod(desktop, 0o755);
+    await symlink(desktop, path.join(bin, "codex"));
+    vi.spyOn(desktopAppPaths, "resolveMacOSDesktopCodexAppServerCommandCandidates").mockReturnValue(
+      [desktop],
+    );
+    const runVersion = vi.fn(async () => `codex-cli ${NEWER}`);
+    const probeHandshake = vi.fn(async () => NEWER);
+
+    await expect(
+      resolveManagedCodexClientVersion("package-only", {
+        platform: "darwin",
+        probes: { env: { PATH: bin }, platform: "darwin", runVersion, probeHandshake },
+      }),
+    ).resolves.toBe(CODEX_APP_SERVER_VERSION);
+    expect(runVersion).not.toHaveBeenCalled();
+    expect(probeHandshake).not.toHaveBeenCalled();
+    expectChoice("belongs to a macOS desktop app");
+  });
+
+  it("starts the selected installed Codex first with the package as its fallback", async () => {
+    const pluginRoot = path.join(root, "plugin");
+    const packaged = await writePackageLauncher(pluginRoot);
+    const selected = {
+      command: "/usr/local/lib/node_modules/@openai/codex/bin/codex.js",
+      nativeCommand: "/usr/local/lib/node_modules/@openai/codex/vendor/codex",
+      version: NEWER,
+    };
+    installedState.selection = Promise.resolve(selected);
+    installedState.selected = selected;
+    const pathExists = async () => true;
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toMatchObject({
+      command: selected.command,
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [packaged],
+    });
+    expect(resolveManagedCodexNativeCommand(selected.command)).toBe(selected.nativeCommand);
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+        pluginRoot,
+        pathExists,
+        preferInstalled: false,
+      }),
+    ).resolves.toMatchObject({ command: packaged });
+  });
+
+  it("starts and reports the desktop app for desktop-first without probing PATH", async () => {
+    const pluginRoot = path.join(root, "plugin");
+    const packaged = await writePackageLauncher(pluginRoot);
+    const desktopInstalled = async (command: string) =>
+      command.includes("Codex.app") || command === packaged;
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
+        platform: "darwin",
+        pluginRoot,
+        pathExists: desktopInstalled,
+      }),
+    ).resolves.toMatchObject({
+      command: expect.stringContaining("Codex.app"),
+      managedFallbackCommandPaths: expect.arrayContaining([packaged]),
+    });
+    await expect(
+      resolveManagedCodexClientVersion("desktop-first", {
+        platform: "darwin",
+        pathExists: desktopInstalled,
+      }),
+    ).resolves.toBe(CODEX_APP_SERVER_VERSION);
+    // Neither the start nor discovery began a PATH selection.
+    expect(installedState.selection).toBeUndefined();
+
+    // Without the desktop app, desktop-first starts reach the installed Codex.
+    await installNpmCodex(`echo "codex-cli ${NEWER}"`);
+    await expect(
+      resolveManagedCodexClientVersion("desktop-first", {
+        platform: "darwin",
+        pathExists: async () => false,
+        probes: { env: { PATH: bin }, probeHandshake: async () => NEWER },
+      }),
+    ).resolves.toBe(NEWER);
+  });
+
+  it.each(["launcher", "native executable"])(
+    "drops an installed Codex whose %s disappeared after selection",
+    async (missing) => {
+      const pluginRoot = path.join(root, "plugin");
+      const packaged = await writePackageLauncher(pluginRoot);
+      const selected = {
+        command: "/opt/codex/lib/node_modules/@openai/codex/bin/codex.js",
+        nativeCommand: "/opt/codex/lib/node_modules/@openai/codex-linux-x64/vendor/codex",
+        version: NEWER,
+      };
+      installedState.selection = Promise.resolve(selected);
+      installedState.selected = selected;
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const gone = missing === "launcher" ? selected.command : selected.nativeCommand;
+
+      await expect(
+        resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+          platform: "linux",
+          pluginRoot,
+          pathExists: async (command) => command !== gone,
+        }),
+      ).resolves.toMatchObject({ command: packaged });
+      await expect(resolveManagedCodexClientVersion("package-first")).resolves.toBe(
+        CODEX_APP_SERVER_VERSION,
+      );
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          `installed ${selected.command} ${NEWER} failed to start (executable`,
+        ),
+      );
+    },
+  );
+
+  it("lets every start that captured a rejected installed Codex fall back, logging once", () => {
+    const selected = {
+      command: "/opt/codex/bin/codex",
+      nativeCommand: "/opt/codex/bin/codex",
+      version: NEWER,
+    };
+    installedState.selection = Promise.resolve(selected);
+    installedState.selected = selected;
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+
+    expect(rejectInstalledCodexAppServer(selected.command, new Error("spawn EACCES"))).toBe(true);
+    expect(rejectInstalledCodexAppServer(selected.command, new Error("spawn EACCES"))).toBe(true);
+    expect(rejectInstalledCodexAppServer("/usr/bin/other-codex", new Error("boom"))).toBe(false);
+    expect(warn).toHaveBeenCalledOnce();
+    // A concurrent start of the same launcher that initializes cleanly still yields.
+    expect(() => assertInstalledCodexAppServerVersion(selected.command, NEWER)).toThrow(
+      "another start already rejected this installed Codex",
+    );
+    expect(() => assertInstalledCodexAppServerVersion("/usr/bin/other-codex", NEWER)).not.toThrow();
   });
 });

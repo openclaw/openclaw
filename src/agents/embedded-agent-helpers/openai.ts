@@ -264,13 +264,10 @@ export function dropStaleOpenAIReasoning(
       return msg;
     }
 
-    let changed = false;
     let droppedReplayableReasoning = false;
-    const nextContent: AssistantContentBlock[] = [];
-    for (const block of assistantMsg.content) {
+    const nextContent = assistantMsg.content.filter((block) => {
       if (!block) {
-        changed = true;
-        continue;
+        return false;
       }
       const record = block as OpenAIThinkingBlock;
       if (
@@ -278,14 +275,13 @@ export function dropStaleOpenAIReasoning(
         record.type !== "thinking" ||
         !hasOpenAIReasoningSignature(record.thinkingSignature)
       ) {
-        nextContent.push(block);
-        continue;
+        return true;
       }
-      changed = true;
       droppedReplayableReasoning = true;
-    }
+      return false;
+    });
 
-    if (!changed) {
+    if (nextContent.length === assistantMsg.content.length) {
       return msg;
     }
 

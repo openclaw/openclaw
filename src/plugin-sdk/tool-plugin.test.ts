@@ -148,34 +148,42 @@ describe("defineToolPlugin", () => {
     });
   });
 
-  it("passes optional tools through to runtime registration and metadata", () => {
-    const entry = defineToolPlugin({
-      id: "optional-tools",
-      name: "Optional Tools",
-      description: "Optional tool demo.",
-      tools: (tool) => [
-        tool({
-          name: "optional_echo",
-          description: "Echo input.",
-          parameters: Type.Object({ input: Type.String() }),
+  it.each([false, true, "execute"] as const)(
+    "passes optional tool workspace access %s through registration and metadata",
+    (workspaceAccess) => {
+      const entry = defineToolPlugin({
+        id: "optional-tools",
+        name: "Optional Tools",
+        description: "Optional tool demo.",
+        tools: (tool) => [
+          tool({
+            name: "optional_echo",
+            description: "Echo input.",
+            parameters: Type.Object({ input: Type.String() }),
+            optional: true,
+            workspaceAccess,
+            execute: ({ input }) => input,
+          }),
+        ],
+      });
+      const captured = createCapturedPluginRegistration({ id: "optional-tools" });
+      const registerTool = vi.fn();
+      captured.api.registerTool = registerTool as typeof captured.api.registerTool;
+
+      entry.register(captured.api);
+
+      expect(registerTool).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "optional_echo" }),
+        {
           optional: true,
-          execute: ({ input }) => input,
-        }),
-      ],
-    });
-    const captured = createCapturedPluginRegistration({ id: "optional-tools" });
-    const registerTool = vi.fn();
-    captured.api.registerTool = registerTool as typeof captured.api.registerTool;
-
-    entry.register(captured.api);
-
-    expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "optional_echo" }), {
-      optional: true,
-    });
-    expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
-      { name: "optional_echo", optional: true },
-    ]);
-  });
+          workspaceAccess,
+        },
+      );
+      expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
+        { name: "optional_echo", optional: true, workspaceAccess },
+      ]);
+    },
+  );
 
   it("supports context factories while keeping static tool metadata", () => {
     const entry = defineToolPlugin({
@@ -190,6 +198,7 @@ describe("defineToolPlugin", () => {
           description: "Echo input.",
           parameters: Type.Object({ input: Type.String() }),
           optional: true,
+          workspaceAccess: "execute",
           factory({ config, toolContext }) {
             if (toolContext.sandboxed) {
               return null;
@@ -226,12 +235,14 @@ describe("defineToolPlugin", () => {
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), {
       name: "factory_echo",
       optional: true,
+      workspaceAccess: "execute",
     });
     expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
       {
         name: "factory_echo",
         label: "Factory Echo",
         optional: true,
+        workspaceAccess: "execute",
       },
     ]);
 

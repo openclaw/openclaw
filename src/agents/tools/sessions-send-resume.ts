@@ -1,10 +1,10 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 /** Parent task continuation with one completion owner across execution turns. */
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindInProcessSubagentResume } from "../../gateway/in-process-subagent-resume.js";
 import type { TrustedAgentToolCaller } from "../../gateway/server-methods/types.js";
 import { bindParentSubagentResume } from "../../gateway/session-subagent-resume.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonResult } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,

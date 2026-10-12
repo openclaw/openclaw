@@ -25,7 +25,6 @@ import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
-import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
 import {
   withSqliteReclamationWorker,
@@ -85,17 +84,13 @@ export async function certifySessionCanonicalValidationPending(
   let oversizedRows = 0;
   try {
     const readiness = database
-      ? runSqliteReadOperationSync(
-          database.db,
-          () => {
-            const initialize = !hasOpenClawAgentCanonicalValidation(database);
-            return {
-              initialize,
-              hasWork: initialize || hasPendingCanonicalSessionValidation(database),
-            };
-          },
-          "fresh",
-        )
+      ? runSqliteReadOperationSync(database.db, () => {
+          const initialize = !hasOpenClawAgentCanonicalValidation(database);
+          return {
+            initialize,
+            hasWork: initialize || hasPendingCanonicalSessionValidation(database),
+          };
+        })
       : { initialize: pending!.initializeCanonicalValidation, hasWork: true };
     if (!readiness.hasWork) {
       return;
@@ -157,7 +152,7 @@ export async function certifySessionCanonicalValidationPending(
             claim?.assertCurrent();
             const result = await withSqliteMutationWorkerLifetime(
               databaseOptions,
-              async ({ assertCurrent, commitGate, signal }) =>
+              async ({ assertCurrent, signal }) =>
                 await useWorker(
                   async (worker) => {
                     if (!claim) {
@@ -172,10 +167,6 @@ export async function certifySessionCanonicalValidationPending(
                         plan: { kind: "canonical-validation" },
                         expectedSource: pending!.source,
                         assertCurrent: assertOpeningCurrent,
-                        commitGate,
-                        onCommitRequest: () => {
-                          throw new Error("Canonical source preparation cannot request a commit");
-                        },
                         withWriteAdmission: (run, reclamationAdmission) =>
                           runExclusiveSqliteSessionWrite(
                             databaseOptions,
@@ -218,39 +209,31 @@ export async function certifySessionCanonicalValidationPending(
                       }
                     };
                     assertCommitAllowed();
-                    return await withSqliteReclamationAuthorization(
-                      commitGate,
-                      database?.db ?? databaseOptions.path,
-                      assertCommitAllowed,
-                      (authorize) =>
-                        worker.runCanonicalValidation({
+                    return await worker.runCanonicalValidation({
+                      databaseOptions,
+                      claim: currentClaim,
+                      validationOwner,
+                      maxRows: MAX_BATCH_ROWS,
+                      maxBytes: MAX_BATCH_BYTES,
+                      initializeCanonicalValidation,
+                      withWriteAdmission: async (run, reclamationAdmission) =>
+                        await runExclusiveSqliteSessionWrite(
                           databaseOptions,
-                          claim: currentClaim,
-                          validationOwner,
-                          commitGate,
-                          maxRows: MAX_BATCH_ROWS,
-                          maxBytes: MAX_BATCH_BYTES,
-                          initializeCanonicalValidation,
-                          onCommitRequest: authorize,
-                          withWriteAdmission: async (run, reclamationAdmission) =>
-                            await runExclusiveSqliteSessionWrite(
-                              databaseOptions,
-                              async () => {
-                                let refusal: { error: unknown } | undefined;
-                                try {
-                                  assertCommitAllowed();
-                                } catch (error) {
-                                  refusal = { error };
-                                }
-                                await run(refusal);
-                              },
-                              "session.canonical-validation.certify",
-                              { reclamationAdmission },
-                              "worker",
-                              signal,
-                            ),
-                        }),
-                    );
+                          async () => {
+                            let refusal: { error: unknown } | undefined;
+                            try {
+                              assertCommitAllowed();
+                            } catch (error) {
+                              refusal = { error };
+                            }
+                            await run(refusal);
+                          },
+                          "session.canonical-validation.certify",
+                          { reclamationAdmission },
+                          "worker",
+                          signal,
+                        ),
+                    });
                   },
                   () => {
                     assertOwnerCurrent();

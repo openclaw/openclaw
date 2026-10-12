@@ -261,12 +261,7 @@ export async function waitForWhatsAppLoginResult(params: {
   let currentSock = params.sock;
   const restartedStatuses = new Set<number>();
 
-  const replaceLoginSocket = async (
-    opts: { closeCurrent?: boolean } = {},
-  ): Promise<WhatsAppLoginWaitResult | null> => {
-    if (opts.closeCurrent ?? true) {
-      closeWaSocket(currentSock);
-    }
+  const replaceLoginSocket = async (): Promise<WhatsAppLoginWaitResult | null> => {
     try {
       currentSock = await createSocket(false, params.verbose, {
         authDir: params.authDir,
@@ -332,14 +327,8 @@ export async function waitForWhatsAppLoginResult(params: {
               : WHATSAPP_LOGIN_RESTART_MESSAGE,
           ),
         );
-        const replacementFailure = await replaceLoginSocket();
-        if (replacementFailure) {
-          return replacementFailure;
-        }
-        continue;
-      }
-
-      if (statusCode === LOGGED_OUT_STATUS) {
+        closeWaSocket(currentSock);
+      } else if (statusCode === LOGGED_OUT_STATUS) {
         if (restartedStatuses.has(LOGGED_OUT_STATUS)) {
           return {
             outcome: "logged-out",
@@ -373,19 +362,19 @@ export async function waitForWhatsAppLoginResult(params: {
           }
         }
         restartedStatuses.add(LOGGED_OUT_STATUS);
-        const replacementFailure = await replaceLoginSocket({ closeCurrent: false });
-        if (replacementFailure) {
-          return replacementFailure;
-        }
-        continue;
+      } else {
+        return {
+          outcome: "failed",
+          message: formatError(err),
+          statusCode,
+          error: err,
+        };
       }
 
-      return {
-        outcome: "failed",
-        message: formatError(err),
-        statusCode,
-        error: err,
-      };
+      const replacementFailure = await replaceLoginSocket();
+      if (replacementFailure) {
+        return replacementFailure;
+      }
     }
   }
 }

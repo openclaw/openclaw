@@ -22,8 +22,13 @@ const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
   probe: vi.fn(),
   darwinCommand: vi.fn(),
+  identity: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessIdentity>(() => null),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessIdentity: mocks.identity,
+}));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   execFileSync: mocks.exec,
@@ -53,6 +58,13 @@ it("enforces the lock observation deadline after native argv inspection", async 
   );
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   vi.spyOn(process, "kill").mockReturnValue(true);
+  mocks.identity.mockImplementation((pid) => ({
+    pid,
+    parentPid: 0,
+    startTimeMicros: 1,
+    startTimeResolutionMicros: 1,
+    exited: false,
+  }));
   let elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
   mocks.darwinCommand.mockImplementation(() => {

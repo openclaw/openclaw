@@ -76,10 +76,7 @@ export function readCurrentSessionEntryCacheParticipants(
     !cached ||
     !entry ||
     !getAdmittedSqliteSchemaFacts(database) ||
-    !cacheValidityTokensEqual(
-      cached.validityToken,
-      readSessionEntryCacheValidityToken(database, "cached"),
-    )
+    !cacheValidityTokensEqual(cached.validityToken, readSessionEntryCacheValidityToken(database))
   ) {
     return undefined;
   }

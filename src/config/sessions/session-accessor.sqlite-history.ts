@@ -50,7 +50,7 @@ import {
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionEntryProjection } from "./session-entry-snapshots.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import type { SessionArchiveInventoryScope } from "./session-transcript-inventory.types.js";
@@ -246,7 +246,7 @@ export function listTranscriptInstancesFromDatabase(params: {
     .filter((entry): entry is SessionTranscriptInstance => entry !== undefined);
 }
 
-/** Read retained archive identities through the same physical and logical session owner. */
+/** @deprecated Main-thread callers must await listSessionTranscriptArchivesInWorker. */
 export function listSessionTranscriptArchivesReadOnly(scope: SessionArchiveInventoryScope) {
   const selectors = [...new Set(scope.sessionIds ?? [])];
   const archiveNames = [...new Set(scope.archiveNames ?? [])];

@@ -154,10 +154,10 @@ export async function prepareModelChoice(params: {
           };
           let { decisions, entry, auth } = await decide(owner.modelCatalog);
           let renewalError: unknown;
-          // A native observation can outlive its runtime client (another agent's turn may
-          // replace it). Renew it once through the owner's native load; the gate is unchanged.
+          // Native readiness can be unknown before discovery or after its client retires.
+          // Acquire it once through the owner's native load before admitting the choice.
           if (
-            auth.availability === false &&
+            auth.availability !== true &&
             auth.runtimeAuth?.source === "native" &&
             owner.loadNativeModelCatalog
           ) {
@@ -184,7 +184,10 @@ export async function prepareModelChoice(params: {
           if (auth.routeResolution?.kind === "incompatible") {
             return { kind: "unavailable", error: auth.routeResolution.message };
           }
-          if ((profileId || auth.availabilityAuthoritative) && auth.availability === false) {
+          if (
+            (auth.runtimeAuth?.source === "native" && auth.availability !== true) ||
+            ((profileId || auth.availabilityAuthoritative) && auth.availability === false)
+          ) {
             // A failed renewal left the old observation in place; it says nothing about the account.
             return {
               kind: "unavailable",

@@ -80,7 +80,7 @@ export function createAssistantCommentaryMediaCustody(
     get lastRewrite() {
       return lastRewrite;
     },
-    async run<T>(operation: () => Promise<T>): Promise<T> {
+    async run<T>(this: void, operation: () => Promise<T>): Promise<T> {
       lastRewrite = undefined;
       preparingTranscript = true;
       const observer = observeChatSendCommentaryMedia(params);
@@ -208,7 +208,7 @@ function observeChatSendCommentaryMedia(params: AssistantCommentaryMediaCustodyP
           const managedMedia = new Map<string, AssistantDisplayContentBlock[]>();
           let committed = false;
           try {
-            const mediaScope = captureWebchatReplyMediaScope({
+            const mediaScope = await captureWebchatReplyMediaScope({
               requesterContext: params.requesterContext,
               cfg: session.cfg,
               sessionKey: scope.sessionKey,

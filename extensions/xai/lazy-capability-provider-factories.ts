@@ -1,7 +1,7 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
@@ -194,7 +194,7 @@ export function createLazyXaiMediaUnderstandingProvider(): MediaUnderstandingPro
 }
 
 export function createLazyXaiVideoGenerationProvider(
-  context: Pick<PluginCapabilityCatalogContext, "isProviderApiKeyConfigured">,
+  context: Pick<PluginCapabilityCatalogHostContext, "isProviderApiKeyConfiguredAsync">,
 ): VideoGenerationProvider {
   return {
     ...createXaiVideoGenerationProviderMetadata(context),
@@ -203,7 +203,10 @@ export function createLazyXaiVideoGenerationProvider(
 }
 
 export function createLazyXaiSpeechProvider(
-  context: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured">,
+  context: Pick<
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync"
+  >,
 ): SpeechProviderPlugin {
   return {
     ...createXaiSpeechProviderMetadata(context),
@@ -216,8 +219,9 @@ export function createLazyXaiSpeechProvider(
 
 export function createLazyXaiRealtimeTranscriptionProvider(
   context: Pick<
-    PluginCapabilityCatalogContext,
+    PluginCapabilityCatalogHostContext,
     | "isProviderAuthProfileConfigured"
+    | "isProviderAuthProfileConfiguredAsync"
     | "resolveApiKeyForProvider"
     | "createRealtimeTranscriptionWebSocketSession"
   >,
@@ -239,8 +243,8 @@ export function createLazyXaiRealtimeTranscriptionProvider(
 
 export function createLazyXaiRealtimeVoiceProvider(
   context: Pick<
-    PluginCapabilityCatalogContext,
-    "isProviderAuthProfileConfigured" | "resolveAgentDir"
+    PluginCapabilityCatalogHostContext,
+    "isProviderAuthProfileConfigured" | "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
   >,
 ): RealtimeVoiceProviderPlugin {
   return {

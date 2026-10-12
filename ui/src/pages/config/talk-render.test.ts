@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
-import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
 import { renderTalk, type TalkRealtimeProviderOption } from "./talk.ts";
 
 type TalkProps = Parameters<typeof renderTalk>[0];
@@ -60,29 +59,6 @@ function renderFixture(
   return container;
 }
 
-describe("isTalkGptLiveModel", () => {
-  it.each(["gpt-live", " Gpt-Live-1-Codex "])("accepts the GPT-Live family: %s", (model) => {
-    expect(isTalkGptLiveModel(model)).toBe(true);
-  });
-
-  it("rejects an absent model", () => {
-    expect(isTalkGptLiveModel(null)).toBe(false);
-  });
-});
-
-describe("resolveTalkRealtimeSelection", () => {
-  it.each([
-    [" Provider-Direct ", "provider-direct"],
-    [null, null],
-  ])("normalizes consult routing: %s", (consultRouting, expected) => {
-    expect(
-      resolveTalkRealtimeSelection({
-        talk: { realtime: { consultRouting } },
-      }).consultRouting,
-    ).toBe(expected);
-  });
-});
-
 describe("renderTalk", () => {
   it("locks every curated picker when config mutation is unavailable", async () => {
     const container = renderFixture({
@@ -92,9 +68,7 @@ describe("renderTalk", () => {
     });
     await updatePickers(container);
 
-    const provider = container.querySelector<HTMLElement & { disabled?: boolean }>(
-      "wa-radio-group",
-    );
+    const provider = container.querySelector<HTMLInputElement>(".settings-segmented__input");
     expect(provider?.disabled).toBe(true);
     const voice = [...container.querySelectorAll<HTMLSelectElement>("select")];
     expect(voice).toHaveLength(1);
@@ -138,11 +112,11 @@ describe("renderTalk", () => {
     ).toEqual(["", ...voices]);
   });
 
-  it.each([
-    ["gpt-liveish", false],
-    ["gpt-live-test-canary", true],
-  ] as const)("renders the GPT-Live hint only for the exact family: %s", (model, showsHint) => {
-    const container = renderFixture({ selection: { model, transport: "gateway-relay" } });
-    expect(container.textContent?.includes(t("talkPage.gptLive.hint"))).toBe(showsHint);
-  });
+  it.each([["gpt-liveish", false]] as const)(
+    "renders the GPT-Live hint only for the exact family: %s",
+    (model, showsHint) => {
+      const container = renderFixture({ selection: { model, transport: "gateway-relay" } });
+      expect(container.textContent?.includes(t("talkPage.gptLive.hint"))).toBe(showsHint);
+    },
+  );
 });

@@ -69,8 +69,9 @@ The Gateway method `sessions.resolve` owns resolution for exact keys, raw
 session IDs, labels, and short IDs. Discovery selectors are filtered by the
 calling client's session visibility. Short-ID ambiguity results contain at most
 ten recent candidates, so clients can ask you for a longer prefix without
-guessing. See [Control UI URLs](/web/urls) for the complete literal encoding and
-stability contract.
+guessing. Key, full session ID, and label resolution read only matching session
+metadata without waiting for unrelated sessions to refresh. See [Control UI URLs](/web/urls) for the complete
+literal encoding and stability contract.
 
 ### Gateway version requirement
 

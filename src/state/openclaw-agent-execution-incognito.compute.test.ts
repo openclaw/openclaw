@@ -283,6 +283,33 @@ it("composes empty and multi-session store compute without holding its actor FIF
       ],
       cacheStatus: { status: "fresh", cachedFiles: 2 },
     });
+    await expect(
+      runUsageCostWorker(prepared, {
+        kind: "sessions",
+        projection: "overview",
+        pricingFingerprint,
+        sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        overview: {
+          sessions: [first, second].map((target) => ({
+            key: target.sessionKey,
+            sessionId: target.sessionId,
+            agentId: actor.agentId,
+            updatedAt: 10_000,
+            instances: [{ sessionId: target.sessionId, sessionFile: marker(target) }],
+          })),
+          options: { limit: 1 },
+        },
+      }),
+    ).resolves.toMatchObject({
+      kind: "overview",
+      result: {
+        totals: { totalTokens: 20, totalCost: 2 },
+        sessions: [{ usage: { totalTokens: 10, totalCost: 1 } }],
+        overview: { total: 2, selectedRowCount: 2, limit: 1 },
+      },
+      cacheStatus: { status: "fresh", cachedFiles: 2 },
+    });
   }));
 
 it("refuses new compute work through a released borrow", async () => {
@@ -366,9 +393,8 @@ describe("cross-actor compute", () => {
     const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
     const scheduled = vi
       .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
-      .mockImplementation((generation, run, owner) =>
+      .mockImplementation((run, owner) =>
         runOperation(
-          generation,
           (operation) =>
             run({
               ...operation,
@@ -893,61 +919,55 @@ it("discards revoked partial projections and reconciles the complete active acto
   });
 });
 
-it.each(["coalesce", "handoff"] as const)(
-  "retains deferred projection and read-only readiness through %s",
-  async (mode) =>
-    withIncognitoSessionActor(actor, async () => {
-      const target = await create(`deferred-${mode}`);
-      await append(target, "old branch");
-      await append(target, "first branch", actor, null);
-      const database = { ...location(), env };
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const checked = createDeferredCore();
-      let held = false;
-      const wrapped = observeCompute(async (type) => {
-        if (type === "session.compute.store.status") {
-          checked.resolve();
-        }
-        if (type === "session.compute.source.open" && !held) {
-          held = true;
-          entered.resolve();
-          await release.promise;
-          if (mode === "handoff") {
-            throw new Error("interrupted projection preparation");
-          }
-        }
-      });
-      let waiting: Promise<void> | undefined;
-      try {
-        startSessionTranscriptIndexReconcile(database);
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          waitForSessionTranscriptIndexReconcile(database),
-          "Reconciliation settled before opening its source",
-        );
-        waiting = waitForSessionTranscriptProjection(
-          { ...target, env, storePath: database.path },
-          undefined,
-        );
-        await awaitGateBeforeSettlement(
-          checked.promise,
-          waiting,
-          "Readiness settled before its actor probe",
-        );
-        // This append would deadlock if the deferred owner held the actor FIFO.
-        await append(target, "final branch", actor, null);
-        startSessionTranscriptIndexReconcile(database);
-        release.resolve();
-        await Promise.all([waiting, waitForSessionTranscriptIndexReconcile(database)]);
-        await expect(recentHistory(target)).resolves.toMatchObject({
-          totalMessages: 1,
-          messages: [{ content: [{ type: "text", text: "final branch" }] }],
-        });
-      } finally {
-        release.resolve();
-        await Promise.allSettled([waiting, waitForSessionTranscriptIndexReconcile(database)]);
-        wrapped.mockRestore();
+it("retains deferred projection and read-only readiness through coalescing", async () =>
+  withIncognitoSessionActor(actor, async () => {
+    const target = await create("deferred-coalesce");
+    await append(target, "old branch");
+    await append(target, "first branch", actor, null);
+    const database = { ...location(), env };
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const checked = createDeferredCore();
+    let held = false;
+    const wrapped = observeCompute(async (type) => {
+      if (type === "session.compute.store.status") {
+        checked.resolve();
       }
-    }),
-);
+      if (type === "session.compute.source.open" && !held) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+    });
+    let waiting: Promise<void> | undefined;
+    try {
+      startSessionTranscriptIndexReconcile(database);
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        waitForSessionTranscriptIndexReconcile(database),
+        "Reconciliation settled before opening its source",
+      );
+      waiting = waitForSessionTranscriptProjection(
+        { ...target, env, storePath: database.path },
+        undefined,
+      );
+      await awaitGateBeforeSettlement(
+        checked.promise,
+        waiting,
+        "Readiness settled before its actor probe",
+      );
+      // This append would deadlock if the deferred owner held the actor FIFO.
+      await append(target, "final branch", actor, null);
+      startSessionTranscriptIndexReconcile(database);
+      release.resolve();
+      await Promise.all([waiting, waitForSessionTranscriptIndexReconcile(database)]);
+      await expect(recentHistory(target)).resolves.toMatchObject({
+        totalMessages: 1,
+        messages: [{ content: [{ type: "text", text: "final branch" }] }],
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([waiting, waitForSessionTranscriptIndexReconcile(database)]);
+      wrapped.mockRestore();
+    }
+  }));

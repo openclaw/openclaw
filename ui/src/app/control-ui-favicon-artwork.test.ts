@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { recordLobsterVisit } from "../components/lobster-dex.ts";
 import { loadUnlockedLobsterFavicon } from "../components/lobster-favicon.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
+import { fetchPluginThemeArtworkBlobUrl } from "../pages/plugins/icon-loader.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { applyControlUiFaviconImage } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFaviconArtwork } from "./control-ui-favicon-artwork.runtime.ts";
@@ -21,6 +23,8 @@ vi.mock("../lib/identity-avatar-loader.ts", () => ({
 }));
 // mock-isolation: Pixel decoding is covered at the real browser boundary; this owner fences asynchronous results.
 vi.mock("../components/lobster-favicon.ts", () => ({ loadUnlockedLobsterFavicon: vi.fn() }));
+// mock-isolation: The validated loader owns HTTP admission; this owner fences decoding and publication.
+vi.mock("../pages/plugins/icon-loader.ts", () => ({ fetchPluginThemeArtworkBlobUrl: vi.fn() }));
 const cleanups: Array<() => void> = [];
 function setup(preference?: TabIconPreference) {
   const gateway = createGatewayHarness(client(async () => ({})));
@@ -31,7 +35,11 @@ function setup(preference?: TabIconPreference) {
       listeners.delete(listener);
     };
   };
-  const theme = { settings: { tabIcon: preference }, subscribe };
+  const theme = {
+    settings: { tabIcon: preference },
+    branding: resolveThemeBranding(undefined),
+    subscribe,
+  };
   const selection = { state: { selectedId: "main", scopeId: "main" }, subscribe };
   const agents = {
     state: {
@@ -66,9 +74,124 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   vi.mocked(loadUnlockedLobsterFavicon).mockReset();
+  vi.mocked(fetchPluginThemeArtworkBlobUrl).mockReset();
 });
 
 describe("tab icon artwork lifecycle", () => {
+  it("uses theme artwork as fallback, respects personal artwork, and follows theme hot reload", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal(
+      "Image",
+      class {
+        src = "";
+        naturalWidth = 32;
+        naturalHeight = 32;
+        decode = async () => {};
+      },
+    );
+    vi.mocked(fetchPluginThemeArtworkBlobUrl)
+      .mockResolvedValueOnce(null)
+      .mockImplementation(async ({ url }) => `blob:${url}`);
+    const fixture = setup();
+    fixture.theme.branding = resolveThemeBranding({
+      brandIcon: "ship",
+      artwork: { icons: { ship: { url: "/__openclaw__/theme-art/ship?v=1" } } },
+    });
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(fetchPluginThemeArtworkBlobUrl).toHaveBeenCalledTimes(2);
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ src: "blob:/__openclaw__/theme-art/ship?v=1" }),
+    );
+
+    fixture.theme.branding.artwork = {
+      icons: { ship: { url: "/__openclaw__/theme-art/ship?v=2" } },
+    };
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ src: "blob:/__openclaw__/theme-art/ship?v=2" }),
+    );
+
+    vi.mocked(resolveAvatarImageUrl).mockReturnValue("blob:personal-avatar");
+    fixture.theme.settings.tabIcon = "agent:circle";
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ src: "blob:personal-avatar" }),
+      "circle",
+    );
+    fixture.selection.state.selectedId = "other";
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ src: "blob:/__openclaw__/theme-art/ship?v=2" }),
+    );
+
+    const lobster = document.createElement("img");
+    vi.mocked(loadUnlockedLobsterFavicon).mockResolvedValue(lobster);
+    fixture.theme.settings.tabIcon = "lobster:crimson";
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(lobster);
+    fixture.theme.branding.lobsterdex = false;
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ src: "blob:/__openclaw__/theme-art/ship?v=2" }),
+    );
+    expect(fixture.theme.settings.tabIcon).toBe("lobster:crimson");
+    vi.mocked(loadUnlockedLobsterFavicon).mockResolvedValue(null);
+    fixture.theme.branding.lobsterdex = true;
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ src: "blob:/__openclaw__/theme-art/ship?v=2" }),
+    );
+  });
+
+  it.each(["theme", "gateway", "disconnect"] as const)(
+    "retires pending custom artwork on %s changes",
+    async (retire) => {
+      const decoded = createDeferred();
+      const decoding = createDeferred();
+      vi.stubGlobal(
+        "Image",
+        class {
+          src = "";
+          naturalWidth = 32;
+          naturalHeight = 32;
+          decode = () => {
+            decoding.resolve();
+            return decoded.promise;
+          };
+        },
+      );
+      vi.mocked(fetchPluginThemeArtworkBlobUrl).mockResolvedValue("blob:retired-theme");
+      const fixture = setup();
+      fixture.theme.branding = resolveThemeBranding({
+        brandIcon: "ship",
+        artwork: { icons: { ship: { url: "/__openclaw__/theme-art/ship?v=1" } } },
+      });
+      fixture.publish();
+      await decoding.promise;
+      if (retire === "theme") {
+        fixture.theme.branding = resolveThemeBranding(undefined);
+        fixture.publish();
+      } else if (retire === "gateway") {
+        fixture.gateway.gateway.connectionRevision += 1;
+      } else {
+        fixture.disconnect();
+      }
+      decoded.resolve();
+      await vi.dynamicImportSettled();
+      expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
+    },
+  );
+
   it("re-bakes selected lobster artwork on theme and unlock changes, retaining an unavailable choice", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const image = document.createElement("img");
@@ -85,22 +208,36 @@ describe("tab icon artwork lifecycle", () => {
     fixture.publish();
     await vi.dynamicImportSettled();
     expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 1);
+    fixture.theme.branding.lobsterdex = false;
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
+    expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 1);
+    expect(fixture.theme.settings.tabIcon).toBe("lobster:crimson");
+    fixture.theme.branding.lobsterdex = true;
+    fixture.publish();
+    await vi.dynamicImportSettled();
+    expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(image);
+    expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 2);
     fixture.disconnect();
     recordLobsterVisit("blue");
     fixture.publish();
     await vi.dynamicImportSettled();
-    expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 1);
+    expect(loadUnlockedLobsterFavicon).toHaveBeenCalledTimes(afterUnlock + 2);
     expect(applyControlUiFaviconImage).toHaveBeenLastCalledWith(null);
   });
 
   it("fences late lobster images after selection, Gateway replacement, and teardown", async () => {
-    for (const retire of ["selection", "gateway", "disconnect"] as const) {
+    for (const retire of ["selection", "theme", "gateway", "disconnect"] as const) {
       const pending = createDeferred<HTMLImageElement | null>();
       vi.mocked(loadUnlockedLobsterFavicon).mockReturnValue(pending.promise);
       const fixture = setup("lobster:crimson");
       await vi.dynamicImportSettled();
       if (retire === "selection") {
         fixture.theme.settings.tabIcon = "default";
+        fixture.publish();
+      } else if (retire === "theme") {
+        fixture.theme.branding.lobsterdex = false;
         fixture.publish();
       } else if (retire === "gateway") {
         fixture.gateway.gateway.connectionRevision += 1;

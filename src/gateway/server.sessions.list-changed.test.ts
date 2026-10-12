@@ -280,6 +280,19 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   expect(child?.model).toBe("test-model-without-catalog-context");
   expect(child?.modelSelectionLocked).toBe(true);
 
+  const gallery = await rpcReq<{ sessions: Array<Record<string, unknown>> }>(ws, "sessions.list", {
+    rowMode: "dashboard",
+  });
+  expect(gallery.ok).toBe(true);
+  const galleryChild = gallery.payload?.sessions.find((row) => row.key === child?.key);
+  expect(galleryChild).toMatchObject({
+    rowMode: "dashboard",
+    parentSessionKey: "agent:main:main",
+    sessionId: "sess-child",
+  });
+  expect(galleryChild).not.toHaveProperty("totalTokens");
+  expect(galleryChild).not.toHaveProperty("model");
+
   ws.close();
 });
 

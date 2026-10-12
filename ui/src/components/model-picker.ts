@@ -1,52 +1,12 @@
 import { html, nothing } from "lit";
+import { modelPickerOptions, type ModelPickerParams } from "./model-picker-options.ts";
 import { providerDisplayLabel, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderPicker } from "./select-picker.ts";
 
-export type ModelPickerOption = {
-  value: string;
-  label: string;
-  provider?: string;
-  detail?: string;
-  disabled?: boolean;
-};
-
-type ModelPickerParams = {
-  id?: string;
-  label: string;
-  value: string;
-  options: readonly ModelPickerOption[];
-  disabled?: boolean;
-  title?: string;
-  placement?: "top" | "bottom";
-  showSelectedDetail?: boolean;
-  groupByProvider?: boolean;
-  searchPlaceholder?: string;
-  custom?: {
-    label: string;
-    placeholder?: string;
-    commit?: "input" | "change";
-    id?: string;
-    invalid?: boolean;
-    describedBy?: string;
-  };
-  onOpen?: () => void;
-  onChange: (value: string) => void;
-};
+export type { ModelPickerOption } from "./model-picker-options.ts";
 
 export function renderModelPicker(params: ModelPickerParams) {
-  let customValue = "__openclaw_custom_model__";
-  const values = new Set([params.value, ...params.options.map((option) => option.value)]);
-  while (values.has(customValue)) {
-    customValue += "_";
-  }
-  const options: Array<ModelPickerOption & { description?: string }> = [
-    ...params.options.map((option) => ({ ...option, description: option.detail })),
-    ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
-  ];
-  const selectedIndex = options.findIndex((option) => option.value === params.value);
-  if (selectedIndex > 0) {
-    options.unshift(...options.splice(selectedIndex, 1));
-  }
+  const { customValue, options, selectedIndex } = modelPickerOptions(params);
   const commitCustom = (event: Event) => {
     if ((event.type === "change") === (params.custom?.commit === "change")) {
       params.onChange((event.currentTarget as HTMLInputElement).value);

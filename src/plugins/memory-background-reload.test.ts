@@ -124,6 +124,7 @@ function loadMemory(host: RegistryHost, config: OpenClawConfig) {
 
 function registerMemoryWorkspaceWatch(workspace: string) {
   const subscriptions: Array<{ notify: () => void; signal: AbortSignal }> = [];
+  let nextSubscription = createDeferredCore();
   const files: MemoryWorkspaceFiles = {
     assertCurrent() {},
     listFiles: listMemoryFiles,
@@ -139,6 +140,8 @@ function registerMemoryWorkspaceWatch(workspace: string) {
         notify: AsyncLocalStorage.bind(() => onChange("change")),
         signal: watchSignal,
       });
+      nextSubscription.resolve();
+      nextSubscription = createDeferredCore();
       await new Promise<void>((resolve) => {
         watchSignal.addEventListener("abort", () => resolve(), { once: true });
       });
@@ -151,7 +154,7 @@ function registerMemoryWorkspaceWatch(workspace: string) {
     memoryFiles: files,
     bridge: { readFile: unused, writeFile: unused, stat: unused },
   });
-  return { subscriptions, release };
+  return { subscriptions, release, nextSubscription: () => nextSubscription.promise };
 }
 
 it("retires live watchers and starts successor indexing without a search or turn", async ({
@@ -164,11 +167,16 @@ it("retires live watchers and starts successor indexing without a search or turn
       search: {
         provider: "none",
         sources: ["memory"],
+        // Keep this watcher case memory-only; retirement during session startup
+        // discovery has its own deterministic case below.
+        rememberAcrossConversations: false,
         store: { vector: { enabled: false } },
       },
     },
   };
-  const { subscriptions, release } = registerMemoryWorkspaceWatch(state.workspaceDir);
+  const { subscriptions, release, nextSubscription } = registerMemoryWorkspaceWatch(
+    state.workspaceDir,
+  );
   const instances: PluginInstance[] = [];
   let closeInitial: (() => Promise<void>) | undefined;
   try {
@@ -177,6 +185,9 @@ it("retires live watchers and starts successor indexing without a search or turn
     instances.push(memory.instance);
     const opened = await memory.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
     assert(opened.manager, opened.error ?? "Expected the initial memory manager");
+    // Close drains accepted syncs by contract; settle the dirty startup index first so the
+    // fixed retirement budget measures watcher retirement, not cold first-index latency.
+    await opened.manager.sync?.({ reason: "startup-settled" });
     const raw = getPluginOriginalValue(opened.manager, memory.instance) ?? opened.manager;
     const prototype = Object.getPrototypeOf(raw) as RegisteredMemorySearchManager;
     closeInitial = async () => {
@@ -209,7 +220,9 @@ it("retires live watchers and starts successor indexing without a search or turn
     const service = registration.service;
     assert(service.apiVersion !== 2);
     const context = { config, stateDir: state.stateDir, logger };
+    const successorWatching = nextSubscription();
     await service.start(context);
+    await withinTest(successorWatching, signal);
     expect(subscriptions).toHaveLength(2);
     expect(subscriptions[1]!.signal.aborted).toBe(false);
     await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
@@ -223,7 +236,9 @@ it("retires live watchers and starts successor indexing without a search or turn
     expect(await withinTest(indexedChunks.promise, signal)).toBeGreaterThan(0);
     await service.stop?.(context);
     expect(subscriptions[1]!.signal.aborted).toBe(true);
+    const restartedWatching = nextSubscription();
     await service.start(context);
+    await withinTest(restartedWatching, signal);
     expect(subscriptions).toHaveLength(3);
     await expect(current.instance.dispose()).resolves.toEqual({ errors: [] });
     expect(subscriptions.every((subscription) => subscription.signal.aborted)).toBe(true);
@@ -234,6 +249,67 @@ it("retires live watchers and starts successor indexing without a search or turn
       await instance.dispose();
     }
     release();
+    vi.restoreAllMocks();
+    await state.cleanup();
+  }
+});
+
+it("retires Memory Core while session startup discovery is in flight", async ({ signal }) => {
+  const state = await createOpenClawTestState({ label: "memory-startup-retirement" });
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { workspace: state.workspaceDir } } },
+    memory: {
+      search: { provider: "none", sources: ["sessions"], store: { vector: { enabled: false } } },
+    },
+  };
+  const memory = loadMemory(registryHost(), config);
+  try {
+    // A transient manager exposes the shared prototype without scheduling startup work.
+    const probe = await memory.runtime.getMemorySearchManager({
+      cfg: config,
+      agentId: "main",
+      purpose: "cli",
+    });
+    assert(probe.manager, probe.error ?? "Expected a transient memory manager");
+    const discovery = Object.getPrototypeOf(
+      getPluginOriginalValue(probe.manager, memory.instance) ?? probe.manager,
+    ) as {
+      listSessionCorpusEntries(): Promise<unknown[]>;
+      awaitManagerIdle(): Promise<void>;
+    };
+    await probe.manager.close?.();
+    const listed = createDeferredCore();
+    const closing = createDeferredCore();
+    // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
+    const list = discovery.listSessionCorpusEntries;
+    vi.spyOn(discovery, "listSessionCorpusEntries").mockImplementationOnce(async function (
+      this: object,
+    ) {
+      const entries = await list.call(this);
+      listed.resolve();
+      await closing.promise;
+      return entries;
+    });
+    // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
+    const awaitIdle = discovery.awaitManagerIdle;
+    vi.spyOn(discovery, "awaitManagerIdle").mockImplementation(function (this: object) {
+      closing.resolve();
+      return awaitIdle.call(this);
+    });
+    const opened = await memory.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
+    assert(opened.manager, opened.error ?? "Expected the startup memory manager");
+    await withinTest(listed.promise, signal);
+    const { database } = (getPluginOriginalValue(opened.manager, memory.instance) ??
+      opened.manager) as unknown as { database: object };
+    const sourceState = vi.spyOn(
+      Object.getPrototypeOf(database) as { readSourceState(): unknown },
+      "readSourceState",
+    );
+
+    await expect(memory.instance.dispose()).resolves.toEqual({ errors: [] });
+    expect(sourceState).not.toHaveBeenCalled();
+  } finally {
+    await memory.instance.dispose();
     vi.restoreAllMocks();
     await state.cleanup();
   }

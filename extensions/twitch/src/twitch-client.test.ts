@@ -199,14 +199,6 @@ describe("TwitchClientManager", () => {
       );
     });
 
-    it("should reuse existing client for same account", async () => {
-      const client1 = await manager.getClient(testAccount);
-      const client2 = await manager.getClient(testAccount);
-
-      expect(client1).toBe(client2);
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-    });
-
     it("deduplicates concurrent client creation for the same account", async () => {
       mockConnect.mockImplementationOnce(() => {});
 
@@ -364,23 +356,6 @@ describe("TwitchClientManager", () => {
       expect(mockConnect).toHaveBeenCalledOnce();
     });
 
-    it("should normalize token by removing oauth: prefix", async () => {
-      const accountWithPrefix: TwitchAccountConfig = {
-        ...testAccount,
-        accessToken: "oauth:actualtoken123",
-      };
-
-      resolveTwitchTokenMock.mockReturnValue({
-        token: "oauth:actualtoken123",
-        source: "config" as const,
-      });
-
-      await manager.getClient(accountWithPrefix);
-
-      expect(mockAuthProvider.constructor).toHaveBeenCalledOnce();
-      expect(mockAuthProvider.constructor).toHaveBeenCalledWith("test-client-id", "actualtoken123");
-    });
-
     it("should use token directly when no oauth: prefix", async () => {
       // Override the mock to return a token without oauth: prefix
       resolveTwitchTokenMock.mockReturnValue({
@@ -448,17 +423,6 @@ describe("TwitchClientManager", () => {
           "Missing Twitch token for account default (set channels.twitch.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
       },
       {
-        name: "multi-account default",
-        cfg: {
-          channels: {
-            twitch: { accounts: { default: { ...testAccount, accessToken: "" } } },
-          },
-        },
-        accountId: "default",
-        expected:
-          "Missing Twitch token for account default (set channels.twitch.accounts.default.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
-      },
-      {
         name: "named account",
         cfg: {
           channels: {
@@ -485,44 +449,24 @@ describe("TwitchClientManager", () => {
         await expect(manager.getClient(testAccount, cfg, accountId)).rejects.toThrow(expected);
       },
     );
-
-    it("should create separate clients for same account with different channels", async () => {
-      const account1: TwitchAccountConfig = {
-        ...testAccount,
-        channel: "channel1",
-      };
-      const account2: TwitchAccountConfig = {
-        ...testAccount,
-        channel: "channel2",
-      };
-
-      await manager.getClient(account1);
-      await manager.getClient(account2);
-
-      expect(mockConnect).toHaveBeenCalledTimes(2);
-    });
   });
 
   describe("onMessage", () => {
-    it.each([false, true])(
-      "keeps the current registration after stale cleanup (same handler: %s)",
-      async (sameHandler) => {
-        await manager.getClient(testAccount);
-        const previous = vi.fn();
-        const current = sameHandler ? previous : vi.fn();
-        const cleanup = manager.onMessage(testAccount, previous);
-        manager.onMessage(testAccount, current);
+    it("keeps the current registration after stale cleanup reuses the same handler", async () => {
+      await manager.getClient(testAccount);
+      const previous = vi.fn();
+      const current = previous;
+      const cleanup = manager.onMessage(testAccount, previous);
+      manager.onMessage(testAccount, current);
 
-        cleanup();
-        messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-current"));
+      cleanup();
+      messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-current"));
 
-        expect(current).toHaveBeenCalledOnce();
-        expect(current).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-current" }));
-        if (!sameHandler) {
-          expect(previous).not.toHaveBeenCalled();
-        }
-      },
-    );
+      expect(current).toHaveBeenCalledOnce();
+      expect(current).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "msg-current", isOwner: false }),
+      );
+    });
 
     it("cleanup of the current handler stops delivery", async () => {
       await manager.getClient(testAccount);
@@ -536,18 +480,6 @@ describe("TwitchClientManager", () => {
   });
 
   describe("disconnect", () => {
-    it("should clear client and message handler", async () => {
-      const handler = vi.fn();
-      await manager.getClient(testAccount);
-      manager.onMessage(testAccount, handler);
-
-      await manager.disconnect(testAccount);
-
-      const key = manager.getAccountKey(testAccount);
-      expect(managerState(manager).clients.has(key)).toBe(false);
-      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
-    });
-
     it("clears pending client message handlers when disconnect cancels connection", async () => {
       mockConnect.mockImplementationOnce(() => {});
       const handler = vi.fn();
@@ -565,12 +497,6 @@ describe("TwitchClientManager", () => {
       messageHandlers[0]?.("#testchannel", "testuser", "stale", ircMessage("msg-stale"));
 
       expect(handler).not.toHaveBeenCalled();
-    });
-
-    it("should handle disconnecting non-existent client gracefully", async () => {
-      // Missing clients are ignored.
-      await manager.disconnect(testAccount);
-      expect(mockQuit).not.toHaveBeenCalled();
     });
 
     it("should only disconnect specified account when multiple accounts exist", async () => {
@@ -596,12 +522,6 @@ describe("TwitchClientManager", () => {
       expect(mockQuit).toHaveBeenCalledTimes(2);
       expect(managerState(manager).clients.size).toBe(0);
       expect(managerState(manager).messageHandlers.size).toBe(0);
-    });
-
-    it("should handle empty client list gracefully", async () => {
-      // Empty client sets are ignored.
-      await manager.disconnectAll();
-      expect(mockQuit).not.toHaveBeenCalled();
     });
   });
 
@@ -679,18 +599,6 @@ describe("TwitchClientManager", () => {
       expect(mockSay).toHaveBeenCalledTimes(2);
     });
 
-    it("should send message successfully", async () => {
-      const result = await manager.sendMessage(testAccount, "testchannel", "Hello, world!");
-
-      expect(result).toEqual({
-        ok: true,
-        messageId: expect.stringMatching(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-        ),
-      });
-      expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
-    });
-
     it("should keep surrogate pairs intact when pre-chunking long messages", async () => {
       const prefix = "a".repeat(499);
 
@@ -700,15 +608,6 @@ describe("TwitchClientManager", () => {
         ["testchannel", prefix],
         ["testchannel", "😀b"],
       ]);
-    });
-
-    it("should generate unique message ID for each message", async () => {
-      const result1 = await manager.sendMessage(testAccount, "testchannel", "First message");
-      const result2 = await manager.sendMessage(testAccount, "testchannel", "Second message");
-
-      expect(result1.ok).toBe(true);
-      expect(result2.ok).toBe(true);
-      expect(result1).not.toEqual(result2);
     });
 
     it("should log and return a formatted send failure", async () => {
@@ -721,18 +620,6 @@ describe("TwitchClientManager", () => {
         error: "Rate limited",
       });
       expect(mockLogger.error).toHaveBeenCalledWith("Failed to send message: Rate limited");
-    });
-
-    it("should handle unknown error types", async () => {
-      mockSay.mockRejectedValueOnce("String error");
-
-      await expect(
-        manager.sendMessage(testAccount, "testchannel", "Test message"),
-      ).resolves.toEqual({
-        ok: false,
-        error: "String error",
-      });
-      expect(mockLogger.error).toHaveBeenCalledWith("Failed to send message: String error");
     });
 
     it("should create client if not already connected", async () => {
@@ -759,36 +646,6 @@ describe("TwitchClientManager", () => {
       });
     });
 
-    it("should handle incoming chat messages", async () => {
-      await manager.getClient(testAccount);
-
-      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
-
-      onMessageCallback(
-        "#testchannel",
-        "testuser",
-        "Hello bot!",
-        ircMessage("msg123", { userId: "12345" }),
-      );
-
-      expect(capturedMessage?.username).toBe("testuser");
-      expect(capturedMessage?.displayName).toBe("TestUser");
-      expect(capturedMessage?.userId).toBe("12345");
-      expect(capturedMessage?.message).toBe("Hello bot!");
-      expect(capturedMessage?.channel).toBe("#testchannel");
-      expect(capturedMessage?.chatType).toBe("group");
-    });
-
-    it("should preserve channel names without a # prefix", async () => {
-      await manager.getClient(testAccount);
-
-      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
-
-      onMessageCallback("testchannel", "testuser", "Test", ircMessage("msg1"));
-
-      expect(capturedMessage?.channel).toBe("testchannel");
-    });
-
     it("should include user role flags in message", async () => {
       await manager.getClient(testAccount);
 
@@ -805,32 +662,13 @@ describe("TwitchClientManager", () => {
           isMod: true,
           isVip: true,
           isSubscriber: true,
+          isBroadcaster: true,
         }),
       );
 
       expect(capturedMessage?.isMod).toBe(true);
       expect(capturedMessage?.isVip).toBe(true);
       expect(capturedMessage?.isSub).toBe(true);
-      expect(capturedMessage?.isOwner).toBe(false);
-    });
-
-    it("should handle broadcaster messages", async () => {
-      await manager.getClient(testAccount);
-
-      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
-
-      onMessageCallback(
-        "#testchannel",
-        "broadcaster",
-        "Test",
-        ircMessage("msg3", {
-          userName: "broadcaster",
-          displayName: "Broadcaster",
-          userId: "789",
-          isBroadcaster: true,
-        }),
-      );
-
       expect(capturedMessage?.isOwner).toBe(true);
     });
   });

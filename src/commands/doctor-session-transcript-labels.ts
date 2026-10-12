@@ -153,70 +153,68 @@ export async function noteSessionTranscriptLabelHealth(params: {
       title: NOTE_TITLE,
       failureLabel: "Failed to inspect or rewrite labels",
     },
-    ({ reader, target, databaseOptions, reportError }) => {
+    ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const { agentId } = target;
-      for (const sessionId of reader.sessionIds()) {
-        const readResult = reader.repairSnapshot(
-          sessionId,
-          normalizeLegacyInboundContextLabels,
-          mayContainLegacyInboundContextLabels,
+      const readResult = reader.repairSnapshot(
+        sessionId,
+        normalizeLegacyInboundContextLabels,
+        mayContainLegacyInboundContextLabels,
+      );
+      if (!readResult.ok) {
+        reportError(
+          `- Failed to read transcript for session ${sessionId} (${agentId})`,
+          readResult.error,
         );
-        if (!readResult.ok) {
-          reportError(
-            `- Failed to read transcript for session ${sessionId} (${agentId})`,
-            readResult.error,
+        return;
+      }
+
+      const updates: Array<{ seq: number; eventJson: string }> = [];
+      let hasMalformedRow = false;
+      for (const row of readResult.rows) {
+        let event: TranscriptEvent;
+        try {
+          event = JSON.parse(row.eventJson) as TranscriptEvent;
+        } catch {
+          // A malformed sibling cannot produce a valid deferred projection after repair.
+          hasMalformedRow = true;
+          continue;
+        }
+        if (normalizeLegacyInboundContextLabels(event)) {
+          updates.push({ seq: row.seq, eventJson: JSON.stringify(event) });
+        }
+      }
+
+      if (updates.length === 0) {
+        return;
+      }
+
+      foundSessions += 1;
+      foundEvents += updates.length;
+
+      if (params.shouldRepair) {
+        try {
+          if (hasMalformedRow) {
+            throw new Error(`transcript contains malformed event JSON for ${sessionId}`);
+          }
+          runOpenClawAgentWriteTransaction(
+            (writeDatabase) => {
+              const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
+              if (!transcriptSnapshotsMatch(readResult.rows, currentRows)) {
+                throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
+              }
+              // Surgical per-row update: preserves seq, created_at, and sessions row.
+              updateSqliteTranscriptEventJsonInTransaction(writeDatabase, sessionId, updates);
+            },
+            databaseOptions,
+            { operationLabel: "doctor.session-transcript-labels" },
           );
-          continue;
-        }
-
-        const updates: Array<{ seq: number; eventJson: string }> = [];
-        let hasMalformedRow = false;
-        for (const row of readResult.rows) {
-          let event: TranscriptEvent;
-          try {
-            event = JSON.parse(row.eventJson) as TranscriptEvent;
-          } catch {
-            // A malformed sibling cannot produce a valid deferred projection after repair.
-            hasMalformedRow = true;
-            continue;
-          }
-          if (normalizeLegacyInboundContextLabels(event)) {
-            updates.push({ seq: row.seq, eventJson: JSON.stringify(event) });
-          }
-        }
-
-        if (updates.length === 0) {
-          continue;
-        }
-
-        foundSessions += 1;
-        foundEvents += updates.length;
-
-        if (params.shouldRepair) {
-          try {
-            if (hasMalformedRow) {
-              throw new Error(`transcript contains malformed event JSON for ${sessionId}`);
-            }
-            runOpenClawAgentWriteTransaction(
-              (writeDatabase) => {
-                const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
-                if (!transcriptSnapshotsMatch(readResult.rows, currentRows)) {
-                  throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
-                }
-                // Surgical per-row update: preserves seq, created_at, and sessions row.
-                updateSqliteTranscriptEventJsonInTransaction(writeDatabase, sessionId, updates);
-              },
-              databaseOptions,
-              { operationLabel: "doctor.session-transcript-labels" },
-            );
-            repairedSessions += 1;
-            repairedEvents += updates.length;
-          } catch (repairError) {
-            reportError(
-              `- Failed to rewrite labels for session ${sessionId} (${agentId})`,
-              repairError,
-            );
-          }
+          repairedSessions += 1;
+          repairedEvents += updates.length;
+        } catch (repairError) {
+          reportError(
+            `- Failed to rewrite labels for session ${sessionId} (${agentId})`,
+            repairError,
+          );
         }
       }
     },

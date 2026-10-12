@@ -5,9 +5,11 @@ import {
   type PluginCommandCatalogDecision,
   type PluginCommandDispatch,
 } from "openclaw/plugin-sdk/plugin-command-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createArgMenusHarness,
+  createSlashCommand,
   encodeValue,
   expectArgMenuLayout,
   expectSingleDispatchedSlashBody,
@@ -235,12 +237,34 @@ describe("Slack native command argument menus", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("renders runtime-specific /think choices", async () => {
+  it.each(["config", "parent"])("renders /think choices from the %s model", async (source) => {
+    const parentKey = "agent:main:slack:channel:c1";
+    const sessionKey = `${parentKey}:thread:100`;
+    if (source === "parent") {
+      const reader = vi
+        .spyOn(sessionStore, "getSessionEntryAsync")
+        .mockImplementation(async (params) =>
+          params.sessionKey === parentKey
+            ? {
+                sessionId: "parent",
+                updatedAt: 1,
+                providerOverride: "openai",
+                modelOverride: "gpt-5.6-luna",
+              }
+            : undefined,
+        );
+      onTestFinished(() => reader.mockRestore());
+      getSlackSlashMocks().resolveAgentRouteMock.mockReturnValue({
+        agentId: "main",
+        sessionKey,
+        accountId: "acct",
+      });
+    }
     const testHarness = createArgMenusHarness({
       commands: { native: true, nativeSkills: false },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
+          model: { primary: source === "parent" ? "openai/gpt-5.4" : "openai/gpt-5.6-luna" },
           models: {
             "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
           },
@@ -254,6 +278,11 @@ describe("Slack native command argument menus", () => {
 
     expect(values.length).toBeGreaterThan(0);
     expect(values).toContain("ultra");
+    if (source === "parent") {
+      expect(sessionStore.getSessionEntryAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main", sessionKey: parentKey }),
+      );
+    }
   });
 
   it("falls back to static menus when app.options() throws during registration", async () => {
@@ -297,6 +326,20 @@ describe("Slack native command argument menus", () => {
     const element = actions.elements?.[0];
     expect(element?.type).toBe(type);
     expect(element).toHaveProperty("confirm");
+    expect(getSlackSlashMocks().recordDeliveredCommandExchangeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "session:1",
+        commandText: `/${name}`,
+        commandId: expect.stringMatching(/^slack:/),
+        replyId: "argument-menu",
+      }),
+    );
+    expect(
+      getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls[0]?.[0].replyText,
+    ).toContain(firstCallPayload(respond, "menu").text);
+    expect(
+      getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls[0]?.[0].replyText,
+    ).not.toContain("openclaw_cmdarg");
     if (type === "button") {
       expect(element?.action_id).toBe("openclaw_cmdarg_0_0");
       expect(actions.elements?.[1]?.action_id).toBe("openclaw_cmdarg_0_1");
@@ -307,8 +350,25 @@ describe("Slack native command argument menus", () => {
       });
       expectSingleDispatchedSlashBody("/tools compact");
     } else {
+      expect(
+        getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls[0]?.[0].replyText,
+      ).toContain("tokens");
       expect(element?.action_id).toBe("openclaw_cmdarg");
     }
+  });
+
+  it("does not retain an argument menu when Slack rejects delivery", async () => {
+    const respond = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("delivery rejected"))
+      .mockResolvedValue(undefined);
+    await command("tools")({
+      command: createSlashCommand(),
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond,
+    });
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(getSlackSlashMocks().recordDeliveredCommandExchangeMock).not.toHaveBeenCalled();
   });
 
   it("uses static_select when encoded values fit Slack option limits", async () => {
@@ -342,6 +402,9 @@ describe("Slack native command argument menus", () => {
     expect(firstElement?.text?.text?.endsWith("…")).toBe(true);
     expect(firstElement?.value?.length).toBeGreaterThan(75);
     expect(firstElement).toHaveProperty("confirm");
+    const recorded = getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls.at(-1)?.[0];
+    expect(recorded?.replyText).toContain(firstElement?.text?.text);
+    expect(recorded?.replyText).not.toContain("Long button label ".repeat(8));
   });
 
   it("caps large button fallback menus to Slack's block limit", async () => {
@@ -371,6 +434,9 @@ describe("Slack native command argument menus", () => {
     const element = actionBlocks[0]?.elements?.[0];
     expect(element?.text?.text).toBe("Valid");
     expect(element?.value?.length).toBeLessThanOrEqual(2000);
+    const recorded = getSlackSlashMocks().recordDeliveredCommandExchangeMock.mock.calls.at(-1)?.[0];
+    expect(recorded?.replyText).toContain("Valid");
+    expect(recorded?.replyText).not.toContain("Overlong");
   });
 
   it("escapes only entities in confirm dialog text", async () => {

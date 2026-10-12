@@ -1,18 +1,11 @@
 import { createServer } from "node:http";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
-import type { Context, Model } from "../types.js";
-import { processCompletionsStream } from "./openai-completions-stream.js";
+import type { Context, Model, SimpleStreamOptions } from "../types.js";
+import type { FirstStreamEventInternalOptions } from "../utils/stream-first-event-timeout.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
-import {
-  makeCompletionsChunk,
-  createAssistantOutput,
-  createDeepSeekCompletionsModel,
-  makeCompletionsModel,
-  neverYieldsStream,
-} from "./openai-completions.test-support.js";
+import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 import { buildOpenAISdkRequestOptions } from "./openai-transport-params.js";
 
 async function captureTransportRequest(
@@ -337,28 +330,57 @@ describe("openai completions transport", () => {
   });
 
   it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {
+    const previousHost = getAiTransportHost();
+    const responseReady = Promise.withResolvers<void>();
+    const requestAborted = vi.fn();
+    let closeBody: (() => void) | undefined;
+    configureAiTransportHost({
+      ...previousHost,
+      buildModelFetch: () => async (_input, init) => {
+        init?.signal?.addEventListener("abort", requestAborted, { once: true });
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              closeBody = () => controller.close();
+            },
+            cancel() {
+              closeBody = undefined;
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
     vi.useFakeTimers();
     try {
-      const model = createDeepSeekCompletionsModel();
-      const abortFirstEventStream = vi.fn();
       const onFirstEventTimeout = vi.fn();
-      const resultPromise = processCompletionsStream(
-        neverYieldsStream() as AsyncIterable<ChatCompletionChunk>,
-        createAssistantOutput(model),
-        model,
-        { push: vi.fn() },
-        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
+      const options: SimpleStreamOptions & FirstStreamEventInternalOptions = {
+        apiKey: "test-key",
+        firstEventTimeoutMs: 5,
+        onFirstEventTimeout,
+        onResponse: () => responseReady.resolve(),
+      };
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        makeCompletionsModel(),
+        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        options,
       );
-      const rejection = expect(resultPromise).rejects.toThrow(
+      if (stream instanceof Promise) {
+        throw new Error("OpenAI Chat transport must return its event stream synchronously");
+      }
+
+      await responseReady.promise;
+      await vi.advanceTimersByTimeAsync(5);
+      const result = await stream.result();
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toMatch(
         /did not deliver a first SSE event within 5ms after streaming headers/,
       );
-
-      await vi.advanceTimersByTimeAsync(5);
-      await rejection;
-      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
-      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
+      expect(requestAborted).toHaveBeenCalledTimes(1);
+      expect(onFirstEventTimeout).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
     } finally {
+      closeBody?.();
+      configureAiTransportHost(previousHost);
       vi.useRealTimers();
     }
   });

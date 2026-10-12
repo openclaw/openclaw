@@ -6,7 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { bindCronRunReceiptExecution } from "../cron/store/run-receipt-execution-binding.js";
 import { observeDeviceAuthHostSql } from "../infra/device-auth-store.sql.test-support.js";
-import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableHasColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -180,43 +179,21 @@ describe("owner-native execution lifecycle receipts", () => {
     ).toEqual({ context_id: "context-1", execution_id: "execution-1" });
   });
 
-  it.each(["transaction", "commit"] as const)(
-    "rejects revoked cron authority at native %s admission",
-    async (stage) => {
-      const options = createUnboundCronDatabase();
-      const current = openOpenClawStateDatabase(options).db;
-      let revoked = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              revoked = true;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
-      try {
-        await expect(
-          bindCronRunReceiptExecution({
-            admitted: admitted(),
-            handle: receiptHandle,
-            options,
-            assertCurrent: () => {
-              if (revoked) {
-                throw new Error("Synthetic binding owner was revoked");
-              }
-            },
-          }),
-        ).rejects.toThrow("Synthetic binding owner was revoked");
-      } finally {
-        admission.mockRestore();
-      }
-      expect(revoked).toBe(true);
-      expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
-    },
-  );
+  it("rejects revoked cron authority before dispatch", async () => {
+    const options = createUnboundCronDatabase();
+    const current = openOpenClawStateDatabase(options).db;
+    await expect(
+      bindCronRunReceiptExecution({
+        admitted: admitted(),
+        handle: receiptHandle,
+        options,
+        assertCurrent: () => {
+          throw new Error("Synthetic binding owner was revoked");
+        },
+      }),
+    ).rejects.toThrow("Synthetic binding owner was revoked");
+    expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
+  });
 
   it("lazily binds cron, allocates nothing when disabled, and preserves exact metadata on reopen", async () => {
     const options = createUnboundCronDatabase();

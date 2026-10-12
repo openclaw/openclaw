@@ -27,7 +27,6 @@ import {
   startServerWithClient,
   testState,
   trackConnectChallengeNonce,
-  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
@@ -122,24 +121,23 @@ describe("gateway server agent", () => {
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {
-    await withGatewayServer(async ({ port: portValue }) => {
-      await useTempSessionStorePath();
-      const storePath = testState.sessionStorePath;
-      if (!storePath) {
-        throw new Error("missing session store path");
-      }
+    const storePath = testState.sessionStorePath;
+    if (!storePath) {
+      throw new Error("missing session store path");
+    }
 
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId: "sess-main-before-write-reset",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main-before-write-reset",
+          updatedAt: Date.now(),
         },
-      });
+      },
+    });
 
-      const writeWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
-      trackConnectChallengeNonce(writeWs);
+    const writeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    trackConnectChallengeNonce(writeWs);
+    try {
       await new Promise<void>((resolve) => {
         writeWs.once("open", resolve);
       });
@@ -169,9 +167,9 @@ describe("gateway server agent", () => {
       const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
       expect(stored?.sessionId).toBe("sess-main-before-write-reset");
       expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
-
+    } finally {
       writeWs.close();
-    });
+    }
   });
 
   test.each(["completion", "abort"] as const)(

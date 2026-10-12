@@ -8,6 +8,7 @@ import type {
   ToolLoopWarning,
   ToolLoopIntervention,
   ToolLoopRecoveryState,
+  ToolResultContentSource,
 } from "./types.js";
 
 export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
@@ -87,6 +88,7 @@ const toolExecutionPreparerByTool = new WeakMap<object, InternalToolExecutionPre
 type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
 const toolResultProvenanceByValue = new WeakMap<object, object>();
+const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
 
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(
@@ -212,6 +214,26 @@ export function getInternalToolResultProvenance(value: object): object | undefin
   return toolResultProvenanceByValue.get(value);
 }
 
+/**
+ * Mark one result or thrown error as carrying content from a nested call whose
+ * tool declares a result content source. Dispatchers such as Tool Search and
+ * Code Mode use this because their own static declaration cannot describe each
+ * call; finalization combines it with the executed tool's declaration.
+ */
+export function attachInternalToolResultContentSource<T extends object>(
+  value: T,
+  source: ToolResultContentSource,
+): T {
+  toolResultContentSourceByValue.set(value, source);
+  return value;
+}
+
+export function getInternalToolResultContentSource(
+  value: object,
+): ToolResultContentSource | undefined {
+  return toolResultContentSourceByValue.get(value);
+}
+
 /** Carry private commit ownership through result transforms and message construction. */
 export function copyInternalToolResultState<T extends object>(source: object, target: T): T {
   const acknowledge = toolResultAcknowledgementByValue.get(source);
@@ -221,6 +243,10 @@ export function copyInternalToolResultState<T extends object>(source: object, ta
   const provenance = toolResultProvenanceByValue.get(source);
   if (provenance) {
     toolResultProvenanceByValue.set(target, provenance);
+  }
+  const contentSource = toolResultContentSourceByValue.get(source);
+  if (contentSource) {
+    toolResultContentSourceByValue.set(target, contentSource);
   }
   return target;
 }

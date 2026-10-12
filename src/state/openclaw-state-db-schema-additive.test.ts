@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -205,7 +206,7 @@ it("adds the caption retry index to populated same-version state without changin
   expect(readState(reopened.db)).toEqual(before);
 });
 
-it("reuses admitted journal columns while observing foreign DDL and rollback", () => {
+it("reuses admitted journal columns while observing managed DDL and rollback", () => {
   const database = openOpenClawStateDatabase({
     env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-journal-columns-") },
   });
@@ -224,7 +225,7 @@ it("reuses admitted journal columns while observing foreign DDL and rollback", (
   } finally {
     observation.restore();
   }
-  const foreign = new DatabaseSync(database.path);
+  const foreign = openNodeSqliteDatabase(database.path);
   try {
     foreign.exec("ALTER TABLE agent_deletion_journal RENAME COLUMN agent_id TO retired_agent_id");
     expect(check).toThrow("Agent deletion journal missing");

@@ -1,9 +1,85 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, type Mock, type vi } from "vitest";
 import type {
   AgentDeletionJournalCleanupPath,
   AgentDeletionJournalEntry,
 } from "../../state/agent-deletion-journal.js";
+
+type MockIdentity = {
+  name?: string;
+  theme?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+export type MockAgentEntry = {
+  id: string;
+  name?: string;
+  workspace?: string;
+  agentDir?: string;
+  model?: string;
+  identity?: MockIdentity;
+};
+
+export type MockConfig = {
+  agents?: {
+    entries?: Record<string, Omit<MockAgentEntry, "id">>;
+  };
+};
+
+export function getAgentList(cfg: unknown): MockAgentEntry[] {
+  return Object.entries((cfg as MockConfig | undefined)?.agents?.entries ?? {}).map(([id, entry]) =>
+    Object.assign({}, entry, { id }),
+  );
+}
+
+export function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
+  const config = (cfg as MockConfig | undefined) ?? {};
+  const params = (opts as {
+    agentId?: string;
+    name?: string;
+    workspace?: string;
+    agentDir?: string;
+    model?: string | null;
+    identity?: MockIdentity;
+  }) ?? { agentId: "" };
+  const list = getAgentList(config);
+  const agentId = params.agentId ?? "";
+  const index = list.findIndex((entry) => entry.id === agentId);
+  const base = index >= 0 ? expectDefined(list[index], "existing agent entry") : { id: agentId };
+  const nextEntry: MockAgentEntry = {
+    ...base,
+    ...(params.name ? { name: params.name } : {}),
+    ...(params.workspace ? { workspace: params.workspace } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.model ? { model: params.model } : {}),
+    ...(params.identity ? { identity: { ...base.identity, ...params.identity } } : {}),
+  };
+  if (params.model === null) {
+    delete nextEntry.model;
+  }
+  if (index >= 0) {
+    list[index] = nextEntry;
+  } else {
+    list.push(nextEntry);
+  }
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      entries: Object.fromEntries(list.map(({ id, ...entry }) => [id, entry])),
+    },
+  };
+}
+
+export function resolveMockWorkspaceDir(cfg: unknown, agentId?: string): string {
+  const resolvedAgentId = agentId ?? "";
+  return (
+    getAgentList(cfg).find((entry) => entry.id === resolvedAgentId)?.workspace ??
+    `/workspace/${resolvedAgentId}`
+  );
+}
 
 export function cleanupPath(
   pathname: string,
@@ -44,6 +120,7 @@ export function deletionJournal(
     sessionsDir: "/journal/sessions",
     createdAt: 1,
     cleanupCompleted: false,
+    phase: "retiring",
     deleteFiles: true,
     databasePaths: [],
     cleanupPaths: [],
@@ -202,6 +279,21 @@ export function expectRespondOk(
   const payload = expectRecordFields(mockCallArg(respond, 0, 1), expected);
   expect(mockCallArg(respond, 0, 2)).toBeUndefined();
   return payload;
+}
+
+export function expectPendingDeletion(
+  respond: ReturnType<typeof vi.fn>,
+  expected: Record<string, unknown>,
+) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    expect.objectContaining(expected),
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("deletion cleanup is still pending"),
+    }),
+  );
+  return expectRecordFields(mockCallArg(respond, 0, 1), expected);
 }
 
 export function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: string) {

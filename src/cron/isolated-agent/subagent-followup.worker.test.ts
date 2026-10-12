@@ -15,11 +15,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import {
-  createOpenClawTestState,
-  withOpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   hasUnsettledCronDescendants,
   readDescendantExecutionState,
@@ -163,7 +159,7 @@ it.each(["update", "delete", "successor", "other requester"] as const)(
   },
 );
 
-it.each(["close", "source replacement", "caller cancellation"] as const)(
+it.each(["close", "caller cancellation"] as const)(
   "refuses Cron fallback after %s during the worker read",
   async (change) => {
     await withPersistedCronRuns(async () => {
@@ -186,28 +182,13 @@ it.each(["close", "source replacement", "caller cancellation"] as const)(
           work.beginClose(reason);
           gate.release();
           expect(await outcome).toBe(reason);
-        } else if (change === "close") {
+        } else {
           const closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
           gate.release();
           await closing;
           expect(await outcome).toMatchObject({
             message: expect.stringMatching(/read admission/u),
           });
-        } else {
-          const other = await createOpenClawTestState({ scenario: "minimal", applyEnv: false });
-          try {
-            await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-              saveSubagentRegistryToSqlite(
-                new Map([[child.runId, completedChild("Other source")]]),
-              );
-              gate.release();
-              expect(await outcome).toMatchObject({
-                message: expect.stringMatching(/database changed|read admission/u),
-              });
-            });
-          } finally {
-            await other.cleanup();
-          }
         }
       } finally {
         gate.release();

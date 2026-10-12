@@ -229,6 +229,7 @@ describe("resolveCronSession", () => {
   it("rolls forced runs to a new identity, preserving user preferences and clearing prior routing and workspace", () => {
     const preferences = {
       pinnedAt: NOW_MS - 500,
+      sidebarRoot: true,
       modelOverride: "claude-sonnet-4-6",
       providerOverride: "anthropic",
       modelOverrideSource: "user" as const,

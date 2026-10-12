@@ -46,9 +46,7 @@ export function buildLmstudioAuthHeaders(
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-export function sanitizeLmstudioStringHeaders(
-  headers: unknown,
-): Record<string, string> | undefined {
+function sanitizeLmstudioStringHeaders(headers: unknown): Record<string, string> | undefined {
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
     return undefined;
   }

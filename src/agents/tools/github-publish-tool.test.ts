@@ -1,12 +1,38 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { createCronToolSchema } from "./cron-tool-schema.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 describe("github_publish tool", () => {
+  it.each(["available", "absent", "self-scoped", "denied"] as const)(
+    "offers a scheduled continuation only with %s automation creation",
+    (availability) => {
+      const publish = createGitHubPublishTool();
+      const automations = {
+        name: "automations",
+        description: "Schedule work",
+        parameters: createCronToolSchema({ selfRemoveOnly: availability === "self-scoped" }),
+      };
+      finalizeAgentToolAvailability(
+        [publish, ...(availability === "absent" ? [] : [automations])],
+        availability === "denied" ? { toolExecutionAllow: ["github_publish"] } : undefined,
+      );
+      if (availability === "available") {
+        expect(publish.description).toContain(
+          'automations: at + agentTurn + sessionTarget "session:<this session key from Runtime>"',
+        );
+      } else {
+        expect(publish.description).not.toContain("automations:");
+        expect(publish.description).toContain("a scheduled continuation is unavailable");
+      }
+    },
+  );
+
   it.each(["responseId", "turnId"] as const)(
     "scopes reused call IDs by %s and keeps replays stable across runs",
     async (identityField) => {

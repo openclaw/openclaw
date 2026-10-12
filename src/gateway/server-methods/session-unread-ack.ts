@@ -5,6 +5,10 @@ export type SessionPatchTargetIdentity = Pick<
   SessionsPatchParams,
   | "agentId"
   | "expectedLifecycleRevision"
+  | "expectedSidebarRoot"
+  | "expectedCategory"
+  | "expectedArchived"
+  | "expectedSidebarAncestors"
   | "expectedMarkedUnreadAt"
   | "expectedPermissionMode"
   | "expectedSandboxMode"

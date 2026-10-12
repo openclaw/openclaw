@@ -27,9 +27,6 @@ function readAssistantDeliveryFacts(value: unknown): AssistantDeliveryFacts | un
       facts.mediaUrls = mediaUrls;
     }
   }
-  if (value.textPhaseRequiresTerminal === true) {
-    facts.textPhaseRequiresTerminal = true;
-  }
   if (isRecord(value.tts) && value.tts.tagged === true) {
     const tts: AssistantDeliveryTtsFacts = { tagged: true };
     if (typeof value.tts.text === "string") {

@@ -277,6 +277,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
   readScope: SessionTranscriptReadScope;
   readers: SessionTranscriptPageReader;
   effectiveMaxChars: number;
+  toolResultMaxChars?: number;
   max: number;
   maxBytes: number;
   offset?: number;
@@ -389,6 +390,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
         subagentCoordination: params.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
         maxChars: params.effectiveMaxChars,
+        toolResultMaxChars: params.toolResultMaxChars,
         resolveCronJobName: params.resolveCronJobName,
         ...(resolveProfileDisplay && !params.deferProfileDisplay
           ? { resolveCurrentUserProfileDisplay }

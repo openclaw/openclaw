@@ -68,6 +68,7 @@ export function registerExternalHandoffShutdownTests(
           expectRestartCloseCall(close, restartDeferralTimeoutMs);
           expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
           expect(runtime.exit).not.toHaveBeenCalled();
+          expect(cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
         } finally {
           joined.resolve();
         }
@@ -77,7 +78,8 @@ export function registerExternalHandoffShutdownTests(
         expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
         expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
         expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
-        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalled();
+        // A settled rejection preserves failure status, not an orphaned watchdog.
+        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
       });
     },
   );

@@ -12,8 +12,9 @@ import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { createModelSelectionState } from "./model-selection.js";
 
+// mock-isolation: Literal model identity cases use an empty store without discovering host accounts.
 vi.mock("../../agents/auth-profiles.runtime.js", () => ({
-  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+  ensureAuthProfileStoreAsync: () => ({ version: 1, profiles: {} }),
 }));
 
 afterEach(() => resetPluginRuntimeStateForTest());

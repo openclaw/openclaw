@@ -189,7 +189,7 @@ export async function prepareRetainedSessionImport(
         code: fs.existsSync(params.target.storePath)
           ? "retained_plugin_source_conflict"
           : "historical_transcript_deferred",
-        message: `${artifactPath}: ${reason} Canonical SQLite sessions remain authoritative. Preserve this input and its backups. Restore the verified original at ${sourcePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state/config.`,
+        message: `${artifactPath}: ${reason} The SQLite sessions remain the active records. Preserve this input and its backups. Restore the verified original at ${sourcePath}, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents against the same state/config.`,
       });
     },
   };
@@ -200,7 +200,7 @@ export async function prepareRetainedSessionImport(
           if (!readStaleDeferredPluginSessionImport(sourceVerification)) {
             issues.push({
               code: "retained_plugin_source_index_rebuilt",
-              message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Canonical SQLite sessions were not replayed.`,
+              message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Existing SQLite sessions were not reimported.`,
             });
           }
         }
@@ -302,7 +302,7 @@ function appendRetainedIndexComparison(
       const canonical = current.get(sessionKey);
       let message: string;
       if (!canonical || canonical.sessionId !== entry.sessionId) {
-        message = "Retained session identity differs from the current canonical SQLite row.";
+        message = "Retained session identity differs from the current SQLite row.";
       } else {
         const sourceFields = new Map(Object.entries(entry));
         const canonicalFields = new Map(Object.entries(canonical));
@@ -317,18 +317,18 @@ function appendRetainedIndexComparison(
         if (!changedFields.length) {
           continue;
         }
-        message = `Retained session identity matches canonical SQLite, but metadata differs: ${changedFields.join(", ")}.`;
+        message = `Retained session identity matches the SQLite records, but metadata differs: ${changedFields.join(", ")}.`;
       }
       issues.push({
         code: "retained_plugin_source_conflict",
         sessionKey,
-        message: `${message} Canonical values were kept; the retained index remains protected for recovery.`,
+        message: `${message} Existing values were kept; the retained index remains protected for recovery.`,
       });
     }
   } catch (error) {
     issues.push({
       code: "retained_plugin_source_conflict",
-      message: `Could not compare retained session metadata: ${formatErrorMessage(error)}. Canonical SQLite sessions were not changed.`,
+      message: `Could not compare retained session metadata: ${formatErrorMessage(error)}. Existing SQLite sessions were not changed.`,
     });
   }
 }
@@ -438,7 +438,7 @@ export async function archiveConflictingRetainedSessionSources(
         code: params.verifiedEmpty
           ? "retained_empty_transcript_superseded"
           : "retained_plugin_source_conflict",
-        message: `${source}: ${reason} Preserved at ${move.archivePath}; canonical SQLite sessions were not replayed.`,
+        message: `${source}: ${reason} Preserved at ${move.archivePath}; existing SQLite sessions were not reimported.`,
       });
     } catch (error) {
       report.issues.push({

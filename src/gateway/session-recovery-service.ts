@@ -430,14 +430,16 @@ export async function recoverGatewaySession(params: {
           let stop: (() => Promise<void>) | undefined;
           try {
             if (!current.source.mainRestartRecovery?.tombstone?.recoveredSessionKey) {
-              stop = prepareSessionWorkerPlacementStop({
-                action: "recover",
-                agentId: sourceTarget.agentId,
-                authorize: assertCurrent,
-                context: params.workerPlacementContext,
-                sessionId: initialSource.sessionId,
-                sessionKey: sourceTarget.canonicalKey,
-              }).stop;
+              stop = (
+                await prepareSessionWorkerPlacementStop({
+                  action: "recover",
+                  agentId: sourceTarget.agentId,
+                  authorize: assertCurrent,
+                  context: params.workerPlacementContext,
+                  sessionId: initialSource.sessionId,
+                  sessionKey: sourceTarget.canonicalKey,
+                })
+              ).stop;
             }
           } catch (error) {
             return { ok: false as const, error: stopFailure(error) };
@@ -514,6 +516,9 @@ export async function recoverGatewaySession(params: {
               : {}),
             ...(currentSource.pluginOwnerId ? { pluginOwnerId: currentSource.pluginOwnerId } : {}),
             ...(currentSource.visibility ? { visibility: currentSource.visibility } : {}),
+            ...(currentSource.communication
+              ? { communication: { ...currentSource.communication } }
+              : {}),
             ...(currentSource.spawnedCwd ? { spawnedCwd: currentSource.spawnedCwd } : {}),
             ...(currentSource.execHost ? { execHost: currentSource.execHost } : {}),
             ...(currentSource.execNode ? { execNode: currentSource.execNode } : {}),

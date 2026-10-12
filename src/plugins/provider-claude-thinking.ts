@@ -10,7 +10,6 @@ import {
   CLAUDE_SONNET_55_THINKING_PROFILE,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeHaiku55ModelIdentity,
-  resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeOpus55ModelIdentity,
@@ -47,7 +46,6 @@ export function resolveClaudeThinkingProfile(
   options?: { includeNativeMax?: boolean },
 ): ProviderThinkingProfile {
   const ref = { id: modelId, params };
-  const canonicalModelId = resolveClaudeModelIdentity(ref);
   if (resolveClaudeHaiku55ModelIdentity(ref)) {
     return CLAUDE_HAIKU_55_THINKING_PROFILE;
   }
@@ -86,7 +84,7 @@ export function resolveClaudeThinkingProfile(
       defaultLevel: "off",
     };
   }
-  if (isClaudeAdaptiveThinkingDefaultModelId(canonicalModelId)) {
+  if (supportsClaudeAdaptiveThinking(ref)) {
     return {
       levels: [
         ...BASE_CLAUDE_THINKING_LEVELS,

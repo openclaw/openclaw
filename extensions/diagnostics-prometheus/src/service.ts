@@ -23,6 +23,7 @@ import {
   type LabelSet,
 } from "./prometheus-format.js";
 import {
+  AGENT_DURATION_BUCKETS_SECONDS,
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
@@ -149,6 +150,7 @@ function recordDiagnosticEvent(
         "Agent run duration in seconds.",
         labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       store.counter("openclaw_run_completed_total", "Agent runs completed by outcome.", labels);
       return;
@@ -172,6 +174,7 @@ function recordDiagnosticEvent(
         "Model request or synthetic agent-turn duration in seconds.",
         labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       store.counter(
         "openclaw_model_call_total",
@@ -268,6 +271,7 @@ function recordDiagnosticEvent(
         "Agent harness run duration in seconds.",
         labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       store.counter(
         "openclaw_harness_run_total",
@@ -360,6 +364,7 @@ function recordDiagnosticEvent(
         "Inbound message dispatch duration in seconds.",
         labels,
         seconds(evt.durationMs),
+        AGENT_DURATION_BUCKETS_SECONDS,
       );
       return;
     }

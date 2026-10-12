@@ -106,6 +106,6 @@ export const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
 export const findForeignLaunchdJobs = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<ForeignLaunchdJob[]>
 >(async () => []);
-export const readLastGatewayErrorLine = vi.fn<
-  (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => Promise<string | null>
->(async (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => null);
+export const readLastGatewayErrorLine = vi.fn<(_env?: NodeJS.ProcessEnv) => Promise<string | null>>(
+  async () => null,
+);

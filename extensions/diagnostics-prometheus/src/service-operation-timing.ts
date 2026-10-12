@@ -78,10 +78,10 @@ export function recordOperationTimingEvent(
       const sendPhase = CHAT_SEND_PHASE.exec(evt.name)?.[1];
       if (sendPhase) {
         const stage = evt.details?.stage;
-        if (stage === "request" || stage === "startup") {
+        if (stage === "request" || stage === "startup" || stage === "steer" || stage === "queued") {
           store.histogram(
             "openclaw_chat_send_phase_seconds",
-            "Elapsed chat.send owner phases before acknowledgement and during run startup.",
+            "Elapsed chat.send owner phases before acknowledgement, during startup, or awaiting steering and queued follow-up delivery.",
             { phase: sendPhase, stage },
             seconds(evt.durationMs),
           );

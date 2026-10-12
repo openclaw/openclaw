@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
+  acquireSessionMcpRuntime,
   getSessionMcpRuntimeManagerForTesting,
   peekSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
@@ -129,8 +130,8 @@ it.each(["completed", "interrupted"] as const)(
         }
         void readBody(request)
           .then((body) => {
-            // Memory preparation reads the MCP catalog before inference. Keep a real
-            // server owned by the run without adding tools to its model request.
+            // The held-run fixture seeds a real MCP resource for settlement proof;
+            // memory inference itself must not discover unrelated MCP tools.
             if (request.url === "/mcp") {
               const message = JSON.parse(body) as {
                 id?: number;
@@ -321,7 +322,21 @@ it.each(["completed", "interrupted"] as const)(
         const firstPrivateSessionIds = [...privateSessionIds];
         expect(firstPrivateSessionIds.length).toBeGreaterThan(0);
         for (const sessionId of firstPrivateSessionIds) {
-          expect(peekSessionMcpRuntime({ sessionId }) !== undefined).toBe(true);
+          expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
+          // Seed a run-owned resource without widening the memory model tool surface.
+          // Release its lease before settlement so active-lease protection is not exercised.
+          const lease = await acquireSessionMcpRuntime({
+            sessionId,
+            workspaceDir: state.workspaceDir,
+            cfg,
+            manifestRegistry: { plugins: [] },
+          });
+          try {
+            await lease.runtime.getCatalog();
+          } finally {
+            lease.releaseLease();
+          }
+          expect(peekSessionMcpRuntime({ sessionId })).toBeDefined();
         }
         if (outcome === "interrupted") {
           interrupted.abort(new Error("next human turn"));

@@ -2,10 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decodeMemoryEmbedding } from "../../packages/memory-host-sdk/src/host/embedding-vector.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import {
-  decodeUsageCostRollup,
-  USAGE_COST_ROLLUP_VERSION,
-} from "../infra/session-cost-usage-rollup-codec.js";
+import { decodeUsageCostRollup } from "../infra/session-cost-usage-rollup-codec.js";
 import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
 import { resolveZstdCodec } from "../infra/zstd-codec.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -79,8 +76,7 @@ function seedHistoricalData(db: DatabaseSync) {
   const rollup = createSessionUsageRollupData();
   rollup.untimestamped.totals.totalTokens = 17;
   const usage = {
-    // The cutover carries only current-version rollups; older ones are rebuilt.
-    version: USAGE_COST_ROLLUP_VERSION,
+    version: 6,
     pricingFingerprint: "synthetic",
     checkpoint: {
       kind: "jsonl",
@@ -315,11 +311,13 @@ describe("agent schema 22 storage cutover", () => {
           db.close();
           db = new DatabaseSync(pathname);
           const before = legacySnapshot(db);
-          // These entries have no cold fields: migration only adds their initial revision.
+          // These entries have no cold fields, start time, or optional references.
           const expectedPreserved = {
             ...before.preserved,
             session_nodes: db
-              .prepare("SELECT *, 0 AS snapshot_revision FROM session_nodes ORDER BY rowid")
+              .prepare(
+                "SELECT *, 0 AS snapshot_revision, NULL AS session_started_at, 0 AS has_optional_references FROM session_nodes ORDER BY rowid",
+              )
               .all(),
           };
           expect(

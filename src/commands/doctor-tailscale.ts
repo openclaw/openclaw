@@ -3,9 +3,42 @@ import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import {
+  inspectTailscaleBackendStateWithRunner,
   inspectTailscaleServeGatewayUrlsWithRunner,
   type TailscaleStatusCommandRunner,
 } from "../shared/tailscale-status.js";
+
+/** A prerequisite finding, not authority to enable Tailscale or change exposure. */
+export async function inspectDoctorTailscalePrerequisite(
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const mode = cfg.gateway?.tailscale?.mode;
+  if (cfg.gateway?.mode === "remote" || (mode !== "serve" && mode !== "funnel")) {
+    return undefined;
+  }
+  const inspection = await inspectTailscaleBackendStateWithRunner((argv, options) =>
+    runUtf8CommandWithTimeout(argv, { ...options, maxOutputBytes: 400_000 }),
+  );
+  const prerequisite = `Gateway startup requires a running Tailscale backend because gateway.tailscale.mode="${mode}".`;
+  if (inspection.status !== "ok") {
+    return `${prerequisite} Tailscale status ${inspection.status === "invalid" ? "could not be parsed" : "is unavailable"}. Verify that the Tailscale CLI is installed and the local Tailscale service is running with \`tailscale status --json\`, then rerun Doctor before restarting the Gateway.`;
+  }
+  switch (inspection.state) {
+    case "Running":
+      return undefined;
+    case "Stopped":
+      return `${prerequisite} Tailscale is stopped. Reconnect in the Tailscale app or run \`tailscale up\`, then verify \`tailscale status --json\` reports Running before restarting the Gateway.`;
+    case "NeedsLogin":
+      return `${prerequisite} Tailscale is logged out. Sign in through the Tailscale app or \`tailscale login\`, then verify \`tailscale status --json\` reports Running before restarting the Gateway.`;
+    case "NeedsMachineAuth":
+      return `${prerequisite} This machine needs tailnet administrator approval. Approve it in the Tailscale admin console, then verify \`tailscale status --json\` reports Running before restarting the Gateway.`;
+    case "NoState":
+    case "Starting":
+      return `${prerequisite} The Tailscale backend is still starting. Wait for \`tailscale status --json\` to report Running before restarting the Gateway.`;
+    default:
+      return `${prerequisite} Tailscale did not report a running backend. Inspect \`tailscale status --json\` and resolve its backend state before restarting the Gateway.`;
+  }
+}
 
 export async function collectTailscaleConfigWarnings(params: {
   cfg: OpenClawConfig;

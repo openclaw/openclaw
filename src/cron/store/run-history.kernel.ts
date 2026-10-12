@@ -1,21 +1,29 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   compareCronRunRecordsNewestFirst,
   cronRunRecordStoreKey,
+  cronRunLogEntryToDetail,
   cronRunRecordToRunLogEntry,
   parseCronRunDetailJson,
   resolveCronRunRecordTimestamp,
 } from "../run-history-detail.js";
+import { createCronExecutionId } from "../run-id.js";
 import type { CronRunHistoryWrite, CronRunRecord } from "./run-history.types.js";
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 
 const query = (db: DatabaseSync) =>
-  getNodeSqliteKysely<Pick<DB, "task_runs" | "execution_owner_lifecycle_bindings">>(db);
+  getNodeSqliteKysely<
+    Pick<DB, "task_runs" | "execution_owner_lifecycle_bindings" | "cron_run_receipts">
+  >(db);
 const RETENTION_MS = 7 * 24 * 60 * 60_000;
 const LOST_RETENTION_MS = 24 * 60 * 60_000;
 const CRON_HISTORY_KEEP_PER_JOB = 2000;
@@ -201,6 +209,52 @@ export function recordCronRunInDatabase(db: DatabaseSync, input: CronRunHistoryW
         }),
     );
   }
+}
+
+/** Queue rejection is durable even if the host never receives the commit result. */
+export function recordSkippedCronRequestInDatabase(
+  db: DatabaseSync,
+  input: {
+    storeKey: string;
+    jobId: string;
+    receiptId?: string;
+    agentId?: string;
+    startedAt: number;
+    endedAt: number;
+    error: string;
+    nextRunAtMs?: number;
+  },
+): void {
+  const requestRunId = input.receiptId
+    ? executeSqliteQueryTakeFirstSync(
+        db,
+        query(db)
+          .selectFrom("cron_run_receipts")
+          .select("request_run_id")
+          .where("receipt_id", "=", input.receiptId),
+      )?.request_run_id
+    : undefined;
+  const discriminator = input.receiptId ?? "queued";
+  const suffix = requestRunId && requestRunId !== discriminator ? `:${requestRunId}` : "";
+  recordCronRunInDatabase(db, {
+    ...input,
+    runId: `${createCronExecutionId(input.jobId, input.startedAt)}:${discriminator}${suffix}`,
+    status: "failed",
+    detail: cronRunLogEntryToDetail(
+      {
+        ts: input.endedAt,
+        jobId: input.jobId,
+        action: "finished",
+        status: "skipped",
+        error: input.error,
+        runId: requestRunId ?? undefined,
+        runAtMs: input.startedAt,
+        durationMs: 0,
+        nextRunAtMs: input.nextRunAtMs,
+      },
+      { storeKey: input.storeKey },
+    ),
+  });
 }
 
 /** Same seven-day/lost-day and separate history/quiet-count bounds as released cron rows. */

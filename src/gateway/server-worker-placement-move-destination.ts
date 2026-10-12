@@ -19,7 +19,7 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
     WorkerPlacementSessionRuntime &
       Pick<
         typeof placementSessionRuntime,
-        "resolveWorkerPlacementCapabilities" | "resolveWorkerPlacementSessionRuntime"
+        "resolveWorkerPlacementCapabilities" | "resolveWorkerPlacementSessionRuntimeAsync"
       >
   >;
 }) {
@@ -51,11 +51,12 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
     if (!destination.ok || !destination.value) {
       throw new Error(destination.ok ? "worker move target is missing" : destination.error);
     }
-    const runtime = sessionRuntime.resolveWorkerPlacementSessionRuntime({
+    const runtime = await sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync({
       cfg: config,
       entry,
       agentId: target.agentId,
       sessionKey: target.canonicalKey,
+      assertCurrent: () => assertCurrent(params.getConfig()),
     });
     const { executionMode, devicePlacement } =
       sessionRuntime.resolveWorkerPlacementCapabilities(runtime);

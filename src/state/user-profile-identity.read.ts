@@ -30,10 +30,7 @@ import {
   userProfileDisplaySelection,
   toUserProfile,
 } from "./user-profiles-internal.js";
-import {
-  ensureUserProfilesSchema,
-  hasEnsuredUserProfileRoleSchema,
-} from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -126,11 +123,7 @@ export function readUserProfileSnapshotSync(
           .select([
             ...userProfileDisplaySelection,
             "created_at",
-            // The native role writer can add this column after a worker has opened.
-            ...(hasEnsuredUserProfileRoleSchema(database.db) ||
-            tableHasColumn(database.db, "user_profiles", "role")
-              ? (["role"] as const)
-              : []),
+            ...(tableHasColumn(database.db, "user_profiles", "role") ? (["role"] as const) : []),
           ])
           .orderBy("created_at", "asc")
           .orderBy("id", "asc"),

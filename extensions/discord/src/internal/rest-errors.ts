@@ -18,11 +18,6 @@ type DiscordErrorRedactionState = {
   remainingNodes: number;
 };
 
-function isSensitiveDiscordErrorKey(key: string): boolean {
-  // An empty value isolates structured key handling from configured value patterns.
-  return redactSensitiveFieldValue(key, "") !== "";
-}
-
 function reserveRedactedKey(
   key: string,
   usedKeys: Set<string>,
@@ -95,9 +90,9 @@ function redactDiscordErrorBody(
       }
       const redactedKey = redactSensitiveFieldValue(sensitiveAncestorKey ?? "", nestedKey);
       const outputKey = reserveRedactedKey(redactedKey, usedKeys, collisionCounts);
-      const nestedSensitiveKey = isSensitiveDiscordErrorKey(nestedKey)
-        ? nestedKey
-        : sensitiveAncestorKey;
+      // An empty value isolates structured key handling from configured value patterns.
+      const nestedSensitiveKey =
+        redactSensitiveFieldValue(nestedKey, "") !== "" ? nestedKey : sensitiveAncestorKey;
       entries.push([
         outputKey,
         redactDiscordErrorBody(

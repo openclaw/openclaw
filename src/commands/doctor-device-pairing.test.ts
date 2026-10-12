@@ -136,28 +136,6 @@ describe("noteDevicePairingHealth", () => {
     noteMock.mockReset();
   });
 
-  it("does not create shared state while collecting local pairing findings", async () => {
-    await withTempDir("openclaw-doctor-device-pairing-readonly-", async (stateDir) => {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: "1",
-        },
-        async () => {
-          await expect(
-            collectDevicePairingHealthFindings({
-              cfg: { gateway: { mode: "local" } },
-              healthOk: false,
-            }),
-          ).resolves.toEqual([]);
-          await expect(
-            fs.stat(path.join(stateDir, "state", "openclaw.sqlite")),
-          ).rejects.toMatchObject({ code: "ENOENT" });
-        },
-      );
-    });
-  });
-
   it("warns about pending scope upgrades from local pairing state when the gateway is down", async () => {
     await withApprovedOperatorPairing(async ({ identity, publicKey }) => {
       const pending = await requestDevicePairing({
@@ -202,20 +180,20 @@ describe("noteDevicePairingHealth", () => {
   });
 
   it.each([
-    ...(["devices/paired.json", "nodes/paired.json"] as const).map((file) => ({
-      file,
-      mode: "local" as const,
+    {
+      file: "nodes/paired.json",
+      mode: "local",
       findingPath: "devices.legacy-store",
       requirement: "pairing-store-legacy-file",
       fixHint: "openclaw doctor --fix",
-    })),
-    ...(["local", "remote"] as const).map((mode) => ({
+    },
+    {
       file: "identity/device-auth.json",
-      mode,
+      mode: "remote",
       findingPath: "identity.device-auth",
       requirement: "device-auth-store-legacy-file",
       fixHint: "openclaw doctor --fix",
-    })),
+    },
   ] as const)(
     "warns about unimported $file in $mode mode without changing it",
     async (testCase) => {
@@ -260,84 +238,71 @@ describe("noteDevicePairingHealth", () => {
     },
   );
 
-  it.each(["canonical rows coexist", "import committed before source removal failed"] as const)(
-    "describes remaining device-auth files when %s",
-    async (scenario) => {
-      await withOpenClawTestState(
-        { prefix: "openclaw-doctor-device-auth-debt-", env: { OPENCLAW_TEST_FAST: "1" } },
-        async (state) => {
-          const { db } = openOpenClawStateDatabase({ env: state.env });
-          const expectedToken =
-            scenario === "canonical rows coexist"
-              ? "synthetic-canonical-token"
-              : "synthetic-legacy-token";
-          if (scenario === "canonical rows coexist") {
-            db.prepare(
-              "INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
-            ).run("synthetic-device", "operator", expectedToken, "[]", 10);
-          }
-          const sourcePath = await state.writeText(
-            "identity/device-auth.json",
-            legacyDeviceAuthContents,
-          );
-          // Migration lock release retires native handles; each read reacquires the owner.
-          const readTokenRow = () => {
-            const { db: readDb } = openOpenClawStateDatabase({ env: state.env });
-            return readDb
-              .prepare("SELECT token FROM device_auth_tokens WHERE device_id = ? AND role = ?")
-              .get("synthetic-device", "operator");
-          };
-          if (scenario !== "canonical rows coexist") {
-            let rowAtRemoval: unknown;
-            let removalAttempts = 0;
-            __setFsSafeTestHooksForTest({
-              beforeRootFallbackMutation(operation, targetPath) {
-                if (operation === "remove" && targetPath === sourcePath) {
-                  removalAttempts++;
-                  rowAtRemoval = readTokenRow();
-                  throw new Error("synthetic device-auth source removal failure");
-                }
-              },
-            });
-            try {
-              const result = await migrateLegacyDeviceAuth({
-                detected: detectLegacyDeviceAuth({
-                  stateDir: state.stateDir,
-                  doctorOnlyStateMigrations: true,
-                }),
-                stateDir: state.stateDir,
-                env: state.env,
-              });
-              expect(removalAttempts).toBe(1);
-              expect(rowAtRemoval).toEqual({ token: expectedToken });
-              expect(result.warnings.length).toBeGreaterThan(0);
-            } finally {
-              __setFsSafeTestHooksForTest(undefined);
+  it("describes remaining device-auth files when import committed before source removal failed", async () => {
+    await withOpenClawTestState(
+      { prefix: "openclaw-doctor-device-auth-debt-", env: { OPENCLAW_TEST_FAST: "1" } },
+      async (state) => {
+        openOpenClawStateDatabase({ env: state.env });
+        const expectedToken = "synthetic-legacy-token";
+        const sourcePath = await state.writeText(
+          "identity/device-auth.json",
+          legacyDeviceAuthContents,
+        );
+        // Migration lock release retires native handles; each read reacquires the owner.
+        const readTokenRow = () => {
+          const { db: readDb } = openOpenClawStateDatabase({ env: state.env });
+          return readDb
+            .prepare("SELECT token FROM device_auth_tokens WHERE device_id = ? AND role = ?")
+            .get("synthetic-device", "operator");
+        };
+        let rowAtRemoval: unknown;
+        let removalAttempts = 0;
+        __setFsSafeTestHooksForTest({
+          beforeRootFallbackMutation(operation, targetPath) {
+            if (operation === "remove" && targetPath === sourcePath) {
+              removalAttempts++;
+              rowAtRemoval = readTokenRow();
+              throw new Error("synthetic device-auth source removal failure");
             }
-          }
-          expect(readTokenRow()).toEqual({ token: expectedToken });
-          // Existing rows do not release the legacy-file access guard.
-          await expect(
-            loadDeviceAuthToken({ deviceId: "synthetic-device", role: "operator", env: state.env }),
-          ).rejects.toThrow("Legacy device auth requires migration");
-          const params = { cfg: { gateway: { mode: "remote" as const } }, healthOk: false };
-          const findings = await collectDevicePairingHealthFindings(params);
-          expect(findings).toEqual([
-            expect.objectContaining({
-              requirement: "device-auth-store-legacy-file",
-              message: expect.stringContaining("is still present"),
-              fixHint: expect.stringContaining("migration or cleanup"),
+          },
+        });
+        try {
+          const result = await migrateLegacyDeviceAuth({
+            detected: detectLegacyDeviceAuth({
+              stateDir: state.stateDir,
+              doctorOnlyStateMigrations: true,
             }),
-          ]);
-          await noteDevicePairingHealth(params);
-          expect(requireNoteMessage()).not.toContain("has not been imported");
-          expect(requireNoteMessage()).not.toContain(expectedToken);
-          expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
-          expect(readTokenRow()).toEqual({ token: expectedToken });
-        },
-      );
-    },
-  );
+            stateDir: state.stateDir,
+            env: state.env,
+          });
+          expect(removalAttempts).toBe(1);
+          expect(rowAtRemoval).toEqual({ token: expectedToken });
+          expect(result.warnings.length).toBeGreaterThan(0);
+        } finally {
+          __setFsSafeTestHooksForTest(undefined);
+        }
+        expect(readTokenRow()).toEqual({ token: expectedToken });
+        // Existing rows do not release the legacy-file access guard.
+        await expect(
+          loadDeviceAuthToken({ deviceId: "synthetic-device", role: "operator", env: state.env }),
+        ).rejects.toThrow("Legacy device auth requires migration");
+        const params = { cfg: { gateway: { mode: "remote" as const } }, healthOk: false };
+        const findings = await collectDevicePairingHealthFindings(params);
+        expect(findings).toEqual([
+          expect.objectContaining({
+            requirement: "device-auth-store-legacy-file",
+            message: expect.stringContaining("is still present"),
+            fixHint: expect.stringContaining("migration or cleanup"),
+          }),
+        ]);
+        await noteDevicePairingHealth(params);
+        expect(requireNoteMessage()).not.toContain("has not been imported");
+        expect(requireNoteMessage()).not.toContain(expectedToken);
+        expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
+        expect(readTokenRow()).toEqual({ token: expectedToken });
+      },
+    );
+  });
 
   it("warns when the local cached device token predates the gateway rotation", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {

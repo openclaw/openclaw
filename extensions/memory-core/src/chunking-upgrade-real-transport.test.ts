@@ -1,4 +1,4 @@
-// Memory Core tests prove the chunking upgrade fallback against a real HTTP
+// Memory Core tests prove the format upgrade fallback against a real HTTP
 // embedding server: the outage reaches the wire through the real
 // openai-compatible provider, the real embedding retry policy, and the real
 // SQLite store instead of a test-double provider.
@@ -138,7 +138,7 @@ afterAll(() => {
   vi.resetConfig();
 });
 
-describe("memory chunking upgrade fallback over a real embedding transport", () => {
+describe("memory format upgrade fallback over a real embedding transport", () => {
   let root = "";
   let workspace = "";
   let memory = "";
@@ -157,12 +157,16 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
     return result.manager as unknown as MemoryIndexManager;
   }
 
-  function createConfig(params: { baseUrl: string; extraPaths?: string[] }): OpenClawConfig {
+  function createConfig(params: {
+    baseUrl: string;
+    extraPaths?: string[];
+    model?: string;
+  }): OpenClawConfig {
     return isolateMemoryManagerTestConfig({
       memory: {
         search: {
           provider: "openai-compatible",
-          model: "text-embedding-bge-m3",
+          model: params.model ?? "text-embedding-bge-m3",
           remote: { baseUrl: params.baseUrl, apiKey: "fixture-token" },
           outputDimensionality: 3,
           store: { vector: { enabled: true } },
@@ -175,8 +179,11 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
   }
 
   // Seeds a published index, then reopens its metadata as an older runtime's
-  // index so the next search sees a pending OpenClaw chunking upgrade.
-  async function seedPriorChunkingVersionIndex(cfg: OpenClawConfig): Promise<string> {
+  // index so the next search sees a pending OpenClaw format upgrade.
+  async function seedPriorFormatIndex(
+    cfg: OpenClawConfig,
+    version: "chunkingVersion" | "embeddingInputFormatVersion" = "chunkingVersion",
+  ): Promise<string> {
     const manager = requireManager(
       await getMemorySearchManager({
         runInBackgroundContext: runInMemoryTestBackgroundContext,
@@ -203,7 +210,10 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
       }
       const meta = JSON.parse(row.value) as Record<string, unknown>;
       db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
-        JSON.stringify({ ...meta, chunkingVersion: MEMORY_CHUNKING_VERSION - 1 }),
+        JSON.stringify({
+          ...meta,
+          [version]: version === "chunkingVersion" ? MEMORY_CHUNKING_VERSION - 1 : 0,
+        }),
       );
     } finally {
       db.close();
@@ -262,46 +272,58 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
     }
   });
 
-  it("serves keyword results through memory_search when a real server rejects the upgrade rebuild", async () => {
-    const server = await startEmbeddingServer();
-    const cfg = createConfig({ baseUrl: server.baseUrl });
-    const filePath = path.join(memory, "upgrade-fallback.md");
-    await fs.writeFile(filePath, "UpgradeKeywordFallback()\nfinish()");
-    await seedPriorChunkingVersionIndex(cfg);
-    // The changed file forces the upgrade rebuild to request a fresh embedding
-    // instead of republishing from the embedding cache.
-    await fs.writeFile(
-      filePath,
-      "UpgradeKeywordFallback() changed after the prior index was published.",
-    );
-    server.setMode("unauthorized");
+  it.each(["chunkingVersion", "embeddingInputFormatVersion"] as const)(
+    "serves keyword results through memory_search when a real server rejects the %s rebuild",
+    async (version) => {
+      const server = await startEmbeddingServer();
+      const cfg = createConfig({
+        baseUrl: server.baseUrl,
+        model: version === "embeddingInputFormatVersion" ? "embeddinggemma" : undefined,
+      });
+      const filePath = path.join(memory, "upgrade-fallback.md");
+      await fs.writeFile(filePath, "UpgradeKeywordFallback()\nfinish()");
+      await seedPriorFormatIndex(cfg, version);
+      // The changed file forces the upgrade rebuild to request a fresh embedding
+      // instead of republishing from the embedding cache.
+      await fs.writeFile(
+        filePath,
+        "UpgradeKeywordFallback() changed after the prior index was published.",
+      );
+      server.setMode("unauthorized");
 
-    const tool = createMemorySearchToolFor(cfg);
-    try {
-      const result = await tool.execute("upgrade-keyword-fallback", {
-        query: "UpgradeKeywordFallback",
-        corpus: "memory",
-      });
-      expect(result.details).toMatchObject({
-        results: [expect.objectContaining({ path: "memory/upgrade-fallback.md" })],
-      });
-      expect(result.details).not.toHaveProperty("unavailable");
-    } finally {
-      await closeAllMemorySearchManagers();
-      closeOpenClawAgentDatabasesForTest();
-    }
-    // The rejection must have reached the real server for the rebuild's fresh
-    // embedding; the seed phase answered 200 beforehand.
-    expect(server.requests.some((request) => request.status === 401)).toBe(true);
-    expect(server.requests.some((request) => request.status === 200)).toBe(true);
-  });
+      const tool = createMemorySearchToolFor(cfg);
+      try {
+        const result = await tool.execute("upgrade-keyword-fallback", {
+          query: "UpgradeKeywordFallback",
+          corpus: "memory",
+        });
+        expect(result.details).toMatchObject({
+          results: [expect.objectContaining({ path: "memory/upgrade-fallback.md" })],
+        });
+        expect(result.details).not.toHaveProperty("unavailable");
+      } finally {
+        await closeAllMemorySearchManagers();
+        closeOpenClawAgentDatabasesForTest();
+      }
+      // The rejection must have reached the real server for the rebuild's fresh
+      // embedding; the seed phase answered 200 beforehand.
+      expect(server.requests.some((request) => request.status === 401)).toBe(true);
+      expect(server.requests.some((request) => request.status === 200)).toBe(true);
+      if (version === "embeddingInputFormatVersion") {
+        const failedInputs = server.requests
+          .filter((request) => request.status === 401)
+          .flatMap((request) => request.body.input);
+        expect(failedInputs).toContainEqual(expect.stringMatching(/^title: none \| text: /));
+      }
+    },
+  );
 
   it("keeps memory_search paused when a real outage rebuild has no usable FTS index", async () => {
     const server = await startEmbeddingServer();
     const cfg = createConfig({ baseUrl: server.baseUrl });
     const filePath = path.join(memory, "upgrade-fts-paused.md");
     await fs.writeFile(filePath, "UpgradeFtsPaused()\nfinish()");
-    const dbPath = await seedPriorChunkingVersionIndex(cfg);
+    const dbPath = await seedPriorFormatIndex(cfg);
     await fs.writeFile(filePath, "UpgradeFtsPaused() changed after the prior index was published.");
     // Occupy the FTS table name with a view so every schema ensure — including
     // the upgrade rebuild's republish — fails to restore a usable keyword index.
@@ -343,7 +365,7 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
     const cfgWithoutWiki = createConfig({ baseUrl: server.baseUrl });
     const filePath = path.join(memory, "upgrade-scope.md");
     await fs.writeFile(filePath, "UpgradeScopeMemory alpha note.");
-    await seedPriorChunkingVersionIndex(cfgWithWiki);
+    await seedPriorFormatIndex(cfgWithWiki);
     await fs.writeFile(filePath, "UpgradeScopeMemory note changed after the prior index.");
     server.setMode("unauthorized");
 
@@ -372,7 +394,7 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
     const cfg = createConfig({ baseUrl: server.baseUrl });
     const filePath = path.join(memory, "upgrade-quota.md");
     await fs.writeFile(filePath, "UpgradeQuotaFallback()\nfinish()");
-    await seedPriorChunkingVersionIndex(cfg);
+    await seedPriorFormatIndex(cfg);
     await fs.writeFile(
       filePath,
       "UpgradeQuotaFallback() changed after the prior index was published.",

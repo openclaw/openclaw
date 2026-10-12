@@ -203,7 +203,7 @@ describe("OpenAI Chat Completions stream", () => {
       name: "lookup",
       arguments: { query: "cats" },
     });
-    expect(result.content[0]).not.toHaveProperty("partialArgs");
+    expect(result.content[0]).not.toHaveProperty("partialJson");
     expect(result.content[0]).not.toHaveProperty("streamIndex");
     expect(eventTypes).toContain("toolcall_start");
     expect(eventTypes).toContain("toolcall_delta");

@@ -33,6 +33,8 @@ const GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
+export const CONTEXT_OVERFLOW_ERROR_MESSAGE =
+  "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
 const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
   "LLM streaming response contained a malformed fragment. Please try again.";
 
@@ -76,7 +78,7 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   const error = asOptionalRecord(record.error);
   return (
     [error?.message, error?.type, error?.code].some((value) => typeof value === "string") ||
-    (typeof record.error === "string" && typeof record.message === "string")
+    typeof record.error === "string"
   );
 }
 
@@ -200,13 +202,18 @@ export function parseApiErrorInfo(raw?: string) {
     ? errorCode !== undefined && !errorType
       ? errorCode
       : errorType
-    : readStringField(payload, "error");
+    : typeof payload.message === "string"
+      ? readStringField(payload, "error")
+      : undefined;
   const code = errorCode ?? readStringField(payload, "code");
   return {
     httpCode,
     type: type ?? readStringField(payload, "type"),
     ...(code === undefined ? {} : { code }),
-    message: readStringField(error, "message") ?? readStringField(payload, "message"),
+    message:
+      readStringField(error, "message") ??
+      readStringField(payload, "message") ??
+      readStringField(payload, "error"),
     requestId: readStringField(payload, "request_id") ?? readStringField(payload, "requestId"),
   };
 }

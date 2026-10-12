@@ -145,33 +145,6 @@ export function clearMemoryEmbeddingCacheIdentities(
   }
 }
 
-function prepareMemoryEmbeddingCacheUpsert(db: DatabaseSync) {
-  const { compiled, bind } = compileSqliteQueryBindings<MemoryEmbeddingCacheRow>((parameter) =>
-    getNodeSqliteKysely<EmbeddingCacheDatabase>(db)
-      .insertInto("memory_embedding_cache")
-      .values({
-        provider: parameter((row) => row.provider),
-        model: parameter((row) => row.model),
-        provider_key: parameter((row) => row.provider_key),
-        hash: parameter((row) => row.hash),
-        embedding: parameter((row) => row.embedding),
-        dims: parameter((row) => row.dims),
-        updated_at: parameter((row) => row.updated_at),
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["provider", "model", "provider_key", "hash"]).doUpdateSet((eb) => ({
-          embedding: eb.ref("excluded.embedding"),
-          dims: eb.ref("excluded.dims"),
-          updated_at: eb.ref("excluded.updated_at"),
-        })),
-      ),
-  );
-  // The caller owns this statement for its write loop, including large embedding bindings.
-  const statement = db.prepare(compiled.sql);
-  statement.setReadBigInts(true);
-  return (row: MemoryEmbeddingCacheRow) => statement.run(...bind(row));
-}
-
 export function upsertMemoryEmbeddingCache(params: {
   db: DatabaseSync;
   provider: { id: string; model: string };
@@ -199,60 +172,56 @@ export function upsertMemoryEmbeddingCache(params: {
     return;
   }
   if (maxEntries !== undefined) {
-    reserveMemoryEmbeddingCacheCapacity({
-      db: params.db,
-      provider,
-      providerKey: params.providerKey,
-      hashes: retainedRows.map(([hash]) => hash),
-      maxEntries,
-    });
+    const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
+    const hashes = retainedRows.map(([hash]) => hash);
+    // Reserve space before inserting vectors so even a transient overflow is impossible.
+    for (let start = 0; start < hashes.length; start += 400) {
+      executeSqliteQuerySync(
+        params.db,
+        db
+          .deleteFrom("memory_embedding_cache")
+          .where("provider", "=", provider.id)
+          .where("model", "=", provider.model)
+          .where("provider_key", "=", params.providerKey)
+          .where("hash", "in", hashes.slice(start, start + 400)),
+      );
+    }
+    const excess = countMemoryEmbeddingCache(params.db) - (maxEntries - hashes.length);
+    if (excess > 0) {
+      deleteOldestMemoryEmbeddingCacheRows(params.db, excess);
+    }
   }
   const now = params.now ?? Date.now();
-  const upsert = prepareMemoryEmbeddingCacheUpsert(params.db);
+  const { compiled, bind } = compileSqliteQueryBindings<{ hash: string; embedding: number[] }>(
+    (parameter) =>
+      getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db)
+        .insertInto("memory_embedding_cache")
+        .values({
+          provider: provider.id,
+          model: provider.model,
+          provider_key: params.providerKey,
+          hash: parameter((entry) => entry.hash),
+          embedding: parameter((entry) => encodeMemoryEmbedding(entry.embedding)),
+          dims: parameter((entry) => entry.embedding.length),
+          updated_at: now,
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["provider", "model", "provider_key", "hash"]).doUpdateSet((eb) => ({
+            embedding: eb.ref("excluded.embedding"),
+            dims: eb.ref("excluded.dims"),
+            updated_at: eb.ref("excluded.updated_at"),
+          })),
+        ),
+  );
+  const statement = params.db.prepare(compiled.sql);
+  statement.setReadBigInts(true);
   const retained = new Set(retainedRows.map(([, index]) => index));
   row = 0;
   for (const entry of params.entries()) {
     if (!retained.has(row++)) {
       continue;
     }
-    const embedding = entry.embedding;
-    upsert({
-      provider: provider.id,
-      model: provider.model,
-      provider_key: params.providerKey,
-      hash: entry.hash,
-      embedding: encodeMemoryEmbedding(embedding),
-      dims: embedding.length,
-      updated_at: now,
-    });
-  }
-}
-
-function reserveMemoryEmbeddingCacheCapacity(params: {
-  db: DatabaseSync;
-  provider: { id: string; model: string };
-  providerKey: string;
-  hashes: string[];
-  maxEntries: number;
-}): void {
-  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
-  // The caller's transaction replaces incoming rows and reserves space before
-  // inserting vectors, so even a transient row-count overflow is impossible.
-  for (let start = 0; start < params.hashes.length; start += 400) {
-    executeSqliteQuerySync(
-      params.db,
-      db
-        .deleteFrom("memory_embedding_cache")
-        .where("provider", "=", params.provider.id)
-        .where("model", "=", params.provider.model)
-        .where("provider_key", "=", params.providerKey)
-        .where("hash", "in", params.hashes.slice(start, start + 400)),
-    );
-  }
-  const retainedCapacity = params.maxEntries - params.hashes.length;
-  const excess = countMemoryEmbeddingCache(params.db) - retainedCapacity;
-  if (excess > 0) {
-    deleteOldestMemoryEmbeddingCacheRows(params.db, excess);
+    statement.run(...bind(entry));
   }
 }
 

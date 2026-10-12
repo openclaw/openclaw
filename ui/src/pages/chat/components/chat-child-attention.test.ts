@@ -3,7 +3,7 @@ import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { renderChatComposerNotices } from "../chat-view-notices.ts";
-import type { ChatChildAttention } from "./chat-child-attention.ts";
+import type { ChatChildAttention } from "./chat-child-attention.tsx";
 
 const parentKey = "agent:main:dashboard:parent";
 const childKey = "agent:main:subagent:diagnostic";
@@ -129,5 +129,6 @@ it("retires its expiry timer when the pane is removed", async () => {
   await notice.updateComplete;
   expect(vi.getTimerCount()).toBe(1);
   notice.remove();
+  await Promise.resolve();
   expect(vi.getTimerCount()).toBe(0);
 });

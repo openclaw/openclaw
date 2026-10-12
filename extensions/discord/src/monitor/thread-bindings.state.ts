@@ -20,14 +20,6 @@ import type {
   ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
 
-export type ThreadBindingPersistence = {
-  targetKey: string;
-  deletingTarget: boolean;
-  nextRecord: ThreadBindingRecord | null;
-  writingKey?: string;
-  committedKeys: Set<string>;
-};
-
 type ThreadBindingsGlobalState = {
   managersByAccountId: Map<string, ThreadBindingManager>;
   bindingsByThreadId: Map<string, ThreadBindingRecord>;
@@ -40,10 +32,8 @@ type ThreadBindingsGlobalState = {
   loadedPersistentBindings: boolean;
   persistenceAvailable: boolean;
   lastPersistedAtMs: number;
-  revision: number;
   mutationTail: Promise<void>;
   accountOperationTails: WeakMap<ThreadBindingManager, Promise<void>>;
-  activePersistence?: ThreadBindingPersistence;
 };
 
 // Plugin hooks can load this module through a separate runtime path while core
@@ -63,7 +53,6 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
     loadedPersistentBindings: false,
     persistenceAvailable: true,
     lastPersistedAtMs: 0,
-    revision: 0,
     mutationTail: Promise.resolve(),
     accountOperationTails: new WeakMap(),
   };
@@ -322,7 +311,6 @@ export function setBindingRecord(record: ThreadBindingRecord) {
     unlinkSessionBinding(existing.targetSessionKey, bindingKey);
   }
   BINDINGS_BY_THREAD_ID.set(bindingKey, record);
-  THREAD_BINDINGS_STATE.revision += 1;
   linkSessionBinding(record.targetSessionKey, bindingKey);
   rememberReusableWebhook(record);
 }
@@ -337,7 +325,6 @@ export function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord 
     return null;
   }
   BINDINGS_BY_THREAD_ID.delete(key);
-  THREAD_BINDINGS_STATE.revision += 1;
   unlinkSessionBinding(existing.targetSessionKey, key);
   return existing;
 }
@@ -345,7 +332,6 @@ export function removeBindingRecord(bindingKeyRaw: string): ThreadBindingRecord 
 function beginBindingsLoad() {
   THREAD_BINDINGS_STATE.loadedBindings = true;
   BINDINGS_BY_THREAD_ID.clear();
-  THREAD_BINDINGS_STATE.revision += 1;
   BINDINGS_BY_SESSION_KEY.clear();
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
   THREAD_BINDINGS_STATE.loadedPersistentBindings = false;
@@ -356,10 +342,9 @@ function restoreBindings(entries: PluginStateEntry<ThreadBindingRecord>[]) {
   THREAD_BINDINGS_STATE.loadedPersistentBindings = entries.length > 0;
   for (const entry of entries) {
     const normalized = normalizePersistedBinding(entry.key, entry.value);
-    if (!normalized) {
-      continue;
+    if (normalized) {
+      setBindingRecord(normalized);
     }
-    setBindingRecord(normalized);
   }
 }
 

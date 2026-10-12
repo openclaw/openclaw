@@ -3,9 +3,12 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   openSqliteWorkerStore,
+  readSqliteDatabaseWriteTokenForPath,
   runSqliteWorkerStoreOperation,
+  runSqliteWorkerStoreWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolveWorkboardDatabaseInput } from "./database-config.js";
 import type { WorkboardPersistence, WorkboardWriteAuthority } from "./persistence-types.js";
 import type {
   WorkboardSqliteOperations,
@@ -14,24 +17,29 @@ import type {
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
 
 type WorkboardSqliteStores = WorkboardPersistence & {
-  ready: Promise<number>;
-  dataVersion(this: void): Promise<number>;
+  ready: Promise<void>;
+  readWriteToken(this: void): string | undefined;
   close(this: void): Promise<void>;
   runWithWriteAuthority: WorkboardWriteAuthority;
 };
 
 export function createWorkboardSqliteStores(options: {
+  config?: Parameters<typeof resolveWorkboardDatabaseInput>[0];
   dbPath?: string;
   workerModuleUrl: URL;
 }): WorkboardSqliteStores {
   const databasePath = path.resolve(
     options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
   );
-  const worker = openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
-    moduleUrl: options.workerModuleUrl,
-    databasePath,
-    input: undefined,
-  });
+  const postgres = options.config?.database?.engine === "postgres";
+  const selectedDatabase = resolveWorkboardDatabaseInput(options.config ?? {});
+  const worker = selectedDatabase.then((input) =>
+    openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
+      moduleUrl: options.workerModuleUrl,
+      databasePath,
+      input,
+    }),
+  );
   let ownedConnection: number | undefined;
   let brokerClosed = false;
   let brokerCleanup = false;
@@ -93,7 +101,7 @@ export function createWorkboardSqliteStores(options: {
       }
       throw error;
     });
-  const ready = opened.then((value) => value.dataVersion);
+  const ready = opened.then(() => undefined);
   void ready.catch(() => {});
   async function execute<K extends keyof WorkboardSqliteOperations>(
     type: K,
@@ -102,6 +110,25 @@ export function createWorkboardSqliteStores(options: {
   ): Promise<WorkboardSqliteOperations[K]["output"]> {
     const authority = writes ? writeAuthority.getStore() : undefined;
     const store = await worker;
+    if (writes && postgres) {
+      const result = unwrapWorkboardSqliteResult(
+        await runSqliteWorkerStoreWrite(
+          store,
+          (scope) => scope.execute({ type, input }),
+          () => {
+            if (authority && !authority.active) {
+              throw new Error("Workboard mutation authority has settled.");
+            }
+            authority?.assertCurrent?.();
+          },
+          [databasePath],
+        ),
+      );
+      if (authority && result !== false && result !== "conflict" && result !== "owner_busy") {
+        authority.assertCurrent = undefined;
+      }
+      return result;
+    }
     if (!authority) {
       return unwrapWorkboardSqliteResult(await store.execute({ type, input }));
     }
@@ -162,7 +189,7 @@ export function createWorkboardSqliteStores(options: {
       }
     },
     ready,
-    dataVersion: () => run(undefined, (connection) => execute("dataVersion", { connection })),
+    readWriteToken: () => readSqliteDatabaseWriteTokenForPath(databasePath),
     cards: {
       register: bindOperation((input) => execute("cards.register", input, true)),
       registerIfAbsent: bindOperation((input) => execute("cards.registerIfAbsent", input, true)),

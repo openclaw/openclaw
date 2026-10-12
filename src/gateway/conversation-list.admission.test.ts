@@ -5,7 +5,7 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   listConversations,
   registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
 import {
@@ -35,7 +35,7 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-function createDirectory(
+async function createDirectory(
   params: { agentId?: string; physicalAgentId?: string; peerIds?: string[] } = {},
 ) {
   const agentId = params.agentId ?? "main";
@@ -47,7 +47,7 @@ function createDirectory(
     agents: { entries: { [agentId]: {} } },
     session: { store: storePath },
   };
-  const scope = resolveConversationRegistryScope({ config, agentId });
+  const scope = await prepareConversationRegistryScope({ config, agentId });
   const routed = createDeferredCore();
   const deps = {
     listConversations,
@@ -83,7 +83,7 @@ describe("conversation directory write admission", () => {
     "rechecks route ownership after waiting for the writer: %s",
     async (eligibility) => {
       const peerIds = ["peer", "peer-two", "peer-three"];
-      const fixture = createDirectory({ peerIds });
+      const fixture = await createDirectory({ peerIds });
       let currentConfig = fixture.config;
       const release = createDeferredCore();
       const blocker = runOpenClawAgentWriteAdmission(
@@ -91,6 +91,20 @@ describe("conversation directory write admission", () => {
         () => release.promise,
       );
       let settled = false;
+      let forcedUnavailable = false;
+      const prepare = routeOwnership.prepareConversationRouteEligibilitiesForAgent;
+      vi.spyOn(routeOwnership, "prepareConversationRouteEligibilitiesForAgent").mockImplementation(
+        async (input) => {
+          const prepared = await prepare(input);
+          return {
+            ...prepared,
+            read: () =>
+              forcedUnavailable
+                ? input.conversations.map(() => "unavailable" as const)
+                : prepared.read(),
+          };
+        },
+      );
       const result = runGatewayConversationList(
         {
           config: fixture.config,
@@ -122,10 +136,7 @@ describe("conversation directory write admission", () => {
             bindings: [{ type: "route", agentId: "finance", match: { channel: "reef" } }],
           };
         } else if (eligibility === "unavailable") {
-          vi.spyOn(
-            routeOwnership,
-            "resolveConversationRouteEligibilitiesForAgent",
-          ).mockImplementation(({ conversations }) => conversations.map(() => "unavailable"));
+          forcedUnavailable = true;
         }
         release.resolve();
         await blocker;
@@ -160,7 +171,7 @@ describe("conversation directory write admission", () => {
   it.each(["environment", "working directory"] as const)(
     "keeps a shared physical store and logical route when the %s changes during discovery",
     async (changed) => {
-      const fixture = createDirectory({
+      const fixture = await createDirectory({
         agentId: "logical-agent",
         physicalAgentId: "schema-owner",
       });

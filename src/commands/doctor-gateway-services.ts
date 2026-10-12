@@ -4,6 +4,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
@@ -68,6 +69,8 @@ import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.j
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
   formatServiceConfigIssues,
+  formatGatewayServiceRepairPreview,
+  reportGatewayServiceConfigAudit,
   hasRepairableServiceDefinitionDrift,
   isOperatorOwnedEnvironmentIssue,
   isPreservedLaunchdTimeoutWarning,
@@ -299,12 +302,6 @@ export async function maybeRepairGatewayServiceConfig(
     note(formatInstallOwnerMessage(serviceOwner), "Gateway runtime");
     return cfg;
   }
-  const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
-    ? [
-        `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
-        "Run `openclaw gateway install --force` from the intended package install to replace the gateway service definition.",
-      ].join("\n")
-    : null;
 
   const tokenRefConfigured = Boolean(
     resolveSecretInputRef({
@@ -454,24 +451,14 @@ export async function maybeRepairGatewayServiceConfig(
     note(serviceRewriteBlock, "Gateway service config");
   }
 
-  const hasEntrypointMismatch = audit.issues.some(
-    (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+  const sourceCheckoutWarningToShow = reportGatewayServiceConfigAudit(
+    audit,
+    serviceLayout,
+    definitionRepair,
   );
-  const sourceCheckoutWarningToShow = hasEntrypointMismatch ? null : sourceCheckoutWarning;
-
   if (audit.issues.length === 0 && !definitionRepair) {
-    if (sourceCheckoutWarningToShow !== null) {
-      note(sourceCheckoutWarningToShow, "Gateway service config");
-    }
     return cfg;
   }
-
-  const consolidatedLines: string[] = [];
-  if (sourceCheckoutWarningToShow !== null) {
-    consolidatedLines.push(sourceCheckoutWarningToShow, "");
-  }
-  consolidatedLines.push(...formatServiceConfigIssues(audit.issues));
-  note(consolidatedLines.join("\n"), "Gateway service config");
   // A short custom timeout is diagnostic, not permission to overwrite native policy.
   if (!definitionRepair && !installationDrift && isPreservedLaunchdTimeoutWarning(audit)) {
     return cfg;
@@ -540,12 +527,23 @@ export async function maybeRepairGatewayServiceConfig(
       : undefined;
   const needsConfigWrite =
     !tokenRefConfigured && !configuredGatewayToken && Boolean(gatewayTokenForRepair);
+  const { preview, unresolvedFindings: unresolvedRepairFindings } =
+    formatGatewayServiceRepairPreview({
+      command,
+      managedDefinition,
+      plan: expectedRuntimePlan,
+      currentLayout: serviceLayout,
+      plannedLayout: runtimeLayout,
+      missingSystemNode: needsNodeRuntime && !systemNodePath,
+      definitionDrift: audit.definitionDrift,
+    });
+  note(preview, "Gateway service repair preview");
   const repair = await prompter.confirmRuntimeRepair({
     message: needsConfigWrite
       ? "Preserve the Gateway token in the secret store, write its SecretRef to config, and reinstall the service now?"
       : needsAggressive
-        ? "Overwrite gateway service config with current defaults now?"
-        : "Update gateway service config to the recommended defaults now?",
+        ? "Overwrite gateway service config with the repair shown above now?"
+        : "Apply the gateway service repair shown above now?",
     initialValue: needsConfigWrite ? false : needsAggressive ? prompter.shouldForce : true,
     requiresInteractiveConfirmation:
       needsConfigWrite ||
@@ -561,7 +559,7 @@ export async function maybeRepairGatewayServiceConfig(
     }
     if (sourceCheckoutWarningToShow === null) {
       note(
-        "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
+        `Run \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the gateway service definition.`,
         "Gateway service config",
       );
     }
@@ -656,6 +654,9 @@ export async function maybeRepairGatewayServiceConfig(
       warn: (message) => note(message, "Gateway"),
     },
   });
+  if (unresolvedRepairFindings.length > 0) {
+    note(unresolvedRepairFindings.join("\n"), "Gateway service findings still unresolved");
+  }
   return cfgForServiceInstall;
 }
 

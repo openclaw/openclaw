@@ -71,7 +71,7 @@ export function renderPersonName(
 /**
  * Wraps an avatar that already sits beside its own labelled name link. The twin is hidden
  * from assistive tech and the tab order so one identity never yields two targets; see the
- * focusable filter in session-progress-hovercard.runtime.ts.
+ * focusable filter in session-progress-hovercard.runtime.tsx.
  */
 export function renderPersonAvatarLink(avatar: unknown, link: PersonActivityLink | null) {
   return link

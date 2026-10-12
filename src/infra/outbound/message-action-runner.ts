@@ -18,6 +18,7 @@ import { isFencedProviderReadAction } from "../../channels/plugins/message-actio
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
@@ -49,17 +50,17 @@ import { MessageActionDeniedError } from "./message-action-denial.js";
 import {
   assertMessageDeliveryCurrent,
   beforeMessageDeliveryAttempt,
-  withMessageActionEffectAuthority,
   executeMessagePlugin,
   executeMessagePoll,
 } from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
+  waitForLocalMessageMedia,
   normalizeSandboxMediaParams,
   parseJsonMessageParam,
   resolveAttachmentMediaPolicy,
-  resolveExtraActionMediaSourceParamKeys,
+  resolveExtraActionMediaSourceParamKeysAsync,
 } from "./message-action-params.js";
 import { prepareMessageRoute, resolveMessageTarget } from "./message-action-routing.js";
 import { withSendNormalization } from "./message-action-send-payload.js";
@@ -319,13 +320,19 @@ async function handleInternalSourceReplySendAction(
       params.message = recommendations.text;
     }
   }
+  const mediaSources = collectActionMediaSourceHints(params, [], { structuredAttachments: "all" });
+  await waitForLocalMessageMedia({
+    ...input,
+    sources: mediaSources,
+    assertCurrent: input.assertDirectAdapterHandoff,
+  });
   const mediaAccess =
     input.mediaAccess ??
     resolveAgentScopedOutboundMediaAccess({
       cfg: input.cfg,
       agentId,
       workspaceDir: input.workspaceDir,
-      mediaSources: collectActionMediaSourceHints(params, [], { structuredAttachments: "all" }),
+      mediaSources,
       ...messageActionRequesterMediaContext(input),
       messageProvider: input.sessionKey ? undefined : INTERNAL_MESSAGE_CHANNEL,
       accountId: input.sessionKey ? input.requesterAccountId : undefined,
@@ -501,12 +508,6 @@ async function handleInternalSourceReplySendAction(
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
-  return withMessageActionEffectAuthority(input, () => runMessageActionWithAuthority(input));
-}
-
-async function runMessageActionWithAuthority(
-  input: MessageActionInput,
-): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const cfg = input.cfg;
   let params = { ...input.params };
@@ -558,28 +559,41 @@ async function runMessageActionWithAuthority(
           const { channel, channelPlugin, accountId, dryRun, defersExternalTargetResolution } =
             route;
 
-          const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
-            cfg,
-            action,
-            args: params,
-            channel,
-            accountId,
-            sessionKey: input.sessionKey,
-            sessionId: input.sessionId,
-            agentId: resolvedAgentId,
-            requesterSenderId: input.requesterSenderId,
-            senderIsOwner: input.senderIsOwner,
-          });
+          const extraActionMediaSourceParamKeys = await resolveExtraActionMediaSourceParamKeysAsync(
+            {
+              cfg,
+              action,
+              args: params,
+              channel,
+              accountId,
+              sessionKey: input.sessionKey,
+              sessionId: input.sessionId,
+              agentId: resolvedAgentId,
+              requesterSenderId: input.requesterSenderId,
+              senderIsOwner: input.senderIsOwner,
+            },
+          );
+          (route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff)?.();
           const structuredAttachmentMode = action === "send" ? "all" : "selected";
+          const mediaSources = collectActionMediaSourceHints(
+            params,
+            extraActionMediaSourceParamKeys,
+            {
+              structuredAttachments: structuredAttachmentMode,
+            },
+          );
+          await waitForLocalMessageMedia({
+            ...input,
+            sources: mediaSources,
+            assertCurrent: route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff,
+          });
 
           const mediaAccess =
             input.mediaAccess ??
             resolveAgentScopedOutboundMediaAccess({
               cfg,
               agentId: resolvedAgentId,
-              mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
-                structuredAttachments: structuredAttachmentMode,
-              }),
+              mediaSources,
               ...messageActionRequesterMediaContext(input),
               messageProvider: input.sessionKey ? undefined : channel,
               accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
@@ -675,7 +689,15 @@ async function runMessageActionWithAuthority(
           const deliveryInput = context.input;
           context.input = {
             ...deliveryInput,
-            assertDirectAdapterHandoff: () => assertMessageDeliveryCurrent(deliveryInput),
+            assertDirectAdapterHandoff: composeSessionSourceAssertion(
+              [deliveryInput.assertDirectAdapterHandoff],
+              (assertSource) => {
+                throwIfAborted(deliveryInput.abortSignal);
+                assertSource();
+                deliveryInput.messageActionAuthorization?.scheduled?.assertCurrent();
+                deliveryInput.messageActionAuthorization?.deliveryAttempt?.assertCurrent();
+              },
+            ),
           };
         }
       }

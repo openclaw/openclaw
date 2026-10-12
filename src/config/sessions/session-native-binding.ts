@@ -10,6 +10,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { pluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -226,6 +227,22 @@ export function runSessionNativeBindingWorkerOperation<
       },
       async settle(outcome, acknowledged) {
         const settlement = await admitted?.retained.settled;
+        if (readinessAuthorized) {
+          pluginStatePublication.invalidateEntries(
+            { identity: sharedSource.key, incarnation: operationId },
+            members.flatMap(({ participant }) =>
+              participant.binding
+                ? [
+                    {
+                      plugin_id: participant.binding.pluginId,
+                      namespace: participant.binding.namespace,
+                      entry_key: participant.binding.key,
+                    },
+                  ]
+                : [],
+            ),
+          );
+        }
         const receipt = readReceipt(admitted?.admission.committed?.facts);
         const completed =
           settlement?.kind === "completed" && admitted?.admission.settlement?.kind === "completed";

@@ -121,13 +121,30 @@ export function resolveThinkingProfile({
   modelId,
   provider,
   reasoning,
+  api,
+  thinkingLevelMap,
 }: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile {
   const isCloudRoute =
     normalizeProviderId(provider) === OLLAMA_CLOUD_PROVIDER_ID || isCloudModelRef(modelId);
   const supportsThinking =
     reasoning === true ||
     (reasoning === undefined && isCloudRoute && supportsOllamaCloudFullThinkingEffort(modelId));
-  return supportsThinking
-    ? OLLAMA_REASONING_THINKING_PROFILE
-    : OLLAMA_NON_REASONING_THINKING_PROFILE;
+  if (!supportsThinking) {
+    return OLLAMA_NON_REASONING_THINKING_PROFILE;
+  }
+  if ((!api || api === "ollama") && thinkingLevelMap) {
+    return {
+      ...OLLAMA_REASONING_THINKING_PROFILE,
+      levels: [
+        { id: "off" },
+        ...(thinkingLevelMap.minimal === "minimal" ? [{ id: "minimal" as const }] : []),
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(thinkingLevelMap.xhigh === "xhigh" ? [{ id: "xhigh" as const }] : []),
+        { id: "max" },
+      ],
+    };
+  }
+  return OLLAMA_REASONING_THINKING_PROFILE;
 }

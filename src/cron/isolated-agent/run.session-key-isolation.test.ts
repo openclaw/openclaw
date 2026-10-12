@@ -300,6 +300,13 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toContain("turn/start rejected before result metadata");
+    expect(await patchSessionEntryMock.mock.results[0]?.value).toMatchObject({
+      systemSent: true,
+      skillsSnapshot: {
+        prompt: "<available_skills></available_skills>",
+        version: 42,
+      },
+    });
     expect(persistedAtStartup.get("agent:main:cron:test")).toMatchObject({
       sessionId: "test-session-id",
       agentHarnessId: "codex",
@@ -432,23 +439,18 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       resolveCronSessionMock.mockReturnValue(session);
       lookupModelContextTokensMock.mockReturnValue(512_000);
-      runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          result: {
-            payloads: [{ text: "test output" }],
-            meta: {
-              agentMeta: {
-                provider: "openai",
-                model: "gpt-5.4",
-                agentHarnessId: "codex",
-                ...(reported ? { contextTokens: 1_000_000, contextTokensSource: "runtime" } : {}),
-              },
-            },
+      resolveEffectiveAgentRuntimeMock.mockReturnValue("codex");
+      mockRunCronFallbackPassthrough();
+      runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "test output" }],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.4",
+            agentHarnessId: "codex",
+            ...(reported ? { contextTokens: 1_000_000, contextTokensSource: "runtime" } : {}),
           },
         },
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
       });
       await runSkillFilterCase();
       expect(session.sessionEntry).toMatchObject({

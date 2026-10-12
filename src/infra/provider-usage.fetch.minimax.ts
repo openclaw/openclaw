@@ -56,21 +56,22 @@ const PERCENT_KEYS = [
 // dedicated remaining-percent fields as their authoritative values.
 const REMAINING_PERCENT_KEYS = ["usage_percent", "usagePercent"] as const;
 
-const CURRENT_INTERVAL_TOTAL_KEYS = snakeAndCamelFields("current_interval_total_count");
-const CURRENT_INTERVAL_REMAINING_KEYS = snakeAndCamelFields("current_interval_usage_count");
-const CURRENT_INTERVAL_REMAINING_PERCENT_KEYS = snakeAndCamelFields(
-  "current_interval_remaining_percent",
-);
-const CURRENT_INTERVAL_STATUS_KEYS = snakeAndCamelFields("current_interval_status");
-const CURRENT_WEEKLY_TOTAL_KEYS = snakeAndCamelFields("current_weekly_total_count");
-const CURRENT_WEEKLY_REMAINING_KEYS = snakeAndCamelFields("current_weekly_usage_count");
-const CURRENT_WEEKLY_REMAINING_PERCENT_KEYS = snakeAndCamelFields(
-  "current_weekly_remaining_percent",
-);
-const CURRENT_WEEKLY_STATUS_KEYS = snakeAndCamelFields("current_weekly_status");
+function modelWindowFields(period: "interval" | "weekly", reset: string, label?: string) {
+  return {
+    label,
+    total: snakeAndCamelFields(`current_${period}_total_count`),
+    remaining: snakeAndCamelFields(`current_${period}_usage_count`),
+    remainingPercent: snakeAndCamelFields(`current_${period}_remaining_percent`),
+    status: snakeAndCamelFields(`current_${period}_status`),
+    reset: snakeAndCamelFields(reset),
+  };
+}
+
+const INTERVAL_WINDOW = modelWindowFields("interval", "end_time");
+const WEEKLY_WINDOW = modelWindowFields("weekly", "weekly_end_time", "Week");
 const MODEL_REMAINING_PERCENT_KEYS = [
-  ...CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
-  ...CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
+  ...INTERVAL_WINDOW.remainingPercent,
+  ...WEEKLY_WINDOW.remainingPercent,
 ] as const;
 
 const USED_KEYS = snakeAndCamelFields(
@@ -100,8 +101,8 @@ const TOTAL_KEYS = [
     "prompts_total",
     "total_prompts",
   ),
-  ...CURRENT_INTERVAL_TOTAL_KEYS,
-  ...CURRENT_WEEKLY_TOTAL_KEYS,
+  ...INTERVAL_WINDOW.total,
+  ...WEEKLY_WINDOW.total,
   ...snakeAndCamelFields("limit", "quota", "quota_limit", "max"),
 ] as const;
 
@@ -132,8 +133,8 @@ const REMAINING_KEYS = [
   "left",
   // MiniMax usage endpoints misname these: values are remaining quota, not consumed.
   // See https://github.com/MiniMax-AI/MiniMax-M2/issues/99
-  ...CURRENT_INTERVAL_REMAINING_KEYS,
-  ...CURRENT_WEEKLY_REMAINING_KEYS,
+  ...INTERVAL_WINDOW.remaining,
+  ...WEEKLY_WINDOW.remaining,
 ] as const;
 
 const PLAN_KEYS = ["plan", "plan_name", "planName", "product", "tier"] as const;
@@ -293,8 +294,8 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
     .filter(
       (record) =>
         hasAny(record, MODEL_REMAINING_PERCENT_KEYS) ||
-        (pickNumber(record, CURRENT_INTERVAL_TOTAL_KEYS) ?? 0) > 0 ||
-        (pickNumber(record, CURRENT_WEEKLY_TOTAL_KEYS) ?? 0) > 0,
+        (pickNumber(record, INTERVAL_WINDOW.total) ?? 0) > 0 ||
+        (pickNumber(record, WEEKLY_WINDOW.total) ?? 0) > 0,
     );
   return (
     records.find((record) => {
@@ -302,7 +303,7 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
       return name === "general" || name.startsWith("minimax-m");
     }) ??
     records.find((record) =>
-      [CURRENT_INTERVAL_STATUS_KEYS, CURRENT_WEEKLY_STATUS_KEYS].some((keys) => {
+      [INTERVAL_WINDOW.status, WEEKLY_WINDOW.status].some((keys) => {
         const status = pickNumber(record, keys);
         return status === 1 || status === 2;
       }),
@@ -317,23 +318,7 @@ function deriveMinimaxModelWindows(record: Record<string, unknown>): {
 } {
   const windows: UsageWindow[] = [];
   let recognized = false;
-  for (const window of [
-    {
-      total: CURRENT_INTERVAL_TOTAL_KEYS,
-      remaining: CURRENT_INTERVAL_REMAINING_KEYS,
-      remainingPercent: CURRENT_INTERVAL_REMAINING_PERCENT_KEYS,
-      status: CURRENT_INTERVAL_STATUS_KEYS,
-      reset: snakeAndCamelFields("end_time"),
-    },
-    {
-      label: "Week",
-      total: CURRENT_WEEKLY_TOTAL_KEYS,
-      remaining: CURRENT_WEEKLY_REMAINING_KEYS,
-      remainingPercent: CURRENT_WEEKLY_REMAINING_PERCENT_KEYS,
-      status: CURRENT_WEEKLY_STATUS_KEYS,
-      reset: snakeAndCamelFields("weekly_end_time"),
-    },
-  ]) {
+  for (const window of [INTERVAL_WINDOW, WEEKLY_WINDOW]) {
     const remainingPercent = pickNumber(record, window.remainingPercent);
     const total = pickNumber(record, window.total);
     const remaining = pickNumber(record, window.remaining);

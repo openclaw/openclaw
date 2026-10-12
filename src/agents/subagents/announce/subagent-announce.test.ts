@@ -255,7 +255,9 @@ describe("subagent announce seam flow", () => {
         (
           loadSessionStoreMock(storePath) as Record<
             string,
-            ReturnType<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>
+            Awaited<
+              ReturnType<typeof import("./subagent-announce.runtime.js").readSubagentSessionEntry>
+            >
           >
         )[sessionKey],
       readSessionMessagesAsync: async () => [],

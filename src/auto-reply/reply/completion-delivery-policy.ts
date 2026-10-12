@@ -43,9 +43,10 @@ function resolveCompletionChatType(params: {
     }
   }
 
-  return inferCompletionChatTypeFromTarget(
-    params.directOrigin?.to ?? params.requesterSessionOrigin?.to,
-  );
+  const target =
+    (params.directOrigin?.to ?? params.requesterSessionOrigin?.to)?.trim().toLowerCase() ?? "";
+  const prefix = target.slice(0, target.indexOf(":") + 1);
+  return COMPLETION_TARGET_CHAT_TYPES.get(prefix) ?? "unknown";
 }
 
 export function completionRequiresMessageToolDelivery(
@@ -72,10 +73,4 @@ export function resolveDurableCompletionDeliveryMode(
   // Message-tool-only blocks ambient model replies. A durable completion is an
   // explicit system send: the host fixes route/payload and withholds the message tool.
   return sourceReplyDeliveryMode === "message_tool_only" ? "host_owned" : "automatic";
-}
-
-function inferCompletionChatTypeFromTarget(to: string | undefined): CompletionChatType {
-  const normalized = to?.trim().toLowerCase() ?? "";
-  const prefix = normalized.slice(0, normalized.indexOf(":") + 1);
-  return COMPLETION_TARGET_CHAT_TYPES.get(prefix) ?? "unknown";
 }

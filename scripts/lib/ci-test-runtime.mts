@@ -67,6 +67,9 @@ export type CiTestRuntimeSelection =
 export const BUN_UI_TEST_ENV = {
   BUN_JSC_thresholdForFTLOptimizeAfterWarmUp: "512000",
   BUN_JSC_thresholdForFTLOptimizeSoon: "8000",
+  // Each shared worker otherwise grows against the whole runner's RAM. Collect
+  // after 256 MiB of allocation per cycle; this does not cap the live heap.
+  BUN_JSC_gcMaxHeapSize: "268435456",
   // Avoid sweeping parked allocator threads between short UI update cycles.
   MIMALLOC_PURGE_HOLES_MIN_INTERVAL: "1000",
 } as const;
@@ -306,6 +309,8 @@ const runtimePartitions = new Map<
       files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
       nodeRequired: new Set([
         "src/cli/cli-process-diagnostics.test.ts",
+        // This contract requires Node's async_hooks Promise callback boundaries.
+        "src/infra/main-thread-stall.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",

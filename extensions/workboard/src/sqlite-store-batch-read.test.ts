@@ -12,9 +12,10 @@ import type {
   PersistedWorkboardNotificationSubscription,
 } from "./persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
-import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
+import { createWorkboardSqliteStores } from "./test/database-config.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { sqliteTestAuxStores } from "./test/sqlite-store.js";
 
 const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
@@ -23,6 +24,7 @@ const sqliteStatements = vi.hoisted(() => ({
   count: 0,
   prepared: [] as string[],
   executed: [] as string[],
+  schema: [] as string[],
 }));
 
 vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
@@ -32,7 +34,22 @@ vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
     openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
       const db = actual.openNodeSqliteDatabase(...args);
       const prepare = db.prepare.bind(db);
+      const recordSchema = (sql: string) => {
+        if (
+          /user_version|schema_version|sqlite_schema|sqlite_master|pragma_table|PRAGMA\s+table_info|workboard_schema_migrations|CREATE\s+(?:TABLE|INDEX)/i.test(
+            sql,
+          )
+        ) {
+          sqliteStatements.schema.push(sql);
+        }
+      };
+      const exec = db.exec.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql) => {
+        recordSchema(sql);
+        exec(sql);
+      });
       vi.spyOn(db, "prepare").mockImplementation((sql) => {
+        recordSchema(sql);
         sqliteStatements.prepared.push(sql);
         const statement = prepare(sql);
         for (const method of ["all", "get", "iterate", "run"] as const) {
@@ -126,7 +143,30 @@ function withStores<T>(run: (dbPath: string) => Promise<T>): Promise<T> {
 }
 
 describe("workboard sqlite batch card read", () => {
-  it.each(["worker log", "proof"])("hydrates once when adding a %s", async (operation) => {
+  // Intercepts SQLite opens and schema-admission statements.
+  test("opens and reads without freshness probes or repeated schema admission", async () => {
+    await withStores(async (dbPath) => {
+      for (let opened = 0; opened < 2; opened += 1) {
+        sqliteStatements.schema.length = 0;
+        sqliteStatements.executed.length = 0;
+        const stores = createKernelStores(dbPath);
+        try {
+          if (opened === 0) {
+            expect(sqliteStatements.schema.length).toBeGreaterThan(0);
+          } else {
+            expect(sqliteStatements.schema).toEqual([]);
+          }
+          expect(await stores.cards.entries()).toEqual([]);
+          expect(await stores.cards.entries()).toEqual([]);
+          expect(sqliteStatements.executed.filter((sql) => /data_version/i.test(sql))).toEqual([]);
+        } finally {
+          await stores.close();
+        }
+      }
+    });
+  });
+  // Counts statements by intercepting the native SQLite open boundary.
+  test.each(["worker log", "proof"])("hydrates once when adding a %s", async (operation) => {
     await withStores(async (dbPath) => {
       const stores = createKernelStores(dbPath);
       const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
@@ -152,7 +192,8 @@ describe("workboard sqlite batch card read", () => {
     });
   });
 
-  it("prepares each child insert once for one or forty rows and preserves their order", async () => {
+  // Counts prepared statements through the native SQLite open boundary.
+  test("prepares each child insert once for one or forty rows and preserves their order", async () => {
     await withStores(async (dbPath) => {
       const stores = createKernelStores(dbPath);
       try {
@@ -199,7 +240,8 @@ describe("workboard sqlite batch card read", () => {
     });
   });
 
-  it("reports native preparation errors before reading child payload getters and rolls back", async () => {
+  // Renames a column through a separate native SQLite file handle.
+  test("reports native preparation errors before reading child payload getters and rolls back", async () => {
     await withStores(async (dbPath) => {
       const stores = createKernelStores(dbPath);
       const raw = new DatabaseSync(dbPath);
@@ -253,7 +295,8 @@ describe("workboard sqlite batch card read", () => {
     });
   });
 
-  it("issues the same number of statements no matter how many cards exist", async () => {
+  // Counts statements through the native SQLite open boundary.
+  test("issues the same number of statements no matter how many cards exist", async () => {
     await withStores(async (dbPath) => {
       const stores = createKernelStores(dbPath);
       try {
@@ -276,7 +319,8 @@ describe("workboard sqlite batch card read", () => {
     });
   });
 
-  it.each(["lookup", "entries"] as const)(
+  // Injects malformed values through a native SQLite file handle.
+  test.each(["lookup", "entries"] as const)(
     "preserves native, child, and execution error order through %s and remains reusable",
     async (mode) => {
       await withStores(async (dbPath) => {
@@ -320,7 +364,8 @@ describe("workboard sqlite batch card read", () => {
     },
   );
 
-  it.each([
+  // Injects malformed rows and counts native SQLite statements.
+  test.each([
     { fault: "later JSON", expected: "owner_busy", revisionMatches: true, targetOnly: false },
     { fault: "later integer", expected: "owner_busy", revisionMatches: true, targetOnly: false },
     { fault: "later integer", expected: "conflict", revisionMatches: false, targetOnly: false },
@@ -475,7 +520,8 @@ describe("workboard sqlite batch card read", () => {
     });
   });
 
-  it("claims an available owner without reading or replacing unrelated malformed children", async () => {
+  // Injects an unsafe integer through a native SQLite file handle.
+  test("claims an available owner without reading or replacing unrelated malformed children", async () => {
     await withStores(async (dbPath) => {
       const stores = createKernelStores(dbPath);
       const raw = new DatabaseSync(dbPath);
@@ -558,7 +604,8 @@ describe("workboard sqlite batch card read", () => {
     },
   );
 
-  it("reads each keyed collection once while preserving rows, binary order, and attachment joins", async () => {
+  // Measures reads through the native SQLite open boundary.
+  test("reads each keyed collection once while preserving rows, binary order, and attachment joins", async () => {
     await withStores(async (dbPath) => {
       let stores = createKernelStores(dbPath);
       // SQLite's binary order differs from locale sorting and from UTF-16 for the last two ids.
@@ -678,7 +725,8 @@ describe("workboard sqlite batch card read", () => {
     });
   });
 
-  it.each([
+  // Injects malformed JSON through a native SQLite file handle.
+  test.each([
     { kind: "boards", table: "workboard_boards", column: "default_workspace_json" },
     {
       kind: "subscriptions",

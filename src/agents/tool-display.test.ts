@@ -1,6 +1,6 @@
 /**
  * Regression coverage for compact tool display formatting.
- * Ensures tool names, actions, and details stay readable and redacted.
+ * Ensures tool names, actions, and details stay readable.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -789,13 +789,12 @@ describe("tool display details", () => {
 });
 
 describe("compactRawCommand middle truncation", () => {
-  it("uses the canonical tool payload redactor before compacting raw commands", () => {
+  it("preserves raw commands before compacting", () => {
     const longCommand =
       "/opt/custom/bin/deploy --aws-key AKIDABCDEFGHIJKLMNOP1234567890 --output /data/results/deploy-output.json";
     const result = resolveExecDetail({ command: longCommand });
 
-    expect(result).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-    expect(result).toContain("AKIDAB…7890");
+    expect(result).toContain("AKIDABCDEFGHIJKLMNOP1234567890");
   });
 
   it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
@@ -822,10 +821,7 @@ describe("compactRawCommand middle truncation", () => {
 });
 
 describe("coerceDisplayValue middle truncation", () => {
-  it("redacts credential-like values in long generic string details", () => {
-    // A long string whose tail contains a GitHub PAT. Without
-    // redaction-before-truncation, middle truncation could preserve
-    // the raw token at the tail after its prefix context is cut.
+  it("bounds long generic string details", () => {
     const longValue =
       "Deploying service to production cluster with auth ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop and " +
       "x".repeat(200) +
@@ -836,11 +832,11 @@ describe("coerceDisplayValue middle truncation", () => {
         args: { label: longValue },
       }),
     );
-    // The ghp_ token must be redacted before truncation
-    expect(detail).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop");
+    expect(detail!.length).toBeLessThanOrEqual(160);
+    expect(detail).toContain("…");
   });
 
-  it("uses the canonical tool payload redactor before compacting string details", () => {
+  it("preserves string details before compacting", () => {
     const longValue =
       "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " +
       "x".repeat(200) +
@@ -850,7 +846,6 @@ describe("coerceDisplayValue middle truncation", () => {
       args: { label: longValue },
     });
 
-    expect(detail).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-    expect(detail).toContain("AKIDAB…7890");
+    expect(detail).toContain("AKIDABCDEFGHIJKLMNOP1234567890");
   });
 });

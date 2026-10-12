@@ -31,8 +31,8 @@ import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
+import { copyInternalToolResultState } from "./runtime/internal-hooks.js";
 import { executionTitleSchema } from "./schema/typebox.js";
-import { isToolExecutionAllowed } from "./tool-policy-shared.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   applyToolCatalogCompaction,
@@ -134,7 +134,9 @@ function createCodeModeExecDescription(
   // Native tools have schema-derived declarations too; keep remote schemas deferred.
   const catalogKnown = catalog !== undefined;
   const hasMcp = catalog?.some((entry) => entry.source === "mcp") ?? false;
-  const swarmEnabled = isCodeModeSwarmAvailable(ctx, catalog);
+  // Detached reviews retain the admitted catalog. Execution-only restrictions
+  // belong to the bridge; applying them here rewrites the shared prompt prefix.
+  const swarmEnabled = isCodeModeSwarmAvailable({ ...ctx, toolExecutionAllow: undefined }, catalog);
   const apiGuidance =
     !catalogKnown || (catalog?.length ?? 0) > 0 || swarmEnabled
       ? " Read types with `API.list(prefix?)` and `API.read(path)`; read returns `{ path, description, content, bytes }`, not a string. Use `.content` for declaration text. Native tools: `tools/`. Types are documentation; write plain JavaScript."
@@ -144,7 +146,7 @@ function createCodeModeExecDescription(
       ? " MCP tools use the `MCP` namespace or callable `catalog.search` handles."
       : "";
   const swarmGuidance = swarmEnabled
-    ? " Swarm globals `agents.run`, `phase`, and `log` are available; read `agents.d.ts` for types and orchestration idioms."
+    ? " Swarm globals `agents.run`, `phase`, and `log` support orchestration when this run permits spawning; read `agents.d.ts` for types and orchestration idioms."
     : "";
   // Nodes ride the owner-only core tool; advertising the namespace to a run
   // whose catalog cannot resolve it turns the hint into hallucination bait.
@@ -154,8 +156,7 @@ function createCodeModeExecDescription(
       ? "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n"
       : "";
   const hasSkillTool = (name: string) =>
-    catalog?.some((entry) => entry.source === "openclaw" && entry.name === name) &&
-    (!ctx.toolExecutionAllow || isToolExecutionAllowed(ctx.toolExecutionAllow, name));
+    catalog?.some((entry) => entry.source === "openclaw" && entry.name === name);
   const skillsGuidance =
     (hasSkillTool("skills_search")
       ? " Installed skills: use `await skills.search(query, limit)` to find relevant skills. `await skills.list()` lists up to 20 entries; pass an offset for later pages."
@@ -202,14 +203,15 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   ) => {
     const result = normalizeCodeModeTimeoutResult(rawResult);
     markCodeModePermissionChangeResult(result, signal);
+    const controlResult = formatToolSearchControlResult(result, runtime, {
+      terminalBatchStatus: result.status,
+      compact: true,
+    });
     return recordCodeModeToolOutcome(
-      {
-        ...formatToolSearchControlResult(result, runtime, {
-          terminalBatchStatus: result.status,
-          compact: true,
-        }),
+      copyInternalToolResultState(controlResult, {
+        ...controlResult,
         ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
-      },
+      }),
       result,
     );
   };

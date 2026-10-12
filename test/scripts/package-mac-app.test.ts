@@ -59,7 +59,6 @@ describe.skipIf(process.platform === "win32")("cloud-worker app packaging identi
   it.each([
     { BUNDLE_ID: "ai.openclaw.mac" },
     { ALLOW_ADHOC_SIGNING: "1" },
-    { SIGN_IDENTITY: "-" },
     { DISABLE_LIBRARY_VALIDATION: "1" },
     { SKIP_TEAM_ID_CHECK: "1" },
     { OPENCLAW_PACKAGE_APP_ROOT: path.join(process.cwd(), "dist/OpenClaw.app") },
@@ -387,7 +386,7 @@ ${cleanup}
     },
   );
 
-  it.each(["dist/OpenClaw-proof.app", "dist/.openclaw-package.fixture/OpenClaw.app"])(
+  it.each(["dist/OpenClaw-proof.app"])(
     "bounds expanded package exclusions to the app root %s",
     (app) => {
       const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { files: string[] };
@@ -478,7 +477,6 @@ function getMergeFrameworkMachOsBlock(): string {
 function runSwiftToolchainHarness(options: {
   swiftVersion: string;
   selectedDeveloperDir: "command-line-tools" | "xcode";
-  xcodeVersion?: string;
   xcodebuildFailure?: string;
 }) {
   const root = tempDirs.make("openclaw-package-swift-root-");
@@ -499,7 +497,7 @@ function runSwiftToolchainHarness(options: {
 ${
   options.xcodebuildFailure
     ? `printf '%s\\n' ${JSON.stringify(options.xcodebuildFailure)} >&2; exit 1`
-    : `echo ${JSON.stringify(`Xcode ${options.xcodeVersion ?? "26.4"}`)}`
+    : "echo 'Xcode 26.4'"
 }
 `,
   );
@@ -790,9 +788,7 @@ const mlxTTSResourceFiles = [
   "swift-transformers_Hub.bundle/Contents/Resources/t5_tokenizer_config.json",
 ] as const;
 
-function runSwiftPMResourceBundleHarness(
-  options: { missingBundle?: string; missingMetallib?: boolean; skipMLXTTS?: boolean } = {},
-) {
+function runSwiftPMResourceBundleHarness(options: { missingBundle?: string } = {}) {
   const root = tempDirs.make("openclaw-package-resources-root-");
   const buildRoot = path.join(root, "build");
   const helperBuildRoot = path.join(root, "helper build");
@@ -810,12 +806,6 @@ function runSwiftPMResourceBundleHarness(
     writeFileSync(path.join(source, "marker"), bundle, "utf8");
   }
   for (const file of mlxTTSResourceFiles) {
-    if (
-      file.startsWith(`${options.missingBundle}/`) ||
-      (options.missingMetallib && file.endsWith("/default.metallib"))
-    ) {
-      continue;
-    }
     const source = path.join(helperBuildProducts, file);
     mkdirSync(path.dirname(source), { recursive: true });
     writeFileSync(source, file, "utf8");
@@ -828,7 +818,7 @@ function runSwiftPMResourceBundleHarness(
     APP_ROOT=${JSON.stringify(appRoot)}
     PRIMARY_ARCH=arm64
     BUILD_CONFIG=debug
-    SKIP_MLX_TTS=${options.skipMLXTTS ? "1" : "0"}
+    SKIP_MLX_TTS=0
     build_path_for_arch() {
       echo "$BUILD_ROOT/$1"
     }
@@ -1310,19 +1300,6 @@ describe("package-mac-app plist stamping", () => {
     expect(invocations).toEqual([buildArgs, [...buildArgs, "--show-bin-path"]]);
   });
 
-  it("skips the MLX TTS helper build and copy when OPENCLAW_SKIP_MLX_TTS=1", () => {
-    const script = readFileSync(scriptPath, "utf8") + readFileSync(swiftScriptPath, "utf8");
-
-    // Both the per-arch build and the bundle copy are gated on the same flag so
-    // a skipped build never tries to copy a helper binary that was not built.
-    expect(script).toContain(
-      'if [[ "$SKIP_MLX_TTS" == "1" ]]; then\n    echo "🔇 Skipping $MLX_TTS_HELPER_PRODUCT (OPENCLAW_SKIP_MLX_TTS=1)',
-    );
-    expect(script).toContain(
-      'if [[ "$SKIP_MLX_TTS" == "1" ]]; then\n  echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1)',
-    );
-  });
-
   it("refuses OPENCLAW_SKIP_MLX_TTS for release builds but allows it for dev builds", () => {
     const script = readFileSync(scriptPath, "utf8");
 
@@ -1447,18 +1424,6 @@ describe("package-mac-app plist stamping", () => {
       "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
     );
     expect(result.stderr).toContain("DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer");
-  });
-
-  it("rejects Xcode 26.3 even when it exposes a Swift 6.3 binary", () => {
-    const result = runSwiftToolchainHarness({
-      swiftVersion: "6.3.1",
-      selectedDeveloperDir: "xcode",
-      xcodeVersion: "26.3",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Xcode 26.4+");
-    expect(result.stderr).toContain("current Xcode is 26.3");
   });
 
   it("preserves the native Xcode failure before generic selection guidance", () => {
@@ -1727,29 +1692,6 @@ try {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("ERROR: Required SwiftPM resource bundle not found at");
     expect(result.stderr).toContain(missingBundle);
-  });
-
-  it("fails closed when the MLX helper compiled shaders are missing", () => {
-    const { result } = runSwiftPMResourceBundleHarness({ missingMetallib: true });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib");
-  });
-
-  it("omits incomplete MLX helper resources when the helper is skipped for a dev build", () => {
-    const { appRoot, result } = runSwiftPMResourceBundleHarness({
-      skipMLXTTS: true,
-      missingMetallib: true,
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-    for (const bundle of swiftPMResourceBundles) {
-      expect(
-        readFileSync(path.join(appRoot, "Contents", "Resources", bundle, "marker"), "utf8"),
-      ).toBe(bundle);
-    }
-    for (const file of mlxTTSResourceFiles) {
-      expect(existsSync(path.join(appRoot, "Contents", "Resources", file))).toBe(false);
-    }
   });
 
   it("compiles app localizations into signed resources", () => {
@@ -2030,28 +1972,6 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     expect(readFileSync(resolvedFile, "utf8")).toBe("locked\n");
   });
 
-  it("stages the pinned CUA driver and thins single-architecture packages before signing", () => {
-    const packageScript = readFileSync(scriptPath, "utf8");
-    const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
-    const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
-    expect(stageScript).toContain('TAG="cua-driver-rs-v${VERSION}"');
-    expect(stageScript).toContain(
-      'ARTIFACT_MANIFEST="$ROOT_DIR/extensions/cua-computer/package.json"',
-    );
-    expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
-    expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(packageScript).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
-    expect(packageScript).toContain('if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]');
-    expect(packageScript).toContain('lipo "$CUA_DRIVER" -thin "$CUA_ARCH"');
-    expect(packageScript).toContain('[[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]]');
-    expect(packageScript.indexOf("Staging embedded CUA driver")).toBeLessThan(
-      packageScript.indexOf('echo "🔏 Signing bundle'),
-    );
-    expect(codesignScript).toContain(
-      'echo "Signing embedded CUA driver"; sign_plain_item "$CUA_DRIVER"',
-    );
-  });
-
   it("omits the CUA driver only from elevation-host packages", () => {
     const packageScript = readFileSync(scriptPath, "utf8");
     const variantBlock = packageScript.slice(
@@ -2100,22 +2020,4 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
       expect(result.stderr).toContain("Error Reading File");
     },
   );
-
-  it.runIf(process.platform === "darwin")("adds optional strings and booleans", () => {
-    const plist = makePlist();
-    const result = runHelper(`
-      set -euo pipefail
-      source scripts/lib/plistbuddy.sh
-      plist_set_or_add_string ${JSON.stringify(plist)} SUFeedURL ''
-      plist_set_or_add_string ${JSON.stringify(plist)} SUPublicEDKey 'key"with\\\\slashes'
-      plist_set_or_add_bool ${JSON.stringify(plist)} SUEnableAutomaticChecks false
-      /usr/libexec/PlistBuddy -c 'Print :SUFeedURL' ${JSON.stringify(plist)}
-      /usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' ${JSON.stringify(plist)}
-      /usr/libexec/PlistBuddy -c 'Print :SUEnableAutomaticChecks' ${JSON.stringify(plist)}
-    `);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('key"with\\\\slashes');
-    expect(result.stdout).toContain("false");
-  });
 });

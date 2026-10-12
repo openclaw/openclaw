@@ -6,16 +6,16 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { resolveRuntimeImageSanitization } from "./browser-tool.runtime.js";
+import { wrapBrowserExternalContent } from "./browser-tool.snapshot.js";
 import { browserScreenshotAction } from "./browser/client-actions.js";
 import type { BrowserClientTarget } from "./browser/client-request.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
-import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
+import { describeBrowserScreenshot } from "./browser/vision.js";
 
 export type BrowserScreenshotOptions = Pick<
   Parameters<typeof describeBrowserScreenshot>[0],
@@ -126,13 +126,7 @@ export async function executeScreenshotAction({
       // Vision model descriptions contain web page content which is
       // untrusted external input — wrap it the same way snapshot and
       // tabs results are wrapped to mitigate prompt injection.
-      const wrappedDescription = wrapExternalContent(
-        neutralizeMediaDirectives(described.text.trim()),
-        {
-          source: "browser",
-          includeWarning: true,
-        },
-      );
+      const wrappedDescription = wrapBrowserExternalContent(described.text.trim(), true);
       const text = `[analyzed by ${analyzedBy}]\n${wrappedDescription}\n${shareHint}`;
       return textResult(text, {
         ...result,
@@ -153,10 +147,7 @@ export async function executeScreenshotAction({
     // still recover. Provider/runtime errors are untrusted page input;
     // preserve their trust boundary and defang reply-media directives.
     const rawReason = err instanceof Error ? err.message : String(err);
-    const reason = wrapExternalContent(neutralizeMediaDirectives(rawReason), {
-      source: "browser",
-      includeWarning: false,
-    });
+    const reason = wrapBrowserExternalContent(rawReason, false);
     extraText = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
   }
   return await imageResultFromFile({

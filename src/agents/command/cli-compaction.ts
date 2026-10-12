@@ -1,5 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -380,17 +380,6 @@ export async function runCliTurnCompactionLifecycle(
         ? AbortSignal.any([input.abortSignal, sourceSignal])
         : (input.abortSignal ?? sourceSignal);
     const params = { ...input, abortSignal };
-    const capturedEntry = loadSessionEntryReadOnly({
-      agentId: params.sessionAgentId,
-      sessionKey: params.sessionKey,
-      storePath,
-      readConsistency: "latest",
-    });
-    const expectedEntry = {
-      sessionId: params.sessionId,
-      lifecycleRevision: capturedEntry?.lifecycleRevision,
-      activeWriterRunId: capturedEntry?.activeWriterRunId,
-    };
     const assertActive = composeSessionSourceAssertion(
       [assertSourceActive, operatorAuthority?.assertCurrent, host.assertActive],
       (assertSources) => {
@@ -399,6 +388,20 @@ export async function runCliTurnCompactionLifecycle(
       },
     );
     assertActive();
+    const capturedEntry = await readSessionEntryReadOnlyInWorker(
+      {
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey,
+        storePath,
+        readConsistency: "latest",
+      },
+      assertActive,
+    );
+    const expectedEntry = {
+      sessionId: params.sessionId,
+      lifecycleRevision: capturedEntry?.lifecycleRevision,
+      activeWriterRunId: capturedEntry?.activeWriterRunId,
+    };
     const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
       if (params.sessionStore) {
         params.sessionStore[params.sessionKey] = accepted.entry;

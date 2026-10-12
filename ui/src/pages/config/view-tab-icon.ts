@@ -6,6 +6,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presentation.runtime.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import {
   identityAvatarClass,
   renderIdentityAvatarImage,
@@ -18,12 +19,14 @@ import {
 } from "../../components/lobster-pet-look.ts";
 import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { renderSettingsRow, renderSettingsSegmented } from "../../components/settings-ui.ts";
+import { renderThemeBrandIcon } from "../../components/theme-brand-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { renderSettingsSectionHeader } from "./settings-section-header.ts";
 
 export type TabIconViewProps = {
   tabIcon: TabIconPreference | undefined;
+  lobsterdexEnabled?: boolean;
   tabIconAgentAvatar?: string | null;
   tabIconLobsters?: readonly LobsterPetPalette[];
   setTabIconMode: (mode: TabIconPreference) => void;
@@ -41,8 +44,11 @@ function renderLobsterPreview(palette: LobsterPetPalette) {
 
 export function renderTabIconSection(props: TabIconViewProps) {
   const defaultSource = controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg");
-  const lobsters = props.tabIconLobsters ?? [];
-  const lobsterMode = props.tabIcon?.startsWith("lobster:") ?? false;
+  const defaultImage = html`<img src=${defaultSource} alt="" />`;
+  const defaultPreview = renderThemeBrandIcon(defaultImage, currentThemeBranding(), defaultImage);
+  const lobsterdexEnabled = props.lobsterdexEnabled !== false;
+  const lobsters = lobsterdexEnabled ? (props.tabIconLobsters ?? []) : [];
+  const lobsterMode = lobsterdexEnabled && (props.tabIcon?.startsWith("lobster:") ?? false);
   const selectedShape = agentTabIconShape(props.tabIcon);
   const selected = lobsters.find((palette) => props.tabIcon === `lobster:${palette.id}`);
   const preview = lobsterMode ? selected : lobsters[0];
@@ -54,7 +60,7 @@ export function renderTabIconSection(props: TabIconViewProps) {
       aria-hidden="true"
     >
       ${renderIdentityAvatarImage({ view, fallbackSelector: ".settings-tab-icon__preview", className: "identity-avatar__image" })}
-      <span class="identity-avatar__fallback"><img src=${defaultSource} alt="" /></span>
+      <span class="identity-avatar__fallback">${defaultPreview}</span>
     </span>`;
   };
   const optionLabel = (label: string, source: string | null, shape: AgentTabIconShape = "square") =>
@@ -70,7 +76,7 @@ export function renderTabIconSection(props: TabIconViewProps) {
           title: t("configView.appearance.tabIcon.source"),
           stackedOnNarrow: true,
           description:
-            lobsters.length === 0 && !lobsterMode
+            lobsterdexEnabled && lobsters.length === 0 && !lobsterMode
               ? t("configView.appearance.tabIcon.empty")
               : undefined,
           control: renderSettingsSegmented({
@@ -88,15 +94,19 @@ export function renderTabIconSection(props: TabIconViewProps) {
                   selectedShape ?? "square",
                 ),
               },
-              {
-                value: "lobster",
-                label: html`<span class="settings-tab-icon__option">
-                  <span class="settings-tab-icon__preview">
-                    ${preview ? renderLobsterPreview(preview) : html`<img src=${defaultSource} alt="" />`} </span
-                  >${t("configView.appearance.tabIcon.lobsterdex")}
-                </span>`,
-                disabled: lobsters.length === 0,
-              },
+              ...(lobsterdexEnabled
+                ? [
+                    {
+                      value: "lobster",
+                      label: html`<span class="settings-tab-icon__option">
+                        <span class="settings-tab-icon__preview">
+                          ${preview ? renderLobsterPreview(preview) : defaultPreview} </span
+                        >${t("configView.appearance.tabIcon.lobsterdex")}
+                      </span>`,
+                      disabled: lobsters.length === 0,
+                    },
+                  ]
+                : []),
             ],
             ariaLabel: t("configView.appearance.tabIcon.sourceLabel"),
             onChange: (mode) => {

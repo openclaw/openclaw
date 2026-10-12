@@ -31,7 +31,7 @@ import {
   replyRunRegistry,
   requireBlockReplyHandler,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -401,7 +401,6 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       mocks.tryFastAbortFromMessage.mockReset();
       setNoAbort();
       hookMocks.runner.runReplyDispatch.mockReset().mockResolvedValue(undefined);
-      sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({ existing: undefined });
       sessionStoreMocks.updateSessionEntry.mockClear();
       acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
         resolveSessionAsync: async () => ({ kind: "none" as const }),

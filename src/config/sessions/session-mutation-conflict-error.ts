@@ -29,10 +29,3 @@ export class SessionEntryLifecycleUpsertConflictError extends Error {
     this.name = "SessionEntryLifecycleUpsertConflictError";
   }
 }
-
-export class SessionMaintenancePreservationConflictError extends Error {
-  constructor(message = "Session maintenance protection changed before lifecycle commit") {
-    super(message);
-    this.name = "SessionMaintenancePreservationConflictError";
-  }
-}

@@ -7,6 +7,7 @@ import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/te
 import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../src/plugin-sdk/sqlite-runtime-testing.js";
 import { seedInstalledPluginIndex } from "../src/plugins/test-helpers/installed-plugin-index.js";
+import { VERSION } from "../src/version.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -69,7 +70,7 @@ async function installCodexHarnessFixture(stateDir: string, config: OpenClawConf
     path.join(pluginDir, "package.json"),
     JSON.stringify({
       name: "@openclaw/codex",
-      version: "2026.8.1",
+      version: VERSION,
       type: "module",
       openclaw: { extensions: ["./index.js"] },
     }),

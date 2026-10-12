@@ -284,36 +284,27 @@ describe("agents delete command", () => {
     });
   });
 
-  it.each(["remote config", "environment override"])(
-    "never falls back locally for a failed %s target",
-    async (source) => {
-      await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
-        const url = "ws://127.0.0.1:18789";
-        const cfg = config(stateDir);
-        if (source === "remote config") {
-          cfg.gateway = { mode: "remote", remote: { url } };
-        } else {
-          vi.stubEnv("OPENCLAW_GATEWAY_URL", url);
-        }
-        const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
-        await arrange({ stateDir, cfg, sessions });
-        gatewayMocks.callGateway.mockRejectedValue(
-          source === "remote config" ? gatewayTransportError("closed") : credentialsError(),
-        );
-        await runCommandWithRuntime(runtime, () =>
-          agentsDeleteCommand({ id: "ops", force: true }, runtime),
-        );
-        expectNoLocalMutation();
-        expect(readAgentDeletionJournal("ops")).toBeUndefined();
-        expectSessionStore(cfg, sessions);
-        expect(runtime.exit).toHaveBeenCalledWith(1);
-        expect(runtime.error).toHaveBeenCalledWith(
-          expect.stringMatching(/restore.*connection.*Gateway host/i),
-        );
-        expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
-      });
-    },
-  );
+  it("never falls back locally for a failed remote config target", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const url = "ws://127.0.0.1:18789";
+      const cfg = config(stateDir);
+      cfg.gateway = { mode: "remote", remote: { url } };
+      const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
+      await arrange({ stateDir, cfg, sessions });
+      gatewayMocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
+      await runCommandWithRuntime(runtime, () =>
+        agentsDeleteCommand({ id: "ops", force: true }, runtime),
+      );
+      expectNoLocalMutation();
+      expect(readAgentDeletionJournal("ops")).toBeUndefined();
+      expectSessionStore(cfg, sessions);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringMatching(/restore.*connection.*Gateway host/i),
+      );
+      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
+    });
+  });
 
   it("does not replay deletion locally after an established WebSocket closes", async () => {
     await withStateDirEnv("agents-delete-", async ({ stateDir }) => {

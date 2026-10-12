@@ -310,7 +310,10 @@ export async function verifyGatewayMemoryWatcherRestart(
         provider: {
           id: "gateway-memory-probe",
           model: "synthetic",
-          embed: async () => [1, 0],
+          embed: async () => {
+            embeddings.push(current);
+            return [1, 0];
+          },
           embedBatch: async (texts) => {
             embeddings.push(current);
             return texts.map(() => [1, 0]);

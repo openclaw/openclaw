@@ -80,67 +80,59 @@ function aggregateHistory(params: {
   projectId?: string;
 }): ProviderUsageSnapshot {
   const daily = new Map<number, ReturnType<typeof createProviderUsageDailyAccumulator>>();
-  const getDaily = (startTime: number) => {
-    const current =
-      daily.get(startTime) ?? createProviderUsageDailyAccumulator(utcDay(startTime), true);
-    daily.set(startTime, current);
-    return current;
-  };
-
-  for (const rawBucket of params.costs) {
-    const bucket = asProviderUsageObject(rawBucket);
-    const startTime = parseProviderUsageNumber(bucket?.start_time);
-    if (startTime === undefined || !Array.isArray(bucket?.results)) {
-      continue;
-    }
-    const accumulator = getDaily(startTime);
-    for (const rawResult of bucket.results) {
-      const result = asProviderUsageObject(rawResult);
-      const amount = parseProviderUsageNumber(asProviderUsageObject(result?.amount)?.value) ?? 0;
-      const category = resolveProviderUsageDisplayName(result?.line_item, "API");
-      accumulator.amount += amount;
-      accumulator.categories.set(category, (accumulator.categories.get(category) ?? 0) + amount);
-    }
-  }
-
-  for (const rawBucket of params.completions) {
-    const bucket = asProviderUsageObject(rawBucket);
-    const startTime = parseProviderUsageNumber(bucket?.start_time);
-    if (startTime === undefined || !Array.isArray(bucket?.results)) {
-      continue;
-    }
-    const accumulator = getDaily(startTime);
-    for (const rawResult of bucket.results) {
-      const result = asProviderUsageObject(rawResult);
-      if (!result) {
+  for (const kind of ["costs", "completions"] as const) {
+    for (const rawBucket of params[kind]) {
+      const bucket = asProviderUsageObject(rawBucket);
+      const startTime = parseProviderUsageNumber(bucket?.start_time);
+      if (startTime === undefined || !Array.isArray(bucket?.results)) {
         continue;
       }
-      const requests = parseProviderUsageNonNegativeInteger(result.num_model_requests);
-      const textInputTokens = parseProviderUsageNonNegativeInteger(result.input_tokens);
-      const audioInputTokens = parseProviderUsageNonNegativeInteger(result.input_audio_tokens);
-      const cacheReadTokens = parseProviderUsageNonNegativeInteger(result.input_cached_tokens);
-      const inputTokens = Math.max(0, textInputTokens - cacheReadTokens) + audioInputTokens;
-      const outputTokens =
-        parseProviderUsageNonNegativeInteger(result.output_tokens) +
-        parseProviderUsageNonNegativeInteger(result.output_audio_tokens);
-      const totalTokens = textInputTokens + audioInputTokens + outputTokens;
-      accumulator.requests = (accumulator.requests ?? 0) + requests;
-      accumulator.inputTokens += inputTokens;
-      accumulator.cacheReadTokens += cacheReadTokens;
-      accumulator.outputTokens += outputTokens;
-      accumulator.totalTokens += totalTokens;
-      addProviderUsageModel(
-        accumulator,
-        resolveProviderUsageDisplayName(result.model, "Responses and Chat Completions"),
-        {
-          requests,
-          inputTokens,
-          cacheReadTokens,
-          cacheWriteTokens: 0,
-          outputTokens,
-          totalTokens,
-        },
-      );
+      const accumulator =
+        daily.get(startTime) ?? createProviderUsageDailyAccumulator(utcDay(startTime), true);
+      daily.set(startTime, accumulator);
+      for (const rawResult of bucket.results) {
+        const result = asProviderUsageObject(rawResult);
+        if (kind === "costs") {
+          const amount =
+            parseProviderUsageNumber(asProviderUsageObject(result?.amount)?.value) ?? 0;
+          const category = resolveProviderUsageDisplayName(result?.line_item, "API");
+          accumulator.amount += amount;
+          accumulator.categories.set(
+            category,
+            (accumulator.categories.get(category) ?? 0) + amount,
+          );
+          continue;
+        }
+        if (!result) {
+          continue;
+        }
+        const requests = parseProviderUsageNonNegativeInteger(result.num_model_requests);
+        const textInputTokens = parseProviderUsageNonNegativeInteger(result.input_tokens);
+        const audioInputTokens = parseProviderUsageNonNegativeInteger(result.input_audio_tokens);
+        const cacheReadTokens = parseProviderUsageNonNegativeInteger(result.input_cached_tokens);
+        const inputTokens = Math.max(0, textInputTokens - cacheReadTokens) + audioInputTokens;
+        const outputTokens =
+          parseProviderUsageNonNegativeInteger(result.output_tokens) +
+          parseProviderUsageNonNegativeInteger(result.output_audio_tokens);
+        const totalTokens = textInputTokens + audioInputTokens + outputTokens;
+        accumulator.requests = (accumulator.requests ?? 0) + requests;
+        accumulator.inputTokens += inputTokens;
+        accumulator.cacheReadTokens += cacheReadTokens;
+        accumulator.outputTokens += outputTokens;
+        accumulator.totalTokens += totalTokens;
+        addProviderUsageModel(
+          accumulator,
+          resolveProviderUsageDisplayName(result.model, "Responses and Chat Completions"),
+          {
+            requests,
+            inputTokens,
+            cacheReadTokens,
+            cacheWriteTokens: 0,
+            outputTokens,
+            totalTokens,
+          },
+        );
+      }
     }
   }
 

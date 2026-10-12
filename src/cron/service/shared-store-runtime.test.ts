@@ -14,6 +14,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { cronRunRecordStoreKey } from "../run-history-detail.js";
 import {
@@ -478,10 +479,15 @@ describe("scheduler-disabled shared-store mutations", () => {
       const admission = vi
         .spyOn(serviceStore, "persistCronJobMutation")
         .mockImplementationOnce(async (params) => {
-          const snapshot = params.previous.jobs.find(({ id }) => id === job.id)!;
-          expect(snapshot.schedule).toEqual(before.schedule);
-          expect(snapshot.state.runningAtMs).toBe(firstReceipt.startedAtMs);
-          expect(snapshot.state.runningScheduleChangeId).toBe(before.state.runningScheduleChangeId);
+          expect(params.expectedJob).toEqual({
+            id: job.id,
+            configRevision: resolveCronJobConfigRevision(before),
+          });
+          expect(params.jobMutation).toMatchObject({
+            kind: "update",
+            id: job.id,
+            patch: { schedule: { kind: "every", everyMs: 120_000, anchorMs: nowMs } },
+          });
           child.send("advance");
           await closed;
           assertCompleted();
@@ -560,6 +566,13 @@ describe("scheduler-disabled shared-store mutations", () => {
         return { status: "ok" as const, summary: "unused" };
       },
       async listConfiguredChannels() {
+        return [];
+      },
+    });
+    const persist = serviceStore.persistCronJobMutation;
+    const admission = vi
+      .spyOn(serviceStore, "persistCronJobMutation")
+      .mockImplementationOnce(async (params) => {
         const peerStore = await loadCronStore(storePath);
         const peerTarget = peerStore.jobs.find((job) => job.id === target.id);
         if (!peerTarget) {
@@ -567,15 +580,17 @@ describe("scheduler-disabled shared-store mutations", () => {
         }
         peerTarget.name = "peer-update";
         await saveCronStore(storePath, peerStore);
-        return [];
-      },
-    });
-
-    await expect(
-      cron.update(target.id, {
-        delivery: { mode: "webhook", to: "https://example.com/cron" },
-      }),
-    ).rejects.toThrow("changed after it was read");
+        return persist(params);
+      });
+    try {
+      await expect(
+        cron.update(target.id, {
+          delivery: { mode: "webhook", to: "https://example.com/cron" },
+        }),
+      ).rejects.toThrow("changed after it was read");
+    } finally {
+      admission.mockRestore();
+    }
     const persisted = (await loadCronStore(storePath)).jobs.find((job) => job.id === target.id);
     expect(persisted?.name).toBe("peer-update");
     expect(persisted?.delivery).toBeUndefined();

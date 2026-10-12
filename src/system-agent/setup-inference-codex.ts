@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
@@ -93,7 +93,7 @@ export async function stageCodexCandidate(
     if (appServer.homeScope === "user") {
       return candidate;
     }
-    const store = loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir);
+    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir);
     const existingProfileId = resolveAuthProfileOrder({
       cfg: config,
       store,
@@ -148,16 +148,11 @@ export async function stageCodexCandidate(
             "OpenAI sign-in is unavailable. Connect OpenAI in Model Setup, then retry Codex setup.",
         };
       }
-      const authContext: StageContext = {
-        ...ctx,
-        cfg: config,
-        params: { ...ctx.params, modelRef, authChoice: choice.id },
-      };
-      try {
-        return await stageProviderAuthCandidate(authContext, true, "codex");
-      } finally {
-        ctx.credentialsSaved = authContext.credentialsSaved;
-      }
+      return await stageProviderAuthCandidate(
+        { ...ctx, cfg: config, params: { ...ctx.params, modelRef, authChoice: choice.id } },
+        true,
+        "codex",
+      );
     }
     registerSecretValueForRedaction(credential.key);
     const saved = await saveSetupCredential({
@@ -170,7 +165,7 @@ export async function stageCodexCandidate(
       agentDir: ctx.agentDir,
       beforePersistentEffect: () => ctx.beforePersistentEffect("credential"),
     });
-    ctx.credentialsSaved = true;
+    ctx.effects.credentialsSaved = true;
     return { ...candidate, authProfileId: saved.profile.profileId, config: saved.config };
   });
 }

@@ -1,5 +1,7 @@
 import { get } from "node:http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -30,6 +32,10 @@ async function readJson(url: string): Promise<Record<string, unknown>> {
 
 describe("Gateway HTTP event-loop sampling", () => {
   it("retains a blocked request interval when readiness is read before the sampler resumes", async () => {
+    const warn = vi.fn();
+    const rawConsole = loggingState.rawConsole;
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    loggingState.rawConsole = { ...console, warn };
     const clock = createGatewaySchedulerClock();
     const monitor = createGatewayEventLoopHealthMonitor({
       scheduler: createTestGatewayScheduler(clock.clock),
@@ -76,6 +82,9 @@ describe("Gateway HTTP event-loop sampling", () => {
             blockNextRead = true;
             await readJson(url);
             await clock.wake();
+            expect(
+              warn.mock.calls.some(([message]) => String(message).includes('task="gateway:http"')),
+            ).toBe(true);
             const after = await readJson(url);
             expect(after).toMatchObject({
               ready: true,
@@ -98,6 +107,8 @@ describe("Gateway HTTP event-loop sampling", () => {
       });
     } finally {
       monitor.stop();
+      loggingState.rawConsole = rawConsole;
+      setLoggerOverride(null);
     }
     expect(monitor.snapshot()).toBeUndefined();
   });

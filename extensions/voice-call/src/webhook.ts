@@ -8,7 +8,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
+import { resolveConfiguredCapabilityProviderAsync } from "openclaw/plugin-sdk/provider-selection-runtime";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -269,7 +269,7 @@ export class VoiceCallWebhookServer {
     const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await loadRealtimeTranscriptionRuntime();
-    const resolution = resolveConfiguredCapabilityProvider({
+    const resolution = await resolveConfiguredCapabilityProviderAsync({
       configuredProviderId: streaming.provider,
       providerConfigs: streaming.providers,
       cfg: pluginConfig,
@@ -281,7 +281,9 @@ export class VoiceCallWebhookServer {
       resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
         provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
       isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-        provider.isConfigured({ cfg, providerConfig }),
+        provider.isConfiguredAsync
+          ? provider.isConfiguredAsync({ cfg, providerConfig })
+          : (provider.isConfigured?.({ cfg, providerConfig }) ?? false),
     });
     if (!resolution.ok) {
       this.logger.warn(

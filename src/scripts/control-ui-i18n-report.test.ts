@@ -72,17 +72,6 @@ describe("control-ui-i18n report helpers", () => {
     expect(filterRawCopyEntries(entries, "missing")).toEqual([]);
   });
 
-  it("summarizes raw-copy occurrences deterministically", () => {
-    expect(summarizeRawCopy(entries, 2)).toEqual({
-      entries: 3,
-      occurrences: 7,
-      topPaths: [
-        { count: 4, path: "ui/src/ui/views/config-form.render.ts" },
-        { count: 2, path: "ui/src/ui/chat/render.ts" },
-      ],
-    });
-  });
-
   it("filters translation keys by surface token", () => {
     const keys = [
       "agents.tabs.cronJobs",

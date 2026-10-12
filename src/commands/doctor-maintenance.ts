@@ -55,7 +55,9 @@ import {
 } from "./doctor-update-refusal.js";
 
 export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
-  if (!(params.options.repair === true || params.options.yes === true)) {
+  if (
+    !(params.options.repair === true || params.options.yes === true || params.interactiveRepair)
+  ) {
     return undefined;
   }
   const env = { ...process.env, ...(params.runId ? { [UPDATE_RUN_ID_ENV]: params.runId } : {}) };
@@ -65,7 +67,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     ? resolveUpdateParentGatewayActivation(env)
     : undefined;
   // Repair discovery can execute plugins and open writable state. Establish
-  // ownership for every explicit repair before running those inspections.
+  // ownership for every admitted repair before running those inspections.
   let stopped: PreManagedServiceStop | undefined;
   let serviceUpdateVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
@@ -119,16 +121,23 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       pollIntervalMs: 250,
       maxPollIntervalMs: 2_000,
     });
+  const throwSettledFailure = (failure: Error | undefined) => {
+    if (failure !== undefined) {
+      throw failure;
+    }
+  };
   const releaseState = async () => {
     if (cleanupFailure) {
       throw cleanupFailure.error;
     }
-    await state.release();
+    const settledFailure = await state.release();
     repairStoresMayBeOpen = false;
+    return settledFailure;
   };
-  const release = async (assertCustody?: () => void) => {
-    await settle(async () => {
-      await releaseState();
+  // A settled state cleanup failure is reported only after Doctor restores what it stopped.
+  const releaseAndRestoreAutoStart = (assertCustody?: () => void) =>
+    settle(async () => {
+      const settledFailure = await releaseState();
       const recovery = stopped?.windowsTaskAutoStartRecovery;
       try {
         assertCustody?.();
@@ -142,15 +151,16 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           await settle(async () => recovery?.complete(!retainStoppedInstallation));
         }
       }
+      return settledFailure;
     });
-  };
-  const finish = async (
+  const release = async (assertCustody?: () => void) =>
+    throwSettledFailure(await releaseAndRestoreAutoStart(assertCustody));
+  const restoreGateway = async (
     cfg: OpenClawConfig,
     assertCustody?: () => void,
     writeConfig?: DoctorConfigWriter,
     assertRestoreAdmission = assertUpdateAdmissionCurrent,
   ) => {
-    await release(assertCustody);
     assertCustody?.();
     const before = stopped;
     const root = params.root;
@@ -183,6 +193,11 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         }
       }
       if (
+        // Custody consent restores our own stop; it does not authorize starting
+        // a service the operator had already stopped. Explicit repair retains recovery.
+        (params.interactiveRepair &&
+          params.options.repair !== true &&
+          params.options.yes !== true) ||
         resolveDoctorRepairMode(params.options).updateInProgress ||
         before.offline !== true ||
         verdict?.kind !== "owned" ||
@@ -311,6 +326,16 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       const warning = `Warning: Replaced stale Gateway PID ${staleReplacement.pid ?? "unknown"} through its service manager; verified ${staleReplacement.version} build ${staleReplacement.buildId} after Doctor maintenance.`;
       warn(warning);
     }
+  };
+  const finish = async (
+    cfg: OpenClawConfig,
+    assertCustody?: () => void,
+    writeConfig?: DoctorConfigWriter,
+    assertRestoreAdmission?: () => void,
+  ) => {
+    const settledFailure = await releaseAndRestoreAutoStart(assertCustody);
+    await restoreGateway(cfg, assertCustody, writeConfig, assertRestoreAdmission);
+    throwSettledFailure(settledFailure);
   };
   const admitRepair = async () => {
     inspectingActivation = false;
@@ -601,7 +626,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       return state.receipt;
     },
     run: <T>(operation: () => T) => state.run(operation),
-    releaseState: () => settle(releaseState),
+    releaseState: async () => throwSettledFailure(await settle(releaseState)),
     async repairSqliteNoCow(paths: readonly string[]) {
       assertHeld(this, "SQLite NOCOW repair");
       const result = await settle(() => state.repairSqliteNoCow(paths));

@@ -44,10 +44,11 @@ vi.mock("./entry.compile-cache.js", () => ({
     return true;
   },
 }));
-vi.mock("./entry.respawn.js", () => ({
+vi.mock("./entry.respawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./entry.respawn.js")>()),
   buildCliRespawnPlan: () =>
     boundary.mode === "none" ? null : { command: "node", argv: [], env: {} },
-  runCliRespawnPlan: (_plan: unknown, _runtime: unknown, writer: typeof boundary.writer) => {
+  runCliRespawnPlan: async (_plan: unknown, _runtime: unknown, writer: typeof boundary.writer) => {
     boundary.writer = writer;
     boundary.spawnTitle = process.title;
     boundary.events.push("spawn");

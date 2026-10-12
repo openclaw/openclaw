@@ -10,7 +10,6 @@ import {
   loadPreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuthScope,
 } from "../agents/prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
@@ -111,34 +110,20 @@ function projectPreparedGatewayModelCatalogSnapshot(
 export async function loadPreparedGatewayModelCatalogSnapshot(
   params?: LoadPreparedGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalogSnapshot> {
-  for (;;) {
-    let loaded: Awaited<ReturnType<typeof loadGatewayModelCatalogOwnerSnapshot>>;
-    let refreshedAuth: Awaited<ReturnType<typeof loadPreparedModelRuntimeAuth>>;
-    try {
-      loaded = await loadGatewayModelCatalogOwnerSnapshot(params);
-      refreshedAuth = params?.refreshAuth
-        ? await loadPreparedModelRuntimeAuth(
-            loaded.candidate,
-            params.authScope ?? {
-              providerIds: loaded.owner.modelCatalog.entries.map((entry) => entry.provider),
-            },
-          )
-        : undefined;
-    } catch (error) {
-      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-        // Supersession invalidates every captured owner fact. Reacquire the whole owner so
-        // replacement auth cannot be combined with stale catalog or metadata.
-        continue;
-      }
-      throw error;
-    }
-    const { owner } = loaded;
-    return projectPreparedGatewayModelCatalogSnapshot(
-      owner,
-      owner.authMaterializations,
-      refreshedAuth,
-    );
-  }
+  const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
+  const refreshedAuth = params?.refreshAuth
+    ? await loadPreparedModelRuntimeAuth(
+        candidate,
+        params.authScope ?? {
+          providerIds: owner.modelCatalog.entries.map((entry) => entry.provider),
+        },
+      )
+    : undefined;
+  return projectPreparedGatewayModelCatalogSnapshot(
+    owner,
+    owner.authMaterializations,
+    refreshedAuth,
+  );
 }
 
 export async function loadGatewayModelCatalogSnapshot(
@@ -243,12 +228,11 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
     getPendingPreparedModelRuntimeReplacement,
     materializePreparedModelCatalogOwner,
   } = await import("../agents/prepared-model-catalog.js");
-  const config = (params?.getConfig ?? getRuntimeConfig)();
   const replacement = getPendingPreparedModelRuntimeReplacement();
   if (replacement) {
     await replacement;
-    return readPreparedGatewayModelCatalogOwnerSnapshot(params);
   }
+  const config = (params?.getConfig ?? getRuntimeConfig)();
   const candidate = getPublishedPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),

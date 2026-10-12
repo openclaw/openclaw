@@ -582,15 +582,18 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       itemId,
       payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME },
     });
-    if (!this.camera.hasLiveTrack()) {
-      this.submitToolResult(callId, { ok: false, error: "camera is off" });
+    const failCapture = (message: string) => {
+      this.submitToolResult(callId, { ok: false, error: message });
       this.emitTalkEvent({
         type: "tool.error",
         callId,
         itemId,
         final: true,
-        payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, message: "camera is off" },
+        payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, message },
       });
+    };
+    if (!this.camera.hasLiveTrack()) {
+      failCapture("camera is off");
       return;
     }
     try {
@@ -609,15 +612,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, frameAttached: true },
       });
     } catch (error) {
-      const message = formatUiError(error);
-      this.submitToolResult(callId, { ok: false, error: message });
-      this.emitTalkEvent({
-        type: "tool.error",
-        callId,
-        itemId,
-        final: true,
-        payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, message },
-      });
+      failCapture(formatUiError(error));
     }
   }
 

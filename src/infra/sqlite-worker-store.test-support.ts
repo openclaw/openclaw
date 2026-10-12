@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { existsSync, linkSync, renameSync, writeFileSync } from "node:fs";
 import { parentPort, threadId } from "node:worker_threads";
@@ -6,6 +7,7 @@ import type { Generated } from "kysely";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { captureSqliteReaderOwner, type SqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
@@ -216,6 +218,15 @@ function createFixtureBackend(
         return (async () => {
           try {
             await Promise.resolve();
+            assert.throws(
+              () => requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined }),
+              /requires its retained admission/u,
+            );
+            publishSqliteDatabaseAdmission(
+              db,
+              { name: "fixture.cleanup", read: (value) => (value === true ? true : undefined) },
+              true,
+            );
             closeNative();
             writeFileSync(markerPath, "native database closed");
             if (reject) {

@@ -11,10 +11,10 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import {
-  appendTranscriptEvent,
   appendTranscriptMessage,
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.transcript.js";
+import { appendPreparedTranscriptEvent } from "../../config/sessions/session-transcript-event.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -69,12 +69,16 @@ export async function seedMessageCutSource(
       message: { role: message.role, content: message.content },
     });
   }
-  await appendTranscriptEvent(scope, {
-    type: "leaf",
-    id: "active-leaf",
-    parentId: "alternate-user",
-    targetId: "user-2",
-  });
+  await appendPreparedTranscriptEvent(
+    scope,
+    {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "alternate-user",
+      targetId: "user-2",
+    },
+    () => {},
+  );
   return scope;
 }
 

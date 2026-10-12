@@ -235,22 +235,17 @@ async function runQaTestFileScenario(params: QaScenarioCommandRunParams) {
       requireCurrentRunEvidence: requiresProducerEvidence,
     });
   } catch (error) {
-    if (result.status !== "pass") {
-      return result;
+    if (result.status === "pass") {
+      result.failureMessage = `Script producer evidence is invalid: ${formatErrorMessage(error)}`;
+      result.status = "fail";
     }
-    return {
-      ...result,
-      failureMessage: `Script producer evidence is invalid: ${formatErrorMessage(error)}`,
-      status: "fail" as const,
-    };
+    return result;
   }
   if (!producerEvidenceResult.producerEvidence) {
     if (requiresProducerEvidence && result.status === "pass") {
-      return {
-        ...result,
-        failureMessage: "Script exited successfully without writing fresh producer QA evidence.",
-        status: "fail" as const,
-      };
+      result.failureMessage =
+        "Script exited successfully without writing fresh producer QA evidence.";
+      result.status = "fail";
     }
     return result;
   }

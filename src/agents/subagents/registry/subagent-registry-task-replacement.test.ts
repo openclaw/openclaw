@@ -39,7 +39,10 @@ import type { AgentWaitResult } from "../../run-wait.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as persistence from "./subagent-registry-persistence.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  SubagentRegistryVersionConflictError,
+} from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
@@ -697,7 +700,6 @@ it.each([
   "source replaced",
   "stamp admitted during wait",
   "caller retired during late stamp",
-  "source replaced during late stamp",
   "cleanup admitted during wait",
 ] as const)(
   "settles the predecessor's admitted writes before follow-up publication (%s)",
@@ -734,9 +736,14 @@ it.each([
       ]),
     }));
     const original = subagentRuns.get("pending-ended-hook")!;
-    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(
-      createHookRunner(createEmptyPluginRegistry()),
-    );
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "test",
+      hookName: "subagent_ended",
+      source: "test",
+      handler: async () => {},
+    });
+    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(createHookRunner(registry));
     const cleanup = createSubagentRegistryContextCleanup({
       isEndedHookOwnerCurrent: (entry) =>
         isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
@@ -889,12 +896,11 @@ it.each([
       release.resolve();
       await hook;
       if (callerRetired || sourceReplaced) {
+        // An out-of-band writer is refused at the version check without reloading/replaying.
         expect(await followup).toMatchObject({
-          error: new Error(
-            callerRetired
-              ? "follow-up caller retired"
-              : "subagent follow-up source changed while its writes settled",
-          ),
+          error: sourceReplaced
+            ? new SubagentRegistryVersionConflictError([original.runId])
+            : new Error("follow-up caller retired"),
         });
         const stored = loadSubagentRegistryFromSqlite();
         expect(stored.has("after-ended-hook")).toBe(false);

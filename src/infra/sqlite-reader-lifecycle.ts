@@ -194,19 +194,16 @@ export function retainSqliteReader(
   if (databasePath && pathReaders) {
     activeReaders.byPath.set(databasePath, pathReaders);
   }
-  let released = false;
   return {
     progress() {
-      if (!released) {
+      if (databaseReaders.has(token)) {
         reader.lastProgressAtMs = Date.now();
       }
     },
     release() {
-      if (released) {
+      if (!databaseReaders.delete(token)) {
         return;
       }
-      released = true;
-      databaseReaders.delete(token);
       if (
         databaseReaders.size === 0 &&
         activeReaders.byDatabase.get(database) === databaseReaders

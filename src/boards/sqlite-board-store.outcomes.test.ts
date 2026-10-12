@@ -4,12 +4,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
+  failSqliteWorkerSlot,
   receiveSqliteWorkerReply,
-  settleFailedSqliteWorkerJobs,
   settleSqliteWorkerJob,
   withSqliteWorkerCleanupFailure,
 } from "../infra/sqlite-worker-broker-reply.js";
-import type { Job } from "../infra/sqlite-worker-broker.types.js";
+import type { Actor, Job } from "../infra/sqlite-worker-broker.types.js";
 import {
   isSqliteWorkerError,
   SqliteWorkerError,
@@ -112,9 +112,11 @@ async function receiveExecutedFailure(retire: boolean) {
     },
     detach() {},
   };
-  const slot: Parameters<typeof receiveSqliteWorkerReply>[0] = {
-    actors: new Set(),
+  const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
+    Parameters<typeof failSqliteWorkerSlot>[0] = {
+    actors: new Set<Actor>(),
     current: job,
+    queue: [],
     worker: {
       postMessage() {
         throw new Error("A failure reply must not request another result frame");
@@ -136,20 +138,11 @@ async function receiveExecutedFailure(retire: boolean) {
       },
     },
     {
-      fail(reason, currentError, openOutcome) {
-        if (!(reason instanceof Error)) {
-          throw new Error("Expected a decoded worker error");
-        }
-        const current = slot.current;
-        slot.current = undefined;
-        slot.failed = new SqliteWorkerError(reason.message, "unavailable");
-        settleFailedSqliteWorkerJobs({
-          queuedError: slot.failed,
-          current,
-          queued: [],
-          error: reason,
+      fail(reason, currentError, openOutcome, completed) {
+        failSqliteWorkerSlot(slot, reason, {
           currentError,
           openOutcome,
+          completed,
           retire: async () => {
             events.push("retired");
           },

@@ -11,7 +11,8 @@ import {
   normalizeProgressCardInput,
   ProgressCardInputError,
 } from "../../session-cards/progress-card-input.js";
-import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
+import type { ProgressCardStore } from "../../session-cards/progress-card-store.types.js";
+import { progressCardStore } from "../progress-card-store.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";

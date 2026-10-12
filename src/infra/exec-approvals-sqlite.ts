@@ -20,6 +20,7 @@ import {
   resetExecApprovalsMigrationGateForTest,
 } from "./exec-approvals-migration-gate.js";
 import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
+import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -146,6 +147,7 @@ export function writeExecApprovalsConfigRow(params: {
   file: ExecApprovalsFile;
   raw?: string;
   now?: number;
+  change?: "policy" | "usage";
 }): string {
   const normalized = normalizeExecApprovalsInternal(params.file);
   const authored = params.raw ?? serializeExecApprovals(params.file);
@@ -168,6 +170,12 @@ export function writeExecApprovalsConfigRow(params: {
       .values({ config_key: EXEC_APPROVALS_CONFIG_KEY, ...values })
       .onConflict((conflict) => conflict.column("config_key").doUpdateSet(values)),
   );
+  const persisted = parsePersistedExecApprovals(raw);
+  const file = persisted.ok ? persisted.value : createFailClosedExecApprovalsFallback();
+  const { socket: _socket, ...policy } = file;
+  execApprovalsPublication.stagePostimages(params.db, [
+    { file: policy, change: params.change ?? "policy" },
+  ]);
   return raw;
 }
 
@@ -178,6 +186,7 @@ export function deleteExecApprovalsConfigRow(db: DatabaseSync): void {
       .deleteFrom("exec_approvals_config")
       .where("config_key", "=", EXEC_APPROVALS_CONFIG_KEY),
   );
+  execApprovalsPublication.stageDeletions(db, [EXEC_APPROVALS_CONFIG_KEY]);
 }
 
 /** Called only inside the approval owner's winning resolution transaction. */

@@ -15,9 +15,9 @@ import {
 import { addSessionMember, removeSessionMember } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionMember as StoredSessionMember } from "../../config/sessions/session-membership-facts.types.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
-import type { SessionMember as StoredSessionMember } from "../../config/sessions/session-sharing-store.kernel.js";
 import {
   composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,

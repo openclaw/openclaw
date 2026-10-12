@@ -6,10 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import {
-  interruptSessionWorkAdmissions,
-  isSessionWorkAdmissionActive,
-} from "../sessions/session-lifecycle-admission.js";
+import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -188,6 +185,7 @@ test("successful naming survives setup failure and is shared with discussion ope
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.runStarted).toBe(true);
     key = created.payload!.key;
+    await settleWorkspaceRuns(context, storePath, key);
     await vi.waitFor(() => expect(titleMocks.generate).toHaveBeenCalledOnce());
     const discussion = directSessionReq(
       "session.discussion.open",
@@ -254,8 +252,8 @@ test("successful naming survives setup failure and is shared with discussion ope
   }
 });
 
-test.each(["generator error", "worktree wait timeout"])(
-  "sessions.create preserves title recovery after %s",
+test.each(["generator error", "delayed title"])(
+  "sessions.create preserves background title recovery after %s",
   async (failure) => {
     const root = tempDirs.make("openclaw-session-worktree-recovery-");
     testState.agentConfig = { workspace: await initializeRepository(root, "workspace") };
@@ -287,7 +285,7 @@ test.each(["generator error", "worktree wait timeout"])(
         throw error;
       }
     };
-    const delayed = failure === "worktree wait timeout";
+    const delayed = failure === "delayed title";
     titleMocks.generate.mockImplementationOnce(() => {
       titleStarted.resolve();
       return delayed ? title.promise : Promise.reject(new Error("boom"));
@@ -298,9 +296,6 @@ test.each(["generator error", "worktree wait timeout"])(
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
     try {
-      if (delayed) {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
       const created = await directSessionReq<{ runStarted: boolean }>(
         "sessions.create",
         {
@@ -314,14 +309,13 @@ test.each(["generator error", "worktree wait timeout"])(
 
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload?.runStarted).toBe(true);
-      await waitForPreparation(titleStarted.promise);
-      if (delayed) {
-        await vi.advanceTimersByTimeAsync(30_000);
-        vi.useRealTimers();
-      }
       await waitForPreparation(dispatchStarted.promise);
       const branch = loadSessionEntry(target)?.worktree?.branch;
       expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
+      expect(titleMocks.generate).not.toHaveBeenCalled();
+      dispatchFinished.resolve();
+      await settleWorkspaceRuns(context, storePath, key);
+      await titleStarted.promise;
       if (delayed) {
         expect(loadSessionEntry(target)?.displayName).toBeUndefined();
         title.resolve("Late investigation title");
@@ -331,12 +325,13 @@ test.each(["generator error", "worktree wait timeout"])(
         );
         expect(loadSessionEntry(target)?.worktree?.branch).toBe(branch);
       } else {
-        expect(branch).toBe(`openclaw/${loadSessionEntry(target)?.displayName}`);
+        await vi.waitFor(() =>
+          expect(loadSessionEntry(target)?.displayName).toMatch(/^[a-z]+-[a-z]+$/),
+        );
       }
-      expect(isSessionWorkAdmissionActive(storePath, [key])).toBe(true);
+      expect(loadSessionEntry(target)?.worktree?.branch).toBe(branch);
       expect(titleMocks.generate).toHaveBeenCalledOnce();
     } finally {
-      vi.useRealTimers();
       title.resolve("Fixture cleanup");
       dispatchFinished.resolve();
       await settleWorkspaceRuns(context, storePath, key, true);

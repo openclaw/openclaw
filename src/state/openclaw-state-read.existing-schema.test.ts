@@ -1,3 +1,4 @@
+import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -52,6 +53,8 @@ async function fixture() {
     .run("synthetic-installed-runtime");
   const options = { path: database.path, env };
   await closeOpenClawStateDatabaseAsync();
+  renameSync(options.path, `${options.path}.seed`);
+  copyFileSync(`${options.path}.seed`, options.path);
   return {
     env,
     options,
@@ -146,7 +149,7 @@ it("prepares ACP and workspace facets together and observes foreign changes at e
 });
 
 it.each(["fresh", "cached", "artifact"] as const)(
-  "validates existing runtime shape on %s fixed reads without host SQL or schema repair",
+  "validates replacement runtime shape on %s fixed reads without host SQL or schema repair",
   async (mode) => {
     const { options, record, read: readRows } = await fixture();
     const read = () =>
@@ -163,6 +166,9 @@ it.each(["fresh", "cached", "artifact"] as const)(
           runs: [record],
         });
       });
+      await closeOpenClawStateDatabaseAsync();
+      renameSync(options.path, `${options.path}.previous`);
+      copyFileSync(`${options.path}.previous`, options.path);
       const { DatabaseSync } = requireNodeSqlite();
       const external = new DatabaseSync(options.path);
       try {

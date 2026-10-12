@@ -15,15 +15,17 @@ import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
+import { getMemoryManagerLifecycle } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 
+const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
 const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => ({ manager: null })));
 const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits));
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
     authorizeSearchHits: authorizeSearchHitsMock,
-    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
     closeMemorySearchManager: closeMemorySearchManagerMock,
     getMemorySearchManager: getMemorySearchManagerMock,
   })),
@@ -421,6 +423,7 @@ describe("memory-core plugin runtime registration", () => {
         agents: { entries: { main: {}, research: {} } },
       };
       const services: Array<OpenClawPluginService | OpenClawPluginServiceV2> = [];
+      const backgroundTasks: unknown[] = [];
       const api = createTestPluginApi({
         id: "memory-core",
         config,
@@ -431,6 +434,11 @@ describe("memory-core plugin runtime registration", () => {
           }
         },
       });
+      api.lifecycle.runInBackgroundContext = (run) => {
+        const task = run();
+        backgroundTasks.push(task);
+        return task;
+      };
       plugin.register(api);
       for (const service of services) {
         if (service.apiVersion === 2) {
@@ -438,11 +446,101 @@ describe("memory-core plugin runtime registration", () => {
         }
         await service.start({ config, stateDir: "unused", logger: api.logger });
       }
+      await Promise.all(backgroundTasks);
       expect(getMemorySearchManagerMock.mock.calls).toEqual(
         owner === "memory-core"
           ? [[{ cfg: config, agentId: "main" }], [{ cfg: config, agentId: "research" }]]
           : [],
       );
+    },
+  );
+
+  it.each([
+    { cleanupOwner: "stop", cleanupFails: false },
+    { cleanupOwner: "stop", cleanupFails: true },
+    { cleanupOwner: "dispose", cleanupFails: false },
+    { cleanupOwner: "dispose", cleanupFails: true },
+  ])(
+    "drains managers after tracked activation rejects ($cleanupOwner, cleanup failure: $cleanupFails)",
+    async ({ cleanupOwner, cleanupFails }) => {
+      const activationFailure = new Error("plugin retired after activation");
+      const cleanupFailure = new Error("memory manager cleanup failed");
+      const config: OpenClawConfig = {
+        agents: { entries: { main: {}, research: {} } },
+      };
+      const lifecycle = getMemoryManagerLifecycle();
+      const previousPrepare = lifecycle.prepare;
+      const previousReload = lifecycle.reload;
+      const drain = vi.fn(async () => ({ errors: cleanupFails ? [cleanupFailure] : [] }));
+      lifecycle.prepare = () => drain;
+      if (cleanupFails) {
+        closeAllMemorySearchManagersMock.mockRejectedValueOnce(cleanupFailure);
+      }
+      let service: OpenClawPluginService | undefined;
+      const disposals: Array<() => void | Promise<void>> = [];
+      const api = createTestPluginApi({
+        id: "memory-core",
+        config,
+        runtime: hostRuntime,
+        registerService(registered) {
+          if (registered.id === "memory-core-index" && registered.apiVersion !== 2) {
+            service = registered;
+          }
+        },
+      });
+      // Forced retirement can reject the tracked call after its callback acquired managers.
+      function runInBackgroundContext<T>(run: () => T): T;
+      function runInBackgroundContext(run: () => unknown) {
+        const result = run();
+        if (!(result instanceof Promise)) {
+          return result;
+        }
+        const tracked = result.then(() => {
+          throw activationFailure;
+        });
+        void tracked.catch(() => {});
+        return tracked;
+      }
+      api.lifecycle.runInBackgroundContext = runInBackgroundContext;
+      api.lifecycle.onDispose = (callback) => {
+        disposals.push(callback);
+        return () => {};
+      };
+      try {
+        plugin.register(api);
+        if (!service?.stop || disposals.length === 0) {
+          throw new Error("Expected memory index cleanup owners");
+        }
+        const context = { config, stateDir: "unused", logger: api.logger };
+        const stop = service.stop.bind(service);
+        await service.start(context);
+        const failures: unknown[] = [];
+        for (const cleanup of cleanupOwner === "stop"
+          ? [() => stop(context)]
+          : disposals.toReversed()) {
+          try {
+            await cleanup();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        const failure = failures.length === 1 ? failures[0] : new AggregateError(failures);
+        const leaves = (error: unknown): unknown[] =>
+          error instanceof AggregateError ? error.errors.flatMap(leaves) : [error];
+        if (cleanupFails) {
+          expect(leaves(failure)).toEqual([activationFailure, cleanupFailure]);
+        } else {
+          expect(failure).toBe(activationFailure);
+        }
+        expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
+        expect(
+          cleanupOwner === "stop" ? closeAllMemorySearchManagersMock : drain,
+        ).toHaveBeenCalledOnce();
+      } finally {
+        lifecycle.prepare = previousPrepare;
+        lifecycle.reload = previousReload;
+        closeAllMemorySearchManagersMock.mockReset();
+      }
     },
   );
 

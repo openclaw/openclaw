@@ -220,7 +220,7 @@ export function createResponsesTerminalController(params: {
     // Complete the same public block with authoritative identities and arguments;
     // scratch JSON must never survive into transcript replay.
     const completed = { id: resolveResponsesToolCallId(item, started?.block.id), ...validated };
-    const toolCall: ToolCall & { partialJson?: string } = started
+    const toolCall: ToolCall = started
       ? Object.assign(started.block, completed)
       : { type: "toolCall", ...completed };
     delete toolCall.partialJson;

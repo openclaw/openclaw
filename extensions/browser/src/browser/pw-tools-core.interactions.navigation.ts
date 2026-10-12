@@ -450,11 +450,9 @@ export async function awaitNavigationGuardedInteraction<T>(
           action: async () => {
             try {
               // Preserve native dispatch ordering for callers without an authority check.
-              if (opts.assertCurrent) {
-                const assertion = assertInteractionCurrent(opts);
-                if (assertion) {
-                  await assertion;
-                }
+              const assertion = assertInteractionCurrent(opts);
+              if (assertion) {
+                await assertion;
               }
               throwIfInteractionAborted(signal);
               return await opts.action();

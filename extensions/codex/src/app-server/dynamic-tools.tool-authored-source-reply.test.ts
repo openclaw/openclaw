@@ -78,28 +78,28 @@ afterEach(() => {
 });
 
 describe("Codex tool-authored source replies", () => {
-  it("records the reply payload and terminates the turn for a capable tool", async () => {
+  it("holds the reply candidate until batch settlement for a capable tool", async () => {
     const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
 
     const result = await callOrderStatus(bridge);
 
     expect(result.success).toBe(true);
     expect(result.terminate).toBe(true);
-    expect(result.toolAuthoredFinalReply).toBe(true);
-    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
-      {
-        text: "Pedido SO1 creado. 18 botellas · total 459,85 €.",
-        mediaUrls: ["/tmp/a.pdf"],
-        idempotencyKey: "turn-1:tool-source-reply:call-1",
-        sourceReplyFinal: true,
-        toolAuthored: true,
-      },
-    ]);
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
+    expect(result.toolAuthoredSourceReply).toEqual({
+      text: "Pedido SO1 creado. 18 botellas · total 459,85 €.",
+      mediaUrls: ["/tmp/a.pdf"],
+      idempotencyKey: "turn-1:tool-source-reply:call-1",
+      sourceReplyFinal: true,
+      toolAuthored: true,
+      toolAuthoredForToolCallId: "call-1",
+      toolAuthoredForTurnId: "turn-1",
+    });
     // No message tool ran, so messaging delivery evidence stays untouched.
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
   });
 
-  it("delivers the reply as rewritten by result middleware", async () => {
+  it("holds the candidate as rewritten by result middleware", async () => {
     installResultMiddleware((event) => ({
       result: {
         content: event.result.content,
@@ -111,9 +111,8 @@ describe("Codex tool-authored source replies", () => {
     const result = await callOrderStatus(bridge);
 
     expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
-      expect.objectContaining({ text: "Pedido SO1 creado." }),
-    ]);
+    expect(result.toolAuthoredSourceReply).toMatchObject({ text: "Pedido SO1 creado." });
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
   });
 
   it("delivers nothing when result middleware withdraws the reply", async () => {
@@ -121,18 +120,6 @@ describe("Codex tool-authored source replies", () => {
       result: { content: event.result.content, details: { redacted: true } },
     }));
     const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
-
-    const result = await callOrderStatus(bridge);
-
-    expect(result.terminate).toBeUndefined();
-    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
-  });
-
-  it("keeps the turn running for a non-final reply", async () => {
-    const bridge = createBridge({
-      canDeliverSourceReply: true,
-      details: { sourceReply: { text: "Comprobando stock…", final: false } },
-    });
 
     const result = await callOrderStatus(bridge);
 
@@ -150,20 +137,14 @@ describe("Codex tool-authored source replies", () => {
     expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
   });
 
-  it.each([
-    { label: "the searchable namespace", namespace: "openclaw" },
-    { label: "the dynamic-tool root", namespace: null },
-  ])(
-    "ignores a reply from a call in $label, which Code Mode programs can reach",
-    async ({ namespace }) => {
-      const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
+  it("ignores a reply from the searchable namespace, which Code Mode programs can reach", async () => {
+    const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
 
-      const result = await callOrderStatus(bridge, namespace);
+    const result = await callOrderStatus(bridge, "openclaw");
 
-      expect(result.success).toBe(true);
-      expect(result.terminate).toBeUndefined();
-      expect(result.toolAuthoredFinalReply).toBeUndefined();
-      expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
-    },
-  );
+    expect(result.success).toBe(true);
+    expect(result.terminate).toBeUndefined();
+    expect(result.toolAuthoredSourceReply).toBeUndefined();
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
+  });
 });

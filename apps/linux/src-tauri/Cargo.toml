@@ -53,7 +53,7 @@ uuid = { version = "1.26.1", features = ["v4"] }
 zeroize = "1.9.0"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.189"
+libc = "0.2.190"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cairo-rs = { version = "0.18.5", features = ["png"] }

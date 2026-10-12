@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -48,9 +49,9 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
-// This fixture clones a local Git origin; no GitHub identity is involved.
+// mock-isolation: This fixture clones a local Git origin without GitHub credentials.
 vi.mock("./worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: async () => undefined,
+  prepareGitHubPublicationFact: async () => undefined,
 }));
 
 describe("repository workspace result ownership", () => {
@@ -317,7 +318,7 @@ describe("repository workspace result ownership", () => {
   );
 
   it.each(["worker-turn", "remote-exec"] as const)(
-    "keeps %s editor staging SQL constant across publication blobs and unchanged saves untouched",
+    "keeps %s editor staging SQL off the caller thread across publication blobs and unchanged saves untouched",
     async (executionMode) => {
       const f = await fixture(executionMode);
       const context = createGatewayRequestContext(makeContextParams());
@@ -394,7 +395,7 @@ describe("repository workspace result ownership", () => {
       }
       expect(stageCosts).toHaveLength(2);
       expect(stageCosts[0]!.callbacks).toBeGreaterThan(0);
-      expect(stageCosts[0]!.statements).toBeGreaterThan(0);
+      expect(stageCosts[0]!.statements).toBe(0);
       expect(stageCosts[1]).toEqual(stageCosts[0]);
       const accepted = await f.store.get(f.repository.workspaceId);
       await expect(
@@ -446,9 +447,13 @@ describe("repository workspace result ownership", () => {
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       const checkpoint = await readArtifact(f.repository.workspaceId, "uncertain.txt");
-      expect(checkpoint.preview).toEqual(
-        new Uint8Array(Buffer.from("write completed before transport loss\n")),
+      assert.ok(checkpoint.preview);
+      assert.deepStrictEqual(
+        Buffer.from(checkpoint.preview),
+        Buffer.from("write completed before transport loss\n"),
       );
+      expect(checkpoint.preview.byteOffset).toBe(0);
+      expect(checkpoint.preview.buffer.byteLength).toBe(checkpoint.preview.byteLength);
     },
   );
 
@@ -770,7 +775,8 @@ describe("repository workspace result ownership", () => {
       });
       expect(environments.startTunnel).not.toHaveBeenCalled();
       const saved = await readArtifact(f.repository.workspaceId, "survives.txt");
-      expect(saved.preview).toEqual(new Uint8Array(Buffer.from("durable before restart\n")));
+      assert.ok(saved.preview);
+      assert.deepStrictEqual(Buffer.from(saved.preview), Buffer.from("durable before restart\n"));
     },
   );
 });

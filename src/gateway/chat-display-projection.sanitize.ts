@@ -172,7 +172,7 @@ function projectChatHistoryMediaFacts(value: unknown): unknown[] | undefined {
 
 export function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
+  opts?: { preserveExactToolPayload?: boolean; maxChars?: number; toolResultMaxChars?: number },
 ): { block: unknown; changed: boolean; truncated: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false, truncated: false };
@@ -185,6 +185,10 @@ export function sanitizeChatHistoryContentBlock(
   const preserveExactToolPayload =
     opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  const toolResultMaxChars =
+    opts?.preserveExactToolPayload || isToolResultHistoryBlockType(entry.type)
+      ? opts?.toolResultMaxChars
+      : undefined;
   if (isToolResultHistoryBlockType(entry.type) && "details" in entry) {
     const projectedDetails = projectToolResultDetails(entry.details, maxChars);
     if (projectedDetails.details) {
@@ -209,7 +213,11 @@ export function sanitizeChatHistoryContentBlock(
       changed = true;
     }
     const content = entry.content.map((item) =>
-      sanitizeChatHistoryContentBlock(item, { preserveExactToolPayload: true, maxChars }),
+      sanitizeChatHistoryContentBlock(item, {
+        preserveExactToolPayload: true,
+        maxChars,
+        toolResultMaxChars,
+      }),
     );
     if (content.some((item) => item.changed)) {
       entry.content = content.map((item) => item.block);
@@ -228,6 +236,7 @@ export function sanitizeChatHistoryContentBlock(
       entry[field],
       maxChars,
       preserveExactToolPayload && (field === "text" || field === "content"),
+      field === "text" || field === "content" ? toolResultMaxChars : undefined,
     );
     entry[field] = res.text;
     changed ||= res.truncated;
@@ -409,6 +418,7 @@ function projectWorkspaceConflictDetails(
 export function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  toolResultMaxChars?: number,
 ): { message: unknown; changed: boolean } {
   if (!message || typeof message !== "object") {
     return { message, changed: false };
@@ -451,6 +461,8 @@ export function sanitizeChatHistoryMessage(
     typeof entry.tool_name === "string" ||
     typeof entry.toolCallId === "string" ||
     typeof entry.tool_call_id === "string";
+  const resultMaxChars =
+    preserveExactToolPayload && messageHasToolResultShape(entry) ? toolResultMaxChars : undefined;
 
   if ("details" in entry) {
     const conflictDetails = projectWorkspaceConflictDetails(entry);
@@ -503,7 +515,12 @@ export function sanitizeChatHistoryMessage(
         )
       : text;
     changed ||= controlStripped !== text;
-    const res = truncateChatHistoryText(controlStripped, maxChars, preserveExactToolPayload);
+    const res = truncateChatHistoryText(
+      controlStripped,
+      maxChars,
+      preserveExactToolPayload,
+      resultMaxChars,
+    );
     changed ||= res.truncated;
     truncated ||= res.truncated;
     return res.text;
@@ -530,6 +547,7 @@ export function sanitizeChatHistoryMessage(
       const sanitized = sanitizeChatHistoryContentBlock(content[index], {
         preserveExactToolPayload,
         maxChars: rawText === undefined ? maxChars : remainingText,
+        toolResultMaxChars,
       });
       if (rawText !== undefined) {
         remainingText -= rawText.length + 1;
@@ -645,7 +663,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  opts?: { includeCommentaryFallbacks?: boolean },
+  opts?: { includeCommentaryFallbacks?: boolean; toolResultMaxChars?: number },
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -664,7 +682,11 @@ export function sanitizeChatHistoryMessages(
         if (!hasMediaFacts && shouldDropAssistantHistoryMessage(commentary)) {
           continue;
         }
-        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
+        const projected = sanitizeChatHistoryMessage(
+          commentary,
+          maxChars,
+          opts?.toolResultMaxChars,
+        );
         if (hasMediaFacts || !shouldDropAssistantHistoryMessage(projected.message)) {
           next.push(projected.message);
         }
@@ -674,7 +696,7 @@ export function sanitizeChatHistoryMessages(
       changed = true;
       continue;
     }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
+    const res = sanitizeChatHistoryMessage(message, maxChars, opts?.toolResultMaxChars);
     changed ||= res.changed;
     if (res.changed && shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;

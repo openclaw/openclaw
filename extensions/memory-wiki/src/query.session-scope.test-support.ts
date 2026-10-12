@@ -22,7 +22,7 @@ type SessionScopeTestParams = {
     }>;
   }) => unknown;
   getActiveMemorySearchManagerMock: Mock;
-  loadCombinedSessionStoreForGatewayMock: Mock;
+  loadCombinedSessionStoreForGatewayAsyncMock: Mock;
   searchMemoryWiki: typeof searchMemoryWiki;
 };
 
@@ -55,7 +55,7 @@ export function registerSessionlessAgentScopeQueryTests(params: SessionScopeTest
           search: { backend: "shared", corpus: "memory" },
         },
       });
-      params.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      params.loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
         storePath: "(test)",
         store: {
           "agent:secondary:visible-session": {
@@ -126,7 +126,7 @@ export function registerSessionlessAgentScopeQueryTests(params: SessionScopeTest
         maxResults: 10,
       });
 
-      expect(params.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(appConfig, {
+      expect(params.loadCombinedSessionStoreForGatewayAsyncMock).toHaveBeenCalledWith(appConfig, {
         agentId: "secondary",
       });
       expect(results.map((result) => result.path)).toEqual([

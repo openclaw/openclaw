@@ -1,7 +1,11 @@
 /** Provider transport implementations and transport-specific compatibility helpers. */
-export type { OpenAIResponsesCompactionRejection } from "./provider-options.js";
+export type {
+  CompactionReplayRejection,
+  OpenAIResponsesCompactionRejection,
+} from "./provider-options.js";
 export * from "./transports/anthropic-payload-policy.js";
 export * from "./transports/anthropic-transport-stream.js";
+export { resolveCompletionTokenReservation } from "./transports/anthropic-transport-options.js";
 export * from "./transports/deepseek-text-filter.js";
 export * from "./transports/google-thinking-level.js";
 export * from "./transports/json-unsafe-integers.js";

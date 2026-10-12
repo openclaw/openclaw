@@ -18,7 +18,12 @@ export function createToolingDependencyFixture(root: string, staleAncestor = fal
       }
     }
   }
-  for (const name of ["tsx-cli-shim.mjs", "tooling-dependencies.mjs", "local-check-runtime.mts"]) {
+  for (const name of [
+    "tsx-cli-shim.mjs",
+    "tooling-dependencies.mjs",
+    "local-check-runtime.mts",
+    "managed-cleanup-handoff.mts",
+  ]) {
     copyFileSync(resolve("scripts/lib", name), join(lib, name));
   }
   for (const name of ["tsx.mjs", "crabbox-wrapper.mjs"]) {

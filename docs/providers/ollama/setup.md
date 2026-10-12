@@ -77,13 +77,22 @@ sidebarTitle: "Setup"
       --custom-model-id "qwen3.5:27b"
     ```
 
-    `--custom-base-url` and `--custom-model-id` are optional; omitting them uses the local default host and the `gemma4` suggested model.
+    `--custom-base-url` and `--custom-model-id` are optional. Omitting the base URL
+    uses the local default host. Without a model ID, setup prefers an installed
+    model with tool support and at least 16K of context, favoring non-reasoning
+    models and then smaller models. If none qualifies, it tries the `gemma4`
+    suggested model.
 
     A local model advertised as embedding-only cannot be selected as the chat
     default. Setup reports an error and leaves the existing configuration intact;
     reset preflight also rejects an explicitly selected embedding-only model or
     an inventory advertised as entirely embedding-only. Models that support both
     completion and embeddings remain eligible.
+
+    Existing configured embedding rows are not deleted. Remove them from
+    `models.providers.ollama.models`, or rerun Ollama onboarding to rebuild the
+    list. Re-onboarding replaces that provider's model catalog, so preserve any
+    custom model entries you want to keep before running it.
 
   </Tab>
 

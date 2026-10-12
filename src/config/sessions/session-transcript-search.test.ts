@@ -25,8 +25,8 @@ import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sq
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import {
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
@@ -85,7 +85,7 @@ async function appendUserMessage(sessionId: string, sessionKey: string, text: st
 
 // Keep projection fixtures deterministic; the worker suite covers host scheduling.
 function searchSessionTranscripts(params: SessionTranscriptSearchParams) {
-  const { found, revision: _revision, ...result } = searchSessionTranscriptsReadOnlySync(params);
+  const { found, ...result } = searchSessionTranscriptsReadOnlySync(params);
   const indexing =
     found &&
     listSessionsNeedingTranscriptIndexReconcile(

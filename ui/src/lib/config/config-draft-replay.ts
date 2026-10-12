@@ -70,23 +70,12 @@ export function configContentConflicts(
   original: Record<string, unknown>,
   current: Record<string, unknown>,
   canonical: Record<string, unknown>,
+  mode: "content" | "form" = "content",
 ): boolean {
   const before = projectConfigContent(original, canonical);
   const draft = projectConfigContent(current, canonical);
-  return (
-    stableStringify(replayConfigDraftEdits(before, canonical, draft)) !== stableStringify(draft)
-  );
-}
-
-export function configFormContentConflicts(
-  original: Record<string, unknown>,
-  current: Record<string, unknown>,
-  canonical: Record<string, unknown>,
-): boolean {
-  const before = projectConfigContent(original, canonical);
-  const draft = projectConfigContent(current, canonical);
-  return (
-    stableStringify(replayConfigDraftEdits(before, draft, canonical)) !==
-    stableStringify(replayConfigDraftEdits(before, canonical, draft))
-  );
+  return mode === "form"
+    ? stableStringify(replayConfigDraftEdits(before, draft, canonical)) !==
+        stableStringify(replayConfigDraftEdits(before, canonical, draft))
+    : stableStringify(replayConfigDraftEdits(before, canonical, draft)) !== stableStringify(draft);
 }

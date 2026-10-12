@@ -26,9 +26,9 @@ export function reconcileUpdateRunCandidatesInWorker(
 ): UpdateRunReconciliationResult {
   const { candidates, selection: input, busyTimeoutMs, redactPaths } = command;
   const options = { ...stateOptions, busyTimeoutMs, redactPaths };
+  assertCurrent("transaction");
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
-      assertCurrent("transaction");
       const selected = candidates.flatMap(({ record }) => {
         const current = readUpdateRunRecord(db, record.runId);
         return current ? [inspectUpdateRunReconciliation(db, current, input)] : [];

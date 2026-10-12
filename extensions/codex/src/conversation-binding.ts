@@ -30,11 +30,12 @@ import type { CodexTurnStartResponse } from "./app-server/protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
   type CodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
-  withLeasedCodexAppServerClientStartSelectionRetry,
+  withCodexAppServerClientRequestScope,
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
 } from "./app-server/shared-client.js";
@@ -91,7 +92,7 @@ async function runBoundTurn(params: {
     config: params.config,
   });
   const identity = { kind: "conversation" as const, bindingId: params.data.bindingId };
-  const binding = params.bindingStore.read(identity);
+  const binding = await params.bindingStore.readAsync(identity);
   if (!binding?.threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
@@ -100,19 +101,25 @@ async function runBoundTurn(params: {
     identity,
     threadId: binding.threadId,
     run: async () => {
-      const current = params.bindingStore.read(identity);
+      const current = await params.bindingStore.readAsync(identity);
       if (!isSameCodexAppServerThreadOwner(current, binding)) {
         throw new Error("Codex conversation binding changed before its turn.");
       }
       assertCodexBindingMayBeReplaced(binding, "running a conversation-bound Codex thread");
       let threadId = binding.threadId;
       const requestedWorkspaceDir = binding.cwd || params.data.workspaceDir;
-      const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
+      const reviewerModelProvider = await resolveModelBackedReviewerPolicyProvider({
         authProfileId: binding.authProfileId,
         modelProvider: binding.modelProvider,
         ...agentLookup,
       });
-      const { runtime, workspaceDir } = await resolveConversationAppServerRuntime({
+      const {
+        runtime,
+        workspaceDir,
+        assertCurrent,
+        source,
+        incognito: sourceIncognito,
+      } = await resolveConversationAppServerRuntime({
         pluginConfig: params.pluginConfig,
         config: params.config,
         agentId: params.data.source?.agentId ?? params.data.agentId,
@@ -123,6 +130,7 @@ async function runBoundTurn(params: {
         model: binding.model,
         agentDir: params.data.agentDir,
       });
+      const incognito = sourceIncognito ?? params.incognito;
       const { sessionRoot, approvalPolicy, sandbox } = runtime;
       const permissionProfile = runtime.networkProxy?.profileName;
       const networkProxyConfigFingerprint = runtime.networkProxy?.configFingerprint;
@@ -133,22 +141,30 @@ async function runBoundTurn(params: {
       let useStickyNetworkProfile = permissionProfile !== undefined && !networkProxyBindingChanged;
       assertNativeConversationApprovalPolicySupported(runtime);
       const modelSelection = binding.model
-        ? resolveCodexAppServerRequestModelSelection({
+        ? await resolveCodexAppServerRequestModelSelection({
             model: binding.model,
             modelProvider: binding.modelProvider,
             authProfileId: binding.authProfileId,
             ...agentLookup,
           })
         : undefined;
-      const threadRequestRuntime = { runtime, workspaceDir, ...modelSelection };
+      const threadRequestRuntime = {
+        runtime,
+        workspaceDir,
+        assertCurrent,
+        source,
+        incognito,
+        ...modelSelection,
+      };
 
       const clientOptions = {
+        assertCurrentAsync: assertCurrent,
         startOptions: runtime.start,
         timeoutMs: runtime.requestTimeoutMs,
         authProfileId: binding.authProfileId,
         ...agentLookup,
       } satisfies CodexAppServerClientOptions;
-      let client = await getLeasedSharedCodexAppServerClient(clientOptions);
+      const client = await getLeasedSharedCodexAppServerClient(clientOptions);
       const clientLease: CodexAppServerClientLease = { client };
       let activeTurnId: string | undefined;
       let activeTurnCleanup: () => void = () => undefined;
@@ -164,11 +180,15 @@ async function runBoundTurn(params: {
         | undefined;
       let ownsNativeSubscription = false;
       let turnSucceeded = false;
+      const withCurrent = async (write: () => void) => {
+        await assertCurrent();
+        write();
+      };
       const assertResumeInputAllowed = async () => {
         const { thread } = await client.request(
           "thread/read",
           { threadId, includeTurns: false },
-          { timeoutMs: runtime.requestTimeoutMs },
+          { timeoutMs: runtime.requestTimeoutMs, withCurrent },
         );
         assertCodexThreadAcceptsDirectInput(thread);
       };
@@ -177,7 +197,7 @@ async function runBoundTurn(params: {
           // A new client may already retain this parent's child; check before claiming it.
           await assertResumeInputAllowed();
         }
-        if (!params.incognito && isCodexAppServerClientRuntimeLive(client)) {
+        if (!incognito && isCodexAppServerClientRuntimeLive(client)) {
           const ownership = await consumeCodexAppServerLiveThread(client, threadId);
           if (ownership) {
             liveThreadOwnership = { client, threadId, ownership };
@@ -187,15 +207,26 @@ async function runBoundTurn(params: {
         if (
           networkProxyBindingChanged ||
           binding.clientId !== client.getInstanceId() ||
-          (isCodexAppServerClientRuntimeLive(client) && !params.incognito && !liveThreadOwnership)
+          (isCodexAppServerClientRuntimeLive(client) && !incognito && !liveThreadOwnership)
         ) {
           if (!networkProxyBindingChanged && binding.clientId === client.getInstanceId()) {
             await assertResumeInputAllowed();
           }
-          const result = await withLeasedCodexAppServerClientStartSelectionRetry({
+          const result = await withCodexAppServerClientRequestScope({
             lease: clientLease,
             options: clientOptions,
-            run: async (requestClient, requestOptions) => {
+            run: async (requestClient, connectionRequestOptions) => {
+              const requestOptions = () => {
+                const options = connectionRequestOptions();
+                return {
+                  ...options,
+                  withCurrent: async (write: () => void) => {
+                    await assertCurrent();
+                    options.assertCurrent();
+                    write();
+                  },
+                };
+              };
               const threadRequest = await buildConversationThreadRequestForClient(
                 requestClient,
                 threadRequestRuntime,
@@ -209,7 +240,7 @@ async function runBoundTurn(params: {
                     ...threadRequest,
                     developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
                     experimentalRawEvents: true,
-                    ...(params.incognito ? { ephemeral: true } : {}),
+                    ...(incognito ? { ephemeral: true } : {}),
                   },
                   requestOptions(),
                 );
@@ -227,9 +258,6 @@ async function runBoundTurn(params: {
                 requestResume: (request) =>
                   requestClient.request("thread/resume", request, requestOptions()),
               });
-            },
-            onClientChange: (nextClient) => {
-              client = nextClient;
             },
           });
           const response = networkProxyBindingChanged
@@ -274,20 +302,22 @@ async function runBoundTurn(params: {
             // Keep the old physical owner authoritative until unsubscribe succeeds;
             // failed migration then rolls back only the newly resumed connection.
             await releaseCodexAppServerBindingSubscription(binding, {
+              withCurrent,
               retainedClientId: client.getInstanceId(),
             });
           }
           const patch = {
+            ...(incognito ? { conversationIncognito: true } : {}),
             clientId: client.getInstanceId(),
             cwd: response.thread.cwd ?? (networkProxyBindingChanged ? workspaceDir : binding.cwd),
             model: response.model ?? modelSelection?.model ?? binding.model,
-            modelProvider: normalizeCodexAppServerBindingModelProvider({
+            modelProvider: await normalizeCodexAppServerBindingModelProvider({
               authProfileId: binding.authProfileId,
               modelProvider:
                 response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
               ...agentLookup,
             }),
-          };
+          } satisfies Partial<CodexAppServerThreadBinding>;
           const committed = await params.bindingStore.mutate(
             identity,
             networkProxyBindingChanged
@@ -306,6 +336,7 @@ async function runBoundTurn(params: {
                   },
                 }
               : { kind: "patch", threadId: binding.threadId, patch },
+            source,
           );
           if (!committed) {
             throw new Error(
@@ -316,6 +347,17 @@ async function runBoundTurn(params: {
           }
           if (networkProxyBindingChanged) {
             useStickyNetworkProfile = runtime.networkProxy !== undefined;
+          }
+        } else if (incognito && !binding.conversationIncognito) {
+          const recorded = await params.bindingStore.mutate(
+            identity,
+            { kind: "patch", threadId, patch: { conversationIncognito: true } },
+            source,
+          );
+          if (!recorded) {
+            throw new Error(
+              "Codex conversation binding changed while recording its source lifecycle.",
+            );
           }
         }
         const turnCollector = createCodexConversationTurnCollector(threadId);
@@ -347,7 +389,7 @@ async function runBoundTurn(params: {
             personality: CODEX_NATIVE_PERSONALITY_NONE,
             ...(serviceTier ? { serviceTier } : {}),
           },
-          { timeoutMs: runtime.requestTimeoutMs },
+          { timeoutMs: runtime.requestTimeoutMs, withCurrent },
         );
         activeTurnId = response.turn.id;
         activeTurnCleanup = trackCodexConversationActiveTurn({
@@ -370,7 +412,7 @@ async function runBoundTurn(params: {
           throw error;
         }
         if (error instanceof CodexThreadDirectInputError) {
-          if (params.incognito && ownsNativeSubscription) {
+          if (incognito && ownsNativeSubscription) {
             // Resume can reveal a cold child's capability only after subscribing.
             // Release that subscription without clearing the preserved binding.
             const released = await unsubscribeCodexThreadBestEffort(client, {
@@ -403,7 +445,7 @@ async function runBoundTurn(params: {
             isolatedSubscriptionClient = client;
           }
         }
-        if (params.incognito) {
+        if (incognito) {
           const bindingReleased = await params.bindingStore.mutate(identity, {
             kind: "clear",
             threadId,
@@ -426,7 +468,7 @@ async function runBoundTurn(params: {
           if (
             ownsNativeSubscription &&
             isolatedSubscriptionClient !== client &&
-            !params.incognito &&
+            !incognito &&
             isCodexAppServerClientRuntimeLive(client)
           ) {
             // Ownership callbacks are branded to one physical client and native

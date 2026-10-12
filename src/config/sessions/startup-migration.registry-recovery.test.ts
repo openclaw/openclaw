@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareAgentDeleteDatabases } from "../../agents/agent-delete-databases.js";
 import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
@@ -10,6 +11,7 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
+import { publishAgentDeletionJournalStatus } from "../../state/agent-deletion-journal-status.js";
 import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -71,11 +73,22 @@ it.each(["cold", "preexisting"] as const)(
       closeOpenClawAgentDatabasesForTest();
     }
 
-    await runSessionStartupMigration({
-      cfg: { agents: { entries: { main: {} } } },
-      env,
-      log: { info: vi.fn(), warn: vi.fn() },
-    });
+    const statements = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
+    try {
+      await runSessionStartupMigration({
+        cfg: { agents: { entries: { main: {} } } },
+        env,
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
+    } finally {
+      statements.restore();
+    }
+    // Schema re-admission preserves the unchanged stored policy.
+    expect(
+      statements.queries.filter((sql) =>
+        /select "main_key" from "session_key_contract"/iu.test(sql),
+      ),
+    ).toEqual([]);
 
     expect(withOpenClawAgentDatabaseReadOnly(readCanonicalSessionMainKey, options)).toEqual({
       found: true,
@@ -332,6 +345,7 @@ it.each(["missing", "receipt-held", "malformed-receipt", "malformed-journal"])(
                   "INSERT INTO agent_deletion_journal (agent_id, agent_dir, workspace_dir, sessions_dir, database_paths_json, created_at, cleanup_completed, delete_files) VALUES (?, ?, ?, ?, ?, 1, 1, 0)",
                 )
                 .run("archived", stateDir, stateDir, stateDir, "{");
+              publishAgentDeletionJournalStatus(database.db, "archived", "complete");
             }
             if (history === "malformed-receipt") {
               database.db.exec(

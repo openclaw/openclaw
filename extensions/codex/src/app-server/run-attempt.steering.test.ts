@@ -749,9 +749,13 @@ describe("runCodexAppServerAttempt steering", () => {
     );
     const params = createSteeringParams();
 
+    // This tests receipt ordering, not elapsed time during SQLite preparation.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
-    let handle:
+    await run.waitForTurnAccepted();
+    const handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+      (call) => call[0] === params.sessionId,
+    )?.[1] as
       | {
           queueMessage: (
             text: string,
@@ -759,12 +763,7 @@ describe("runCodexAppServerAttempt steering", () => {
           ) => Promise<void>;
         }
       | undefined;
-    await vi.waitFor(() => {
-      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
-        (call) => call[0] === params.sessionId,
-      )?.[1] as typeof handle;
-      expect(handle).toBeDefined();
-    }, fastWait);
+    expect(handle).toBeDefined();
     const onDispatchedAccepted = vi.fn();
     const onUnsentAccepted = vi.fn();
     const onLateAccepted = vi.fn();
@@ -772,10 +771,8 @@ describe("runCodexAppServerAttempt steering", () => {
       debounceMs: 0,
       onQueueAccepted: onDispatchedAccepted,
     });
-    await vi.waitFor(
-      () => expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1),
-      fastWait,
-    );
+    await waitForMethod("turn/steer");
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1);
     const steer = requests.find((entry) => entry.method === "turn/steer");
     const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
       ?.clientUserMessageId;

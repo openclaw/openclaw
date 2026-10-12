@@ -1,6 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
@@ -19,9 +19,9 @@ import {
   deleteSessionEntryRows,
   writeSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -31,7 +31,10 @@ import {
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { registerSessionStateWatch } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -355,7 +358,7 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
   });
 
   it.each(["transaction", "commit", "prepare"] as const)(
-    "rejects a watch when foreign lineage changes during its %s grant",
+    "rejects a watch when owner-committed lineage changes during its %s grant",
     async (stage) => {
       await seedLineage();
       const targetSessionKey = `agent:main:dashboard:lineage-watch-${stage}`;
@@ -363,12 +366,15 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       if (stage === "prepare") {
         expect(await registerSessionStateWatch(watch)).toBe(true);
       }
+      // Admit the competing agent writer before the watch owns the shared-state transaction.
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
       const grant = await mintCompletionGrant(`lineage-watch-${stage}`);
-      const peer = new DatabaseSync(
-        resolvePhysicalSessionStorePath({ agentId: "main", sessionKey: childKey }),
-      );
+      // A competing writer must not inherit the guarded reader's artifact-preserving context.
+      const inWriterContext = AsyncLocalStorage.snapshot();
       let witnessed = false;
       let watched: boolean | undefined;
+      let writeFailure: unknown;
+      let committed = false;
       registerBeforeToolCallHook(async () => {
         const admission = probe.admission(workerAdmission, (request, allow, admit) => {
           if (
@@ -381,11 +387,20 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
           ) {
             witnessed = true;
             const replacementOwner = "agent:main:direct:another-requester";
-            peer
-              .prepare(
-                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.spawnedBy', ?), spawned_by = ?, parent_session_key = ? WHERE session_key = ?",
-              )
-              .run(replacementOwner, replacementOwner, replacementOwner, childKey);
+            try {
+              inWriterContext(() =>
+                runSqliteImmediateTransactionSync(database.db, () =>
+                  writeSessionEntry(database, childKey, {
+                    ...childEntry,
+                    spawnedBy: replacementOwner,
+                  }),
+                ),
+              );
+              committed = true;
+            } catch (error) {
+              writeFailure = error;
+              throw error;
+            }
           }
           admit(request, allow);
         });
@@ -397,21 +412,18 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
           admission.mockRestore();
         }
       });
-      try {
-        const response = await grant.request("tools/call");
-        expect(await response.json()).toMatchObject({ result: { isError: true } });
-        expect(witnessed).toBe(true);
-        expect(watched).toBe(false);
-        const cursor = openOpenClawStateDatabase()
-          .db.prepare(
-            "SELECT target_session_key FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
-          )
-          .get(requesterKey, targetSessionKey);
-        expect(Boolean(cursor)).toBe(stage === "prepare");
-        expect(await grant.written()).toBeUndefined();
-      } finally {
-        peer.close();
-      }
+      const response = await grant.request("tools/call");
+      expect(witnessed).toBe(true);
+      expect(committed, String(writeFailure)).toBe(true);
+      expect(await response.json()).toMatchObject({ result: { isError: true } });
+      expect(watched).toBe(false);
+      const cursor = openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT target_session_key FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
+        )
+        .get(requesterKey, targetSessionKey);
+      expect(Boolean(cursor)).toBe(stage === "prepare");
+      expect(await grant.written()).toBeUndefined();
     },
   );
 

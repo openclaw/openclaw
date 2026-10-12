@@ -14,47 +14,17 @@ export const SQLITE_SNAPSHOT_LEGACY_MARKER = new RegExp(
 );
 const tokenMarker = new RegExp(`^${SQLITE_SNAPSHOT_PREFIX}${suffix}`, "u");
 export const SQLITE_SNAPSHOT_LEGACY_AGE_MS = 24 * 60 * 60 * 1000;
-const pendingTokenReleases = new Map<string, Set<SqliteStagingToken>>();
-
-function releaseTokens(directory: string, tokens: Iterable<SqliteStagingToken>): void {
-  const pending = pendingTokenReleases.get(directory) ?? new Set<SqliteStagingToken>();
+function releaseTokens(tokens: Iterable<SqliteStagingToken>): void {
   const failures: unknown[] = [];
   for (const token of tokens) {
     try {
       token();
-      pending.delete(token);
     } catch (error) {
-      pending.add(token);
       failures.push(error);
     }
   }
-  if (pending.size) {
-    pendingTokenReleases.set(directory, pending);
-  } else {
-    pendingTokenReleases.delete(directory);
-  }
   if (failures.length) {
     throw new AggregateError(failures, "SQLite snapshot retirement token release failed");
-  }
-}
-
-/** A failed native close retains its actual handle until retry, even after commit or unlink. */
-export function drainPendingSqliteSnapshotTokens(directory: string): void {
-  releaseTokens(directory, pendingTokenReleases.get(directory) ?? []);
-}
-
-export function drainPendingSqliteSnapshotRootTokens(
-  root: string,
-  onFailure: (error: unknown) => void,
-): void {
-  for (const directory of pendingTokenReleases.keys()) {
-    if (path.dirname(directory) === root) {
-      try {
-        drainPendingSqliteSnapshotTokens(directory);
-      } catch (error) {
-        onFailure(error);
-      }
-    }
   }
 }
 
@@ -75,16 +45,11 @@ export function beginSqliteSnapshotRetirement(
   directory: string,
   options: { token?: SqliteStagingToken; cutoff?: number } = {},
 ) {
-  drainPendingSqliteSnapshotTokens(directory);
   const tokens: SqliteStagingToken[] = [];
   const payload: string[] = [];
   // Keep the registered creator retryable after failed EXCLUSIVE admission;
   // newly acquired handles instead belong to this retirement's release custody.
-  const release = () =>
-    releaseTokens(
-      directory,
-      tokens.filter((token) => token !== options.token),
-    );
+  const release = () => releaseTokens(tokens.filter((token) => token !== options.token));
   if (!fs.existsSync(directory)) {
     options.token?.();
     return { bytes: 0, payload, release, retire: () => {} };
@@ -94,7 +59,6 @@ export function beginSqliteSnapshotRetirement(
     inheritedCutoff: number,
     layout = "",
     lock = true,
-    parentFenced = false,
   ): { bytes: number; newest: number } {
     const stat = fs.lstatSync(current);
     if (!stat.isDirectory() || (process.getuid && stat.uid !== process.getuid())) {
@@ -111,18 +75,10 @@ export function beginSqliteSnapshotRetirement(
       inspect(current, cutoff, layout, false);
     }
     if (!layout && lock) {
-      // Allocation holds its parent's read token until this token exists. Once
-      // that parent is exclusive, an empty child can only be an interrupted allocation.
-      const unfinishedAllocation =
-        parentFenced &&
-        tokenMarker.test(path.basename(current)) &&
-        fs.readdirSync(current).length === 0;
       tokens.push(
         current === directory && options.token
           ? options.token.beginRetirement()
-          : unfinishedAllocation
-            ? acquireSqliteStagingToken(current, "reclaim", { allowMissing: true })
-            : acquireSqliteSnapshotToken(current, "reclaim"),
+          : acquireSqliteSnapshotToken(current, "reclaim"),
       );
     }
     let bytes = 0;
@@ -152,16 +108,7 @@ export function beginSqliteSnapshotRetirement(
         ) {
           throw new Error("Unrecognized snapshot directory");
         }
-        const allocationParent = layout === "openclaw" ? path.dirname(current) : current;
-        const child = inspect(
-          location,
-          cutoff,
-          childLayout,
-          lock,
-          nested &&
-            (layout === "" || layout === "openclaw") &&
-            isSqliteSnapshotStagingName(path.basename(allocationParent)),
-        );
+        const child = inspect(location, cutoff, childLayout, lock);
         bytes += child.bytes;
         newest = Math.max(newest, child.newest);
       } else if (
@@ -198,8 +145,7 @@ export function beginSqliteSnapshotRetirement(
       payload,
       release,
       retire: () => {
-        // Parent first: its committed marker rejects late admission if a child's
-        // commit/close fails after the disposable payload has already been removed.
+        // Publish retirement before closing the controls and removing their directory.
         for (const token of tokens) {
           token(true);
         }

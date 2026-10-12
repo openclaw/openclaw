@@ -1,0 +1,418 @@
+import { randomUUID } from "node:crypto";
+import fsNode from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { z } from "zod";
+import type { BackupSqliteSnapshotFact } from "../../commands/backup-resource-inventory.js";
+import { prepareDoctorDatabasePreflight } from "../../commands/doctor-database-preflight.js";
+import {
+  assertConfigFileWritePathSnapshot,
+  captureConfigFileWritePathProof,
+} from "../../config/io.write-safety.js";
+import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
+import { runDoctorHealthFlow } from "../../flows/doctor-health.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import {
+  publishFileExclusive,
+  requireDirectorySync,
+  syncDirectory,
+} from "../../infra/directory-durability.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
+import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
+import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import {
+  createUpdateDatabaseBackup,
+  UpdateDatabaseBackupSchema,
+} from "../../infra/update-database-backup.js";
+import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
+import {
+  captureTargetDatabaseSchemaContext,
+  formatSchemaRefusalLines,
+  hasSchemaRefusal,
+} from "./schema-preflight.js";
+import {
+  captureUpdateConfigSnapshot,
+  readUpdateConfigSnapshot,
+} from "./update-command-config-snapshot.js";
+
+const ReceiptSchema = z.object({
+  schemaVersion: z.literal(1),
+  runId: z.string().uuid(),
+  stateDir: z.string(),
+  configPath: z.string(),
+  status: z.enum(["backed-up", "migrated", "failed", "restoring-config", "restored", "finished"]),
+  backup: UpdateDatabaseBackupSchema,
+  databases: z.array(z.string()),
+  databaseIdentities: z.record(z.string(), z.object({ dev: z.number(), ino: z.number() })),
+  configIdentity: z.object({ path: z.string(), dev: z.number(), ino: z.number() }).nullable(),
+  configFiles: z.array(
+    z.object({
+      path: z.string(),
+      raw: z.string().nullable(),
+      pathSnapshot: z.object({
+        targetPath: z.string(),
+        entries: z.array(
+          z.discriminatedUnion("kind", [
+            z.object({ path: z.string(), kind: z.literal("missing-directory") }),
+            z.object({
+              path: z.string(),
+              kind: z.literal("existing"),
+              dev: z.string(),
+              ino: z.string(),
+              link: z.string().optional(),
+            }),
+          ]),
+        ),
+      }),
+    }),
+  ),
+  displacedConfigFiles: z.array(z.string()).optional(),
+  configDisplacementHashes: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/u)).optional(),
+  error: z.string().optional(),
+});
+type Receipt = z.infer<typeof ReceiptSchema>;
+
+function receiptPath(backupRoot: string): string {
+  if (!path.isAbsolute(backupRoot)) {
+    throw new Error("--backup-root must be an absolute path.");
+  }
+  return `${path.resolve(backupRoot)}.receipt.json`;
+}
+
+async function readReceipt(backupRoot: string) {
+  const file = receiptPath(backupRoot);
+  const receipt = ReceiptSchema.parse(await readJsonIfExists(file));
+  if (receipt.stateDir !== resolveStateDir() || receipt.configPath !== resolveConfigPath()) {
+    throw new Error("Update migration receipt belongs to another state directory or config.");
+  }
+  const normalized = path.resolve(backupRoot);
+  const canonicalBackup = path.join(
+    await fs.realpath(path.dirname(normalized)),
+    `${path.basename(normalized)}.databases`,
+  );
+  if (receipt.backup.directory !== canonicalBackup) {
+    throw new Error("Update migration receipt belongs to another backup root.");
+  }
+  return { file, receipt };
+}
+
+async function saveReceipt(file: string, receipt: Receipt) {
+  const destination = path.join(await fs.realpath(path.dirname(file)), path.basename(file));
+  await writeJsonAtomic(destination, receipt, { mode: 0o600, dirMode: 0o700, durable: true });
+}
+
+async function readIdentities(databases: readonly string[]) {
+  const identities: Receipt["databaseIdentities"] = {};
+  for (const database of databases) {
+    const info = await fs.stat(database).catch((error: unknown) => {
+      if (hasNodeErrorCode(error, "ENOENT")) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (info) {
+      identities[database] = { dev: info.dev, ino: info.ino };
+    }
+  }
+  return identities;
+}
+
+async function readConfigIdentity(configPath: string): Promise<Receipt["configIdentity"]> {
+  const identity = (await readIdentities([configPath]))[configPath];
+  return identity ? { path: configPath, ...identity } : null;
+}
+
+/** The external supervisor owns drain/start; the candidate owns backup and schema repair. */
+export async function updateMigrateCommand(backupRoot: string): Promise<void> {
+  const file = receiptPath(backupRoot);
+  if ((await readJsonIfExists(file)) !== null) {
+    throw new Error(
+      `Update migration receipt already exists: ${file}. Restore it or choose a new backup root.`,
+    );
+  }
+  const env = process.env;
+  const source = await captureTargetDatabaseSchemaContext(env);
+  const preflight = await prepareDoctorDatabasePreflight();
+  if (hasSchemaRefusal(preflight)) {
+    throw new Error(formatSchemaRefusalLines(preflight).join("\n"));
+  }
+  const lock = await acquireGatewayLock({
+    env,
+    role: "sqlite-maintenance",
+    allowInTests: true,
+    timeoutMs: 0,
+  });
+  if (!lock) {
+    throw new Error("Update migration requires the Gateway to be stopped.");
+  }
+  let receipt: Receipt;
+  let verifiedSnapshots: BackupSqliteSnapshotFact[];
+  try {
+    ({ receipt, verifiedSnapshots } = await lock.run(async () => {
+      await fs.mkdir(path.dirname(backupRoot), { recursive: true, mode: 0o700 });
+      lock.assertCurrent();
+      const config = await captureUpdateConfigSnapshot(resolveConfigPath(env), env);
+      if (config.doctorOwned === false) {
+        throw new Error(
+          "Update migration cannot capture the complete configuration include graph.",
+        );
+      }
+      const normalized = path.resolve(backupRoot);
+      const canonicalRoot = path.join(
+        await fs.realpath(path.dirname(normalized)),
+        path.basename(normalized),
+      );
+      lock.assertCurrent();
+      const backup = await createUpdateDatabaseBackup({
+        backupRoot: canonicalRoot,
+        stateDir: resolveStateDir(env),
+        config: source.config,
+        env,
+      });
+      lock.assertCurrent();
+      const databases = [
+        ...new Set([...backup.databases.map((entry) => entry.path), ...backup.missingPaths]),
+      ];
+      const databaseIdentities = await readIdentities(databases);
+      lock.assertCurrent();
+      const capturedReceipt: Receipt = {
+        schemaVersion: 1,
+        runId: randomUUID(),
+        stateDir: resolveStateDir(env),
+        configPath: resolveConfigPath(env),
+        status: "backed-up",
+        backup,
+        databases,
+        databaseIdentities,
+        configIdentity: await readConfigIdentity(resolveConfigPath(env)),
+        configFiles: [config, ...(config.includedFiles ?? [])].map((entry) => {
+          const pathSnapshot =
+            entry.pathSnapshot ??
+            captureConfigFileWritePathProof(
+              entry.path,
+              resolvePathViaExistingAncestorSync(entry.path),
+              fsNode,
+            ).snapshot;
+          assertConfigFileWritePathSnapshot(pathSnapshot, fsNode);
+          return { path: entry.path, raw: entry.raw, pathSnapshot };
+        }),
+      };
+      await saveReceipt(file, capturedReceipt);
+      lock.assertCurrent();
+      const snapshots = (backup.databaseOwners ?? []).flatMap(
+        (owner): BackupSqliteSnapshotFact[] => {
+          const identity = databaseIdentities[owner.path];
+          if (!identity) {
+            return [];
+          }
+          return [{ sourcePath: owner.path, ...identity, ...owner }];
+        },
+      );
+      return { receipt: capturedReceipt, verifiedSnapshots: snapshots };
+    }));
+  } finally {
+    await lock.release();
+  }
+  // Update mode reuses this capture instead of creating a second standalone Doctor archive.
+  // The supervisor retains service ownership and its admission fence through verification.
+  const doctorEnv = {
+    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+    OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+    OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+  };
+  const previous = Object.fromEntries(Object.keys(doctorEnv).map((key) => [key, env[key]]));
+  Object.assign(env, doctorEnv);
+  try {
+    preflight.verifiedSnapshots = verifiedSnapshots;
+    try {
+      await runDoctorHealthFlow(
+        defaultRuntime,
+        {
+          repair: true,
+          nonInteractive: true,
+          workspaceSuggestions: false,
+        },
+        undefined,
+        preflight,
+      );
+    } catch (error) {
+      if (!(error instanceof ExitError) || error.code !== 0) {
+        throw error;
+      }
+    }
+    const migrated = await prepareDoctorDatabasePreflight();
+    if (hasSchemaRefusal(migrated) || migrated.pendingMigrations?.length) {
+      throw new Error(
+        "Doctor did not complete the candidate database migrations; the recovery backup was retained.",
+      );
+    }
+    receipt.status = "migrated";
+    receipt.databaseIdentities = await readIdentities(receipt.databases);
+    receipt.configIdentity = await readConfigIdentity(receipt.configPath);
+    await saveReceipt(file, receipt);
+  } catch (error) {
+    receipt.status = "failed";
+    receipt.error = formatErrorMessage(error);
+    await saveReceipt(file, receipt);
+    throw error;
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete env[key];
+      } else {
+        env[key] = value;
+      }
+    }
+  }
+  defaultRuntime.writeJson({ status: receipt.status, receipt: file, databases: receipt.databases });
+}
+
+/** Rollback of a stopped, still-fenced candidate may discard its startup bookkeeping. */
+export async function updateRestoreCommand(backupRoot: string): Promise<void> {
+  const { file, receipt } = await readReceipt(backupRoot);
+  if (receipt.status === "finished") {
+    throw new Error("The accepted update's rollback backup has been retired.");
+  }
+  if (receipt.status !== "restored") {
+    if (receipt.status !== "restoring-config") {
+      await restoreUpdateDatabaseBackup({
+        backup: receipt.backup,
+        runId: receipt.runId,
+        env: process.env,
+        assertCurrent: () => {},
+      });
+      receipt.status = "restoring-config";
+      receipt.databaseIdentities = await readIdentities(receipt.databases);
+      await saveReceipt(file, receipt);
+    }
+    const lock = await acquireGatewayLock({
+      env: process.env,
+      role: "sqlite-maintenance",
+      allowInTests: true,
+      timeoutMs: 0,
+    });
+    if (!lock) {
+      throw new Error("Configuration rollback requires the Gateway to remain stopped.");
+    }
+    try {
+      await lock.run(async () => {
+        for (const config of receipt.configFiles) {
+          const assertCurrent = () => {
+            lock.assertCurrent();
+            assertConfigFileWritePathSnapshot(config.pathSnapshot, fsNode);
+          };
+          assertCurrent();
+          const configPath = config.pathSnapshot.targetPath;
+          const current = await readUpdateConfigSnapshot(configPath);
+          assertCurrent();
+          // Unchanged includes may be readable but intentionally not writable by the runtime.
+          if (current.raw === config.raw) {
+            continue;
+          }
+          const target = `${configPath}.migrated-${receipt.runId}`;
+          const displaced = await readUpdateConfigSnapshot(target);
+          assertCurrent();
+          const expectedHash = receipt.configDisplacementHashes?.[target];
+          if (displaced.raw !== null) {
+            if (!expectedHash || displaced.hash !== expectedHash) {
+              throw new Error(
+                `Displaced configuration changed or has no recovery receipt: ${target}`,
+              );
+            }
+            if (
+              current.raw !== null &&
+              current.raw !== config.raw &&
+              current.hash !== expectedHash
+            ) {
+              throw new Error(
+                `Configuration changed after rollback began: ${config.path}; newer bytes were preserved.`,
+              );
+            }
+          } else if (current.raw !== null) {
+            if (expectedHash && current.hash !== expectedHash) {
+              throw new Error(
+                `Configuration changed before rollback displacement: ${config.path}; newer bytes were preserved.`,
+              );
+            }
+            (receipt.configDisplacementHashes ??= {})[target] = current.hash;
+            await saveReceipt(file, receipt);
+            // Keep the selected config readable until its original is atomically restored.
+            const staged = `${target}.pending-${randomUUID()}`;
+            try {
+              await writeTextAtomic(staged, current.raw, { mode: 0o600, durable: true });
+              const identity = await fs.lstat(staged);
+              assertCurrent();
+              await publishFileExclusive({
+                sourcePath: staged,
+                targetPath: target,
+                expectedSourceIdentity: identity,
+                strategy: "rename-noreplace",
+              });
+            } finally {
+              await fs.rm(staged, { force: true });
+            }
+            assertCurrent();
+          } else if (expectedHash) {
+            throw new Error(`The recorded configuration displacement is missing: ${target}`);
+          }
+          if (
+            (displaced.raw !== null || current.raw !== null) &&
+            !receipt.displacedConfigFiles?.includes(target)
+          ) {
+            (receipt.displacedConfigFiles ??= []).push(target);
+          }
+          if (config.raw !== null) {
+            await writeTextAtomic(configPath, config.raw, {
+              mode: 0o600,
+              durable: true,
+              beforeRename: async () => assertCurrent(),
+            });
+          } else {
+            assertCurrent();
+            await fs.rm(configPath, { force: true });
+            const directory = await fs.realpath(path.dirname(configPath));
+            assertCurrent();
+            requireDirectorySync(
+              await syncDirectory(directory),
+              "Restored configuration directory",
+            );
+            assertCurrent();
+          }
+        }
+      });
+    } finally {
+      await lock.release();
+    }
+    receipt.status = "restored";
+    receipt.databaseIdentities = await readIdentities(receipt.databases);
+    receipt.configIdentity = await readConfigIdentity(receipt.configPath);
+    delete receipt.error;
+    await saveReceipt(file, receipt);
+  }
+  defaultRuntime.writeJson({ status: receipt.status, receipt: file, databases: receipt.databases });
+}
+
+/** The supervisor calls this only after accepting the candidate and retiring its rollback journal. */
+export async function updateFinishCommand(backupRoot: string): Promise<void> {
+  const { file, receipt } = await readReceipt(backupRoot);
+  if (receipt.status !== "migrated" && receipt.status !== "finished") {
+    throw new Error("Only a successfully migrated and accepted update may retire its backup.");
+  }
+  receipt.status = "finished";
+  receipt.configFiles = [];
+  await saveReceipt(file, receipt);
+  const removed = await removePackageUpdatePath(receipt.backup.directory);
+  defaultRuntime.writeJson({
+    status: receipt.status,
+    receipt: file,
+    ...(removed
+      ? {}
+      : {
+          warning: `Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`,
+        }),
+  });
+}

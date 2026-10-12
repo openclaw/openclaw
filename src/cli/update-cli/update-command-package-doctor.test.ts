@@ -442,6 +442,67 @@ it("leaves the run ledger unchanged while the activation Doctor child is pending
   });
 });
 
+it("records the activation Doctor's traced sections on its step and run record", async () => {
+  const { root, env } = await createDoctorFixture();
+  vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", undefined);
+  const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+  adoptUpdateRun(runId, { env });
+  const run = { runId, env };
+  const guards = createUpdateCommandExecutionGuards({ run }, root);
+  const progress = createUpdateRunProgress(run, {}, guards.recordStep);
+  const trace = (name: string, ms: number) =>
+    `[gateway] startup trace: ${name} ${ms.toFixed(1)}ms total=${ms.toFixed(1)}ms start=0.0ms\n`;
+  const stderr = [
+    trace("cli.command.config-ready", 3),
+    trace("doctor.maintenance.begin", 120),
+    "real Doctor warning\n",
+    trace("doctor.database-preflight", 12_300),
+    trace("doctor.config-flow", 4_100),
+    ...[
+      ["doctor:gateway-services", 250_000],
+      ["doctor:plugins", 40_000],
+      ["doctor:sessions", 9_000],
+      ["doctor:skills", 1_000],
+      ["doctor:auth", 700],
+      ["doctor:fast", 5],
+    ].map(([id, ms]) => trace(`doctor.contribution.${id}`, Number(ms))),
+    trace("doctor.contributions", 300_200),
+    // JSON console style carries the same message inside one record.
+    `${JSON.stringify({ level: "info", message: trace("doctor.maintenance-ready", 900).trim() })}\n`,
+  ].join("");
+  let doctorEnv: NodeJS.ProcessEnv | undefined;
+  vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
+    assert(typeof options === "object");
+    doctorEnv = options.env;
+    // Lines arrive split across pipe chunks.
+    const bytes = Buffer.from(stderr);
+    for (let offset = 0; offset < bytes.length; offset += 7) {
+      options.onOutputChunk?.(bytes.subarray(offset, offset + 7), "stderr");
+    }
+    const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+    assert(resultPath, "Missing Doctor result path");
+    await writeUpdatePostInstallDoctorResult({ resultPath, result: { status: "ok" } });
+    return { code: 0, stdout: "", stderr, signal: null, killed: false, termination: "exit" };
+  });
+
+  const step = await runPackageUpdateDoctor({
+    root,
+    timeoutMs: 60_000,
+    managedServiceEnv: env,
+    progress,
+  });
+
+  const sections =
+    "Doctor sections: maintenance.begin 0.1 s, database-preflight 12.3 s, config-flow 4.1 s, contributions 300.2 s, maintenance-ready 0.9 s; slowest contributions: gateway-services 250.0 s, plugins 40.0 s, sessions 9.0 s, skills 1.0 s, auth 0.7 s";
+  expect(doctorEnv?.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
+  expect(step).toMatchObject({ name: "openclaw doctor", exitCode: 0 });
+  expect(step?.diagnostics?.[0]).toBe(sections);
+  expect(step?.stderrTail).toBe("real Doctor warning");
+  expect(getUpdateRun(runId, { env })?.steps).toContainEqual(
+    expect.objectContaining({ step: "diagnostic:openclaw doctor", detail: sections }),
+  );
+});
+
 it.each([
   { receiptKind: "none", cleanupUncertain: false, reportingFails: false },
   { receiptKind: "refusal", cleanupUncertain: false, reportingFails: false },

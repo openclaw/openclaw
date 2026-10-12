@@ -69,9 +69,7 @@ export function formatTuiFooter(params: {
 }
 
 export function sanitizeTerminalControlsAndBinary(text: string): string {
-  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
-  const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
-  const withoutControlChars = withoutAnsi.replace(RENDER_CONTROL_CHARS_RE, "");
+  const withoutControlChars = stripAnsi(text).replace(RENDER_CONTROL_CHARS_RE, "");
   const withoutBidiControls = BIDI_CONTROL_RE.test(withoutControlChars)
     ? withoutControlChars.replace(BIDI_CONTROL_GLOBAL_RE, "")
     : withoutControlChars;

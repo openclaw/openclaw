@@ -19,7 +19,7 @@ import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequences,
 } from "./session-accessor.sqlite-transcript-sequences.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
@@ -32,6 +32,7 @@ import type {
   SessionTranscriptTurnPersistOptions,
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
@@ -63,6 +64,15 @@ function resolveTranscriptTurnAgentId(params: {
     throw new Error(
       `Session key owner "${keyAgentId}" does not match requested agent "${scopedAgentId}".`,
     );
+  }
+  const incognito = captureIncognitoSessionOperation({
+    agentId: scopedAgentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    env: params.env,
+  });
+  if (incognito) {
+    return incognito.actor.agentId;
   }
   const persistedStoreOwner =
     params.sessionStore && !params.storePath
@@ -109,7 +119,12 @@ export async function appendTranscriptMessages<TMessage>(
   options: Pick<SessionTranscriptTurnPersistOptions, "config" | "cwd"> & {
     messages: readonly Omit<
       SessionTranscriptTurnMessageAppend,
-      "config" | "cwd" | "parentId" | "prepareMessageAfterIdempotencyCheck" | "shouldAppend"
+      | "config"
+      | "cwd"
+      | "parentId"
+      | "preparation"
+      | "prepareMessageAfterIdempotencyCheck"
+      | "shouldAppend"
     >[];
   },
 ): Promise<TranscriptMessageAppendResult<TMessage>[]> {
@@ -128,7 +143,7 @@ export async function appendTranscriptMessages<TMessage>(
     messages: options.messages.map((append) => ({
       ...append,
       eventId: append.eventId ?? randomUUID(),
-      message: redactTranscriptMessageForStorage(append.message, options),
+      message: sanitizeTranscriptMessageForStorage(append.message),
       now: append.now ?? Date.now(),
     })),
     updateMode: "none",
@@ -293,7 +308,7 @@ async function appendTranscriptTurnMessages(
     }
   }
   // Resolve cursors only after the last explicit parent has chosen the branch.
-  rememberCommittedTranscriptMessageSequences(target, appendedMessages);
+  await rememberCommittedTranscriptMessageSequences(target, appendedMessages);
   return appendedMessages;
 }
 

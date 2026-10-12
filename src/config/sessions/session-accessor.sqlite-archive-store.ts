@@ -9,21 +9,8 @@ import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
-import {
-  transcriptArchiveIdentityKey,
-  uniqueTranscriptArchives,
-} from "./session-accessor.sqlite-archive-store-kernel.js";
-import type {
-  TranscriptArchivePublishPlan,
-  TranscriptArchivePublishResult,
-} from "./session-accessor.sqlite-archive-types.js";
-import {
-  readPendingSqliteTranscriptArchivesInWorker,
-  runSqliteTranscriptArchivePublishWorker,
-} from "./session-accessor.sqlite-archive.js";
+import { readPendingSqliteTranscriptArchivesInWorker } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
-import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
-import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
@@ -34,29 +21,20 @@ import {
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-
-type SessionArchivePublicationStorage = {
-  assertCurrent?(): void;
-  prepare(
-    requested: readonly SessionLifecycleArchivedTranscript[],
-  ): Promise<TranscriptArchivePublishPlan[]>;
-  record(results: readonly TranscriptArchivePublishResult[]): Promise<void>;
-};
+import {
+  publishPreparedSessionStateArchives,
+  publishSessionStateArchivesInWorker,
+} from "./session-archive-publication.js";
 
 /** Publishes derived archive files after their canonical rows and deletions commit. */
 export async function publishSessionStateArchives(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "ownerStorePath" | "path">,
   requested: readonly SessionLifecycleArchivedTranscript[],
-  storage?: SessionArchivePublicationStorage,
   assertSourceCurrent?: () => void,
 ): Promise<SessionLifecycleArchivedTranscript[]> {
   assertSourceCurrent?.();
-  if (storage) {
-    return publishPreparedSessionStateArchives(requested, storage);
-  }
   const databaseOptions = resolveSessionReclamationDatabaseOptions(toDatabaseOptions(scope));
-  const forceInProcess =
-    hasPreparedNativeSessionDeletion() || !supportsOpenClawAgentDatabaseExecution(databaseOptions);
+  const forceInProcess = !supportsOpenClawAgentDatabaseExecution(databaseOptions);
   return withSqliteMutationWorkerLifetime(databaseOptions, (lifetime) => {
     const { signal } = lifetime;
     const assertCurrent = () => {
@@ -82,6 +60,14 @@ export async function publishSessionStateArchives(
           // Uncertain reads retain the canonical writable preparation path.
           assertCurrent();
         }
+      }
+      if (!forceInProcess) {
+        return publishSessionStateArchivesInWorker({
+          scope: { ...scope, path: databaseOptions.path },
+          requested,
+          assertCurrent,
+          signal,
+        });
       }
       const retained = await runExclusiveSqliteSessionWrite(
         scope,
@@ -185,65 +171,6 @@ export async function publishSessionStateArchives(
       return result;
     });
   });
-}
-
-async function publishPreparedSessionStateArchives(
-  requested: readonly SessionLifecycleArchivedTranscript[],
-  storage: SessionArchivePublicationStorage,
-  signal?: AbortSignal,
-): Promise<SessionLifecycleArchivedTranscript[]> {
-  const requestedArchives = uniqueTranscriptArchives(requested);
-  const requestedIdentitySet = new Set(
-    requestedArchives.map((archive) =>
-      transcriptArchiveIdentityKey(archive.sessionId, archive.generation),
-    ),
-  );
-  let includeRequested = true;
-  while (true) {
-    storage.assertCurrent?.();
-    const requestedForPass = includeRequested ? requestedArchives : [];
-    const plans = await storage.prepare(requestedForPass);
-    storage.assertCurrent?.();
-    includeRequested = false;
-    if (plans.length === 0) {
-      break;
-    }
-
-    const results = await runSqliteTranscriptArchivePublishWorker(plans, signal);
-    storage.assertCurrent?.();
-    await storage.record(results);
-    storage.assertCurrent?.();
-
-    const planByIdentity = new Map(
-      plans.map((plan) => [transcriptArchiveIdentityKey(plan.sessionId, plan.generation), plan]),
-    );
-    emitArchivedTranscriptUpdates(
-      results.flatMap((result) => {
-        const identity = transcriptArchiveIdentityKey(result.sessionId, result.generation);
-        if (!result.archivedPath || requestedIdentitySet.has(identity)) {
-          return [];
-        }
-        const plan = planByIdentity.get(identity);
-        return plan
-          ? [
-              {
-                archivedPath: result.archivedPath,
-                generation: result.generation,
-                sessionId: result.sessionId,
-                sourcePath: path.join(plan.archiveDirectory, `${result.sessionId}.jsonl`),
-              },
-            ]
-          : [];
-      }),
-    );
-    const failedIds = results.flatMap((result) => (result.archivedPath ? [] : [result.sessionId]));
-    if (failedIds.length > 0) {
-      throw new Error(
-        `Session deletion committed, but ${failedIds.length} transcript archive file export(s) remain pending in SQLite; retry the operation to publish them.`,
-      );
-    }
-  }
-  return [...requested];
 }
 
 /** Removes canonical rows only after retention has removed their derived files. */

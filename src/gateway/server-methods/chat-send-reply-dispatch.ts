@@ -190,7 +190,9 @@ export function createChatSendReplyDispatch(params: {
     if (!(reader || assertRetainedSourceCurrent ? isInspectionCurrent() : await isCurrent())) {
       return "missing";
     }
-    const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig());
+    const assertRoutingCurrent = captureSessionMutationRouting(getRuntimeConfig(), undefined, [
+      scope,
+    ]);
     let decision: ReplyDeliveryState = "pending";
     await readSessionTranscriptAnchorsAsync(
       scope,
@@ -315,7 +317,7 @@ export function createChatSendReplyDispatch(params: {
     const sessionKey = transcript?.sessionKey ?? session.sessionKey;
     const agentId = transcript?.agentId ?? session.agentId;
     const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
-    const mediaScope = captureWebchatReplyMediaScope({
+    const mediaScope = await captureWebchatReplyMediaScope({
       requesterContext: params.requesterContext,
       cfg,
       sessionKey,
@@ -346,12 +348,7 @@ export function createChatSendReplyDispatch(params: {
       inputs: replaceChatSendReplyPayload(input, stripVisibleTextFromTtsSupplement(payload)),
       abortSignal: params.abortSignal,
       includeSensitiveMedia: payload.sensitiveMedia !== true,
-      onLocalAudioAccessDenied: (err) => {
-        logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
-      },
-      onManagedMediaPrepareError: (message) => {
-        logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-      },
+      logGateway,
     });
     if (!transcriptPayload) {
       return;

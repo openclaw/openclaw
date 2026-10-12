@@ -12,11 +12,8 @@ const DEFAULT_MAX_SEARCH_LIMIT = 20;
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
   const toolSearch = tools?.toolSearch;
-  if (toolSearch === undefined || toolSearch === true) {
-    return { enabled: true };
-  }
-  if (toolSearch === false) {
-    return { enabled: false };
+  if (toolSearch === undefined || typeof toolSearch === "boolean") {
+    return { enabled: toolSearch ?? true };
   }
   return isRecord(toolSearch) ? toolSearch : {};
 }

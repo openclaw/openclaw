@@ -51,7 +51,6 @@ export function renderConfig(props: ConfigProps) {
   const viewState = props.viewState;
   const showModeToggle = props.showModeToggle ?? false;
   const showRootTab = props.showRootTab ?? true;
-  const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
@@ -214,6 +213,8 @@ export function renderConfig(props: ConfigProps) {
   // Includes the app updater: writes are suspended while it runs, so raw
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
+  const formBusy = configBusy || props.schemaLoading;
+  const showSchemaLoading = props.schemaLoading && !analysis.schema;
   const mutationAllowed = props.mutationAllowed !== false;
   const canRawSave = props.connected && mutationAllowed && !configBusy && hasRawChanges;
   const showAppearanceOnRoot =
@@ -285,7 +286,7 @@ export function renderConfig(props: ConfigProps) {
       })
     : nothing;
   const showToolbar = showModeToggle || showSectionTabs;
-  const showValidityWarning = validity === "invalid" && !viewState.validityDismissed;
+  const showValidityWarning = props.valid === false && !viewState.validityDismissed;
   const showLead =
     showToolbar || settingsLayout === "accordion" || showValidityWarning || Boolean(channelGroup);
 
@@ -399,6 +400,7 @@ export function renderConfig(props: ConfigProps) {
       id="config-section-panel"
       class="config-content"
       role=${showSectionTabs ? "tabpanel" : "region"}
+      aria-busy=${formMode === "form" && props.schemaLoading ? "true" : nothing}
       aria-labelledby=${
         showSectionTabs ? `config-sections-tab-${props.activeSection ?? "root"}` : nothing
       }
@@ -433,7 +435,7 @@ export function renderConfig(props: ConfigProps) {
                   }
                   ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
                   ${
-                    props.schemaLoading
+                    showSchemaLoading
                       ? html`<div class="config-loading">
                           <div class="config-loading__spinner"></div>
                           <span>${t("configView.loadingSchema")}</span>
@@ -445,7 +447,7 @@ export function renderConfig(props: ConfigProps) {
                             value: props.formValue,
                             embedded: props.embeddedEditor === true || Boolean(showSetup),
                             rawAvailable,
-                            disabled: configBusy || !props.formValue || !mutationAllowed,
+                            disabled: formBusy || !props.formValue || !mutationAllowed,
                             unsupportedPaths: analysis.unsupportedPaths,
                             onPatch: props.onFormPatch,
                             onRemove: props.onFormRemove,
@@ -492,11 +494,11 @@ export function renderConfig(props: ConfigProps) {
                         )
                   }
                   ${
-                    showSetup && !props.schemaLoading
+                    showSetup && !showSchemaLoading
                       ? renderSetupSection(
                           setupSchema,
                           props,
-                          configBusy || !props.formValue || !mutationAllowed,
+                          formBusy || !props.formValue || !mutationAllowed,
                         )
                       : nothing
                   }

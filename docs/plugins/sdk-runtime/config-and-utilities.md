@@ -104,6 +104,18 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+`reapOrphanedProcesses` from the same subpath supports recovery of plugin-owned
+macOS process trees after their original host dies. Supply the exact managed
+executable and an argument predicate for its configured instance; also supply
+`cwd` when relative arguments depend on the launch directory. It only selects
+same-user, launchd-adopted roots, retains native birth identities and matching
+descendants, and joins bounded TERM-to-KILL cleanup. It never signals a process
+group or discovers new descendants after the root exits. Call it during managed
+service preparation, before health-based reuse, and leave externally managed
+endpoints outside that path. Unknown identities fail closed on supported hosts;
+hosts without native birth-identity support and other platforms leave existing
+processes untouched. PID 1 can itself be a live owner on Linux.
+
 For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
 the same subpath. It reuses the current Node executable and resolves a real Node
 binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
@@ -249,6 +261,13 @@ Model-picker integrations use two focused runtime subpaths. Import the typed
 seam, including its authoritative conflict check and post-commit effects. The
 lower-level `applyModelOverrideToSessionEntry(...)` helper is not a picker
 persistence API.
+
+Model selection preserves the saved thinking preference; execution clamps it to
+the selected model's supported levels. `thinkingRemap` is no longer emitted in
+the selection result. Its optional type remains deprecated until the next SDK
+major version. Session rows expose the saved request as `thinkingLevel`.
+`sessions.patch` returns that preference in `entry.thinkingLevel` and the
+execution level in `resolved.thinkingLevel`.
 
 Use `applyModelOverrideWithAuthProfileCompatibility(...)` only as the direct
 persistence fallback when a channel callback cannot enter the full live-session

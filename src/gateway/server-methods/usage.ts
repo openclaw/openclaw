@@ -17,16 +17,20 @@ import {
   createUsageAggregateAccumulator,
   UNKNOWN_USAGE_CREATOR_KEY,
 } from "../../shared/usage-aggregates.js";
+import { extractQueryTerms } from "../../shared/usage-query.js";
 import type {
   SessionUsageEntry,
   SessionUsageCreator,
   SessionsUsageAggregates,
   SessionsUsageResult,
+  UsageOverviewOptions,
+  UsageOverviewSession,
 } from "../../shared/usage-types.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -50,6 +54,7 @@ import {
   type DateInterpretation,
   type DateRange,
 } from "./usage-date-range.js";
+import { loadUsageOverview } from "./usage-overview.js";
 import { loadCostUsageSummaryCached, loadSessionsUsageResultCached } from "./usage-result-cache.js";
 import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 import {
@@ -247,6 +252,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
     const sessionCap = operatorSessionCap(client ?? null, config);
+    const accessRevision = readGatewayAccessRevision();
     const visibilityFilter =
       sessionCap === "none"
         ? createSessionListEntryFilter({ client: client ?? null, cfg: config })
@@ -255,7 +261,30 @@ export const usageHandlers: GatewayRequestHandlers = {
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
-    const limit = p.limit ?? 50;
+    const limit = p.projection === "overview" ? 50 : (p.limit ?? 50);
+    const hasOverviewOptions =
+      p.projection === "overview" ||
+      p.query !== undefined ||
+      p.selectedDays !== undefined ||
+      p.selectedHours !== undefined ||
+      p.selectedSessions !== undefined ||
+      p.recentKeys !== undefined ||
+      p.sort !== undefined ||
+      p.sortDirection !== undefined ||
+      p.offset !== undefined;
+    const overviewOptions: UsageOverviewOptions | undefined = hasOverviewOptions
+      ? {
+          limit,
+          offset: p.offset,
+          query: p.query,
+          selectedDays: p.selectedDays,
+          selectedHours: p.selectedHours,
+          selectedSessions: p.selectedSessions,
+          recentKeys: p.recentKeys,
+          sort: p.sort,
+          sortDirection: p.sortDirection,
+        }
+      : undefined;
     const includeContextWeight = p.includeContextWeight ?? false;
     const creatorKey = normalizeOptionalString(p.creatorKey);
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -309,6 +338,9 @@ export const usageHandlers: GatewayRequestHandlers = {
         specificKey,
         includeContextWeight,
         creatorKey,
+        ...(overviewOptions
+          ? { overviewKey: JSON.stringify([p.projection, overviewOptions]) }
+          : {}),
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           const now = Date.now();
@@ -329,6 +361,75 @@ export const usageHandlers: GatewayRequestHandlers = {
             return !creatorKey || creator.key === creatorKey ? [{ entry, creator }] : [];
           });
           const mergedEntries = matchedEntries.map(({ entry }) => entry);
+
+          if (overviewOptions) {
+            // Context is normally hydrated only for the page. An explicit context
+            // filter needs that authoritative fact for every candidate before filtering.
+            if (
+              extractQueryTerms(overviewOptions.query ?? "").some(
+                (term) =>
+                  term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
+              )
+            ) {
+              await loadUsageSessionContext(mergedEntries, visibilityFilter);
+            }
+            const metadata: UsageOverviewSession[] = matchedEntries.map(({ entry, creator }) => ({
+              key: entry.key,
+              label: entry.label,
+              sessionId: entry.sessionId,
+              scope: entry.scope ?? "instance",
+              sessionFamilyKey: entry.sessionFamilyKey,
+              currentSessionId: entry.currentSessionId,
+              includedSessionIds: entry.includedSessionIds,
+              historicalInstanceCount: entry.includedSessionIds?.length,
+              updatedAt: entry.updatedAt,
+              agentId: entry.agentId,
+              creatorKey: creator.key,
+              createdActor: creator.actor,
+              channel: sessionDeliveryChannel(entry.storeEntry),
+              chatType:
+                entry.storeEntry?.chatType ?? sessionDeliveryOrigin(entry.storeEntry)?.chatType,
+              origin: sessionDeliveryOrigin(entry.storeEntry),
+              modelOverride: entry.storeEntry?.modelOverride,
+              providerOverride: entry.storeEntry?.providerOverride,
+              modelProvider: entry.storeEntry?.modelProvider,
+              model: entry.storeEntry?.model,
+              hasContextWeight: Boolean(entry.contextWeight),
+              instances: entry.instances,
+            }));
+            const overview = await loadUsageOverview({
+              sessions: metadata,
+              options: overviewOptions,
+              config,
+              startMs,
+              endMs,
+              includeUntimestamped,
+              dayBucket,
+              projection: p.projection,
+            });
+            const entriesByKey = new Map(
+              mergedEntries.map((entry) => [JSON.stringify([entry.agentId, entry.key]), entry]),
+            );
+            const page = overview.sessions.flatMap((row) => {
+              const entry = entriesByKey.get(JSON.stringify([row.agentId, row.key]));
+              return entry ? [entry] : [];
+            });
+            await loadUsageSessionContext(page, visibilityFilter);
+            return {
+              ...overview,
+              updatedAt: now,
+              startDate: formatDateLabel(startMs, dateInterpretation),
+              endDate: formatDateLabel(endMs, dateInterpretation),
+              creatorOptions: [...creatorOptions.values()],
+              sessions: overview.sessions.map((row) => {
+                const entry = entriesByKey.get(JSON.stringify([row.agentId, row.key]));
+                return Object.assign({}, row, {
+                  hasContextWeight: Boolean(entry?.contextWeight),
+                  contextWeight: includeContextWeight ? (entry?.contextWeight ?? null) : undefined,
+                });
+              }),
+            };
+          }
 
           const sessions: SessionUsageEntry[] = [];
           const accumulator = createUsageAggregateAccumulator();
@@ -462,6 +563,17 @@ export const usageHandlers: GatewayRequestHandlers = {
           contextWeight: includeContextWeight ? null : undefined,
         };
       });
+      if (config !== context.getRuntimeConfig() || accessRevision !== readGatewayAccessRevision()) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "Session access changed while loading usage. Refresh the usage view to try again.",
+          ),
+        );
+        return;
+      }
       respond(true, { ...result, sessions }, undefined);
     } finally {
       for (const read of contextReads.values()) {

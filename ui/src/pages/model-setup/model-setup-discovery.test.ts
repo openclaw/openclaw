@@ -17,7 +17,7 @@ import {
   mountPage,
   selectManualProvider,
 } from "./model-setup-first-run.test-support.ts";
-import { ModelSetupPage } from "./model-setup-page.ts";
+import { createPage, mountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 describe("Model Setup explicit discovery", () => {
   beforeEach(async () => {
@@ -46,10 +46,11 @@ describe("Model Setup explicit discovery", () => {
       throw new Error(`Unexpected setup request: ${method}`);
     });
     const provider = createApplicationContextProvider(context);
-    const page = new ModelSetupPage();
+    const page = createPage(context);
     page.routeData = { firstRun: true };
     provider.append(page);
     document.body.append(provider);
+    mountModelSetupPage(page);
     await waitForFast(() =>
       expect(page.querySelector(".model-setup__current button")).not.toBeNull(),
     );

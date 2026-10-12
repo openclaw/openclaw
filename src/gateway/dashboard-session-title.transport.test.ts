@@ -108,6 +108,26 @@ async function withTitleProvider(
 }
 
 describe("generated titles over the real OpenAI-compatible transport", () => {
+  it("reserves reasoning tokens without consuming the title's answer budget", async () => {
+    await withTitleProvider("Utility budget verified", async ({ cfg, requests }) => {
+      for (const definition of cfg.models!.providers![provider]!.models) {
+        definition.reasoning = true;
+        definition.maxTokens = 16_384;
+      }
+      await expect(
+        prepareDashboardSessionTitle({
+          cfg,
+          agentId: "main",
+          userMessage: "Check the utility model's reasoning budget.",
+        }),
+      ).resolves.toBe("Utility budget verified");
+      expect(requests).toHaveLength(1);
+      const body = requests[0]!.body;
+      expect(body.max_tokens ?? body.max_completion_tokens).toBe(12_288);
+      expect(body.tools ?? []).toEqual([]);
+    });
+  });
+
   it.each([
     {
       name: "model aliases overriding global defaults",

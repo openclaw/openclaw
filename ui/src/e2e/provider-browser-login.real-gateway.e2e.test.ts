@@ -217,7 +217,8 @@ suite.define(() => {
         await fixture.instance.stopGateway();
         await fixture.instance.startGateway();
         readback = await connectReadbackClient();
-        await waitForControlUiGatewayReady(page);
+        // The browser may still be in its 15-second reconnect backoff.
+        await waitForControlUiGatewayReady(page, 30_000);
         expect(await profile()).toMatchObject({
           type: "api_key",
           profileId: `${loginProvider}:default`,

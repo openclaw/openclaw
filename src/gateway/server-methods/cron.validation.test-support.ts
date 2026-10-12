@@ -14,6 +14,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 function createPrefixOnlyChannelPlugin(
@@ -150,7 +151,10 @@ export function createCronTestContext(
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),
-      wake: vi.fn(() => ({ ok: true }) as const),
+      wake: vi.fn(async (opts: Parameters<CronService["wake"]>[0]) => {
+        opts.commitGuard?.();
+        return { ok: true } as const;
+      }),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
       readScratch: vi.fn<CronService["readScratch"]>(async () => ({ currentRevision: 0 })),
       writeScratch: vi.fn(
@@ -431,4 +435,13 @@ export function expectResponseError(
   if (expected.details) {
     expect(error.details).toEqual(expected.details);
   }
+}
+
+export function callerClientWithCronCreatorAuthority(
+  grant: CronCreatorAuthorityGrant,
+): GatewayClient {
+  const client = createCronCallerClient("ops");
+  client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
+  client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
+  return client;
 }

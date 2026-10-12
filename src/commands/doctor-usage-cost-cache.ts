@@ -149,10 +149,44 @@ async function maybeRemoveLegacySkillUploadTree(params: {
   );
 }
 
+// Installs from 2026.8 kept prior Control UI builds here; reload recovery replaced them.
+async function maybeRemoveObsoleteControlUiAssetCache(params: {
+  shouldRepair: boolean;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  const cacheRoot = path.join(
+    resolveStateDir(params.env ?? process.env, os.homedir),
+    "cache",
+    "control-ui-assets",
+  );
+  try {
+    await fs.lstat(cacheRoot);
+    if (!params.shouldRepair) {
+      note(
+        `Obsolete Control UI asset cache remains at ${shortenHomePath(cacheRoot)}. Run \`openclaw doctor --fix\` to remove it.`,
+        "Control UI assets",
+      );
+      return [];
+    }
+    await fs.rm(cacheRoot, { recursive: true, force: true });
+    note(
+      `Removed obsolete Control UI asset cache at ${shortenHomePath(cacheRoot)}.`,
+      "Control UI assets",
+    );
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      const warning = `Could not ${params.shouldRepair ? "remove" : "inspect"} obsolete Control UI asset cache at ${shortenHomePath(cacheRoot)}: ${formatErrorMessage(error)}. Resolve the filesystem error and rerun \`openclaw doctor --fix\`.`;
+      note(warning, "Doctor warnings");
+      return [warning];
+    }
+  }
+  return [];
+}
+
 export async function maybeRepairLegacyRuntimeFiles(
   shouldRepair: boolean,
   env?: NodeJS.ProcessEnv,
-): Promise<void> {
+): Promise<string[]> {
   const failures = await openUsageCostRefreshFailures(env)
     .entries()
     .catch((error: unknown) => {
@@ -192,4 +226,5 @@ export async function maybeRepairLegacyRuntimeFiles(
     }
   }
   await maybeRemoveLegacySkillUploadTree({ shouldRepair, env });
+  return await maybeRemoveObsoleteControlUiAssetCache({ shouldRepair, env });
 }

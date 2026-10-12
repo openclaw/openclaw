@@ -51,6 +51,11 @@ describe("Apple Foundation Models native transport", () => {
     const events = [];
     for await (const event of stream) {
       events.push(event.type);
+      if (event.type === "toolcall_delta") {
+        expect(event.partial.content[event.contentIndex]).toMatchObject({
+          partialJson: JSON.stringify(call.arguments),
+        });
+      }
     }
     const result = await stream.result();
     expect(result).toMatchObject({
@@ -59,6 +64,7 @@ describe("Apple Foundation Models native transport", () => {
       usage: { input: 3995, output: 18, totalTokens: 4013 },
     });
     expect(events).toEqual(["start", "toolcall_start", "toolcall_delta", "toolcall_end", "done"]);
+    expect(result.content[0]).not.toHaveProperty("partialJson");
   });
 
   it.each([

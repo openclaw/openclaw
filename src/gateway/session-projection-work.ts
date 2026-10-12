@@ -54,7 +54,7 @@ export function createSessionProjectionDrain(params: {
   return ensure;
 }
 
-/** Optional transcript work must not invalidate a request's asynchronous read or mutation. */
+/** Foreground requests take priority before the next optional transcript read. */
 export function retainSessionListForegroundWork(): () => void {
   foregroundCount++;
   let retained = true;
@@ -71,14 +71,10 @@ export function retainSessionListForegroundWork(): () => void {
   };
 }
 
-export function canRunSessionListBackgroundWork(): boolean {
-  return foregroundCount === 0;
-}
-
 export async function yieldSessionListBackgroundWork(): Promise<void> {
   for (;;) {
     await yieldSessionListWork();
-    if (canRunSessionListBackgroundWork()) {
+    if (foregroundCount === 0) {
       return;
     }
     foregroundIdle ??= createDeferredCore();

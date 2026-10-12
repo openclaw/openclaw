@@ -204,22 +204,41 @@ export async function prepareWorktreeTemplate(params: {
           existing.contentKey === params.contentKey &&
           existing.backend === params.backend
         ) {
-          retained = await retainWorktreeTemplate(params.env, existing, assertCurrent, true);
+          // A ready generation with readers is immutable until they settle. Reuse
+          // that admission instead of rescanning the same tree for every clone.
+          retained = await retainWorktreeTemplate(
+            params.env,
+            existing,
+            assertCurrent,
+            hasReaders ? undefined : true,
+          );
           if (
-            (await worktreePathExists(existing.path)) &&
-            (await params.validate(existing, options))
+            hasReaders ||
+            ((await worktreePathExists(existing.path)) &&
+              (await params.validate(existing, options)))
           ) {
-            setWorktreePreparationTemplate("warm");
-            await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
+            setWorktreePreparationTemplate("warm", { reason: "ready" });
+            if (!hasReaders) {
+              await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
+            }
             return retained;
           }
           await retained.release();
           retained = undefined;
         }
         if (params.reuseOnly || hasReaders) {
+          setWorktreePreparationTemplate("unavailable", {
+            reason: hasReaders
+              ? existing?.status === "preparing"
+                ? "template-building"
+                : "stale-template-in-use"
+              : existing
+                ? "template-stale"
+                : "template-missing",
+          });
           return undefined;
         }
-        setWorktreePreparationTemplate("cold");
+        setWorktreePreparationTemplate("cold", { reason: "template-disk-admission" });
         await params.requireSpace();
         if (existing) {
           await retireWorktreeTemplate(params.env, existing, options);
@@ -244,8 +263,10 @@ export async function prepareWorktreeTemplate(params: {
         retained = await retainWorktreeTemplate(params.env, record, assertCurrent);
         assertCurrent();
         await fs.mkdir(directory, { recursive: true });
+        setWorktreePreparationTemplate("cold", { reason: "template-build" });
         await params.prepare(record, options);
         await markTemplateReadyAsync(params.env, id, params.now(), assertCurrent);
+        setWorktreePreparationTemplate("cold", { reason: "ready" });
         return { ...retained, status: "ready" };
       },
     );

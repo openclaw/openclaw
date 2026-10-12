@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import {
@@ -30,7 +31,6 @@ import {
 import { generateUUID } from "../../lib/uuid.ts";
 import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
 import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
-import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 
 registerChatGoalsEnglish();
@@ -62,8 +62,7 @@ const rejectedGoalReasons = new Set([
 ]);
 
 function rejectGoalOperation(host: ChatHost, message: string): false {
-  setChatError(host, message);
-  host.requestUpdate?.();
+  setChatError(host, message, true);
   return false;
 }
 
@@ -137,6 +136,12 @@ export function chatGoalRecovery(host: ChatHost): ChatGoalRecovery | undefined {
     }
     return {
       pending: operation.pending,
+      goalId: operation.params?.goalId,
+      action: operation.params
+        ? "action" in operation.params
+          ? operation.params.action
+          : "clear"
+        : undefined,
       retired: operation.retired,
       onCheck: () => runGoalOperation(host, undefined, operation),
     };
@@ -231,12 +236,7 @@ async function runGoalOperation(
   if (operation?.pending) {
     return rejectGoalOperation(host, t("chat.goals.actionPending"));
   }
-  if (operation?.retired) {
-    // Expired/invalid identities cannot be replayed. Refresh before letting the operator
-    // make a new decision; never transform a saved request into a fresh mutation.
-    if (action) {
-      return false;
-    }
+  const reconcileCurrentGoal = async (recoveryOperation: GoalOperation): Promise<boolean> => {
     const sessions = host.sessions;
     const connection = sessions.captureConnectionScope();
     const rowTarget = resolveUiConversationIdentity(host, sessionKey);
@@ -247,12 +247,12 @@ async function runGoalOperation(
       targetIsCurrent() &&
       host.sessions === sessions &&
       sessions.isConnectionScopeCurrent(connection) &&
-      goalOperationTarget(host)?.operation === operation;
-    const marker = JSON.stringify(operation.retired);
+      goalOperationTarget(host)?.operation === recoveryOperation;
     let observation: SessionRowObservation | undefined;
-    operation.pending = true;
-    host.requestUpdate?.();
     try {
+      if (!ownsRecovery()) {
+        return false;
+      }
       const outcome = await sessions.reconcileMutation(agentId);
       if (!ownsRecovery()) {
         return false;
@@ -296,6 +296,24 @@ async function runGoalOperation(
         }
         return false;
       }
+      return true;
+    } finally {
+      observation?.dispose();
+    }
+  };
+  if (operation?.retired) {
+    // Expired/invalid identities cannot be replayed. Refresh before letting the operator
+    // make a new decision; never transform a saved request into a fresh mutation.
+    if (action) {
+      return false;
+    }
+    const marker = JSON.stringify(operation.retired);
+    operation.pending = true;
+    host.requestUpdate?.();
+    try {
+      if (!(await reconcileCurrentGoal(operation))) {
+        return false;
+      }
       // A different consumer may already have retired this marker and saved a new intent.
       if (storage && storage.getItem(storageKey) !== marker) {
         return false;
@@ -310,7 +328,6 @@ async function runGoalOperation(
       }
       return false;
     } finally {
-      observation?.dispose();
       operation.pending = false;
       host.requestUpdate?.();
     }
@@ -383,14 +400,46 @@ async function runGoalOperation(
     }
   };
   operation.pending = true;
-  setChatError(host, null);
-  host.requestUpdate?.();
+  setChatError(host, null, true);
   try {
-    const result = await client.request<SessionsGoalMutationResult>(
-      "action" in params ? "sessions.goal.update" : "sessions.goal.clear",
-      params,
-      { timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
-    );
+    const request = () =>
+      client.request<SessionsGoalMutationResult>(
+        "action" in params ? "sessions.goal.update" : "sessions.goal.clear",
+        params,
+        { timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
+      );
+    let result: SessionsGoalMutationResult;
+    try {
+      result = await request();
+    } catch (error) {
+      if (
+        !("action" in params && params.action === "resume") ||
+        !targetIsCurrent() ||
+        !(
+          error instanceof GatewayProtocolRequestTimeoutError ||
+          (error instanceof GatewayRequestError && error.code === "UNAVAILABLE")
+        )
+      ) {
+        throw error;
+      }
+      // Reconcile a lost ACK within this explicit Resume, preserving its durable identity.
+      // Rendering or restoring a saved request never starts this retry.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
+      if (
+        !targetIsCurrent() ||
+        goalOperationTarget(host)?.operation !== operation ||
+        goalOperationExpired(params.issuedAtMs)
+      ) {
+        throw error;
+      }
+      result = await request();
+    }
+    // Receipts describe the original decision. Keep recovery until the current goal is read.
+    if (result.replayed && !(await reconcileCurrentGoal(operation))) {
+      return false;
+    }
     operations.delete(signature);
     // The successful response already settled the operation, even if storage cleanup fails.
     try {
@@ -400,15 +449,6 @@ async function runGoalOperation(
     }
     if (targetIsCurrent()) {
       if (result.replayed) {
-        // Receipt snapshots describe the original decision, not the current goal or run.
-        void refreshChatSessionListForTarget(host, { sessionKey, agentId }).catch(
-          (error: unknown) => {
-            if (targetIsCurrent()) {
-              setChatError(host, formatUiError(error));
-              host.requestUpdate?.();
-            }
-          },
-        );
         return true;
       }
       const row = host.sessionsResult?.sessions.find(

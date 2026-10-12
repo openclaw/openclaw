@@ -391,7 +391,7 @@ function resolveNpmLatestVersion(packageName: string): string {
   return version;
 }
 
-export function collectPluginReleaseDependencyFreshnessWarnings(
+function collectPluginReleaseDependencyFreshnessWarnings(
   plugins: readonly PublishablePluginPackage[],
   resolveLatestVersion: NpmLatestVersionResolver = resolveNpmLatestVersion,
 ): string[] {

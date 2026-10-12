@@ -275,10 +275,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   private notifyConnectError(error: Error) {
-    if (this.pendingConnectError) {
-      return;
-    }
-    if (isRetryableGatewayStartupUnavailableError(error)) {
+    if (this.pendingConnectError || isRetryableGatewayStartupUnavailableError(error)) {
       return;
     }
     if (
@@ -746,6 +743,16 @@ async function resolveGatewayConnection(
     bootstrap.authFailureReason === "Missing gateway auth token." ||
     bootstrap.authFailureReason === "Missing gateway auth password.";
   if (bootstrap.authFailureReason && (!missingSharedAuth || !hasStoredOriginAuth)) {
+    // A local Gateway pairs this CLI at startup; without one, a token hint misdirects.
+    if (missingSharedAuth && !hasExplicitGatewayTarget && activeLocalGatewayPort === undefined) {
+      throw new Error(
+        [
+          "No Gateway is running on this machine.",
+          "Fix: run `openclaw chat` to chat here without a Gateway, or start one with `openclaw gateway`.",
+          "To use a Gateway on another machine, run `openclaw tui <Gateway URL>` once with that Gateway's token or password, then approve the pairing request in its Control UI.",
+        ].join("\n"),
+      );
+    }
     throwGatewayAuthResolutionError(bootstrap.authFailureReason);
   }
   const edgeAuthHeaders = await resolveTuiEdgeAuthHeaders(config, bootstrap.url, env);

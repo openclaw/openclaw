@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import {
   getRuntimeConfig,
+  resolveMemorySearchIndexConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -201,6 +202,7 @@ export async function runMemoryStatus(
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
+    excludedConfiguredSources?: "sessions"[];
     embeddingProbe?: MemoryEmbeddingProbeResult;
     indexError?: string;
     scan?: MemorySourceScan;
@@ -216,7 +218,7 @@ export async function runMemoryStatus(
     purpose: opts.index || opts.fix ? "cli" : "status",
     inspectSources: true,
     ...hostOptions,
-    run: async ({ manager, agentId }) => {
+    run: async ({ manager, cfg: agentCfg, agentId }) => {
       let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
       let indexError: string | undefined;
       const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -280,6 +282,9 @@ export async function runMemoryStatus(
       allResults.push({
         agentId,
         status,
+        ...(resolveMemorySearchIndexConfig(agentCfg, agentId)?.sessionSourceExcluded
+          ? { excludedConfiguredSources: ["sessions"] }
+          : {}),
         embeddingProbe,
         indexError,
         scan,
@@ -299,6 +304,7 @@ export async function runMemoryStatus(
     const {
       agentId,
       status,
+      excludedConfiguredSources,
       embeddingProbe,
       indexError,
       scan,
@@ -333,6 +339,9 @@ export async function runMemoryStatus(
       `${label("Provider")} ${info(status.provider)} ${muted(`(requested: ${requestedProvider})`)}`,
       `${label("Model")} ${info(modelLabel)}`,
       sourceList ? `${label("Sources")} ${info(sourceList)}` : null,
+      excludedConfiguredSources
+        ? `${label("Excluded source")} ${warn("sessions requested but disabled; set memory.search.experimental.sessionMemory=true for this agent, or memory.search.rememberAcrossConversations=true for private cross-conversation recall")}`
+        : null,
       extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
@@ -347,6 +356,8 @@ export async function runMemoryStatus(
     };
     const addPath = (name: string, value: string | undefined) =>
       addField(name, value ? shortenHomePath(value) : undefined);
+    const addState = (name: string, state: string) =>
+      addField(name, state, state === "ready" ? success : state === "unavailable" ? warn : muted);
     if (status.storage) {
       const storage = status.storage;
       lines.push(
@@ -368,8 +379,7 @@ export async function runMemoryStatus(
           : embeddingProbe.ok
             ? "ready"
             : "unavailable";
-      const stateColor = state === "skipped" ? muted : embeddingProbe.ok ? success : warn;
-      lines.push(`${label("Embeddings")} ${stateColor(state)}`);
+      addState("Embeddings", state);
       addField("Embeddings error", embeddingProbe.error, warn);
     }
     const runtime = deep ? readLlamaCppRuntimeStatus(status) : null;
@@ -429,10 +439,6 @@ export async function runMemoryStatus(
       const vector = status.vector;
       const formatVectorState = (available: boolean | undefined) =>
         resolveMemoryVectorState({ enabled: vector.enabled, available }).state;
-      const formatVectorLine = (lineLabel: string, state: string) => {
-        const vectorColor = state === "ready" ? success : state === "unavailable" ? warn : muted;
-        lines.push(`${label(lineLabel)} ${vectorColor(state)}`);
-      };
       if (status.backend === "builtin") {
         const storeState =
           status.vector.storeAvailable === undefined && status.vector.enabled
@@ -444,24 +450,22 @@ export async function runMemoryStatus(
                   ? "index unverified (unprobed)"
                   : formatVectorState(undefined)
             : formatVectorState(status.vector.storeAvailable);
-        formatVectorLine("Vector store", storeState);
+        addState("Vector store", storeState);
         if (status.vector.semanticAvailable !== undefined) {
-          formatVectorLine("Semantic vectors", formatVectorState(status.vector.semanticAvailable));
+          addState("Semantic vectors", formatVectorState(status.vector.semanticAvailable));
         }
       } else {
         const vectorState = formatVectorState(
           status.vector.semanticAvailable ?? status.vector.available,
         );
-        formatVectorLine("Vector", vectorState);
+        addState("Vector", vectorState);
       }
       addField("Vector dims", status.vector.dims ? String(status.vector.dims) : undefined);
       addPath("Vector path", status.vector.extensionPath);
       addField("Vector error", status.vector.loadError, warn);
     }
     if (status.fts) {
-      const { state: ftsState } = resolveMemoryFtsState(status.fts);
-      const ftsColor = ftsState === "ready" ? success : ftsState === "unavailable" ? warn : muted;
-      lines.push(`${label("FTS")} ${ftsColor(ftsState)}`);
+      addState("FTS", resolveMemoryFtsState(status.fts).state);
       addField("FTS error", status.fts.error, warn);
     }
     if (status.cache) {

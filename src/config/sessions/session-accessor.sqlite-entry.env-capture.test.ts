@@ -63,9 +63,9 @@ vi.mock("./internal-session-key.js", () => ({}));
 vi.mock("./metadata.js", () => ({}));
 vi.mock("./session-accessor.sqlite-entry-cache.js", () => ({}));
 vi.mock("./session-accessor.sqlite-entry-equality.js", () => ({}));
+// mock-isolation: Synthetic capture paths must not load the native entry store or open SQLite.
 vi.mock("./session-accessor.sqlite-entry-store.js", () => ({
   readSessionEntrySelectionSnapshot: () => [],
-  readUnchangedLifecycleTargetSnapshot: () => [],
   writeSessionEntry: (_database: unknown, _key: string, entry: InternalSessionEntry) => entry,
 }));
 vi.mock("./session-accessor.sqlite-exact-read.js", () => ({}));

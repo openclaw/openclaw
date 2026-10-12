@@ -92,7 +92,7 @@ async function inspectClawPackageCompatibility(params: {
         state: "unavailable",
         mapped: [],
         unavailable: [],
-        message: preflight.message ?? "Canonical extension inspection is unavailable.",
+        message: preflight.message ?? "Extension inspection is unavailable.",
       };
       return inspected;
     }

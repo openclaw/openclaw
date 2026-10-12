@@ -25,7 +25,7 @@ import {
   getAgentRunContext,
   getAgentRunContextOwnerStatus,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -509,7 +509,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           evt.projectSessionLifecycle !== false &&
           trackedOwnerIsCurrent &&
           claimIsComplete;
-        const writeContext = captureAgentRunTerminalWriteContext(evt.runId);
+        const { writeContext, track } = captureAgentRunTerminalPersistence(evt.runId);
         const prepareTerminalPersistence = (sessionKey: string, agentId = sessionAgentId) => {
           const persistence = sessionLifecyclePersistence.observe({
             sessionKey,
@@ -549,7 +549,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         if (canPersistTerminal) {
           if (knownSessionKey) {
             const persistence = prepareTerminalPersistence(knownSessionKey);
-            writeContext?.track(persistence);
+            track?.(persistence);
           } else {
             // Context cleanup can precede a terminal event. Resolve its persisted
             // run mapping before the lazy chat handler consumes the same event.
@@ -562,7 +562,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 await prepareTerminalPersistence(selected.sessionKey, selected.agentId);
               }
             });
-            writeContext?.track(terminalPreparation);
+            track?.(terminalPreparation);
           }
         }
       }

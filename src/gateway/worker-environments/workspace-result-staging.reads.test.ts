@@ -353,12 +353,13 @@ it("authenticates the singleton blob returned by checkpoint previews", async () 
     if (
       argv[argv.indexOf("-C") + 1] !== fixture.repository ||
       args[0] !== "cat-file" ||
-      args[1] !== "blob"
+      args[1] !== "--batch"
     ) {
       return result;
     }
     const stdout = Buffer.from(result.stdout);
-    stdout[0] = stdout[0]! ^ 0xff;
+    const contentStart = stdout.indexOf(0x0a) + 1;
+    stdout[contentStart] = stdout[contentStart]! ^ 0xff;
     corrupted++;
     return { ...result, stdout };
   });

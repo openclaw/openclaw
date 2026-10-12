@@ -1,12 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { activationTargetId } from "./state.ts";
-import { detected, mount, props, text } from "./test-helpers/view.test-support.ts";
-import { renderModelSetup } from "./view.ts";
+import {
+  detected,
+  mount,
+  props,
+  text,
+  renderSetup,
+  disposeViews,
+} from "./test-helpers/view.test-support.tsx";
 
 function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
   return mount(
@@ -49,9 +54,7 @@ describe("renderModelSetup", () => {
   });
 
   afterEach(() => {
-    for (const container of document.body.querySelectorAll("div")) {
-      render(nothing, container);
-    }
+    disposeViews();
     document.body.replaceChildren();
     vi.unstubAllGlobals();
     delete (document as unknown as { execCommand?: unknown }).execCommand;
@@ -135,8 +138,9 @@ describe("renderModelSetup", () => {
     );
 
     expect(text(container)).toContain("Recommended installs");
-    expect(text(container)).toContain("Ollama Run open models locally");
     const card = container.querySelector('[data-recommended-install="ollama"]');
+    expect(card?.querySelector("strong")?.textContent).toBe("Ollama");
+    expect(card?.querySelector(".muted")?.textContent).toBe("Run open models locally");
     const icon = card?.querySelector<HTMLElement>('[data-provider-icon="ollama"]');
     const link = card?.querySelector<HTMLAnchorElement>("a");
     expect(icon).not.toBeNull();
@@ -269,7 +273,12 @@ describe("renderModelSetup", () => {
     expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="provider-auto:openai"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="claude-cli"]')).not.toBeNull();
-    expect(text(container)).toContain("Selected model OpenAI gpt-5");
+    const current = container.querySelector(".model-setup__current")!;
+    expect(current.querySelector("h2")?.textContent).toBe("Selected model");
+    expect(current.querySelector("strong")?.textContent).toBe("OpenAI");
+    expect(current.querySelector(".model-setup__current-copy .muted")?.textContent).toContain(
+      "gpt-5",
+    );
     const retry = container.querySelector<HTMLButtonElement>(
       '[data-candidate-kind="saved-auth:openai:replacement"] button',
     );
@@ -313,12 +322,16 @@ describe("renderModelSetup", () => {
     const nonAdmin = mount(
       props({ page: { phase: "ready", result }, canAdmin: false, canVerify: false }),
     );
-    expect(text(nonAdmin)).toContain("Selected model OpenAI gpt-5");
-    expect(nonAdmin.querySelector(".model-setup__current button")).toBeNull();
-
     const unsupportedGateway = mount(props({ page: { phase: "ready", result }, canVerify: false }));
-    expect(text(unsupportedGateway)).toContain("Selected model OpenAI gpt-5");
-    expect(unsupportedGateway.querySelector(".model-setup__current button")).toBeNull();
+    for (const page of [nonAdmin, unsupportedGateway]) {
+      const current = page.querySelector(".model-setup__current")!;
+      expect(current.querySelector("h2")?.textContent).toBe("Selected model");
+      expect(current.querySelector("strong")?.textContent).toBe("OpenAI");
+      expect(current.querySelector(".model-setup__current-copy .muted")?.textContent).toContain(
+        "gpt-5",
+      );
+      expect(current.querySelector("button")).toBeNull();
+    }
   });
 
   it.each([true, false])("reports device-code fallback success: %s", async (copied) => {
@@ -370,25 +383,23 @@ describe("renderModelSetup", () => {
     ({ sensitive, expectedType }) => {
       const container = document.body.appendChild(document.createElement("div"));
       const renderStep = (validationError: string | null) =>
-        render(
-          renderModelSetup(
-            props({
-              wizard: {
-                phase: "step",
-                authChoice: "provider-auth",
-                step: {
-                  id: "access-value",
-                  type: "text",
-                  message: "Provider access value",
-                  sensitive,
-                  placeholder: "Enter value",
-                },
-                busy: false,
-                validationError,
+        renderSetup(
+          props({
+            wizard: {
+              phase: "step",
+              authChoice: "provider-auth",
+              step: {
+                id: "access-value",
+                type: "text",
+                message: "Provider access value",
+                sensitive,
+                placeholder: "Enter value",
               },
-              wizardValue: "initial value",
-            }),
-          ),
+              busy: false,
+              validationError,
+            },
+            wizardValue: "initial value",
+          }),
           container,
         );
       renderStep(null);
@@ -461,7 +472,7 @@ describe("renderModelSetup", () => {
         error: "No reply received",
       };
       viewProps.actionsDisabled = false;
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(0);
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
@@ -481,15 +492,15 @@ describe("renderModelSetup", () => {
 
       viewProps.page = { phase: "ready", result: { ...detected, candidates: [] } };
       viewProps.manualProviderId = "gemini-api-key";
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
       viewProps.page = { phase: "loading" };
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(text(container.querySelector('[role="alert"]')!)).toContain("No reply received");
       viewProps.page = { phase: "ready", result: { ...detected, candidates: [] } };
       viewProps.activation = { phase: "testing", targetId };
-      render(renderModelSetup(viewProps), container);
+      renderSetup(viewProps, container);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
       expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
     },

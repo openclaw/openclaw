@@ -6,36 +6,16 @@ import {
   type renderLazyElementModal,
   type renderLazyElementState,
 } from "../../components/lazy-view-error.ts";
-import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/debug.css";
 import { debugOverlayLayout } from "./debug-overlay-layout.ts";
 import { renderDebugOverlayLoading as renderExpandedLoading } from "./debug-overlay-loading.ts";
-
-export type DebugOverlayMode = "expanded" | "minimized";
-
-export type DebugOverlayElement = HTMLElement & {
-  open: (mode: DebugOverlayMode) => void;
-  toggle: () => void;
-};
+import type { DebugOverlayMode } from "./debug-overlay-state.ts";
 
 export interface DebugOverlayFrameHost {
   readonly lazyCustomElements: Parameters<typeof renderLazyElementModal>[0];
   readonly pendingDebugOverlayMode: DebugOverlayMode;
   togglePendingDebugOverlayMode(): void;
-}
-
-export const debugOverlayTemplate = html`<openclaw-debug-overlay></openclaw-debug-overlay>`;
-
-export function readDebugOverlayMode(
-  event: { eventType: string; detail?: object } | null,
-): DebugOverlayMode {
-  return event?.eventType === DEBUG_OVERLAY_REQUEST_EVENT &&
-    event.detail &&
-    "mode" in event.detail &&
-    event.detail.mode === "minimized"
-    ? "minimized"
-    : "expanded";
 }
 
 export function renderPendingDebugOverlay(
@@ -57,19 +37,6 @@ export function renderPendingDebugOverlay(
     onToggleMode: () => host.togglePendingDebugOverlayMode(),
     onClose: () => host.lazyCustomElements.close(),
   });
-}
-
-export function shouldCloseDebugOverlay(
-  event: KeyboardEvent,
-  mode: DebugOverlayMode | "closed",
-  frame: EventTarget | null,
-): boolean {
-  return (
-    event.key === "Escape" &&
-    !event.defaultPrevented &&
-    mode !== "closed" &&
-    (mode !== "minimized" || (frame !== null && event.composedPath().includes(frame)))
-  );
 }
 
 export function renderDebugOverlayLoading(mode: DebugOverlayMode | "closed") {

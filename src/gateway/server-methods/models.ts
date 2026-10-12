@@ -9,6 +9,7 @@ import {
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
@@ -31,7 +32,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Ordinary reads retain inventory; explicit refresh and lifecycle changes own discovery.
+// Native catalog demand precedes projection; provider inventory keeps its refresh lifecycle.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -109,10 +110,15 @@ export const modelsHandlers: GatewayRequestHandlers = {
         await ensureGatewayPreparedModelRuntimeReady({ agentId: resolved.agentId });
         assertCurrent();
         if (params.refresh !== true) {
-          getPublishedPreparedModelCatalogOwnerSnapshot({
+          const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
             agentId: resolved.agentId,
             config: cfg,
-          })?.recheckNativeLogin?.();
+          });
+          owner?.recheckNativeLogin?.();
+          if (!params.preparedOnly && params.view !== "provider-config") {
+            await owner?.loadNativeModelCatalog?.();
+            assertCurrent();
+          }
         }
         return {
           assertCurrent,
@@ -140,6 +146,14 @@ export const modelsHandlers: GatewayRequestHandlers = {
                 ...listParams(),
                 publicationScope: preparedScope,
               }));
+            const runtimeOwnership =
+              scope && params.view !== "provider-config"
+                ? await readSessionRuntimeOwnershipAsync({
+                    ...scope,
+                    config: context.getRuntimeConfig(),
+                    assertCurrent,
+                  })
+                : undefined;
             const publish = () => {
               assertCurrent();
               const currentConfig = context.getRuntimeConfig();
@@ -155,7 +169,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
                             ),
                           }
                         : {}),
-                      models: projectSessionModelCatalog(scope, result.models, currentConfig),
+                      models: projectSessionModelCatalog(
+                        scope,
+                        result.models,
+                        currentConfig,
+                        runtimeOwnership,
+                      ),
                     }
                   : result;
               const policy = prepareOperatorModelPresentation({

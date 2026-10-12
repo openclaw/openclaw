@@ -634,7 +634,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         "models.probe": {
           provider: "openai",
           status: "ok",
-          latencyMs: 87,
+          latencyMs: 9_087,
           results: [{ label: "Config API key", status: "ok", latencyMs: 87 }],
         },
         "usage.status": { updatedAt: NOW, providers: [] },
@@ -692,7 +692,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await openaiCard.getByRole("button", { name: "Test connection" }).click();
       const probe = await gateway.waitForRequest("models.probe");
       expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
-      await expect.poll(async () => openaiCard.textContent()).toContain("87 ms");
+      await expect
+        .poll(() => openaiCard.locator(".model-providers__probe-target span").nth(1).textContent())
+        .toBe("Connected · Request round-trip: 87 ms");
+      expect(await openaiCard.locator(".model-providers__probe-summary").textContent()).toBe(
+        "Connected",
+      );
 
       const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
       const defaultPatchCount = (await gateway.getRequests("config.patch")).length;

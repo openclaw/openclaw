@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   refreshRemoteBinsForConnectedNodes: vi.fn(),
   registerSkillsChangeListener: vi.fn(),
   closeSkillsWatchers: vi.fn(),
+  detachSkillsWatchers: vi.fn(),
   startCronMaintenance: vi.fn(),
   skillsChangeUnsub: vi.fn(),
   ensureContextWindowCacheLoaded: vi.fn(),
@@ -53,9 +54,11 @@ vi.mock("../skills/runtime/remote.js", () => ({
   refreshRemoteBinsForConnectedNodes: mocks.refreshRemoteBinsForConnectedNodes,
 }));
 
+// mock-isolation: Real watcher lifecycle is covered in server-startup-early.skills-watchers.test.ts.
 vi.mock("../skills/runtime/refresh.js", () => ({
   registerSkillsChangeListener: mocks.registerSkillsChangeListener,
   closeSkillsWatchers: mocks.closeSkillsWatchers,
+  detachSkillsWatchers: mocks.detachSkillsWatchers,
 }));
 
 vi.mock("../cron/maintenance.js", () => ({
@@ -120,6 +123,7 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.refreshRemoteBinsForConnectedNodes.mockReset();
     mocks.registerSkillsChangeListener.mockReset();
     mocks.closeSkillsWatchers.mockReset();
+    mocks.detachSkillsWatchers.mockReset();
     mocks.startCronMaintenance.mockReset();
     mocks.registerSkillsChangeListener.mockReturnValue(mocks.skillsChangeUnsub);
     mocks.skillsChangeUnsub.mockReset();
@@ -195,6 +199,7 @@ describe("startGatewayEarlyRuntime", () => {
     await earlyRuntime.skillsChangeUnsub();
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
     expect(mocks.closeSkillsWatchers).toHaveBeenCalledTimes(1);
+    expect(mocks.detachSkillsWatchers).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

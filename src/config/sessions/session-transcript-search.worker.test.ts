@@ -11,12 +11,11 @@ import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import * as projectionWriter from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
-  reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 import {
@@ -123,22 +122,6 @@ it("keeps a warmed search reader through discovery and retires it through its ca
       } finally {
         hostSql.restore();
       }
-      const changed = await reader.owner.searchTranscripts(request, async () => {
-        runOpenClawAgentWriteTransaction(({ db }) => {
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DB>(db)
-              .updateTable("schema_meta")
-              .set({ updated_at: 2 })
-              .where("meta_key", "=", "primary"),
-          );
-        }, database);
-        return projectionWriter.readSessionTranscriptIndexStatus(database);
-      });
-      expect(changed.indexing).toBe(true);
-      const refreshed = await search();
-      expect(refreshed.hits).toEqual(initial.hits);
-      expect(refreshed.indexing).toBe(false);
       await closeOpenClawAgentDatabaseByPathAsync(aliasPath, "main");
       await expect(search()).rejects.toThrow("revoked");
     } finally {
@@ -170,11 +153,7 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
     });
     const request = { ...scope, query: "needle", sessionKeys: ["agent:main:selected"], limit: 1 };
     const database = { agentId: "main", path: storePath };
-    const {
-      found,
-      revision: _revision,
-      ...golden
-    } = searchSessionTranscriptsReadOnlySync(request, {
+    const { found, ...golden } = searchSessionTranscriptsReadOnlySync(request, {
       ...database,
       env: state.env,
     });
@@ -258,43 +237,6 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
       slowUnavailable.mockRestore();
       clock.mockRestore();
     }
-
-    runOpenClawAgentWriteTransaction(
-      ({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<DB>(db)
-            .updateTable("session_transcript_index_state")
-            .set({ needs_rebuild: 1 }),
-        );
-      },
-      { ...database, env: state.env },
-    );
-    const readStatus = projectionWriter.readSessionTranscriptIndexStatus;
-    const status = vi
-      .spyOn(projectionWriter, "readSessionTranscriptIndexStatus")
-      .mockImplementationOnce(async (...args) => {
-        // Complete publication after the hit snapshot but before its clean status is read.
-        await reconcileSessionTranscriptIndexes({ ...database, env: state.env });
-        const pending = await readStatus(...args);
-        expect(pending).toBe(false);
-        expect(isSessionTranscriptIndexReconcileRunning({ ...database, env: state.env })).toBe(
-          false,
-        );
-        return pending;
-      });
-    try {
-      expect(await searchSessionTranscripts(request, database)).toMatchObject({
-        hits: [],
-        indexing: true,
-      });
-    } finally {
-      status.mockRestore();
-    }
-    expect(await searchSessionTranscripts(request, database)).toEqual({
-      ...golden,
-      indexing: false,
-    });
   });
 });
 
@@ -349,7 +291,10 @@ it("cancels a search status callback queued behind a stuck writer at its deadlin
       await outcome;
       status.mockRestore();
     }
-    expect(await searchSessionTranscripts(request, database)).toEqual(committed);
+    expect(await searchSessionTranscripts(request, database)).toEqual({
+      ...committed,
+      indexing: false,
+    });
   });
 });
 

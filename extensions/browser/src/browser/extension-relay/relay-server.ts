@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/websocket-runtime";
 import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import { EXTENSION_RELAY_MAX_PAYLOAD_BYTES } from "../constants.js";
+import { firstHeader } from "../http-auth.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
 import {
   authenticateExtensionWebSocket,
@@ -41,7 +42,6 @@ import { handlePreAuthWebSocketUpgrade } from "./preauth-websocket-guard.js";
 import { readExtensionRelayToken } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import {
-  firstHeader,
   isAllowedExtensionOrigin,
   requestExtensionProtocolToken,
   requestProtocols,
@@ -199,8 +199,7 @@ export async function startExtensionRelayServer(params: {
     maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
   });
   const httpStates = new WeakMap<Duplex, HttpAuthState>();
-  const socketAuthorities = new WeakMap<Duplex, BrowserRelayAuthV2Authority>();
-  const authSockets = new Set<Duplex>();
+  const socketAuthorities = new Map<Duplex, BrowserRelayAuthV2Authority>();
   const ownerConnections = new Map<WebSocket, () => Promise<void>>();
 
   const currentAuthority = (): BrowserRelayAuthV2Authority | null => {
@@ -218,7 +217,6 @@ export async function startExtensionRelayServer(params: {
       clearTimeout(state.timer);
     }
     httpStates.delete(socket);
-    authSockets.delete(socket);
     const authority = socketAuthorities.get(socket);
     socketAuthorities.delete(socket);
     authority?.releaseConnection(socket);
@@ -246,13 +244,12 @@ export async function startExtensionRelayServer(params: {
     authority: BrowserRelayAuthV2Authority,
     source: string,
   ): boolean => {
-    if (authSockets.has(socket)) {
+    if (socketAuthorities.has(socket)) {
       return true;
     }
     if (!authority.registerPendingConnection(socket, () => socket.destroy(), source)) {
       return false;
     }
-    authSockets.add(socket);
     socketAuthorities.set(socket, authority);
     socket.once("close", () => clearSocketState(socket));
     return true;
@@ -598,7 +595,7 @@ export async function startExtensionRelayServer(params: {
       } finally {
         // This process owns physical retirement even when native cleanup fails.
         // Failed leases get no acknowledgement; the cleanup error still reaches the owner.
-        for (const socket of authSockets) {
+        for (const socket of socketAuthorities.keys()) {
           clearSocketState(socket);
           socket.destroy();
         }

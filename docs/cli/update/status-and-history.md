@@ -53,9 +53,13 @@ Older installed status commands cannot acquire this observation from candidate c
 
 For adopted immutable installations, the installation projection includes
 `activationEnabled` only when explicitly enabled. `activation` reports a
-retained operation's `operationId`, `phase`, `previousSha`, and `candidateSha`;
-`lastActivation` records the verified result and selected generation after
-retirement. Read these under `update.immutable` in CLI JSON or
+retained operation's `operationId`, `phase`, `previousSha`, and `candidateSha`,
+plus optional safe `failure` and the exact retained `recoveryCommand`.
+`lastActivation` records historical verification (`outcome`, `selectedSha`, and
+`verifiedAtMs`), including optional Gateway `version`, `buildId`, `pid`, and
+`bootId`. Text status labels success **accepted** and rollback **restored**;
+a restored predecessor is not candidate success. Older receipts may omit Gateway
+fields. Pending recovery remains separate even when a historical receipt exists. Read these under `update.immutable` in CLI JSON or
 `schedule.install.immutable` in Gateway `update.status`. A prepared generation
 or `starting` phase is not activation success. Use
 [`openclaw update recover --root <installation-root>`](/cli/update#immutable-release-installations)

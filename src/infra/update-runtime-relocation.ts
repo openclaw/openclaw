@@ -3,8 +3,8 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
-import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
+import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 
 export type RuntimeRelocation = {
@@ -145,12 +145,9 @@ export async function relocateRuntimeLauncher(
 }
 
 export async function readRuntimeModulesManifest(file: string) {
-  const original = await fs.readFile(file, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const original = await fs
+    .readFile(file, "utf8")
+    .catch((error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? null);
   if (original === null) {
     return null;
   }

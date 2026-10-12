@@ -35,32 +35,24 @@ function neutralizeEscapedGeneratedMediaDirective(value: string): string {
     .replace(/((?:\\r\\n|\\n|\\r) {0,3})(`{3,}|~{3,})/gu, "$1>$2");
 }
 
+const GENERATED_MEDIA_ESCAPES: Record<string, string> = {
+  "\\": "\\\\",
+  "\r": "\\r",
+  "\n": "\\n",
+  "\t": "\\t",
+};
+const GENERATED_MEDIA_ESCAPE_PATTERN = new RegExp(
+  String.raw`[\\\u0000-\u001f\u007f\u2028\u2029]`,
+  "g",
+);
+
 /** Escape provider-controlled summary text without changing its structured result. */
 export function sanitizeGeneratedMediaDisplayText(value: string): string {
-  let sanitized = "";
-  for (const char of value) {
-    switch (char) {
-      case "\\":
-        sanitized += "\\\\";
-        break;
-      case "\r":
-        sanitized += "\\r";
-        break;
-      case "\n":
-        sanitized += "\\n";
-        break;
-      case "\t":
-        sanitized += "\\t";
-        break;
-      default: {
-        const code = char.charCodeAt(0);
-        sanitized +=
-          code <= 0x1f || code === 0x7f || code === 0x2028 || code === 0x2029
-            ? `\\u${code.toString(16).padStart(4, "0")}`
-            : char;
-      }
-    }
-  }
+  const sanitized = value.replace(
+    GENERATED_MEDIA_ESCAPE_PATTERN,
+    (char) =>
+      GENERATED_MEDIA_ESCAPES[char] ?? `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
   return neutralizeEscapedGeneratedMediaDirective(sanitizeForPromptLiteral(sanitized))
     .replaceAll("[[", "［[")
     .replaceAll("![", "!［");

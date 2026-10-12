@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 // This doctor closure must stay dependency-light while accepting legacy array-backed objects.
 import { asOptionalObjectRecord as readLegacyObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readDoctorAgentEntries } from "../doctor-agent-config.js";
 import type { LegacyMemorySidecarSource } from "./doctor-memory-sidecar-import.js";
 
 const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -34,20 +35,8 @@ function formatLegacyVectorRows(count: number | undefined): string {
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
-function readLegacyAgentEntries(config: unknown) {
-  const agents = readLegacyObjectRecord(readLegacyObjectRecord(config)?.agents);
-  const listed: unknown[] =
-    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
-      ? agents.list
-      : [];
-  return {
-    keyed: readLegacyObjectRecord(agents?.entries),
-    listed,
-  };
-}
-
 function resolveConfiguredAgentIds(config: unknown): string[] {
-  const { keyed, listed } = readLegacyAgentEntries(config);
+  const { keyed, listed } = readDoctorAgentEntries(config);
   const listedIds = listed.flatMap((value) => {
     const id = readLegacyObjectRecord(value)?.id;
     return typeof id === "string" ? [id] : [];
@@ -60,7 +49,7 @@ function readAgentMemorySearch(
   config: unknown,
   agentId: string,
 ): Record<string, unknown> | undefined {
-  const { keyed, listed } = readLegacyAgentEntries(config);
+  const { keyed, listed } = readDoctorAgentEntries(config);
   const keyedEntry = Object.entries(keyed ?? {}).find(
     ([id]) => normalizeAgentId(id) === agentId,
   )?.[1];
@@ -503,6 +492,34 @@ async function migrateLegacyMemorySidecarSource(params: {
 export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
+  async collectBackupResources(params) {
+    const sources = await collectLegacyMemorySidecarSources(params);
+    const resources: Array<{ path: string; kind: "sqlite" | "file" }> = [];
+    for (const source of sources) {
+      resources.push({ path: source.agentDatabasePath, kind: "sqlite" });
+      for (const sourcePath of await existingLegacySidecarPaths(source.legacyPath)) {
+        // Header-based capture recognizes real SQLite files without opening empty
+        // or malformed legacy placeholders as databases.
+        resources.push(
+          { path: sourcePath, kind: "file" },
+          { path: `${sourcePath}.migrated`, kind: "file" },
+        );
+      }
+      // Failed imports can preserve a deterministic retry copy in core memory storage.
+      for (const name of [
+        `${source.agentId}.sqlite`,
+        `${source.agentId}.retry-${crypto.createHash("sha256").update(path.resolve(source.legacyPath)).digest("hex").slice(0, 12)}.sqlite`,
+      ]) {
+        for (const suffix of LEGACY_MEMORY_SIDECAR_SUFFIXES) {
+          resources.push({
+            path: path.join(params.stateDir, "memory", `${name}${suffix}`),
+            kind: "file",
+          });
+        }
+      }
+    }
+    return resources;
+  },
   async detectLegacyState(params) {
     const sources = await collectLegacyMemorySidecarSources(params);
     if (sources.length === 0) {

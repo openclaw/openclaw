@@ -54,10 +54,10 @@ export function extractSlackProgressCommentaryDirectives(text: string) {
     return null;
   }
   const suffix = commentaryMarker.slice("SLACK-QA-COMMENTARY-".length);
-  const execCommand = `grep 'SLACK-QA-TOOL-${suffix}' /dev/null || sleep 5`;
+  const execCommand = `printf '%s' 'SLACK-QA-TOOL-${suffix}' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-${suffix}'`;
   const commandDirective = extractLastCapture(
-    text,
-    /\b(grep 'SLACK-QA-TOOL-[A-F0-9]{8}' \/dev\/null \|\| sleep 5)(?=[.`\s]|$)/u,
+    text.replaceAll("&gt;", ">"),
+    /\b(printf '%s' 'SLACK-QA-TOOL-[A-F0-9]{8}' >\/dev\/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-[A-F0-9]{8}')(?=[.`\s]|$)/u,
   );
   if (
     toolMarker !== `SLACK-QA-TOOL-${suffix}` ||

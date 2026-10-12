@@ -1,5 +1,5 @@
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   resolveAuthProfileEligibility,
   resolveProfileUnusableUntilForDisplay,
   type AuthProfileCredential,
@@ -60,7 +60,7 @@ export async function readCodexAccountAuthOverview(params: {
   }
   const config = params.ctx.config;
   const agentDir = params.agentDir;
-  const store = ensureAuthProfileStore(agentDir, {
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
     allowKeychainPrompt: false,
     config,
   });

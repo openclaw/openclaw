@@ -11,7 +11,7 @@ import {
 } from "./sqlite-file-generation.js";
 
 /** SQLite recovers committed WAL frames; these checks do not scan table or index contents. */
-export function sqliteProcessDeathIntegrityRefusal(
+export function sqliteWalAdmissionRefusal(
   database: DatabaseSync,
   pathname: string,
 ): string | undefined {
@@ -26,10 +26,6 @@ export function sqliteProcessDeathIntegrityRefusal(
     if (database.prepare("PRAGMA journal_mode").get()?.journal_mode !== "wal") {
       return "journal-mode-not-wal";
     }
-    probe = "wal-recovery";
-    // PASSIVE works on every supported SQLite. Busy or partially backfilled WALs
-    // are normal with concurrent readers/writers; neither implies corruption.
-    database.prepare("PRAGMA wal_checkpoint(PASSIVE)").get();
     return undefined;
   } catch {
     return `${probe}-failed`;

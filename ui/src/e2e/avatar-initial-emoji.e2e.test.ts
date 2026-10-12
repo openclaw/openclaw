@@ -58,7 +58,7 @@ async function screenshot(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("renders the identity emoji in the sidebar chip and agent menu row", async () => {
+  it("renders the identity emoji in the rail and agent menu row", async () => {
     await suite.withPage(
       {
         locale: "en-US",

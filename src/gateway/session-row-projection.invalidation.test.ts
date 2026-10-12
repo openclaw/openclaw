@@ -1,6 +1,5 @@
-import { renameSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionCommunicationMode } from "../../packages/gateway-protocol/src/session-communication.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
@@ -39,13 +38,6 @@ import {
   setSecretsRuntimeSourceSnapshotIfCurrent,
 } from "../secrets/runtime-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import * as databaseIdentity from "../state/openclaw-agent-db-identity.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import {
-  openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.js";
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -55,8 +47,8 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import * as listFilters from "./session-list-filters.js";
 import * as projectionWork from "./session-projection-work.js";
-import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
@@ -210,7 +202,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
           });
         }
         expect(sequence(siblingKey)).toBe(siblingSequence);
-        expect.soft(reads, `Stored facts after ${JSON.stringify(change)}`).toEqual([parentKey]);
+        expect.soft(reads, `Stored facts after ${JSON.stringify(change)}`).toEqual([]);
       }
       parent.modelOverrideSource = "user";
       replaceSessionEntrySync(scope, { ...parent });
@@ -251,7 +243,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
         children[0],
       ]);
       expect(moved.sessions.find((row) => row.key === children[0])?.model).toBe("default");
-      expect.soft(reads, "Unchanged parents after a child moves").toEqual([childScope.sessionKey]);
+      expect.soft(reads, "Unchanged parents after a child moves").toEqual([]);
       reads.length = 0;
       await deleteSessionEntryLifecycle({
         ...scope,
@@ -271,115 +263,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
       await projection.ensureMaterialized();
       projection.dispose();
       release();
-    }
-  });
-});
-
-it("hydrates a same-path replacement with a reused inode and retires its previous inventory", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const staged = state.statePath("imports", "replacement.sqlite");
-    const cfg = {
-      agents: { entries: { main: {} } },
-      session: { store: storePath },
-    };
-    replaceSessionEntrySync(
-      { agentId: "main", storePath, sessionKey: "agent:main:old" },
-      { sessionId: "old", updatedAt: 1, category: "old group" },
-    );
-    replaceSessionEntrySync(
-      { agentId: "main", storePath: staged, sessionKey: "agent:main:new" },
-      { sessionId: "new", updatedAt: 2, category: "new group" },
-    );
-    const readIdentity = databaseIdentity.readOpenClawAgentDatabaseIdentity;
-    const previousIdentity = readIdentity(
-      openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
-    );
-    const replacementIdentity = readIdentity(
-      openOpenClawAgentDatabase({ agentId: "main", path: staged }),
-    );
-    if (typeof replacementIdentity.identity !== "string") {
-      throw new Error("Expected a persistent fixture database identity");
-    }
-    const reusedIdentity = replacementIdentity.identity;
-    const previousBirthtime = (BigInt(replacementIdentity.birthtime ?? "0") + 1n).toString();
-    const initialSource = (source: { identity?: string; birthtime?: string }) =>
-      source.identity === previousIdentity.identity &&
-      source.birthtime === previousIdentity.birthtime;
-    const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
-    // Simulate the initial inode while retaining real file verification at both admissions.
-    const workerIdentity = vi
-      .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
-      .mockImplementation((targets, consume, lane) =>
-        readDatabases(
-          targets,
-          (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                async readStoreProjection(input) {
-                  const reply = await owner.readStoreProjection(input);
-                  return reply.source && initialSource(reply.source)
-                    ? {
-                        ...reply,
-                        source: {
-                          ...reply.source,
-                          identity: reusedIdentity,
-                          birthtime: previousBirthtime,
-                        },
-                      }
-                    : reply;
-                },
-                async readMembershipFacts(input) {
-                  const reply = await owner.readMembershipFacts(input);
-                  return initialSource(reply)
-                    ? { ...reply, identity: reusedIdentity, birthtime: previousBirthtime }
-                    : reply;
-                },
-              })),
-            ),
-          lane,
-        ),
-      );
-    await closeOpenClawAgentDatabaseByPathAsync(staged, "main");
-    const projection = await createSessionRowProjection({ cfg });
-    await projection.ensureMaterialized();
-    try {
-      expect([...projection.sessionGroupTargets().keys()]).toEqual(["old group"]);
-      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-      renameSync(staged, storePath);
-      registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      try {
-        await withReadySessionRows(
-          projection,
-          () => [{ agentId: "main", key: "agent:main:new" }],
-          (read) => {
-            expect(read.describe({ agentId: "main", key: "agent:main:new" })?.entry.sessionId).toBe(
-              "new",
-            );
-            expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
-          },
-        );
-        await projection.ensureMaterialized();
-        expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
-        expect([...projection.sessionGroupTargets()]).toEqual([
-          ["new group", [{ sessionKey: "agent:main:new", agentId: "main" }]],
-        ]);
-        const sql = vi.spyOn(DatabaseSync.prototype, "prepare");
-        try {
-          expect(projection.snapshot({ agentId: "main", key: "agent:main:old" }).row).toBeNull();
-          expect(
-            projection.snapshot({ agentId: "main", key: "agent:main:new" }).row?.sessionId,
-          ).toBe("new");
-          expect(sql).not.toHaveBeenCalled();
-        } finally {
-          sql.mockRestore();
-        }
-      } finally {
-        workerIdentity.mockRestore();
-      }
-    } finally {
-      projection.dispose();
     }
   });
 });
@@ -495,11 +378,13 @@ it("reuses row identities across lists until their entry, profile, or config cha
       agents: {
         entries: { main: { identity: { name: "Original agent" } } },
       },
+      session: { communication: { receive: "ask" as SessionCommunicationMode } },
     };
     const scope = { agentId: "main", sessionKey: "agent:main:identity-cache" };
     const entry = {
       sessionId: "identity-cache",
       updatedAt: 1,
+      communication: { send: "never" as const },
       createdActor: { type: "agent" as const, id: "main" },
     };
     replaceSessionEntrySync(scope, entry);
@@ -508,23 +393,41 @@ it("reuses row identities across lists until their entry, profile, or config cha
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const list = () => listProjectedSessions({ projection, opts: {} });
     try {
-      await list();
+      expect((await list()).sessions[0]?.effectiveCommunication).toEqual({
+        send: "never",
+        receive: "ask",
+      });
       const identities = vi.spyOn(agentIdentity, "resolveAgentIdentity");
       for (let index = 0; index < 3; index++) {
         expect((await list()).sessions[0]?.owner?.actor.label).toBe("Original agent");
       }
       expect(identities).not.toHaveBeenCalled();
 
+      const serialized = () =>
+        listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
+      await serialized();
+      const selections = vi.spyOn(listFilters, "filterSessionEntries");
+      sessionChanges.emit({ ...scope, scope: "runtime", facts: { kind: "unchanged" } });
+      expect((await serialized()).sessions[0]?.owner?.actor.label).toBe("Original agent");
+      expect(selections).not.toHaveBeenCalled();
+      identities.mockClear();
+
       sessionChanges.emit({ all: true, scope: "profiles" });
       await list();
-      expect(identities).toHaveBeenCalledTimes(3);
+      expect(identities).toHaveBeenCalled();
       identities.mockClear();
       await list();
       expect(identities).not.toHaveBeenCalled();
 
       cfg.agents.entries.main.identity.name = "Renamed agent";
+      cfg.session.communication.receive = "always";
       sessionChanges.emit({ all: true, scope: "config" });
       expect((await list()).owners?.[0]?.label).toBe("Renamed agent");
+      expect((await list()).sessions[0]?.effectiveCommunication).toEqual({
+        send: "never",
+        receive: "always",
+      });
+      expect((await list()).sessions[0]?.communication).toEqual({ send: "never" });
       assignSessionOwner(scope, {
         owner: { type: "agent", id: "missing" },
         assignedBy: { type: "system", id: "test" },

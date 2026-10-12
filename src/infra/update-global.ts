@@ -23,12 +23,6 @@ import {
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 import { parseSemver } from "./runtime-guard.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-  PKG_INSPECTION_TIMEOUT_MS,
-  type FreeBsdPkgOwnershipInspection,
-} from "./update-freebsd-pkg-ownership.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
@@ -39,6 +33,11 @@ import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
 } from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
+import {
+  createSystemPackageOwnershipInspection,
+  PKG_INSPECTION_TIMEOUT_MS,
+  type SystemPackageOwnershipInspection,
+} from "./update-system-package-ownership.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
@@ -62,7 +61,6 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
 };
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
-const GLOBAL_RENAME_PREFIX = ".";
 /** npm-compatible spec used when the user asks to install the moving main branch. */
 const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
@@ -385,22 +383,19 @@ async function collectInstalledPackageDistErrors(params: {
     actualFiles,
     missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
   });
-  if (inventoryFiles !== null) {
-    return [...inventoryErrors, ...criticalErrors];
+  if (inventoryFiles === null) {
+    if (inventoryError) {
+      inventoryErrors.push(inventoryError);
+    } else if (
+      shouldRequirePackagedDistInventory(params.installedVersion) ||
+      shouldRequirePackagedDistInventory(params.expectedVersion)
+    ) {
+      inventoryErrors.push(
+        `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+      );
+    }
   }
-  if (inventoryError) {
-    return [inventoryError, ...criticalErrors];
-  }
-  if (
-    shouldRequirePackagedDistInventory(params.installedVersion) ||
-    shouldRequirePackagedDistInventory(params.expectedVersion)
-  ) {
-    return [
-      `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
-      ...criticalErrors,
-    ];
-  }
-  return criticalErrors;
+  return [...inventoryErrors, ...criticalErrors];
 }
 
 async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
@@ -663,16 +658,6 @@ function resolvePackageRootFromGlobalRoot(params: {
     ) &&
     (parts.length === 1 || parts[0]?.startsWith("@"));
   return path.join(params.globalRoot, ...(hasSafeSegments ? parts : [PRIMARY_PACKAGE_NAME]));
-}
-
-function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
-  return (
-    globalRoot !== null &&
-    resolveNpmGlobalPrefixLayoutFromGlobalRoot(globalRoot) === null &&
-    resolveNpmGlobalPrefixLayoutFromGlobalRoot(globalRoot, {
-      allowDirectNodeModulesRoot: true,
-    }) !== null
-  );
 }
 
 function inferBunGlobalRootFromPackageRoot(
@@ -974,9 +959,10 @@ export async function resolveGlobalInstallTarget(params: {
   honorPackageRoot?: boolean;
   env?: NodeJS.ProcessEnv;
   packageName?: string;
-  pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  pkgOwnership?: SystemPackageOwnershipInspection;
 }): Promise<ResolvedGlobalInstallTarget> {
-  const pkgOwnership = params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs);
+  const pkgOwnership =
+    params.pkgOwnership ?? createSystemPackageOwnershipInspection(params.timeoutMs);
   await pkgOwnership.assertUnowned(params.pkgRoot);
   const requestedCommand = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
   let requestedPnpmGlobalRoot: Promise<string | null> | undefined;
@@ -1010,7 +996,11 @@ export async function resolveGlobalInstallTarget(params: {
     pnpmIsolatedPackage === null &&
     pnpmPackageRootGlobalRoot === null &&
     bunPackageRootGlobalRoot === null &&
-    isDirectNpmNodeModulesRoot(honoredPackageRootGlobalRoot);
+    honoredPackageRootGlobalRoot !== null &&
+    resolveNpmGlobalPrefixLayoutFromGlobalRoot(honoredPackageRootGlobalRoot) === null &&
+    resolveNpmGlobalPrefixLayoutFromGlobalRoot(honoredPackageRootGlobalRoot, {
+      allowDirectNodeModulesRoot: true,
+    }) !== null;
   const manager = bunPackageRootGlobalRoot
     ? "bun"
     : verifiedPnpmIsolatedGlobalRoot || pnpmPackageRootGlobalRoot
@@ -1055,12 +1045,9 @@ export async function resolveGlobalInstallTarget(params: {
       ? (pnpmIsolatedPackage?.packageRoot ??
         (verifiedPnpmIsolatedGlobalRoot && params.pkgRoot ? params.pkgRoot : fallbackPackageRoot))
       : fallbackPackageRoot;
-  if (process.platform === "freebsd" && !packageRoot) {
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
-  }
   // Manager discovery can outlive the planning snapshot. The selected
   // destination starts a fresh inspection before its runtime is selected.
-  await createFreeBsdPkgOwnershipInspection(params.timeoutMs).assertUnowned(packageRoot);
+  await createSystemPackageOwnershipInspection(params.timeoutMs).assertUnowned(packageRoot);
   const npmOwner =
     command.manager === "npm"
       ? await resolveNpmOwner({
@@ -1248,7 +1235,7 @@ export async function cleanupGlobalRenameDirs(params: {
   if (!root || !name) {
     return { removed };
   }
-  const prefix = `${GLOBAL_RENAME_PREFIX}${name}-`;
+  const prefix = `.${name}-`;
   const inspectionDeadline = Date.now() + PKG_INSPECTION_TIMEOUT_MS;
   let entries: string[];
   try {
@@ -1266,27 +1253,22 @@ export async function cleanupGlobalRenameDirs(params: {
       if (!stat.isDirectory()) {
         continue;
       }
-      if (process.platform === "freebsd") {
-        // A matching rename pattern does not establish ownership of its files.
-        const remainingMs = inspectionDeadline - Date.now();
-        if (remainingMs <= 0) {
-          break;
-        }
-        await createFreeBsdPkgOwnershipInspection(remainingMs).assertUnowned(target);
-        const current = await fs.lstat(target);
-        if (!current.isDirectory() || !sameFileIdentity(stat, current)) {
-          continue;
-        }
+      // A matching rename pattern does not establish ownership of its files.
+      const remainingMs = inspectionDeadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      await createSystemPackageOwnershipInspection(remainingMs).assertUnowned(target);
+      if (Date.now() >= inspectionDeadline) {
+        break;
+      }
+      const current = await fs.lstat(target);
+      if (!current.isDirectory() || !sameFileIdentity(stat, current)) {
+        continue;
       }
       await fs.rm(target, { recursive: true, force: true });
       removed.push(entry);
-    } catch (error) {
-      if (
-        error instanceof FreeBsdPkgOwnershipError &&
-        error.reason === "pkg-ownership-unavailable"
-      ) {
-        break;
-      }
+    } catch {
       // ignore cleanup failures
     }
   }

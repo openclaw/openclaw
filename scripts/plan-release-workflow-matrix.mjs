@@ -24,7 +24,8 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-restart-auth",
     label: "package/update restart auth",
-    timeout_minutes: 55,
+    // 62-minute lane plus runner setup and artifact upload, matching targeted jobs.
+    timeout_minutes: 75,
     profiles: "beta minimum stable full",
   },
   {

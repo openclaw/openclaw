@@ -15,6 +15,7 @@ import {
   prepareSystemEventStorePath,
 } from "../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { buildAgentMainSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -274,7 +275,6 @@ export async function recordSessionStateEventAsync(
   options: AsyncSessionStateEventOptions = {},
 ): Promise<SessionStateEventRecord | undefined> {
   const sessionEntryCurrent = options.sessionEntryCurrent;
-  let watcherPaths: Promise<PromiseSettledResult<PreparedSessionWatcherStorePaths>[]> | undefined;
   try {
     const context = options.context ?? captureOpenClawStateWorkerContext(options);
     const now = options.now ?? Date.now();
@@ -286,24 +286,14 @@ export async function recordSessionStateEventAsync(
       options.assertCurrent?.();
       preparedWatchers?.assertCurrent();
     };
-    if (!event.watcherStorePaths) {
-      watcherPaths = Promise.allSettled([
-        prepareSessionWatcherStorePaths(
-          event.watcherSessionKeys,
-          context.initializationEnvironment,
-        ),
-      ]);
-    }
-    const preparedPaths = watcherPaths;
     return await runOpenClawStateWorkerOperation(
       context,
       async (scope) => {
-        if (preparedPaths) {
-          const result = (await preparedPaths)[0]!;
-          if (result.status === "rejected") {
-            throw result.reason;
-          }
-          preparedWatchers = result.value;
+        if (!event.watcherStorePaths) {
+          preparedWatchers = await prepareSessionWatcherStorePaths(
+            event.watcherSessionKeys,
+            context.initializationEnvironment,
+          );
           event.watcherStorePaths = preparedWatchers.paths;
         }
         const recorded = await scope.execute({
@@ -351,15 +341,8 @@ export async function recordSessionStateEventAsync(
     );
   } catch (error) {
     // A committed originating action and an uncertain signal must never be replayed.
-    try {
-      log.warn(`failed to record session state event: ${String(error)}`);
-    } catch {
-      // Keep the originating durable result even when the diagnostic sink fails.
-    }
+    log.warn(`failed to record session state event: ${String(error)}`);
     return undefined;
-  } finally {
-    // Preparation may already be admitted when the signal writer refuses opening.
-    await watcherPaths;
   }
 }
 
@@ -384,11 +367,17 @@ export async function recordSessionGoalChanged(params: {
   });
 }
 
-/** Released synchronous SDK compatibility; runtime prompt preparation uses worker reads. */
+/** @deprecated Retained for prepareWatchedSessionsPrompt; use its async replacement. */
 export function listAmbientGroupWatchTargets(
   watcherSessionKey: string,
   options: OpenClawStateDatabaseOptions = {},
 ): Set<string> {
+  warnPluginSdkDeprecation({
+    family: "watched-sessions-prompt",
+    method: "prepareWatchedSessionsPrompt",
+    replacement: "prepareWatchedSessionsPromptAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   try {
     const { db } = openOpenClawStateDatabase(options);
     const rows = executeSqliteQuerySync(

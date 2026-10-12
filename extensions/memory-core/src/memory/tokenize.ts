@@ -29,10 +29,6 @@ export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number 
   if (setA.size === 0 && setB.size === 0) {
     return 1;
   }
-  if (setA.size === 0 || setB.size === 0) {
-    return 0;
-  }
-
   let intersectionSize = 0;
   const smaller = setA.size <= setB.size ? setA : setB;
   const larger = setA.size <= setB.size ? setB : setA;
@@ -44,7 +40,7 @@ export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number 
   }
 
   const unionSize = setA.size + setB.size - intersectionSize;
-  return unionSize === 0 ? 0 : intersectionSize / unionSize;
+  return intersectionSize / unionSize;
 }
 
 // Distinct text outside the tokenizer's alphabet must not collapse as two empty sets.

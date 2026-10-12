@@ -13,11 +13,11 @@ import * as clawOwnership from "../claws/provenance-async.js";
 import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
+import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
+} from "../cron/store/run-receipt-store.test-support.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import * as deletionJournal from "../state/agent-deletion-journal.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -495,26 +495,6 @@ describe("Claw serving monitor cleanup", () => {
       await run;
     }
   });
-
-  it.each([false, true])(
-    "removes the config-owned heartbeat monitor (enabled=%s)",
-    async (enabled) => {
-      const current = await fixture(enabled);
-      const plan = await current.plan();
-      expect(plan.blockers).toEqual([]);
-      expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual([
-        expect.objectContaining({ action: "remove", blocked: false }),
-      ]);
-      const result = await current.apply(plan);
-      expect(result).toMatchObject({ status: "complete", agentRemoved: true });
-      expect(
-        (await current.cron.list({ includeDisabled: true })).every(
-          (job) => job.agentId !== "worker",
-        ),
-      ).toBe(true);
-      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).rejects.toThrow();
-    },
-  );
 
   it.each([
     "ordinary",

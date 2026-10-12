@@ -222,9 +222,8 @@ describe("session transcript reconcile worker lifecycle", () => {
     const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
     const operationSpy = vi
       .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
-      .mockImplementation((generation, run, owner) =>
+      .mockImplementation((run, owner) =>
         runOperation(
-          generation,
           (operation) =>
             run({
               ...operation,
@@ -278,7 +277,6 @@ describe("session transcript reconcile worker lifecycle", () => {
           workers: 1,
           workersCreated: before.workersCreated + 1,
           activeTasks: 1,
-          pendingTasks: agents.length,
         });
       } finally {
         fence.release();
@@ -340,15 +338,11 @@ describe("session transcript reconcile worker lifecycle", () => {
     const operationSpy = vi.spyOn(reconcilePool, "runSessionTranscriptReconcileOperation");
     const startDeferred = (options: OpenClawAgentDatabaseOptions) => {
       const release = createDeferred();
-      operationSpy.mockImplementationOnce((generation, run, owner) =>
-        runOperation(
-          generation,
-          async (operation) => {
-            await release.promise;
-            return run(operation);
-          },
-          owner,
-        ),
+      operationSpy.mockImplementationOnce((run, owner) =>
+        runOperation(async (operation) => {
+          await release.promise;
+          return run(operation);
+        }, owner),
       );
       startSessionTranscriptIndexReconcile(options);
       return release;

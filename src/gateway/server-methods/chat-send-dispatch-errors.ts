@@ -2,12 +2,14 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
+import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
@@ -41,6 +43,7 @@ export function formatReturnedAgentErrors(messages: string[]): string | undefine
 }
 
 type PendingDispatchLifecycleError = {
+  terminationFields: ReturnType<typeof resolveAgentRunErrorLifecycleFields>;
   endedAt: number;
   error: string;
   errorKind?: "state_contention";
@@ -239,9 +242,15 @@ export function createChatSendDispatchErrorLifecycle(params: {
       return;
     }
 
-    // Capture terminal ownership before durable cleanup yields: an explicit
-    // abort has both its signal and canonical marker, but a restart may abort
-    // only the signal and must retain its real dispatch-failure outcome.
+    // Capture ownership before cleanup yields. Preparation also aborts this
+    // controller, so only typed reasons establish cancellation, not its failures.
+    const signalTermination = resolveAgentRunErrorLifecycleFields(
+      activeRunAbort.controller.signal.reason,
+      undefined,
+    );
+    const terminationFields = signalTermination.stopReason
+      ? signalTermination
+      : resolveAgentRunErrorLifecycleFields(err, undefined);
     const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
     const abortMarkerAtDispatchReject = context.chatRunState.runs.get(clientRunId)?.abortMarker;
     const agentTerminalOwnedAtDispatchReject =
@@ -314,6 +323,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       !agentTerminalOwnedAtDispatchReject
     ) {
       pendingDispatchLifecycleError = {
+        terminationFields,
         endedAt: Date.now(),
         error: errorMessage,
         errorKind,
@@ -337,11 +347,12 @@ export function createChatSendDispatchErrorLifecycle(params: {
               runId: clientRunId,
               status: "error" as const,
               summary: errorMessage,
+              ...terminationFields,
             },
             error,
           },
         });
-        broadcastError({ errorMessage, errorKind });
+        broadcastError({ errorMessage, errorKind, stopReason: terminationFields.stopReason });
       };
       if (pendingDispatchLifecycleError) {
         // agent.wait consumes the cached terminal immediately. Commit the lifecycle
@@ -354,6 +365,14 @@ export function createChatSendDispatchErrorLifecycle(params: {
   };
 
   const finalize = async () => {
+    if (params.isReplyDispatchRun?.() && activeRunAbort.entry) {
+      // Accepted lifecycle delivery still needs this exact registration and run context.
+      await waitForChatAbortTerminalPersistence(activeRunAbort.entry).catch((error: unknown) => {
+        context.logGateway.warn(
+          `webchat terminal lifecycle settlement failed: ${formatForLog(error)}`,
+        );
+      });
+    }
     const dispatchError = pendingDispatchLifecycleError;
     // Commands and reply-dispatch runtimes have already published their terminal.
     // Native agent events keep ownership until their own terminal delivery completes.
@@ -430,6 +449,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
                 endedAt: dispatchError.endedAt,
                 error: dispatchError.error,
                 errorKind: dispatchError.errorKind,
+                ...dispatchError.terminationFields,
               },
             },
           });

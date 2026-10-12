@@ -466,7 +466,6 @@ export class SystemsController {
     try {
       const inventory = await loadSystemsInventory(this.context.gateway, {
         signal: request.signal,
-        isCurrent,
         fresh: refreshIntent === "manual",
       });
       if (!inventory && isCurrent()) {

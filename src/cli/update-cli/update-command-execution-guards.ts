@@ -41,23 +41,15 @@ export function createUpdateCommandExecutionGuards(
   owner?: PhaseOwner,
 ) {
   const run = opts.run;
-  const runId = run?.runId;
-  const phaseOwner = owner ? { ...owner } : undefined;
   let executor = run?.executorFence;
   const requester = run?.requesterAuthority;
   let stateHandedOff = false;
-  const assertInvocation = (phase?: "restore", readRecovery = true) => {
+  const assertInvocation = (phase?: "restore") => {
     const readStatePolicy = !stateHandedOff && phase !== "restore";
-    if (opts.recovery || (readRecovery && readStatePolicy)) {
+    if (opts.recovery || readStatePolicy) {
       assertUpdateCommandRecoveryState(opts);
     }
-    if (
-      opts.run !== run ||
-      run?.runId !== runId ||
-      run?.executorFence !== executor ||
-      run?.requesterAuthority !== requester ||
-      (readStatePolicy && requester?.isCurrent() === false)
-    ) {
+    if (readStatePolicy && requester?.isCurrent() === false) {
       throw new UpdateRequesterRevokedError();
     }
   };
@@ -65,55 +57,33 @@ export function createUpdateCommandExecutionGuards(
     UpdateCommandExecutionGuards["captureWriteOptions"]
   > => {
     const assertAccepting = () => {
-      if (phaseOwner?.kind !== "package-compensation" && run?.interrupted) {
+      if (owner?.kind !== "package-compensation" && run?.interrupted) {
         throw new UpdateRequesterRevokedError();
       }
     };
     assertAccepting();
-    const capturedExecutor = executor;
-    const capturedHandoff = stateHandedOff;
-    const env = run?.env;
-    const assertCurrent = () => {
-      if (executor !== capturedExecutor || stateHandedOff !== capturedHandoff || run?.env !== env) {
-        throw new UpdateRequesterRevokedError();
-      }
-      if (phaseOwner) {
-        if (opts.recovery) {
-          assertUpdateCommandRecoveryState(opts);
-        }
-        if (opts.run !== run || run?.runId !== runId || run?.executorFence !== capturedExecutor) {
-          throw new UpdateRequesterRevokedError();
-        }
-        phaseOwner.assertCurrent();
-      } else {
-        assertInvocation(undefined, false);
-        capturedExecutor?.assertCurrent();
-      }
-    };
-    assertCurrent();
-    const capturedEnv = cloneEnvWithPlatformSemantics(env ?? process.env);
+    const capturedEnv = cloneEnvWithPlatformSemantics(run?.env ?? process.env);
     const context = captureOpenClawStateWorkerContext({ env: capturedEnv });
     return {
       env: capturedEnv,
       context,
-      assertCurrent,
+      // Driver-only wait; these writes run in the worker, never on the Gateway event loop.
+      busyTimeoutMs: 120_000,
       assertAccepting,
       retainSettlement: (completion: Promise<void>) =>
         retainMutableUpdateSignalWrite(run, completion),
-      ...(phaseOwner || !capturedHandoff ? { requireNoRecovery: true as const } : {}),
+      ...(owner || !stateHandedOff ? { requireNoRecovery: true as const } : {}),
     } satisfies UpdateRunWriteOptions;
   };
   const recordPhase = async (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => {
     if (run) {
+      owner?.assertCurrent();
       const captured = captureWriteOptions();
       await recordUpdateRunPhaseAsync(run.runId, phase, patch, captured);
       recordMutableUpdateSignalPhase(run, phase);
-      if (phaseOwner?.kind === "current-core-finalization") {
-        captured.assertAccepting();
-      }
     }
   };
-  if (phaseOwner) {
+  if (owner) {
     return { recordPhase };
   }
   return {
@@ -124,11 +94,7 @@ export function createUpdateCommandExecutionGuards(
         throw new Error("Update step receipt requires an admitted run.");
       }
       const captured = captureWriteOptions();
-      const record = await recordUpdateRunStepAsync(run.runId, step, captured);
-      captured.context.admission.assertCurrent();
-      captured.assertCurrent();
-      captured.assertAccepting();
-      return record;
+      return await recordUpdateRunStepAsync(run.runId, step, captured);
     },
     onStateHandoff: () => {
       stateHandedOff = true;
@@ -144,7 +110,6 @@ export function createUpdateCommandExecutionGuards(
       if (authority.installKey !== resolveUpdateInstallRoot(root)) {
         throw new UpdateRequesterRevokedError();
       }
-      assertUpdateCommandRecoveryState(opts);
       run.executorFence = acquired;
       executor = acquired;
     },

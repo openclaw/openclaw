@@ -26,7 +26,10 @@ import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
-import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
+import {
+  requireSystemAgentInferenceRoute,
+  requireSystemAgentPersistentApplyInference,
+} from "./inference-guard.js";
 import type { SystemAgentOperation } from "./operations.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
@@ -255,23 +258,14 @@ export class SystemAgentChatEngine {
     if (this.agentSession.verifiedInference !== binding) {
       return this.throwInferenceUnavailable();
     }
-    try {
-      const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-      const route = await resolvePersistentApplyInference({
-        binding,
-        runtime,
-        deps: this.options.deps,
-      });
-      if (route) {
-        return route;
-      }
-    } catch (error) {
-      if (isSystemAgentInferenceUnavailableError(error)) {
-        return this.throwInferenceUnavailable(error.failures, false);
-      }
-      return this.throwInferenceUnavailable([error], false);
-    }
-    return this.throwInferenceUnavailable([], false);
+    return await requireSystemAgentPersistentApplyInference(
+      { binding, runtime, deps: this.options.deps },
+      (failures) =>
+        this.throwInferenceUnavailable(
+          isSystemAgentInferenceUnavailableError(failures[0]) ? failures[0].failures : failures,
+          false,
+        ),
+    );
   }
 
   private rebindVerifiedInference(binding: SystemAgentVerifiedInferenceBinding): void {

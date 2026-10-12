@@ -64,7 +64,7 @@ export async function clearRemovedSessionAuthProfiles(params: {
               registry.assertCurrent();
               owner.assertCurrent();
             };
-            const entries = await owner.readEntries({
+            const { entries } = await owner.readEntries({
               agentId: database.agentId,
               storePath: database.path,
               env: inventory.env,

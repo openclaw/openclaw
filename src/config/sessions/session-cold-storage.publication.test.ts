@@ -259,10 +259,12 @@ it("publishes the committed key exactly once after the worker settles, without h
   expect(changes).toHaveBeenCalledExactlyOnceWith({
     storePath: preparation.target.path,
     sessionKey: "agent:main:committed-window",
+    scope: "transcript",
   });
   expect(factChanges).toHaveBeenCalledExactlyOnceWith({
     storePath: preparation.target.path,
     sessionKey: "agent:main:committed-window",
+    scope: "transcript",
     facts: { kind: "unchanged" },
   });
 });

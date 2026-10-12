@@ -22,15 +22,9 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { finalizePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
-import {
-  bootstrapOutboundChannelPlugin,
-  bootstrapOutboundChannelPluginAsync,
-  resetOutboundChannelBootstrapStateForTests,
-} from "./channel-bootstrap.runtime.js";
+import { bootstrapOutboundChannelPluginAsync } from "./channel-bootstrap.runtime.js";
 
 afterEach(() => {
-  resetOutboundChannelBootstrapStateForTests();
   resetPluginLoaderTestStateForTest();
   vi.unstubAllEnvs();
 });
@@ -102,38 +96,28 @@ function sender(registry: PluginRegistry | undefined) {
 }
 
 describe("outbound bootstrap lifetime", () => {
-  it.each([
-    { retirement: "registry", bootstrap: bootstrapOutboundChannelPlugin },
-    { retirement: "cache", bootstrap: bootstrapOutboundChannelPluginAsync },
-  ])(
-    "sends through a fresh instance after $retirement retirement",
-    async ({ retirement, bootstrap }) => {
-      const fixture = createFixture();
-      const request = { cfg: fixture.config, to: "recipient", text: "hello" };
-      await using firstCache = createPluginCache();
-      await using nextCache = createPluginCache();
-      const first = await withPluginCache(firstCache, () => bootstrap(fixture.params));
-      const firstSend = sender(first);
-      await expect(firstSend(request)).resolves.toMatchObject({ messageId: "first" });
-      if (retirement === "cache") {
-        await retirePluginCache(firstCache);
-      } else {
-        await disposePluginRegistryInstances(expectDefined(first, "first registry"));
-      }
-      expect(() => firstSend(request)).toThrow(/reloaded|disabled|retir/);
+  it("sends through a fresh instance after replacing the plugin cache", async () => {
+    const bootstrap = bootstrapOutboundChannelPluginAsync;
+    const fixture = createFixture();
+    const request = { cfg: fixture.config, to: "recipient", text: "hello" };
+    await using firstCache = createPluginCache();
+    await using nextCache = createPluginCache();
+    const first = await withPluginCache(firstCache, () => bootstrap(fixture.params));
+    const firstSend = sender(first);
+    await expect(firstSend(request)).resolves.toMatchObject({ messageId: "first" });
+    await retirePluginCache(firstCache);
+    expect(() => firstSend(request)).toThrow(/reloaded|disabled|retir/);
 
-      const cache = retirement === "cache" ? nextCache : firstCache;
-      const next = await withPluginCache(cache, () => bootstrap(fixture.params));
-      await expect(sender(next)(request)).resolves.toMatchObject({ messageId: "first" });
-      expect(fixture.events()).toEqual([
-        "registered:first",
-        "sent:first",
-        "disposed:first",
-        "registered:first",
-        "sent:first",
-      ]);
-    },
-  );
+    const next = await withPluginCache(nextCache, () => bootstrap(fixture.params));
+    await expect(sender(next)(request)).resolves.toMatchObject({ messageId: "first" });
+    expect(fixture.events()).toEqual([
+      "registered:first",
+      "sent:first",
+      "disposed:first",
+      "registered:first",
+      "sent:first",
+    ]);
+  });
 
   it("discovers a newly installed sender after metadata invalidation clears an unavailable outcome", async () => {
     const bootstrap = bootstrapOutboundChannelPluginAsync;

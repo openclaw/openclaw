@@ -115,7 +115,7 @@ behavior, or model selection.
   transform a tool result in one `exec`. Unknown outputs remain raw-first.
 - Provider neutral: works for OpenClaw, plugin, MCP, and client tools without
   depending on provider-native code execution.
-- Fails closed: if Code Mode is enabled but the selected executor is
+- No fallback: if Code Mode is enabled but the selected executor is
   unavailable, the run fails instead of silently falling back to broad direct
   tool exposure.
 

@@ -7,12 +7,19 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import type { MessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type {
+  SkillWorkshopChangeNoticeSkill,
+  SkillWorkshopNoticeAction,
+} from "../../shared/skill-workshop-change-notice.js";
+import { SKILL_WORKSHOP_CHANGE_NOTICE_KIND } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { workshopReviewIdOf } from "./review-undo.js";
 
 const log = createSubsystemLogger("skills/workshop");
 
@@ -35,7 +42,7 @@ export function assertSkillReviewRunSucceeded(
   }
 }
 
-const ACTION_VERB: Record<WorkshopChange["action"], string> = {
+const ACTION_VERB: Record<WorkshopChange["action"], SkillWorkshopNoticeAction> = {
   create: "created",
   patch: "updated",
   write_file: "updated",
@@ -45,30 +52,58 @@ const ACTION_VERB: Record<WorkshopChange["action"], string> = {
 };
 
 /** The notice keeps a creation or latest edit; undo keeps the version before the first edit. */
-function formatWorkshopChangeNotice(changes: readonly WorkshopChange[]) {
-  const bySkill = new Map<string, WorkshopChange>();
-  const firstBySkill = new Map<string, WorkshopChange>();
+function formatWorkshopChangeNotice(
+  agentId: string,
+  runId: string,
+  changes: readonly WorkshopChange[],
+) {
+  const bySkill = new Map<string, { first: WorkshopChange; notice: WorkshopChange }>();
   for (const change of changes.toSorted((a, b) => a.createdAtMs - b.createdAtMs)) {
-    if (!firstBySkill.has(change.skillName)) {
-      firstBySkill.set(change.skillName, change);
-    }
-    if (bySkill.get(change.skillName)?.action !== "create") {
-      bySkill.set(change.skillName, change);
+    const group = bySkill.get(change.skillName);
+    if (!group) {
+      bySkill.set(change.skillName, { first: change, notice: change });
+    } else if (group.notice.action !== "create") {
+      group.notice = change;
     }
   }
-  const parts = [...bySkill.values()].map((change) => {
+  const skills = [...bySkill.values()].map(({ notice: change }) => {
+    const skill: SkillWorkshopChangeNoticeSkill = {
+      name: change.skillName,
+      action: ACTION_VERB[change.action],
+    };
     const summary = change.summary.trim();
-    return `${ACTION_VERB[change.action]} \`${change.skillName}\`${summary ? ` (${summary})` : ""}`;
+    if (summary) {
+      skill.summary = summary;
+    }
+    return skill;
   });
+  const parts = skills.map(
+    ({ name, action, summary }) => `${action} \`${name}\`${summary ? ` (${summary})` : ""}`,
+  );
   const text = `💾 Learned: ${parts.join("; ")}. Say "undo" to revert this skill change.`;
   // No prior version means the review created the skill, so undo archives it.
-  const reverts = [...firstBySkill.values()].map(({ skillName, versionId }) =>
+  const reverts = [...bySkill.values()].map(({ first: { skillName, versionId } }) =>
     versionId
       ? `skill_workshop action=restore name=${skillName} version=${versionId}`
       : `skill_workshop action=archive name=${skillName} reason="undo"`,
   );
+  const reviewId = workshopReviewIdOf(runId);
+  const presentation: MessagePresentation | undefined = reviewId
+    ? {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Undo", action: { type: "command", command: `/learn undo ${reviewId}` } },
+            ],
+          },
+        ],
+      }
+    : undefined;
   return {
     text,
+    presentation,
+    marker: { kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND, agentId, runId, skills },
     undoContext: `A background skill review just changed your learned skills and told the user: ${text} If the user asks to undo or revert it, call ${reverts.join("; then ")}.`,
   };
 }
@@ -109,16 +144,25 @@ export async function postWorkshopChangeNotice(params: {
     log.debug(`skill workshop notice skipped: session ${sessionKey} was reset`);
     return;
   }
-  const { text, undoContext } = formatWorkshopChangeNotice(params.changes);
+  const { deliveryContext: target, threadId } = await extractDeliveryInfo(sessionKey, {
+    cfg: params.config,
+  });
+  const channel = target?.channel ? normalizeMessageChannel(target.channel) : undefined;
+  // Slack conversations get no notice (owner decision); the change stays in the Workshop.
+  if (channel === "slack") {
+    log.debug(`skill workshop notice skipped: Slack session ${sessionKey}`);
+    return;
+  }
+  const { text, presentation, marker, undoContext } = formatWorkshopChangeNotice(
+    agentId,
+    params.runId,
+    params.changes,
+  );
   enqueueSystemEvent(undoContext, {
     sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
   });
   const idempotencyKey = `skill-workshop-notice:${params.runId}`;
   try {
-    const { deliveryContext: target, threadId } = extractDeliveryInfo(sessionKey, {
-      cfg: params.config,
-    });
-    const channel = target?.channel ? normalizeMessageChannel(target.channel) : undefined;
     if (channel && isDeliverableMessageChannel(channel) && target?.to) {
       // Delivery and transcript runtimes stay lazy: most reviews change nothing.
       const { sendDurableMessageBatchCore } = await import("../../channels/message/runtime.js");
@@ -130,7 +174,8 @@ export async function postWorkshopChangeNotice(params: {
           accountId: target.accountId,
           // The session key's thread is canonical; stored context may name a stale thread.
           threadId: threadId ?? target.threadId,
-          payloads: [{ text }],
+          // Channels with buttons run the Undo command; plain-text channels show it to copy.
+          payloads: [presentation ? { text, presentation } : { text }],
           session: buildOutboundSessionContext({ cfg: params.config, sessionKey, agentId }),
           mirror: {
             sessionKey,
@@ -159,6 +204,7 @@ export async function postWorkshopChangeNotice(params: {
       expectedLifecycleRevision: generation.lifecycleRevision,
       text,
       idempotencyKey,
+      deliveryMirror: marker,
       config: params.config,
     });
     if (!appended.ok) {

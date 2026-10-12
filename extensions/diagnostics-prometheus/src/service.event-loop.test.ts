@@ -38,7 +38,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
             })),
             workerHeapTotalBytes: 400,
             workerHeapUsedBytes: 250,
-            workerCount: 3,
+            workerCount: 4,
             workerHeapSampledCount: 2,
             workerLifecycle: [
               {
@@ -50,6 +50,10 @@ describe("diagnostics-prometheus runtime metrics", () => {
             workerHeaps: [
               { script: "sqlite-store.worker.js", heapUsed: 100, heapTotal: 200 },
               { script: "sqlite-store.worker.js", heapUsed: 150, heapTotal: 200 },
+            ],
+            workerMemoryMissing: [
+              { script: "sqlite-store.worker.js", threadId: 3, reason: "pending" },
+              { script: "other", threadId: 4, reason: "unavailable" },
             ],
           },
         },
@@ -108,8 +112,15 @@ describe("diagnostics-prometheus runtime metrics", () => {
         }
       }
       expect(metrics.render()).toBe(rendered);
-      expect(rendered).toContain("openclaw_worker_count 3\n");
+      expect(rendered).toContain("openclaw_worker_count 4\n");
       expect(rendered).toContain("openclaw_worker_heap_sampled_count 2\n");
+      expect(rendered).toContain('openclaw_worker_count{script="sqlite-store.worker.js"} 3\n');
+      expect(rendered).toContain(
+        'openclaw_worker_heap_sampled_count{script="sqlite-store.worker.js"} 2\n',
+      );
+      expect(rendered).toContain('openclaw_worker_count{script="other"} 1\n');
+      expect(rendered).toContain('openclaw_worker_heap_sampled_count{script="other"} 0\n');
+      expect(rendered).not.toContain('openclaw_worker_heap_used_bytes{script="other"}');
       expect(rendered).toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store.worker.js"} 250\n',
       );
@@ -137,6 +148,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
           heapUsedBytes: 300,
           externalBytes: 200,
           arrayBuffersBytes: 100,
+          workerCount: 1,
+          workerHeapSampledCount: 1,
           workerHeaps: [{ script: "other", heapUsed: 50, heapTotal: 100 }],
           workerLifecycle: [
             {
@@ -154,6 +167,12 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(metrics.render()).not.toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store',
       );
+      expect(metrics.render()).not.toContain('openclaw_worker_count{script="sqlite-store');
+      expect(metrics.render()).not.toContain(
+        'openclaw_worker_heap_sampled_count{script="sqlite-store',
+      );
+      expect(metrics.render()).toContain('openclaw_worker_count{script="other"} 1\n');
+      expect(metrics.render()).toContain('openclaw_worker_heap_sampled_count{script="other"} 1\n');
       expect(metrics.render()).toContain('openclaw_worker_heap_used_bytes{script="other"} 50\n');
       expect(metrics.render()).toContain(
         'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
@@ -162,10 +181,22 @@ describe("diagnostics-prometheus runtime metrics", () => {
         'openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.js"} 2\n',
       );
       metrics.record(
-        { ...retiredSample, memory: { ...retiredSample.memory, workerHeaps: [] } },
+        {
+          ...retiredSample,
+          memory: {
+            ...retiredSample.memory,
+            workerCount: 0,
+            workerHeapSampledCount: 0,
+            workerHeaps: [],
+          },
+        },
         trusted,
       );
       expect(metrics.render()).not.toContain("openclaw_worker_heap_used_bytes");
+      expect(metrics.render()).not.toContain("openclaw_worker_count{");
+      expect(metrics.render()).not.toContain("openclaw_worker_heap_sampled_count{");
+      expect(metrics.render()).toContain("openclaw_worker_count 0\n");
+      expect(metrics.render()).toContain("openclaw_worker_heap_sampled_count 0\n");
       expect(metrics.render()).toContain(
         'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
       );

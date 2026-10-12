@@ -148,7 +148,7 @@ module.exports = { stateMigrations: [{
           const admitted = caller === "deferred-doctor" ? actions.slice(0, 1) : actions;
           let receipt;
           if (caller === "doctor") {
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             expect(ctx.cfg.agents?.entries?.main).toMatchObject({
               workspace: path.join(home, "workspace"),
             });

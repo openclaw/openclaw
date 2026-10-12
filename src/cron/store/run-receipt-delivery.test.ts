@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
-import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
@@ -8,20 +7,18 @@ import { start, stop } from "../service/ops-lifecycle.js";
 import { makeCronRecoveryState } from "../service/run-recovery.test-support.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import { loadCronStore } from "../store.js";
-import {
-  finishCronRunReceiptAsync,
-  releaseLocalCronRunReceiptOwnership,
-} from "./run-receipt-store.js";
+import { releaseLocalCronRunReceiptOwnership } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
   makeCronReceiptJob,
   makeCronRecoveryJob,
+  finishCronRunReceiptAsync,
 } from "./run-receipt-store.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-delivery-commit-" });
 
-it.each(["commit", "retired", "reply-lost", "evidence-lost"] as const)(
-  "publishes delivery admission only from confirmed current commit: %s",
+it.each(["commit", "retired", "reply-lost"] as const)(
+  "publishes delivery admission only after a successful worker reply: %s",
   async (outcome) => {
     const { storePath } = await makeStorePath();
     const job = makeCronReceiptJob("delivery-commit");
@@ -33,23 +30,7 @@ it.each(["commit", "retired", "reply-lost", "evidence-lost"] as const)(
         .get(receipt.receiptId)?.delivery_attempt_state;
     expect(readPhase()).toBe("not-started");
     const reply =
-      outcome === "reply-lost" || outcome === "evidence-lost"
-        ? loseFirstCronMutationReply("cron.markDeliveryStarted")
-        : undefined;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const lostEvidence =
-      outcome === "evidence-lost"
-        ? vi
-            .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-            .mockImplementation((...args) => {
-              const admission = createAdmission(...args);
-              // The transaction and native owner still settle. Only this caller loses
-              // both retained observations, so persisted bytes cannot authorize it.
-              vi.spyOn(admission, "committed", "get").mockReturnValue(undefined);
-              vi.spyOn(admission, "settlement", "get").mockReturnValue({ kind: "unknown" });
-              return admission;
-            })
-        : undefined;
+      outcome === "reply-lost" ? loseFirstCronMutationReply("cron.markDeliveryStarted") : undefined;
     const published = vi.fn();
     const settled = vi.fn();
     try {
@@ -57,18 +38,12 @@ it.each(["commit", "retired", "reply-lost", "evidence-lost"] as const)(
         context: captureOpenClawStateWorkerContext(),
         type: "cron.markDeliveryStarted",
         input: { storeKey: receipt.storeKey, handle: receipt },
-        assertCurrent: () => undefined,
-        prepare: ({ deletionBlocked }) => {
-          expect(deletionBlocked).toBe(false);
-          return {
-            value: { allowMissingJob: false },
-            assertCurrent: () => {
-              if (outcome === "retired") {
-                throw new Error("delivery owner retired before commit");
-              }
-            },
-          };
+        assertCurrent: () => {
+          if (outcome === "retired") {
+            throw new Error("delivery owner retired before dispatch");
+          }
         },
+        snapshot: { allowMissingJob: false },
         publish: published,
         onSettled: settled,
       });
@@ -79,11 +54,9 @@ it.each(["commit", "retired", "reply-lost", "evidence-lost"] as const)(
       }
       await reply?.waitForExit();
       expect(readPhase()).toBe(outcome === "retired" ? "not-started" : "started");
-      expect(published).toHaveBeenCalledTimes(
-        outcome === "commit" || outcome === "reply-lost" ? 1 : 0,
-      );
+      expect(published).toHaveBeenCalledTimes(outcome === "commit" ? 1 : 0);
       expect(settled).toHaveBeenCalledWith(
-        outcome === "evidence-lost"
+        outcome === "reply-lost"
           ? "unknown"
           : outcome === "retired"
             ? "not-committed"
@@ -95,7 +68,6 @@ it.each(["commit", "retired", "reply-lost", "evidence-lost"] as const)(
       }
     } finally {
       await reply?.close();
-      lostEvidence?.mockRestore();
       await finishCronRunReceiptAsync({
         handle: receipt,
         status: "interrupted",

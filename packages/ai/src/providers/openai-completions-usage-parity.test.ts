@@ -59,6 +59,7 @@ const scenarios: UsageScenario[] = [
     usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     expectedUsage: {
       totalTokens: 0,
+      cacheTelemetry: { state: "unavailable" },
       contextUsage: { state: "available", promptTokens: 0, totalTokens: 0 },
     },
   },
@@ -77,6 +78,7 @@ const scenarios: UsageScenario[] = [
       output: 20,
       cacheRead: 25,
       cacheWrite: 10,
+      cacheTelemetry: { state: "available" },
       reasoningTokens: 7,
       contextUsage: { state: "available", promptTokens: 100, totalTokens: 120 },
       totalTokens: 120,
@@ -171,6 +173,40 @@ const scenarios: UsageScenario[] = [
     expectedUsage: { input: 75, output: 20, cacheRead: 25, cacheWrite: 0, totalTokens: 120 },
     expectedCost: 0.00012125,
   },
+  ...[
+    { name: "top-level cached tokens", expectedCached: 25, cached_tokens: 25 },
+    {
+      name: "nested cache count takes precedence over top-level fallback",
+      expectedCached: 25,
+      cached_tokens: 90,
+      prompt_tokens_details: { cached_tokens: 25 },
+    },
+    {
+      name: "explicit nested zero takes precedence over top-level fallback",
+      expectedCached: 0,
+      cached_tokens: 25,
+      prompt_tokens_details: { cached_tokens: 0 },
+    },
+  ].map(({ name, expectedCached: cached, ...cacheUsage }) => {
+    return {
+      name,
+      package: true,
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 20,
+        total_tokens: 120,
+        ...cacheUsage,
+      },
+      expectedUsage: {
+        input: 100 - cached,
+        cacheRead: cached,
+        cacheTelemetry: { state: "available" },
+        totalTokens: 120,
+        contextUsage: { state: "available", promptTokens: 100, totalTokens: 120 },
+      },
+      expectedCost: (100 - cached + 40 + cached * 0.25) / 1_000_000,
+    };
+  }),
   {
     name: "invalid provider cost and cached-token overflow",
     usage: {

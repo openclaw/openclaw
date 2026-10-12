@@ -9,8 +9,7 @@ import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-sto
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
-  loadChatComposerCommittedDraftRevision,
-  loadChatComposerDraftRevision,
+  loadChatComposerState,
   storedChatOutboxScopeKey,
   type ChatComposerDraftRetry,
 } from "./composer-persistence.ts";
@@ -67,12 +66,10 @@ function resolveChatComposerMemoryFallback(
   }
   let adoptedFallback = sourceFallback;
   if (sourceKey !== scopeKey && sourceFallback.draftRetry) {
-    const committedRevision = loadChatComposerCommittedDraftRevision(
-      state,
-      sessionKey,
-      scope.agentId,
-    );
-    const latestRevision = loadChatComposerDraftRevision(state, sessionKey, scope.agentId);
+    const committedRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
+      .committed;
+    const latestRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
+      .latestAttempt;
     // Rebase only when this unresolved edit is newer than every resolved
     // attempt. Otherwise its original CAS must keep newer pane input intact.
     if (sourceFallback.draftRetry.draftRevision > latestRevision) {

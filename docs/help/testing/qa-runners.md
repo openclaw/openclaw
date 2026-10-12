@@ -23,7 +23,7 @@ nightly on `main` and from manual dispatch with the mock parity lane, live
 Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
 lane as parallel jobs. Scheduled QA and selected release checks run the
 catalog-derived Matrix selection through the shared live adapter. Release
-transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
+transport checks use `mock-openai/gpt-5.6-luna` so they use fixed responses and
 avoid normal provider-plugin startup. These live transport gateways disable
 memory search; memory behavior stays covered by the QA parity suites.
 
@@ -115,7 +115,7 @@ inside every shard.
   - Use `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` to run the same packaged-install
     lane with Discord.
 - `pnpm test:docker:session-runtime-context`
-  - Runs a deterministic built-app Docker smoke for embedded runtime context
+  - Runs a repeatable built-app Docker smoke check for embedded runtime context
     transcripts. Verifies hidden OpenClaw runtime context persists as a
     non-display custom message instead of leaking into the visible user
     turn, then seeds an affected broken session JSONL and verifies
@@ -138,12 +138,12 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
-    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one canonical
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one registered
     Telegram QA scenario id. When omitted, the normal lane samples
     `channel-canary`; focused non-RTT scenario runs stay check-free. An explicit
     RTT scenario is included in scenario selection automatically, so callers do
     not need to repeat it in `OPENCLAW_NPM_TELEGRAM_SCENARIOS`. Multiple ids
-    fail immediately, while unknown or inapplicable ids fail canonical scenario
+    fail immediately, while unknown or inapplicable ids fail the shared scenario
     validation. The package runner promotes the selected RTT scenario once to
     the first position before the remaining taxonomy-backed fail-fast release
     scenarios. Checks continue in its most recently observed conversation and
@@ -309,7 +309,7 @@ gh workflow run package-acceptance.yml --ref main \
     `--credential-role`.
   - Defaults cover canary, mention gating, command addressing, `/status`,
     bot-to-bot mentioned replies, and core native command replies.
-    `mock-openai` defaults also cover deterministic reply-chain and
+    `mock-openai` defaults also cover fixed-response reply-chain and
     Telegram final-message streaming regressions. Use `--list-scenarios`
     for optional checks such as `session_status`.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
@@ -425,6 +425,6 @@ for Slack rows.
 The architecture and scenario-helper names for new channel adapters live in
 [QA overview - Adding a channel](/concepts/qa-e2e-automation#adding-a-channel).
 The minimum bar: implement the transport runner on the shared `qa-lab` host
-seam, add an `adapterFactory` for shared scenarios, declare `qaRunners` in the
+API, add an `adapterFactory` for shared scenarios, declare `qaRunners` in the
 plugin manifest, mount as `openclaw qa <runner>`, and author scenarios under
 `qa/scenarios/`.

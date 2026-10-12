@@ -33,6 +33,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/qa-lab/src/gateway-registration.ts",
   "extensions/visitor-access/index.ts",
   "extensions/workboard/index.ts",
+  "extensions/x/src/work-origin.ts",
 ] as const;
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
@@ -52,6 +53,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/qa-lab/src/gateway-registration.ts": ["before_agent_run"],
   "extensions/visitor-access/index.ts": ["gateway_start"],
   "extensions/workboard/index.ts": ["agent_end", "gateway_start", "gateway_stop", "subagent_ended"],
+  "extensions/x/src/work-origin.ts": ["before_prompt_build"],
 } as const satisfies Record<
   (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
   readonly string[]

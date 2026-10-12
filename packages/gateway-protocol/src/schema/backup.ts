@@ -35,6 +35,10 @@ export const BackupRunRecordSchema = closedObject({
   retention: Type.Optional(BackupRunRetentionSchema),
 });
 export const BackupStatusParamsSchema = closedObject({});
+export const BackupRecordOutcomeParamsSchema = closedObject({
+  expectedOwnerId: Type.String({ minLength: 1 }),
+  outcome: closedObject(Type.Omit(BackupRunRecordSchema, ["id"]).properties),
+});
 export const BackupStatusResultSchema = closedObject({
   targets: Type.Array(
     closedObject({
@@ -62,4 +66,5 @@ export type BackupRunRecord = Static<typeof BackupRunRecordSchema>;
 export type BackupRunLocation = Static<typeof BackupRunLocationSchema>;
 export type BackupRunRetention = Static<typeof BackupRunRetentionSchema>;
 export type BackupStatusParams = Static<typeof BackupStatusParamsSchema>;
+export type BackupRecordOutcomeParams = Static<typeof BackupRecordOutcomeParamsSchema>;
 export type BackupStatusResult = Static<typeof BackupStatusResultSchema>;

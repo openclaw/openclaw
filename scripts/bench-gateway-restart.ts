@@ -1,18 +1,20 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import fs, { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import fs, { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 import {
   getFreePort,
   readProcessRssMb,
   readProcessTreeCpuMs,
   requestProbeStatus,
+  startGatewayRssSampling,
 } from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
@@ -631,15 +633,6 @@ function resolveIterationFailure(iteration: RestartIteration): GatewayRestartFai
   return null;
 }
 
-function finalizeRestartIteration(
-  iteration: RestartIteration,
-  childExited: boolean,
-  flushOutputBuffers: () => void,
-): GatewayRestartFailureCode | null {
-  flushOutputBuffers();
-  return childExited ? "restart_child_exited" : resolveIterationFailure(iteration);
-}
-
 function hasRestartReadySignal(iteration: RestartIteration): boolean {
   return (
     typeof iteration.restartTrace["restart.ready.total"] === "number" &&
@@ -731,7 +724,6 @@ async function runGatewaySample(
   let initialGatewayReadyLogMs: number | null = null;
   let initialHttpListenLogLine: string | null = null;
   let initialHttpListenLogMs: number | null = null;
-  let maxRssMb: number | null = null;
   let childExited = false;
 
   const child = spawn(command.command, command.args, {
@@ -746,15 +738,7 @@ async function runGatewaySample(
     throw error;
   }
   events.push({ ms: performance.now() - sampleStartAt, type: "process.spawned" });
-  const sampleRss = () => {
-    const rssMb = readProcessRssMb(child.pid);
-    if (rssMb != null) {
-      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
-    }
-  };
-  sampleRss();
-  const rssTimer = setInterval(sampleRss, 100);
-  rssTimer.unref?.();
+  const rssSampler = startGatewayRssSampling(child);
   child.once("exit", () => {
     childExited = true;
     events.push({ ms: performance.now() - sampleStartAt, type: "process.exit" });
@@ -846,12 +830,10 @@ async function runGatewaySample(
   }
 
   if (failureCode === null) {
-    flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
     await waitForIterationCondition(
       () => hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs }),
       initialDeadlineAt,
     );
-    flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
     if (!hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs })) {
       failureCode = "initial_ready_log_timeout";
     }
@@ -928,9 +910,9 @@ async function runGatewaySample(
         iteration.cpuMs == null
           ? null
           : iteration.cpuMs / Math.max(1, performance.now() - signalSentAt);
-      iteration.failureCode = finalizeRestartIteration(iteration, childExited, () =>
-        flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt),
-      );
+      iteration.failureCode = childExited
+        ? "restart_child_exited"
+        : resolveIterationFailure(iteration);
       iterations.push(iteration);
       console.error(
         `[gateway-restart-bench] ${options.benchCase.id} restart ${index}/${options.restarts}: readyz=${formatMs(iteration.readyz.ms)} downtime=${formatMs(iteration.readyz.downtimeMs ?? iteration.healthz.downtimeMs)} restartReady=${formatMs(traceValue(iteration, "restart.ready.total"))} cpu=${formatMs(iteration.cpuMs)} rss=${formatMb(traceValue(iteration, "restart.ready.rssMb", "restart.ready.memory.ready.rssMb") ?? lastSnapshotValue(iteration, "rssMb"))} failure=${iteration.failureCode ?? "none"}`,
@@ -943,13 +925,10 @@ async function runGatewaySample(
   }
 
   currentIteration = null;
-  flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
   const exit = await stopChild(child);
-  clearInterval(rssTimer);
-  sampleRss();
-  flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt, {
-    flushPartial: true,
-  });
+  rssSampler.stop();
+  const maxRssMb = rssSampler.sample();
+  flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
   failureCode ??= resolveSampleExitFailure(exit);
   try {
     rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
@@ -992,15 +971,7 @@ async function runCase(
   const samples: GatewayRestartSample[] = [];
   const total = options.runs + options.warmup;
   for (let index = 0; index < total; index += 1) {
-    const sample = await runGatewaySample({
-      benchCase: options.benchCase,
-      entry: options.entry,
-      gatewayRuntime: options.gatewayRuntime,
-      gatewayCpus: options.gatewayCpus,
-      postReadyDelayMs: options.postReadyDelayMs,
-      restarts: options.restarts,
-      timeoutMs: options.timeoutMs,
-    });
+    const sample = await runGatewaySample(options);
     if (index >= options.warmup) {
       samples.push(sample);
       console.error(
@@ -1148,19 +1119,7 @@ async function main() {
   ensureSupportedRestartPlatform();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
-    results.push(
-      await runCase({
-        benchCase,
-        entry: options.entry,
-        gatewayRuntime: options.gatewayRuntime,
-        gatewayCpus: options.gatewayCpus,
-        postReadyDelayMs: options.postReadyDelayMs,
-        restarts: options.restarts,
-        runs: options.runs,
-        timeoutMs: options.timeoutMs,
-        warmup: options.warmup,
-      }),
-    );
+    results.push(await runCase({ ...options, benchCase }));
   }
 
   const payload = {
@@ -1176,8 +1135,7 @@ async function main() {
     results,
   };
   if (options.output) {
-    mkdirSync(path.dirname(options.output), { recursive: true });
-    writeFileSync(options.output, `${JSON.stringify(payload, null, 2)}\n`);
+    writeBenchmarkJson(payload, options.output);
   }
   const evidenceFailures = collectBenchmarkEvidenceFailures(results);
   if (evidenceFailures.length > 0) {
@@ -1202,7 +1160,6 @@ export const testing = {
   countLsofFileDescriptors,
   createRestartIteration,
   ensureSupportedRestartPlatform,
-  finalizeRestartIteration,
   collectBenchmarkEvidenceFailures,
   hasInitialReadyLogs,
   hasBenchmarkFailures,

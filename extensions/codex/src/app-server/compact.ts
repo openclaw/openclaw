@@ -47,7 +47,7 @@ import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js"
 import type { JsonObject } from "./protocol.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
-import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
+import { prepareCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
   sessionBindingIdentity,
@@ -106,16 +106,18 @@ export async function maybeCompactCodexAppServerSession(
       },
     });
   }
-  const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
+  const nativeExecutionGuard = await prepareCodexNativeExecutionBlock({
     config: params.config,
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.sandboxAgentId ?? params.agentId,
+    storePath: params.sessionTarget?.storePath,
+    sessionTarget: params.sessionTarget,
     sandbox: params.sandbox,
     surface: "native compaction",
   });
-  if (nativeExecutionBlock) {
-    return { ok: false, compacted: false, reason: nativeExecutionBlock };
+  if (nativeExecutionGuard.block) {
+    return { ok: false, compacted: false, reason: nativeExecutionGuard.block };
   }
   const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
@@ -153,11 +155,17 @@ export async function maybeCompactCodexAppServerSession(
     if (!params.abortSignal?.aborted) {
       throw error;
     }
-    const threadId = options.bindingStore.read(bindingIdentity)?.threadId;
+    const threadId = (await options.bindingStore.readAsync(bindingIdentity))?.threadId;
     return abortedResult(params, threadId, threadId);
   }
   const { binding: initialBinding, authority } = resolvedBinding;
-  const assertCurrent = authority.assertCurrent;
+  const assertCurrent = () => {
+    authority.assertCurrent();
+  };
+  const withCurrent = async (write: () => void) => {
+    await nativeExecutionGuard.assertCurrent();
+    await authority.withCurrent(write);
+  };
   // Native admission uses caller authority; terminal settlement keeps captured
   // lineage after cancellation without reusing the caller's aborted signal.
   const settlementAuthority = createNativeSessionBindingAuthority(authority.lineage, () => {});
@@ -207,6 +215,7 @@ export async function maybeCompactCodexAppServerSession(
       pluginConfig: options.pluginConfig,
       config,
       assertCurrent,
+      assertCurrentAsync: nativeExecutionGuard.assertCurrent,
       agentDir: resolveAgentDir(config, bindingIdentity.agentId),
     });
   } catch (error) {
@@ -269,12 +278,12 @@ export async function maybeCompactCodexAppServerSession(
       return await withCodexAppServerThreadMutationHold(
         binding.threadId,
         async (hold, start) => {
-          await authority.withCurrent(assertAdmissionCurrent);
+          await withCurrent(assertAdmissionCurrent);
           const boundClientLease = await retainSharedCodexAppServerClientByInstanceId(
             binding.clientId,
           );
           try {
-            await authority.withCurrent(assertAdmissionCurrent);
+            await withCurrent(assertAdmissionCurrent);
             attempt.abortSignal.throwIfAborted();
           } catch (error) {
             await boundClientLease?.release();
@@ -291,6 +300,7 @@ export async function maybeCompactCodexAppServerSession(
               agentDir: attempt.agentDir,
               config: attempt.config,
               assertCurrent: assertAdmissionCurrent,
+              assertCurrentAsync: nativeExecutionGuard.assertCurrent,
             }));
           start();
           embeddedAgentLog.info("selected codex app-server compaction client", {
@@ -390,7 +400,7 @@ export async function maybeCompactCodexAppServerSession(
               if (bindingCleared) {
                 return;
               }
-              const currentBinding = options.bindingStore.read(bindingIdentity);
+              const currentBinding = await options.bindingStore.readAsync(bindingIdentity);
               if (
                 currentBinding?.threadId !== binding.threadId ||
                 currentBinding.clientId !== binding.clientId
@@ -415,7 +425,7 @@ export async function maybeCompactCodexAppServerSession(
                   request: { threadId: binding.threadId, excludeTurns: true },
                   timeoutMs: timeoutMs ?? appServer.requestTimeoutMs,
                   assertCurrent: assertAdmissionCurrent,
-                  withCurrent: authority.withCurrent,
+                  withCurrent,
                   signal: attempt.abortSignal,
                 });
                 releaseThreadSubscription = async () => releaseCompactionThread(binding.threadId);
@@ -429,7 +439,7 @@ export async function maybeCompactCodexAppServerSession(
                     threadId: binding.threadId,
                     includeTurns: false,
                   },
-                  { assertCurrent: assertAdmissionCurrent, withCurrent: authority.withCurrent },
+                  { assertCurrent: assertAdmissionCurrent, withCurrent },
                 );
                 retainedThreadOwnership.assertCurrent();
                 assertCodexSupervisionThreadLineage(binding, thread);
@@ -545,7 +555,7 @@ export async function maybeCompactCodexAppServerSession(
                         ? {}
                         : { timeoutMs: guardedRequestTimeoutMs }),
                       signal: attempt.abortSignal,
-                      withCurrent: authority.withCurrent,
+                      withCurrent,
                       assertCurrent: assertAdmissionCurrent,
                     },
                   );

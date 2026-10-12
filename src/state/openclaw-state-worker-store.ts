@@ -1,4 +1,3 @@
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -136,39 +135,6 @@ export async function runOpenClawStateWorkerOperation<T>(
         recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
       }
       throw hydrated;
-    }
-  });
-}
-
-/** Inspect the existing file without recursively admitting a domain operation. */
-export async function inspectOpenClawStateDatabaseGeneration(
-  context: OpenClawStateWorkerContext,
-  generation: SqliteFileGeneration,
-  signal?: AbortSignal,
-): Promise<boolean | undefined> {
-  return runWithCapturedWorkerContext(context, async () => {
-    try {
-      const store = await owner().open(context, { existingOnly: true, signal });
-      context.admission.assertCurrent();
-      if (!store) {
-        return undefined;
-      }
-      const releaseOperation = owner().retainOperation(store);
-      try {
-        context.admission.assertCurrent();
-        return await runWithOpenClawStateWorkerStore(
-          store,
-          context,
-          (scope) => scope.execute({ type: "database.generationMatches", input: { generation } }),
-          undefined,
-          undefined,
-          signal,
-        );
-      } finally {
-        void releaseOperation();
-      }
-    } catch (error) {
-      throw hydrateOpenClawStateWorkerError(error);
     }
   });
 }

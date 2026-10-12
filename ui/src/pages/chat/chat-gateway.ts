@@ -18,6 +18,7 @@ import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
 import type { ChatEventPayload } from "./chat-history.ts";
+import { withChatReasoning } from "./chat-reasoning.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
@@ -123,8 +124,13 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     payload.state === "final" && payload.seq === 0 && payload.runId?.startsWith("inject-")
       ? payload.runId.slice("inject-".length)
       : null;
+  const sessionMatches = visibleSessionMatches(state, payload.sessionKey, payload.agentId);
   const incomingFinalMessage =
-    payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
+    payload.state === "final"
+      ? sessionMatches && (!state.chatRunId || payload.runId === state.chatRunId)
+        ? withChatReasoning(state, normalizeFinalAssistantMessage(payload.message), payload.runId)
+        : normalizeFinalAssistantMessage(payload.message)
+      : null;
   // Only seq-zero inject deliveries encode a row ID: ordinary runs start at one
   // and may use any client-selected ID. Reconcile with session.message/history.
   const normalizedFinalMessage =
@@ -154,7 +160,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     return latestSteer ? (readSessionMessageIdentity(latestSteer)?.sequence ?? null) : undefined;
   };
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
-  const sessionMatches = visibleSessionMatches(state, payload.sessionKey, payload.agentId);
   const activeRunMatches =
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&
@@ -269,7 +274,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         sessionKey: state.sessionKey,
         sessionKeys,
         clearLocalRun: true,
-        clearChatStream: true,
       });
       return;
     }
@@ -291,7 +295,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       sessionKey: state.sessionKey,
       sessionKeys,
       clearLocalRun: true,
-      clearChatStream: true,
       armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
     });
   };

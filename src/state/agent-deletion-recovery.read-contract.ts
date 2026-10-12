@@ -8,6 +8,14 @@ export type AgentRecoveryReadOperations = {
     input: { statePath: string };
     output: { type: "agentRecovery.holds"; held: HeldAgentDatabase[] };
   };
+  "agentRecovery.pendingDeletions": {
+    input: undefined;
+    output: {
+      type: "agentRecovery.pendingDeletions";
+      entries: AgentDeletionJournalEntry[];
+      manualClawAgentIds: string[];
+    };
+  };
   "agentRecovery.creationJournal": {
     input: { agentId: string };
     output: {

@@ -67,7 +67,7 @@ import {
   buildTelegramModelsProviderChannelData,
 } from "./command-ui.js";
 import { resolveTelegramConfigAccessorAccount, telegramConfigAdapter } from "./config-adapter.js";
-import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.js";
+import { prepareTelegramConversationRouteOwnersAsync } from "./conversation-route-owner.js";
 import { resolveTelegramConversationBaseSessionKey } from "./conversation-route.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
@@ -91,6 +91,7 @@ import { parseTelegramThreadId } from "./outbound-params.js";
 import { releaseStoppedTelegramPollingLease } from "./polling-lease.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
+import { isTelegramTextOnlyChannelData } from "./prompt-context-projection.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getOptionalTelegramRuntime, getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
@@ -217,6 +218,10 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
   },
   outbound: telegramChannelOutbound,
 });
+telegramMessageAdapter.durableFinal = {
+  ...telegramMessageAdapter.durableFinal,
+  isTextOnlyChannelData: isTelegramTextOnlyChannelData,
+};
 
 function normalizeTelegramAcpConversationId(conversationId: string, parentConversationId?: string) {
   const parsed = parseTelegramTopicConversation({ conversationId, parentConversationId });
@@ -662,7 +667,7 @@ export const telegramPlugin = createChatChannelPlugin({
     messaging: {
       defaultMarkdownTableMode: "block",
       targetPrefixes: ["telegram", "tg"],
-      resolveConversationRouteOwner: inspectTelegramConversationRouteOwner,
+      prepareConversationRouteOwnersAsync: prepareTelegramConversationRouteOwnersAsync,
       numericTopicShorthand: true,
       normalizeTarget: normalizeTelegramMessagingTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>

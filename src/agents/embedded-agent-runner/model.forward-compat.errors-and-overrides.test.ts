@@ -88,16 +88,18 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Synthetic discovery snapshots exclude process-wide auth publication and runtime owners.
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
   const { createPluginMetadataSnapshot } =
     await import("../../config/plugin-auto-enable.test-helpers.js");
-  const createSnapshot = (input: {
+  const createSnapshot = async (input: {
     agentDir: string;
     config?: OpenClawConfig;
     workspaceDir?: string;
   }) => {
     const config = input.config ?? {};
+    const { authStorage } = await discovery.discoverAuthStorageFacts(input.agentDir);
     return {
       catalogOwner: undefined,
       agentDir: input.agentDir,
@@ -118,7 +120,6 @@ vi.mock("../prepared-model-runtime.js", async () => {
       findConfiguredRuntimeModel: () => undefined,
       inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
       createStores: () => {
-        const { authStorage } = discovery.discoverAuthStorageFacts(input.agentDir);
         const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
           ...(input.config ? { config: input.config } : {}),
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
@@ -131,7 +132,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
     } satisfies PreparedModelRuntimeSnapshot;
   };
   return {
-    getPreparedModelRuntimeSnapshot: createSnapshot,
+    getPreparedModelRuntimeSnapshot: () => undefined,
     loadPreparedModelRuntimeSnapshot: async (input: Parameters<typeof createSnapshot>[0]) =>
       createSnapshot(input),
   };

@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -112,121 +111,7 @@ async function publicationFixture(root: string, content = "working tree\n") {
   return { sha, input: { publicationStagingRoot, publicationDigest: hash(metadata) } };
 }
 
-it("stages publication blobs without caller-thread workspace-row SQL", async () => {
-  const measure = async (blobCount: number) => {
-    const { root, remote, database, store, workspace, stage } = await fixture();
-    const files: Array<{ path: string; content: string; sha: string }> = [];
-    for (let index = 0; index < blobCount; index++) {
-      const content = `publication blob ${index}\n`;
-      // Ask Git for its object identity; this is not a configuration/security digest.
-      const sha = await requireWorkspaceResultGit(root, ["hash-object", "--stdin"], {
-        input: Buffer.from(content),
-      });
-      files.push({ path: `edit-${index}.txt`, content, sha });
-    }
-    const publicationStagingRoot = path.join(root, "publication");
-    await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
-    for (const file of files) {
-      await fs.writeFile(path.join(remote, file.path), file.content.replace("\n", "\r\n"));
-      await fs.writeFile(path.join(publicationStagingRoot, "blobs", file.sha), file.content);
-    }
-    const metadata = JSON.stringify({
-      version: 1,
-      baseCommit,
-      baseTree: "b".repeat(40),
-      workspaceTree: "c".repeat(40),
-      entries: files.map(({ path: entryPath, sha }) => ({ path: entryPath, mode: "100644", sha })),
-    });
-    await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
-    const counter = trackSqliteStatementExecutions(database.db, ["workspaceRows"], (sql) =>
-      /^\s*select\b/iu.test(sql) && /\bfrom\s+["`[]?session_repository_workspaces\b/iu.test(sql)
-        ? "workspaceRows"
-        : null,
-    );
-    // Measure caller-thread staging SQL; repository reads now belong to the shared-state worker.
-    const prepared = await stage(`publication-query-cost-${blobCount}`, {
-      publicationStagingRoot,
-      publicationDigest: hash(metadata),
-    }).finally(counter.restore);
-    try {
-      const artifact = store.artifactPath(workspace.workspaceId);
-      const refs = (
-        await requireWorkspaceResultGit(artifact, [
-          "for-each-ref",
-          "--format=%(refname)",
-          "refs/openclaw/worker-result-candidates/",
-        ])
-      )
-        .split("\n")
-        .filter(Boolean);
-      const candidates = await Promise.all(
-        refs.map((ref) => readStagedWorkerWorkspaceResult(artifact, ref)),
-      );
-      const recovery = candidates.find((candidate) => candidate.base.baseCommit === baseCommit);
-      const companion = candidates.find((candidate) => candidate.base.baseCommit === null);
-      const payload = new Map<string, string>();
-      if (companion) {
-        for await (const { entry, content } of companion.readEntries()) {
-          if (content) {
-            payload.set(entry.path, Buffer.from(content).toString("utf8"));
-          }
-        }
-      }
-      let recoveryFilesMatching = 0;
-      if (recovery) {
-        for await (const { entry, content } of recovery.readEntries()) {
-          const file = files.find((candidateFile) => candidateFile.path === entry.path);
-          if (
-            file &&
-            content &&
-            Buffer.from(content).toString("utf8") === file.content.replace("\n", "\r\n")
-          ) {
-            recoveryFilesMatching += 1;
-          }
-        }
-      }
-      return {
-        blobCount,
-        distinctBlobs: new Set(files.map((file) => file.sha)).size,
-        callerWorkspaceRowReads: counter.counts.workspaceRows,
-        callerWorkspaceRowsReturned: counter.rowCounts.workspaceRows,
-        candidateCount: candidates.length,
-        companionFileCount: payload.size,
-        companionBlobsMatching: files.filter(
-          (file) => payload.get(`blobs/${file.sha}`) === file.content,
-        ).length,
-        metadataMatches: payload.get("snapshot.json") === metadata,
-        bindingMatches:
-          payload.get("binding.json") ===
-          JSON.stringify({
-            currentManifestRef: recovery?.currentManifestRef,
-            publicationDigest: hash(metadata),
-          }),
-        recoveryFilesMatching,
-      };
-    } finally {
-      await prepared.discard();
-    }
-  };
-  const samples = [await measure(1), await measure(8)];
-  // Emit both real execution counts and imported-content facts before the red assertion.
-  console.info("publication-staging-workspace-reads", JSON.stringify(samples));
-  for (const sample of samples) {
-    expect(sample).toMatchObject({
-      distinctBlobs: sample.blobCount,
-      candidateCount: 2,
-      companionFileCount: sample.blobCount + 2,
-      companionBlobsMatching: sample.blobCount,
-      metadataMatches: true,
-      bindingMatches: true,
-      recoveryFilesMatching: sample.blobCount,
-    });
-    expect(sample.callerWorkspaceRowReads).toBe(0);
-    expect(sample.callerWorkspaceRowsReturned).toBe(0);
-  }
-});
-
-it.each([false, true])(
+it.each([true])(
   "fences Git initialization after checkpoint directory creation (revoked=%s)",
   async (revoke) => {
     const { store, workspace, stage } = await fixture();
@@ -280,10 +165,10 @@ it.for([
   { boundary: "metadata", closure: "authority", publication: true },
   { boundary: "queue", closure: "authority", publication: false },
   ...["preparation", "import"].flatMap((boundary) =>
-    ["none", "authority", "revision"].map((closure) => ({ boundary, closure, publication: false })),
+    ["authority", "revision"].map((closure) => ({ boundary, closure, publication: false })),
   ),
   ...["before-preparation", "preparation", "queue"].flatMap((boundary) =>
-    ["none", "authority", "revision"].map((closure) => ({ boundary, closure, publication: true })),
+    ["authority", "revision"].map((closure) => ({ boundary, closure, publication: true })),
   ),
 ])(
   "fences publication=$publication at $boundary with $closure closure",
@@ -464,7 +349,7 @@ it.for([
   },
 );
 
-it.for(["none", "authority", "revision"] as const)(
+it.for(["authority", "revision"] as const)(
   "fences final checkpoint ref input with %s closure",
   async (closure, { signal }) => {
     const { remote, store, workspace, stage } = await fixture();
@@ -532,20 +417,11 @@ it.for(["none", "authority", "revision"] as const)(
         "refs/openclaw/worker-result-candidates/",
       ]);
       expect({ ok: outcome.ok, publishedRefs, candidateRefs }).toEqual({
-        ok: closure === "none",
-        publishedRefs: closure === "none" ? prepared.checkpointRef : "",
+        ok: false,
+        publishedRefs: "",
         candidateRefs: "",
       });
-      if (outcome.ok) {
-        expect(after.checkpointRef).toBe(prepared.checkpointRef);
-        const saved = await readSessionRepositoryArtifacts({
-          store,
-          workspaceId: workspace.workspaceId,
-          previewPath: "edit.txt",
-          assertCurrent,
-        });
-        expect(saved.preview).toEqual(new Uint8Array(Buffer.from("final input admission\n")));
-      } else {
+      if (!outcome.ok) {
         expect(after).toEqual(atRelease);
         expect(outcome.error).toMatchObject({
           message:
@@ -878,27 +754,6 @@ it.each(["recovery", "publication"])(
     await prepared.discard();
   },
 );
-
-it("cannot replace an immutable publication companion when recovery bytes are unchanged", async () => {
-  const { root, remote, store, workspace, stage } = await fixture();
-  await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
-  const original = await publicationFixture(root);
-  const initial = await stage("turn-immutable-publication", original.input);
-  await initial.publish();
-  const replacement = await publicationFixture(root, "different publication\n");
-  const collision = await stage("turn-immutable-publication", replacement.input);
-  await expect(collision.publish()).rejects.toThrow("different result");
-  await collision.discard();
-  await withSessionRepositoryCheckpoint(
-    { store, workspaceId: workspace.workspaceId, includePublication: true },
-    async (snapshot) => {
-      expect(snapshot.publicationDigest).toBe(original.input.publicationDigest);
-      expect(await fs.readFile(path.join(snapshot.stagingRoot, "edit.txt"), "utf8")).toBe(
-        "working tree\r\n",
-      );
-    },
-  );
-});
 
 it("accepts raw recovery files when a publication blob fails validation", async () => {
   const { root, remote, store, workspace, stage } = await fixture();

@@ -6,6 +6,7 @@ import {
   beginAgentDeletionJournal,
   removeAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
+import { retireAgentDeletionJournalInDatabase } from "./agent-deletion-journal-authority.worker.js";
 import { readAgentDeletionJournal } from "./agent-deletion-journal.js";
 import * as agentDeletionJournal from "./agent-deletion-journal.js";
 import {
@@ -15,6 +16,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db-cache.js";
+import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 afterEach(() => {
@@ -22,16 +24,58 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("admits settlement leases while draining and fences them once retirement begins", () => {
+  const stateDir = tempDirs.make("agent-deletion-draining-fence-");
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const claim = { agentId: "deleted", path: path.join(stateDir, "deleted.sqlite"), env };
+  const deletion = beginAgentDeletionJournal(
+    {
+      agentId: claim.agentId,
+      operationId: "draining-deletion",
+      agentDir: path.join(stateDir, "agents/deleted/agent"),
+      workspaceDir: path.join(stateDir, "workspace-deleted"),
+      sessionsDir: path.join(stateDir, "sessions-deleted"),
+      databasePaths: [claim.path],
+      deleteFiles: true,
+      phase: "draining",
+    },
+    { env },
+  );
+  const lease = claimOpenClawAgentDatabaseLease(claim);
+  try {
+    expect(() => claimOpenClawAgentDatabaseLease({ ...claim, agentId: "survivor" })).toThrow(
+      "deletion owns",
+    );
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        expect(
+          agentDeletionJournal.completeAgentDeletionJournalInDatabase(
+            database,
+            deletion.agentId,
+            deletion.operationId,
+          ),
+        ).toBe(false);
+        expect(
+          retireAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
+        ).toBe(true);
+      },
+      { env },
+    );
+    expect(() => claimOpenClawAgentDatabaseLease(claim)).toThrow("while agent deleted is deleted");
+  } finally {
+    releaseOpenClawAgentDatabaseLease(lease, { env });
+  }
+});
+
 it.each([
   ["registration", "database_paths_json", "[1]"],
   ["lease claim", "cleanup_paths_json", "[1]"],
   ["lease drain", "database_paths_json", "[1]"],
   ["lease drain", "cleanup_paths_json", "[1]"],
   ["registration", "operation_id", "replacement"],
-  ["lease claim", "cleanup_completed", 1],
   ["lease drain", "operation_id", "replacement"],
 ] as const)("%s classifies changed %s=%s", (caller, column, value) => {
-  const afterPrepare = column === "operation_id" || column === "cleanup_completed";
+  const afterPrepare = column === "operation_id";
   const error = afterPrepare
     ? "deletion journal changed"
     : column === "database_paths_json"

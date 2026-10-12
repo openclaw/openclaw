@@ -595,12 +595,8 @@ export async function uninstallChromeExtensionNativeHosts(
     if (status.state === "missing") {
       continue;
     }
-    if (status.state !== "owned") {
-      refused.push(status.manifestPath);
-      continue;
-    }
     const launcherPath = status.launcherPath;
-    if (!launcherPath) {
+    if (status.state !== "owned" || !launcherPath) {
       refused.push(status.manifestPath);
       continue;
     }

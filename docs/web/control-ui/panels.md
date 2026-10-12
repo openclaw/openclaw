@@ -161,6 +161,8 @@ resized while its reported dimensions remain unchanged.
 
 Browser tabs appear directly in the Chat side-panel header, with the URL toolbar below. Each tab shows its page favicon when automatic favicon fetching is enabled and an icon is available. Closing the last browser tab leaves the Browser panel open so you can create another tab with **+**. When Browser is moved to the main area, its tabs appear above its own toolbar.
 
+When the Gateway browser is stopped, choose **Start browser**. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
+
 While an Agent browser preview refreshes, the current page stays visible and the reload icon spins in the toolbar. A loading skeleton appears only before the first page image is available. If refreshing fails, the panel keeps the previous image and shows the error above it.
 
 To paste into an Agent browser tab or Browser dashboard, click the page's input field and press **⌘V** on macOS or **Ctrl+V** on Windows/Linux, or right-click the field and choose **Paste**. Plain text is inserted at the remote cursor, including password fields and fields inside frames. Pasting does not submit the form or copy your clipboard to the Gateway's system clipboard. This requires a managed browser; Chrome MCP existing-session profiles do not support it.

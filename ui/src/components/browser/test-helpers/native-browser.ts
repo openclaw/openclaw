@@ -4,6 +4,7 @@ import type {
   NativeBrowserState,
   NativeBrowserTab,
 } from "../../../app/native-browser-bridge.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
 import {
   createBrowserClient,
@@ -189,7 +190,7 @@ export async function mountSessionPanel(sessionKey: string) {
   panel.remoteAvailable = false;
   panel.embedded = true;
   panel.presented = true;
-  document.body.append(panel);
+  mountSolid(() => panel);
   await panel.updateComplete;
   return panel;
 }

@@ -5,7 +5,9 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { sessionParticipantsSchemaSql } from "../../state/openclaw-agent-session-participants-schema.js";
@@ -76,6 +78,59 @@ function addOwnerColumns(db: DatabaseSync) {
     db.exec(`ALTER TABLE session_nodes ADD COLUMN ${columnName} ${dataType}`);
   }
 }
+
+it("skips absent-field clearing only when the complete previous field set survives", () => {
+  const database = createDatabase();
+  const key = database.keys[0];
+  const previous = {
+    sessionId: "session-0",
+    updatedAt: 1,
+    skillsSnapshot: { prompt: "saved prompt", skills: [] },
+  };
+  // Match the initial complete snapshot, including its report.
+  const previousEntry = {
+    ...previous,
+    systemPromptReport: {
+      source: "run" as const,
+      generatedAt: 1,
+      systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+    },
+  };
+  const writes = trackSqliteStatementExecutions(database.db, ["delete"], (sql) =>
+    /^delete from "session_entry_snapshots"/iu.test(sql) ? "delete" : null,
+  );
+  const replace = (entry: Record<string, unknown>, commit = true) => {
+    const split = splitSessionEntrySnapshots(entry, { previousEntry });
+    database.db.exec("BEGIN");
+    writeSessionEntrySnapshots(database, key, split.snapshots, split);
+    database.db.exec(commit ? "COMMIT" : "ROLLBACK");
+  };
+  const fields = () =>
+    database.db
+      .prepare("SELECT field FROM session_entry_snapshots WHERE session_key = ? ORDER BY field")
+      .all(key)
+      .map((row) => row.field);
+  try {
+    replace({ ...previousEntry, skillsSnapshot: { prompt: "new prompt", skills: [] } });
+    expect(writes.counts.delete).toBe(0);
+    expect(fields()).toEqual(["skillsSnapshot", "systemPromptReport"]);
+    replace(previous, false);
+    expect(fields()).toEqual(["skillsSnapshot", "systemPromptReport"]);
+    replace(previous);
+    expect(writes.counts.delete).toBe(2);
+    expect(fields()).toEqual(["skillsSnapshot"]);
+    // Explicit clearing still uses the same entry transaction.
+    database.db.exec("BEGIN");
+    writeSessionEntrySnapshots(database, key, []);
+    database.db.exec("COMMIT");
+    expect(fields()).toEqual([]);
+  } finally {
+    writes.restore();
+  }
+});
 
 it("batches snapshot replacement while preserving values, revisions, and rollback", () => {
   const database = createDatabase();
@@ -159,7 +214,6 @@ describe("prepared session entry reads", () => {
             ? "entries"
             : null,
     );
-    database.db.exec("BEGIN");
     try {
       const first = read()!;
       first.entry.label = "caller-owned";
@@ -172,6 +226,7 @@ describe("prepared session entry reads", () => {
         });
       }
       expect(queries.counts).toEqual({ entries: 0, participants: 0 });
+      database.db.exec("BEGIN");
 
       database.db
         .prepare("UPDATE session_participants SET actor_id = 'local' WHERE session_key = ?")
@@ -192,41 +247,59 @@ describe("prepared session entry reads", () => {
     expect(read()?.entry.participants?.[0]?.identity.id).toBe("participant-0");
   });
 
-  it("refreshes warm row facts after data-only foreign commits and connection reopen", () => {
+  it("refreshes warm entry and participant facts after worker receipts and connection reopen", async () => {
     const filename = path.join(tempDirs.make("session-row-freshness-"), "agent.sqlite");
     const database = createDatabase(filename);
     database.db.exec("PRAGMA journal_mode=WAL");
-    const peer = new DatabaseSync(filename);
-    openedDatabases.push(peer);
     const key = database.keys[0];
     const read = () => readExactSessionEntryRowValidated(database, key, "list")?.entry;
-    const commit = (value: string) => {
-      peer.exec("BEGIN IMMEDIATE");
-      peer
-        .prepare(
-          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?",
-        )
-        .run(value, key);
-      peer
-        .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
-        .run(value, key);
-      peer.exec("COMMIT");
-    };
     expect(read()?.label).toBe("label-0");
     expect(read()?.participants?.[0]?.identity.id).toBe("participant-0");
-    commit("foreign");
-    expect(read()).toMatchObject({
-      label: "foreign",
-      participants: [{ identity: { id: "foreign" } }],
-    });
-    database.db.close();
-    commit("reopened");
-    database.db.open();
-    admitSqliteSchema(database.db);
-    expect(read()).toMatchObject({
-      label: "reopened",
-      participants: [{ identity: { id: "reopened" } }],
-    });
+    const probes = trackSqliteStatementExecutions(database.db, ["fresh"], (sql) =>
+      /\bdata_version\b/iu.test(sql) ? "fresh" : null,
+    );
+    const broker = new SqliteWorkerBroker();
+    try {
+      const store = await broker.open<AdmissionOperations>({
+        moduleUrl: new URL(
+          "../../infra/sqlite-database-admission.worker.test-support.ts",
+          import.meta.url,
+        ),
+        databasePath: filename,
+        input: undefined,
+      });
+      const commit = (value: "worker" | "reopened") =>
+        broker.runOperation(store!, (scope) =>
+          scope.execute({
+            type: "writeRows",
+            input: {
+              sql: `BEGIN IMMEDIATE;
+            UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', '${value}')
+              WHERE session_key = 'agent:main:first';
+            UPDATE session_participants SET actor_id = '${value}'
+              WHERE session_key = 'agent:main:first';
+            COMMIT;`,
+            },
+          }),
+        );
+      await commit("worker");
+      expect(read()).toMatchObject({
+        label: "worker",
+        participants: [{ identity: { id: "worker" } }],
+      });
+      database.db.close();
+      await commit("reopened");
+      database.db.open();
+      admitSqliteSchema(database.db);
+      expect(read()).toMatchObject({
+        label: "reopened",
+        participants: [{ identity: { id: "reopened" } }],
+      });
+      expect(probes.counts.fresh).toBe(0);
+    } finally {
+      probes.restore();
+      await broker.close();
+    }
   });
 
   it("keeps fresh bindings and participant values without recompiling warm metadata reads", () => {

@@ -35,7 +35,7 @@ export function formatUnresolvedPromptAdvisory(
       : [
           `${pluralize(names.length, "isolated automation")} ${singular ? "drives" : "drive"} shell/process tools from the agent prompt and ${singular ? "keeps" : "keep"} running as-is${formatJobNameList(names)}.`,
           "- This is a supported shape, not a legacy store row, so the doctor fix path cannot convert it and the finding is informational only.",
-          '- For a deterministic run, recreate it as a command automation (`openclaw automations add ... --command "<shell>"`).',
+          '- For a run without a model, recreate it as a command automation (`openclaw automations add ... --command "<shell>"`).',
         ]
   ).join("\n");
 }
@@ -81,12 +81,12 @@ export function formatLegacyGatewayExecAdvisory(names: string[]): string | null 
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const descriptions: Record<string, string> = {
     jobId: "still uses legacy `jobId`",
-    missingId: "is missing a canonical string `id`",
+    missingId: "is missing a string `id`",
     nonStringId: "stores `id` as a non-string value",
     legacyScheduleString: "stores schedule as a bare string",
     legacyScheduleCron: "still uses `schedule.cron`",
     legacyScheduleKind:
-      "stores a non-canonical schedule `kind` or stream `mode` that will be normalized",
+      "stores a outdated schedule `kind` or stream `mode` that will be normalized",
     legacyPayloadKind: "needs payload kind normalization",
     legacyPayloadCodexModel: "still uses legacy `openai-codex/*` cron model refs",
     legacyTaskSuggestionToolName: `still grants legacy tool \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.legacyName}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.canonicalName}\``,

@@ -8,10 +8,12 @@ import {
   parseDateStringTimestampMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  asFiniteNumber,
   asOptionalObjectRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
+  readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
@@ -318,11 +320,9 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       const groundedCount = Math.max(0, Math.floor(Number(entry.groundedCount) || 0));
       const totalScore = Math.max(0, Number(entry.totalScore) || 0);
       const maxScore = clampScore(Number(entry.maxScore) || 0);
-      const firstRecalledAt =
-        typeof entry.firstRecalledAt === "string" ? entry.firstRecalledAt : nowIso;
-      const lastRecalledAt =
-        typeof entry.lastRecalledAt === "string" ? entry.lastRecalledAt : nowIso;
-      const promotedAt = typeof entry.promotedAt === "string" ? entry.promotedAt : undefined;
+      const firstRecalledAt = readStringValue(entry.firstRecalledAt) ?? nowIso;
+      const lastRecalledAt = readStringValue(entry.lastRecalledAt) ?? nowIso;
+      const promotedAt = readStringValue(entry.promotedAt);
       const claimHash = normalizeOptionalString(entry.claimHash);
       const projectKey = normalizeProjectKeyList(entry.projectKey);
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
@@ -381,11 +381,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
               provenanceRaw.sessionKind === "unknown"
                 ? provenanceRaw.sessionKind
                 : "unknown",
-            observedAt:
-              typeof provenanceRaw.observedAt === "number" &&
-              Number.isFinite(provenanceRaw.observedAt)
-                ? provenanceRaw.observedAt
-                : fallbackObservedAt,
+            observedAt: asFiniteNumber(provenanceRaw.observedAt) ?? fallbackObservedAt,
             ...(supersedesKey ? { supersedesKey } : {}),
           }
         : undefined;
@@ -420,7 +416,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
 
   return {
     version: 1,
-    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso,
+    updatedAt: readStringValue(record.updatedAt) ?? nowIso,
     entries,
   };
 }

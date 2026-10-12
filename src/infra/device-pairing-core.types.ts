@@ -5,6 +5,8 @@ import type {
   PairedDeviceApprovalKind,
 } from "./device-pairing.types.js";
 
+export type PairedDeviceTokenIdentity = { deviceId: string; key: string };
+
 export type NodePairingGeneration = {
   nodeId: string;
   key: string;

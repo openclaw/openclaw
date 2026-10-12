@@ -2,6 +2,21 @@ import type { nothing, TemplateResult } from "lit";
 
 export const PANEL_HOSTED_TABS_CHANGE_EVENT = "openclaw:panel-hosted-tabs-change";
 
+const hostedTabsChangeKeys = new WeakMap<HTMLElement, string>();
+
+export function notifyPanelHostedTabsChanged(
+  element: HTMLElement,
+  facts: readonly unknown[],
+): void {
+  const key = JSON.stringify(facts);
+  if (hostedTabsChangeKeys.get(element) !== key) {
+    hostedTabsChangeKeys.set(element, key);
+    element.dispatchEvent(
+      new CustomEvent(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true, composed: true }),
+    );
+  }
+}
+
 export type PanelHostedTab = {
   id: string;
   label: string;
@@ -20,7 +35,7 @@ export type PanelHostedTabsElement = HTMLElement & {
   readonly hostedTabs: PanelHostedTab[];
   readonly activeHostedTabId: string | null;
   /** Header actions while this panel is the active side panel; rendered by the host in light DOM. */
-  readonly hostedActions?: TemplateResult | typeof nothing;
+  readonly hostedActions?: TemplateResult | Node | typeof nothing;
   selectHostedTab(id: string): void;
   closeHostedTab(id: string): Promise<void>;
 };

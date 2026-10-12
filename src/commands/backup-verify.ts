@@ -36,11 +36,6 @@ import {
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
-type BackupVerifyOptions = {
-  archive: string;
-  json?: boolean;
-};
-
 type BackupVerifyResult = Awaited<ReturnType<typeof verifyBackupArchive>>;
 
 type ArchiveEntry = {
@@ -127,8 +122,8 @@ function formatResult(result: BackupVerifyResult): string {
     `Archive entries scanned: ${result.entryCount}`,
     `Symbolic links checked: ${result.symlinkCount}`,
     result.sqliteInventoryVerified
-      ? "Canonical SQLite inventory verified."
-      : "Canonical SQLite completeness unknown: this legacy archive has no database inventory.",
+      ? "SQLite database inventory verified."
+      : "SQLite database coverage unknown: this legacy archive has no database inventory.",
   ].join("\n");
 }
 
@@ -232,7 +227,9 @@ function listSqliteSnapshotEntries(
       continue;
     }
     if (entry.normalized !== owner.archivePath) {
-      throw new Error(`Backup contains a case-mangled canonical SQLite path: ${entry.normalized}`);
+      throw new Error(
+        `Backup contains a SQLite path with incorrect letter casing: ${entry.normalized}`,
+      );
     }
     if (!isRegularArchiveFile(entry.type)) {
       throw new Error(`SQLite snapshot must be a regular archive file: ${entry.normalized}`);
@@ -700,7 +697,7 @@ export async function verifyBackupArchive(
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
-  opts: BackupVerifyOptions,
+  opts: { archive: string; json?: boolean },
 ): Promise<BackupVerifyResult> {
   const result = await verifyBackupArchive(opts.archive);
 

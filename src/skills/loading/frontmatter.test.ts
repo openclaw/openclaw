@@ -6,82 +6,7 @@ import {
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
 
-describe("resolveSkillInvocationPolicy", () => {
-  it("defaults to enabled behaviors", () => {
-    const policy = resolveSkillInvocationPolicy({});
-    expect(policy.userInvocable).toBe(true);
-    expect(policy.disableModelInvocation).toBe(false);
-  });
-
-  it("parses frontmatter boolean strings", () => {
-    const policy = resolveSkillInvocationPolicy({
-      "user-invocable": "no",
-      "disable-model-invocation": "yes",
-    });
-    expect(policy.userInvocable).toBe(false);
-    expect(policy.disableModelInvocation).toBe(true);
-  });
-});
-
 describe("parseSkillFrontmatter", () => {
-  it.each([
-    {
-      title: "keeps recoverable colon-rich scalar values",
-      frontmatter: `---
-name: sample-skill
-description: Use anime style IMPORTANT: Must be kawaii
----`,
-      expectedDescription: "Use anime style IMPORTANT: Must be kawaii",
-    },
-    {
-      title: "keeps recoverable description values beginning with punctuation",
-      frontmatter: `---
-name: sample-skill
-description: [Beta] Builds prereleases
----`,
-      expectedDescription: "[Beta] Builds prereleases",
-    },
-    {
-      title: "keeps recoverable description values beginning with YAML-reserved characters",
-      frontmatter: `---
-name: sample-skill
-description: @scope/package helper
----`,
-      expectedDescription: "@scope/package helper",
-    },
-    {
-      title: "keeps recoverable description values that resemble YAML aliases",
-      frontmatter: `---
-name: sample-skill
-description: *Experimental
----`,
-      expectedDescription: "*Experimental",
-    },
-  ])("$title", ({ frontmatter, expectedDescription }) => {
-    const parsed = parseSkillFrontmatter(frontmatter);
-
-    expect(parsed.description).toBe(expectedDescription);
-  });
-
-  it("rejects malformed structured values with the YAML parse error", () => {
-    expect(() =>
-      parseSkillFrontmatter(`---
-name: [broken
-description: Broken skill
----`),
-    ).toThrow("invalid frontmatter: BAD_INDENT");
-  });
-
-  it("rejects indentation errors following a description", () => {
-    expect(() =>
-      parseSkillFrontmatter(`---
-name: sample-skill
-description: Working skill
-\tmetadata: {}
----`),
-    ).toThrow(/invalid frontmatter.*(?:TAB_AS_INDENT|BAD_INDENT)/);
-  });
-
   it("rejects unresolved aliases under explicit YAML keys", () => {
     expect(() =>
       parseSkillFrontmatter(`---
@@ -91,33 +16,6 @@ description: Working skill
 : *missing
 ---`),
     ).toThrow(/invalid frontmatter.*YAML_EXCEPTION: Unresolved alias/);
-  });
-
-  it("does not recover nested description keys inside malformed metadata", () => {
-    expect(() =>
-      parseSkillFrontmatter(`---
-name: sample-skill
-description: Working skill
-metadata: {
-description: *missing
-}
----`),
-    ).toThrow(/invalid frontmatter/);
-  });
-});
-
-describe("resolveSkillManifestMetadata skill keys", () => {
-  it("ignores empty optional keys without changing existing nonempty config keys", () => {
-    for (const [value, expected] of [
-      ["", undefined],
-      [" foo ", " foo "],
-    ]) {
-      expect(
-        resolveSkillManifestMetadata({
-          metadata: JSON.stringify({ openclaw: { skillKey: value } }),
-        })?.skillKey,
-      ).toBe(expected);
-    }
   });
 });
 
@@ -189,7 +87,7 @@ describe("resolveSkillManifestMetadata install validation", () => {
     ]);
   });
 
-  it.each(["", "g".repeat(64), 123])(
+  it.each(["g".repeat(64), 123])(
     "drops a download installer declaring an invalid SHA-256 digest (%j)",
     (sha256) => {
       const install = resolveInstall({

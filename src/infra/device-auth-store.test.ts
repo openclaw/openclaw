@@ -32,6 +32,7 @@ import { observeDeviceAuthHostSql } from "./device-auth-store.sql.test-support.j
 import { holdDeviceAuthWriterForTest } from "./device-auth-store.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const deviceTarget = { deviceId: "device-1", role: "operator" };
 
@@ -497,27 +498,23 @@ describe("infra/device-auth-store", () => {
     await withOpenClawTestState({ label: "device-token-native-writer" }, async (state) => {
       const lookup = { deviceId: "synthetic-device", role: "operator", env: state.env };
       await tokens.storeDeviceAuthToken({ ...lookup, token: "synthetic-before" });
-      const originalAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
       let nativeWriteStarted = false;
-      vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          originalAdmission((request, grant) => {
-            admit(request, grant);
-            if (request.stage === "transaction" && !nativeWriteStarted) {
-              nativeWriteStarted = true;
-              runOpenClawStateWriteTransaction(
-                ({ db }) => {
-                  storeDeviceAuthTokenInDatabase(db, {
-                    deviceId: "synthetic-native-device",
-                    role: "operator",
-                    token: "synthetic-native-token",
-                  });
-                },
-                { env: state.env },
-              );
-            }
-          }, attachment),
-      );
+      probe.admission(mutationAdmission, (request, grant, admit) => {
+        admit(request, grant);
+        if (request.stage === "transaction" && !nativeWriteStarted) {
+          nativeWriteStarted = true;
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              storeDeviceAuthTokenInDatabase(db, {
+                deviceId: "synthetic-native-device",
+                role: "operator",
+                token: "synthetic-native-token",
+              });
+            },
+            { env: state.env },
+          );
+        }
+      });
       await expect(
         tokens.storeDeviceAuthToken({
           ...lookup,

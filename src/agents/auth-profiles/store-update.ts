@@ -11,7 +11,7 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { executeOpenClawAgentWorkerPublication } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -66,7 +66,6 @@ import { watchAuthProfileNativeCommits } from "./store-update-commit.js";
 import type {
   AuthStoreUpdatePrepared,
   AuthStoreUpdateCommitted,
-  AuthStoreUpdateCommittedWire,
   AuthStoreUpdateResponse,
 } from "./store-update-kernel.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
@@ -282,20 +281,9 @@ async function runPreparedAuthProfileStoreUpdate(
       if (exchangePort) {
         // SAFETY: The paired worker queues canonical fields before requesting its commit grant.
         const received = receiveAuthProfileUpdateValue(exchangePort) as
-          | AuthStoreUpdateCommittedWire
+          | AuthStoreUpdateCommitted
           | undefined;
-        committed = received && {
-          ...received,
-          publication: {
-            ...received.publication,
-            oauthRefreshClaimIds: new Map(
-              received.publication.oauthRefreshClaimIds.map(([profileId, claimId]) => [
-                profileId,
-                claimId ?? undefined,
-              ]),
-            ),
-          },
-        };
+        committed = received;
       }
     };
     const input = {

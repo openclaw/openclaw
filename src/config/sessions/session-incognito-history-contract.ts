@@ -14,6 +14,7 @@ import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js"
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
+  LatestTranscriptAssistantText,
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaLimits,
@@ -107,6 +108,10 @@ type Reads = {
   "visible-delta": {
     input: { limits: SessionTranscriptVisibleMessageDeltaLimits };
     output: SessionTranscriptVisibleMessageDeltaResult;
+  };
+  "latest-assistant": {
+    input: Record<never, never>;
+    output: LatestTranscriptAssistantText | undefined;
   };
   "conversation-binding": {
     input: { conversationRef: string };

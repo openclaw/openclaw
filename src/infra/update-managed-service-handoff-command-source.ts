@@ -10,33 +10,31 @@ function runServiceCommand(command, args, onSpawn, deadline, timeoutCap) {
     const scheduledTask = command === "schtasks.exe";
     const timeoutMs = Math.min(timeoutCap ?? remaining, remaining,
       scheduledTask ? ${SCHTASKS_TIMEOUT_MS} : Infinity);
-    let stdout = "",
-      stderr = "";
+    const output = { stdout: "", stderr: "" };
     const child = spawn(command, args, {
       env: params.serviceManagerEnv,
       stdio: ["ignore", "pipe", "pipe"],
       killSignal: "SIGKILL",
       timeout: timeoutMs,
     });
-    child.stdout?.on("data", (chunk) => {
-      stdout = (stdout + chunk).slice(-8192);
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr = (stderr + chunk).slice(-8192);
-    });
+    for (const stream of ["stdout", "stderr"]) {
+      child[stream]?.on("data", (chunk) => {
+        output[stream] = (output[stream] + chunk).slice(-8192);
+      });
+    }
     child.once("spawn", () => onSpawn?.());
     child.once("error", (error) => {
-      stderr = String(error);
+      output.stderr = String(error);
     });
     child.once("close", (code) => {
       // This private child is killed only by spawn's timeout, not helper cancellation.
       if (scheduledTask && child.killed) {
         const detail = "schtasks " + args[0] + " timed out after " + timeoutMs + "ms";
         appendLog(detail);
-        stderr = [detail, stderr].filter(Boolean).join("\n");
+        output.stderr = [detail, output.stderr].filter(Boolean).join("\n");
         code = 124;
       }
-      resolve({ code: typeof code === "number" ? code : 1, stdout, stderr });
+      resolve({ code: typeof code === "number" ? code : 1, ...output });
     });
   });
 }

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -14,8 +15,12 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import type { SqliteWorkerOperations } from "../../infra/sqlite-worker-contract.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as agentWorkerStore from "../../state/openclaw-agent-worker-store.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createPlacementTurnClaimFixtureOps } from "./placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
@@ -54,18 +59,35 @@ describe("worker transcript claim fences", () => {
         updatedAt: 1,
       });
       const entryBefore = loadSessionEntry(target);
-      const ledger = createWorkerTranscriptCommitStore({ database: support.testState.stateDb });
-      const applicationStarted = createDeferredCore();
+      const applicationQueued = createDeferredCore();
+      const transcriptWorkerUrl = resolveRuntimeWorkerUrl(
+        runtimeProcessEntrypoints.workerTranscriptCommit,
+      ).href;
+      const openWorker = agentWorkerStore.openOpenClawAgentSqliteWorkerStore;
+      const openingWorker = vi
+        .spyOn(agentWorkerStore, "openOpenClawAgentSqliteWorkerStore")
+        .mockImplementation(
+          async <Operations extends SqliteWorkerOperations>(
+            ...args: Parameters<typeof openWorker<Operations>>
+          ) => {
+            const worker = await openWorker<Operations>(...args);
+            if (args[2].moduleUrl.href !== transcriptWorkerUrl) {
+              return worker;
+            }
+            return {
+              ...worker,
+              run<T>(...runArgs: Parameters<typeof worker.run<T>>): Promise<T> {
+                const pending = worker.run<T>(...runArgs);
+                // The real run queues synchronously behind the held transcript writer.
+                applicationQueued.resolve();
+                return pending;
+              },
+            };
+          },
+        );
       const committer = createWorkerTranscriptCommitter({
         getConfig: () => ({ session: { store: target.storePath } }),
-        store: {
-          ...ledger,
-          async begin(input, assertCurrent) {
-            const result = await ledger.begin(input, assertCurrent);
-            applicationStarted.resolve();
-            return result;
-          },
-        },
+        store: createWorkerTranscriptCommitStore({ database: support.testState.stateDb }),
       });
       const workerService = support.createService(support.createProvider(), {
         placementStore: createWorkerSessionPlacementGate(store),
@@ -96,6 +118,7 @@ describe("worker transcript claim fences", () => {
       );
       let replacement: WorkerSessionTurnClaim | undefined;
       let replacementAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
+      let commit: ReturnType<typeof workerService.commitTranscript> | undefined;
       try {
         await bindWorkerTurnOwner(
           store,
@@ -113,8 +136,12 @@ describe("worker transcript claim fences", () => {
             makeAgentAssistantMessage({ content: [{ type: "text", text: "prepared after user" }] }),
           );
         }
-        const commit = workerService.commitTranscript(identity, request);
-        await applicationStarted.promise;
+        commit = workerService.commitTranscript(identity, request);
+        await awaitGateBeforeSettlement(
+          applicationQueued.promise,
+          commit,
+          "transcript commit settled before queuing its writer",
+        );
         expect(await loadTranscriptEvents(target)).toEqual([]);
         if (scenario !== "preparation") {
           await store.releaseTurn(claim);
@@ -180,6 +207,8 @@ describe("worker transcript claim fences", () => {
       } finally {
         releaseWriter.resolve();
         await blocker;
+        await Promise.allSettled([commit]);
+        openingWorker.mockRestore();
         unsubscribe();
         if (store.validateTurnClaim(replacement ?? claim)) {
           await store.releaseTurn(replacement ?? claim);

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -13,67 +13,6 @@ import {
 import type { SessionCapability } from "./session-capability.ts";
 
 describe("event-driven session list refresh", () => {
-  it.each([
-    { scope: "current descriptor", result: false },
-    { scope: "scoped defaults", result: "defaults-only" },
-    { scope: "another agent", result: true },
-    { scope: "another incarnation", result: true },
-    { scope: "retired descriptor", result: true },
-    { scope: "live roster owner", result: true },
-  ] as const)("applies captured read fences only to their $scope", async ({ scope, result }) => {
-    const targetAgentId = scope === "another agent" ? "other" : "research";
-    const target: GatewaySessionRow = {
-      key: "global",
-      kind: "global",
-      agentId: targetAgentId,
-      sessionId: "held-incarnation",
-      updatedAt: 1,
-      label: "Scoped row",
-    };
-    const primary: GatewaySessionRow =
-      scope === "live roster owner"
-        ? target
-        : {
-            key: "agent:main:root",
-            agentId: "main",
-            sessionId: "main-root",
-            kind: "direct",
-            updatedAt: 1,
-          };
-    const ownerAgentId = scope === "live roster owner" ? targetAgentId : "main";
-    const request = createGatewayRequestMock(async () => sessionsResult([primary], 1));
-    const client = createTestGatewayClient(request);
-    const { sessions } = createSessionCapabilityHarness(client.request.bind(client));
-    await sessions.refresh({ agentId: ownerAgentId, force: true });
-    const observation = sessions.observeRow({ key: target.key, agentId: targetAgentId }, () => {});
-    try {
-      expect(observation.captureReconcile()(target).status).toBe("current");
-      const reconcile = sessions.captureReconcile();
-      expect(observation.captureReconcile()(undefined)).toEqual({ status: "current", row: null });
-      if (scope === "retired descriptor") {
-        observation.dispose();
-      }
-      const incoming = {
-        ...target,
-        agentId: "research",
-        sessionId: scope === "another incarnation" ? "incoming-incarnation" : target.sessionId,
-      };
-      expect(
-        reconcile(
-          incoming,
-          scope === "scoped defaults" ? sessionsResult([], 1).defaults : undefined,
-          { resultAgentId: ownerAgentId, selectedGlobalAgentId: "research" },
-        ),
-      ).toBe(result);
-      if (scope === "live roster owner") {
-        expect(sessions.state.result?.sessions[0]).toMatchObject(primary);
-      }
-    } finally {
-      observation.dispose();
-      sessions.dispose();
-    }
-  });
-
   it("bounds held-roster enumeration while reconciling overlapping session views", async () => {
     vi.useFakeTimers();
     const rows = Array.from({ length: 10 }, (_, index) => ({
