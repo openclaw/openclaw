@@ -179,7 +179,16 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       const liveTree = legacyPackageFingerprint(f.packageRoot);
       const previousTree = legacyPackageFingerprint(path.join(f.anchor, "previous"));
       const liveBytes = fs.readFileSync(path.join(f.packageRoot, "package.json"));
-      const launcher = fs.lstatSync(f.launcher, { bigint: true });
+      // Verification reads the link, which may advance its atime (Linux relatime).
+      const launcherState = () => {
+        const { dev, ino, mode, nlink, uid, gid, size, mtimeNs, ctimeNs } = fs.lstatSync(
+          f.launcher,
+          { bigint: true },
+        );
+        const target = fs.readlinkSync(f.launcher);
+        return { dev, ino, mode, nlink, uid, gid, size, mtimeNs, ctimeNs, target };
+      };
+      const launcher = launcherState();
       const previousBytes = fs.readFileSync(path.join(f.anchor, "previous/package.json"));
       const helperBytes = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
       const before = fs.readFileSync(f.journalPath);
@@ -232,7 +241,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       expect(legacyPackageFingerprint(f.packageRoot)).toEqual(liveTree);
       expect(legacyPackageFingerprint(path.join(retained, "previous"))).toEqual(previousTree);
       expect(fs.readFileSync(path.join(f.packageRoot, "package.json"))).toEqual(liveBytes);
-      expect(fs.lstatSync(f.launcher, { bigint: true })).toEqual(launcher);
+      expect(launcherState()).toEqual(launcher);
       expect(fs.readFileSync(path.join(retained, "previous/package.json"))).toEqual(previousBytes);
       expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helperBytes);
       expect(fs.existsSync(f.journalPath)).toBe(false);
