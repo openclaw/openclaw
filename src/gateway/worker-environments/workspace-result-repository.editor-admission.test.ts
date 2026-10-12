@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -70,13 +69,6 @@ describe("repository workspace editor admission", () => {
         admit(request, grant);
       });
       try {
-        const calibration = new DatabaseSync(":memory:");
-        try {
-          calibration.prepare("SELECT 1 AS editor_sql_calibration").get();
-        } finally {
-          calibration.close();
-        }
-        expect(sql.queries.length).toBeGreaterThan(0);
         const saving = f.mutations.mutate({
           ...sessionTarget,
           assertCurrent: () => {

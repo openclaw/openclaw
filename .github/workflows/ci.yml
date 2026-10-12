@@ -6362,6 +6362,7 @@ jobs:
       - android-access-native
       - docker-seed-e2e
       - published-driver-update
+      - postgres-conformance
     if: ${{ always() && !cancelled() && github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || github.event.pull_request.head.repo.full_name != github.repository || needs.preflight.outputs.runner_profile == 'github') && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
@@ -6572,6 +6573,7 @@ jobs:
       - check-test-types-hosted-core-shard
       - check-additional-shard
       - check-extension-package-boundary
+      - postgres-conformance
       - check-docs
       - skills-python
       - checks-windows

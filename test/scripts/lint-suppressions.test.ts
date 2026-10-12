@@ -234,7 +234,7 @@ describe("production lint suppressions", () => {
         "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/infra/device-pairing-row-mapping.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/infra/net/fetch-guard.ts|no-warning-comments|1",
         "src/infra/net/undici-dispatcher-options.ts|typescript/unbound-method|1",

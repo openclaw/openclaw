@@ -208,20 +208,21 @@ export async function readCachedPlacementRecoveryCandidates(
   captured: PlacementReadObservation,
   read: () => Promise<WorkerPlacementRecoveryCandidate[]>,
 ): Promise<WorkerPlacementRecoveryCandidate[]> {
+  const { owner, observation, authority, assertUsable } = captured;
   try {
-    return await preparePlacementRead(
-      captured,
-      undefined,
-      async (owner) => (owner.recoveryCandidatesEmpty ? [] : await read()),
-      (candidates, { owner }) => {
-        if (candidates.length === 0) {
-          owner.recoveryCandidatesEmpty = true;
-        }
-        return candidates;
-      },
-    );
+    const signal = getAsyncWorkSignal();
+    signal?.throwIfAborted();
+    assertUsable();
+    const candidates = owner.recoveryCandidatesEmpty ? [] : await read();
+    signal?.throwIfAborted();
+    assertUsable();
+    // Discovery may overlap Stop; recovery acquires exact session authority before acting.
+    if (candidates.length === 0 && !observation.revoked && !hasPendingPublication(owner)) {
+      owner.recoveryCandidatesEmpty = true;
+    }
+    return candidates;
   } finally {
-    captured.authority.release();
+    authority.release();
   }
 }
 
