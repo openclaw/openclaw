@@ -3,6 +3,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../../test/helpers/mock-logger.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -86,6 +90,8 @@ describe("cron.add at cron.maxJobs", () => {
   });
 
   it("relays the refusal to the agent automations tool without retrying", async () => {
+    setRuntimeConfigSnapshot({ cron: { maxJobs: 1 } });
+    onTestFinished(clearRuntimeConfigSnapshot);
     const cron = await startCron();
     const callGatewayTool = vi
       .fn()
