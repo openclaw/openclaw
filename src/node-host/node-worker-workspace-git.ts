@@ -1,13 +1,82 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
+import { StringDecoder } from "node:string_decoder";
 import type { WorkerWorkspaceManifestEntry } from "../gateway/worker-environments/workspace-manifest.js";
-import { runExec } from "../process/exec.js";
+import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import {
   runWorkspaceCommand,
   TRANSFER_TIMEOUT_MS,
   workspaceCommandEnv,
 } from "./node-worker-workspace-commands.js";
+
+/**
+ * Stream-parse `git ls-files --stage -z` without buffering the full listing.
+ * Completeness comes from a clean Git exit; retained state is bounded to gitlink
+ * paths plus the caller's wanted checkout paths.
+ */
+async function readWorkspaceGitIndex(params: {
+  workspaceDir: string;
+  homeDir: string;
+  gitPrefix: string[];
+  wantedPaths: ReadonlySet<string>;
+  signal?: AbortSignal;
+}): Promise<{ gitlinks: string[]; basePaths: Set<string> }> {
+  const gitlinks: string[] = [];
+  const basePaths = new Set<string>();
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+
+  const consumeRecord = (record: string) => {
+    if (!record) {
+      return;
+    }
+    const separator = record.indexOf("\t");
+    if (separator < 0) {
+      return;
+    }
+    const indexedPath = record.slice(separator + 1);
+    if (record.startsWith("160000 ")) {
+      gitlinks.push(indexedPath);
+      return;
+    }
+    if (params.wantedPaths.has(indexedPath)) {
+      basePaths.add(indexedPath);
+    }
+  };
+
+  const result = await runCommandWithTimeout(
+    ["git", ...params.gitPrefix, "-C", params.workspaceDir, "ls-files", "--stage", "-z"],
+    {
+      cwd: params.workspaceDir,
+      baseEnv: workspaceCommandEnv(params.homeDir),
+      timeoutMs: TRANSFER_TIMEOUT_MS,
+      signal: params.signal,
+      // Discard retained stdout; records are consumed through the observer.
+      outputCapture: { stdout: "discard", stderr: "tail" },
+      maxOutputBytes: { stdout: Number.MAX_SAFE_INTEGER, stderr: 128 * 1024 },
+      onOutputChunk: (chunk, stream) => {
+        if (stream !== "stdout") {
+          return;
+        }
+        pending += decoder.write(chunk);
+        let separator = pending.indexOf("\0");
+        while (separator >= 0) {
+          consumeRecord(pending.slice(0, separator));
+          pending = pending.slice(separator + 1);
+          separator = pending.indexOf("\0");
+        }
+      },
+    },
+  );
+  pending += decoder.end();
+  if (pending) {
+    consumeRecord(pending);
+  }
+  if (result.termination !== "exit" || result.code !== 0) {
+    throw new Error(`workspace transfer apply failed: ${(result.stderr || "").trim()}`);
+  }
+  return { gitlinks, basePaths };
+}
 
 export async function initializeNodeWorkerGitWorkspace(params: {
   workspaceDir: string;
@@ -58,23 +127,14 @@ export async function initializeNodeWorkerGitWorkspace(params: {
   await git(["update-ref", "refs/heads/openclaw-worker", params.baseCommit]);
   await git(["symbolic-ref", "HEAD", "refs/heads/openclaw-worker"]);
   await git(["read-tree", params.baseCommit]);
-  const index = await git(["ls-files", "--stage", "-z"], {
-    maxOutputBytes: MAX_WORKSPACE_MANIFEST_BYTES,
+  const wantedPaths = new Set(params.entries.map((entry) => entry.path));
+  const { gitlinks, basePaths } = await readWorkspaceGitIndex({
+    workspaceDir: params.workspaceDir,
+    homeDir: params.manifestHome,
+    gitPrefix,
+    wantedPaths,
+    signal: params.signal,
   });
-  const gitlinks: string[] = [];
-  const basePaths = new Set<string>();
-  for (const record of index.split("\0").filter(Boolean)) {
-    const separator = record.indexOf("\t");
-    if (separator < 0) {
-      continue;
-    }
-    const indexedPath = record.slice(separator + 1);
-    if (record.startsWith("160000 ")) {
-      gitlinks.push(indexedPath);
-    } else {
-      basePaths.add(indexedPath);
-    }
-  }
   if (gitlinks.length > 0) {
     await git(["update-index", "--skip-worktree", "-z", "--stdin"], {
       input: `${gitlinks.join("\0")}\0`,
