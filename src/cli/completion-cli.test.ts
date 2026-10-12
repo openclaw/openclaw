@@ -429,6 +429,10 @@ _openclaw_root_completion
   itWithPowerShell.each([
     ["a short-option cluster value", "openclaw completion -ysf", "-ysfish"],
     ["a separated short-option cluster value", "openclaw completion -ys f", "fish"],
+    ["an unfinished single-quoted value", "openclaw completion --shell 'f", "fish"],
+    ["an unfinished double-quoted value", 'openclaw completion --shell "f', "fish"],
+    ["a closed quoted value", "openclaw completion --shell 'f'", "fish"],
+    ["a quoted equals value", "openclaw completion --shell='f", "--shell=fish"],
   ])("completes PowerShell Commander choices after %s", async (_name, commandLine, expected) => {
     expect(
       await powerShellCompletion.complete(createDocumentedCompletionProgram(), commandLine),
