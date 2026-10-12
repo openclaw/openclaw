@@ -162,7 +162,9 @@ describe("chat goal status", () => {
 
   it("restores goal actions and expansion after a transient missing session goal", () => {
     const container = document.createElement("div");
-    onTestFinished(() => render(null, container));
+    onTestFinished(() => {
+      render(null, container);
+    });
     const onGoalAction = vi.fn();
     const selectedSession = goalSession({ status: "paused", pausedAt: Date.now() });
     renderChatInto(container, { selectedSession, onGoalAction });
