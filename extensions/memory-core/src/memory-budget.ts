@@ -5,7 +5,12 @@ const PROMOTION_SECTION_HEADING_RE = /^## Promoted From Short-Term Memory \(([^)
 
 const PROMOTION_SUBSECTION_HEADING_RE = /^### (?:Global|Project: .+?)\s*$/;
 
+// Annotated markers still belong to their promotion section when finding boundaries.
 const PROMOTION_ENTRY_MARKER_RE = /^<!--\s*openclaw-memory-promotion:.*-->\s*$/i;
+
+// Only a single comment can qualify a block for deletion; retain the marker's line domain.
+const GENERATED_PROMOTION_ENTRY_MARKER_RE =
+  /^<!--\s*openclaw-memory-promotion:(?:(?!-->).)*-->\s*$/i;
 
 const ATX_HEADING_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 
@@ -68,7 +73,7 @@ function isGeneratedPromotionBlock(lines: string[]): boolean {
       }
     }
 
-    if (!PROMOTION_ENTRY_MARKER_RE.test(lines[index] ?? "")) {
+    if (!GENERATED_PROMOTION_ENTRY_MARKER_RE.test(lines[index] ?? "")) {
       return false;
     }
     // A marker owns only the single bullet emitted with it. Treat any other

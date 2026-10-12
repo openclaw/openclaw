@@ -220,6 +220,87 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.compacted).toBe(existing);
   });
 
+  it.each([
+    [
+      "inline user text",
+      `${PROMOTION_MARKER_LINE} USER-AUTHORED: keep this note. <!-- unrelated -->`,
+    ],
+    ["an additional comment", `${PROMOTION_MARKER_LINE} <!-- USER-AUTHORED: keep this note. -->`],
+  ])("preserves a promotion block with %s after its marker", (_name, markerLine) => {
+    const existing = promotionSection("2026-04-10", 400).replace(PROMOTION_MARKER_LINE, markerLine);
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection: `\n${promotionSection("2026-04-29", 600)}`,
+      budgetChars: 700,
+    });
+
+    expect(result.droppedDates).toEqual([]);
+    expect(result.compacted).toBe(existing);
+  });
+
+  it.each([
+    ["a carriage return", "\r"],
+    ["a line separator", "\u2028"],
+    ["a paragraph separator", "\u2029"],
+  ])("preserves a promotion block with %s inside its marker", (_name, separator) => {
+    const existing = promotionSection("2026-04-10", 400).replace(
+      PROMOTION_MARKER_LINE,
+      `<!-- openclaw-memory-promotion:generated${separator}USER-AUTHORED: keep this note. -->`,
+    );
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection: `\n${promotionSection("2026-04-29", 600)}`,
+      budgetChars: 700,
+    });
+
+    expect(result.droppedDates).toEqual([]);
+    expect(result.compacted).toBe(existing);
+  });
+
+  it.each(["### Global", "### Project: alpha"])(
+    "preserves the whole mixed promotion block when %s has an annotated marker",
+    (heading) => {
+      const existing = [
+        promotionSection("2026-04-10", 400),
+        heading,
+        "",
+        `${PROMOTION_MARKER_LINE} <!-- USER-AUTHORED: keep this note. -->`,
+        "- handwritten bullet",
+        "USER-AUTHORED: keep this separate line too.",
+      ].join("\n");
+      const result = compactMemoryForBudget({
+        existingMemory: existing,
+        newSection: `\n${promotionSection("2026-04-29", 600)}`,
+        budgetChars: 700,
+      });
+
+      expect(result.droppedDates).toEqual([]);
+      expect(result.compacted).toBe(existing);
+    },
+  );
+
+  it.each(["---", "==="])(
+    "preserves the whole mixed promotion block with an annotated marker before %s",
+    (underline) => {
+      const existing = [
+        promotionSection("2026-04-10", 400),
+        "",
+        `${PROMOTION_MARKER_LINE} <!-- USER-AUTHORED: keep this note. -->`,
+        "- handwritten bullet",
+        underline,
+        "USER-AUTHORED: keep this separate line too.",
+      ].join("\n");
+      const result = compactMemoryForBudget({
+        existingMemory: existing,
+        newSection: `\n${promotionSection("2026-04-29", 600)}`,
+        budgetChars: 700,
+      });
+
+      expect(result.droppedDates).toEqual([]);
+      expect(result.compacted).toBe(existing);
+    },
+  );
+
   it("preserves an entire mixed block when user text follows a generated entry", () => {
     const existing = [
       promotionSection("2026-04-10", 400),
