@@ -27,6 +27,13 @@ Generic callbacks retain their prepare-and-compare contract, and source and
 conversation authority still apply at the mutation boundary. These operations
 change no schemas, stored formats, retention, or update behavior.
 
+Session mutation candidates carry their final transfer frames in the existing
+commit-authority exchange. Ordinary candidates need no separate transfer
+acknowledgments; larger candidates retain bounded intermediate frames. The host
+validates the complete candidate and current caller authority before granting
+COMMIT, then publishes only a confirmed native receipt. FIFO ordering, durability,
+schemas, stored formats, and update behavior are unchanged.
+
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
 committed results. Synchronous boot admission, migrations, Doctor/CLI one-shots,

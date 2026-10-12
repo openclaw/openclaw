@@ -239,13 +239,13 @@ export function transferSessionEntryWorkerCandidate(
   admit: AgentWorkerOperationContext["admit"],
   result: { kind: string; publication?: SessionEntryReplacementPublication },
 ): SessionEntryPatchReceipt;
-export function transferSessionEntryWorkerCandidate<Receipt>(
+export function transferSessionEntryWorkerCandidate<Receipt extends object>(
   database: OpenClawAgentDatabase,
   admit: AgentWorkerOperationContext["admit"],
   result: { kind: string; publication?: SessionEntryReplacementPublication },
   wrapReceipt: (receipt: SessionEntryPatchReceipt) => Receipt,
 ): Receipt;
-export function transferSessionEntryWorkerCandidate<Receipt>(
+export function transferSessionEntryWorkerCandidate<Receipt extends object>(
   database: OpenClawAgentDatabase,
   admit: AgentWorkerOperationContext["admit"],
   result: { kind: string; publication?: SessionEntryReplacementPublication },
@@ -265,13 +265,19 @@ export function transferSessionEntryWorkerCandidate<Receipt>(
     kinds: ["patch"],
   });
   try {
-    admit("transaction", { kind: "session-entry-patch-transfer", handle });
+    let frame = transfer.next(handle.id);
+    let finalFrames;
     for (;;) {
-      const frame = transfer.next(handle.id);
-      admit("transaction", { kind: "session-entry-patch-frame", frame });
-      if (frame.done) {
+      const next = transfer.next(handle.id);
+      if (next.done) {
+        finalFrames = [frame, next];
         break;
       }
+      admit("transaction", {
+        kind: "session-entry-patch-transfer",
+        transfer: { handle, frames: [frame] },
+      });
+      frame = next;
     }
     const receipt: SessionEntryPatchReceipt = {
       kind: "session-entry-patch-committed",
@@ -279,7 +285,8 @@ export function transferSessionEntryWorkerCandidate<Receipt>(
     };
     const publication = wrapReceipt ? wrapReceipt(receipt) : receipt;
     deferSqliteWorkerCommitReceipt(database.db, publication);
-    admit("commit", publication);
+    // The last data frame and end marker share the final live-authority grant.
+    admit("commit", { ...publication, transfer: { handle, frames: finalFrames } });
     return publication;
   } finally {
     transfer.cancel();
