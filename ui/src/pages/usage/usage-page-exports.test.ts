@@ -43,7 +43,17 @@ it.each([
     expected: [],
     tokens: 0,
   },
-])("exports the displayed session scope: $name", async ({ selected, query, expected, tokens }) => {
+  {
+    name: "quoted label retained while selecting a provider",
+    selected: [],
+    query: '"label:Team Planning"',
+    labels: ["Team Planning", "Research Review", "Team Quarterly Planning"],
+    menuProvider: "openai",
+    expected: ["first"],
+    tokens: 100,
+  },
+])("exports the displayed session scope: $name", async (scenario) => {
+  const { selected, query, expected, tokens } = scenario;
   const snapshot = cacheSnapshot("fresh");
   const sessions = ["first", "second", "third"].map((label, index) => {
     const totalTokens = [100, 300, 200][index]!;
@@ -56,7 +66,7 @@ it.each([
     };
     return {
       key: `agent:main:${label}`,
-      label,
+      label: scenario.labels?.[index] ?? label,
       agentId: "main",
       sessionId: `${label}-instance`,
       modelProvider: index === 1 ? "anthropic" : "openai",
@@ -103,16 +113,51 @@ it.each([
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await page.updateComplete;
   }
+  if ("menuProvider" in scenario) {
+    expect(
+      [...page.querySelectorAll(".session-bar-title")].map((row) => row.textContent?.trim()),
+    ).toEqual(["Team Planning"]);
+    vi.useFakeTimers();
+    const option = page.querySelector(
+      `.usage-filter-select [value="option:${scenario.menuProvider}"]`,
+    )!;
+    option.closest("wa-dropdown")!.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: option.getAttribute("value"), checked: true } },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    await page.updateComplete;
+    vi.useRealTimers();
+    expect
+      .soft(page.querySelector<HTMLInputElement>(".usage-query-input")!.value)
+      .toBe(`${query} provider:openai `);
+    expect.soft(page.querySelectorAll(".usage-query-chip")).toHaveLength(2);
+    expect
+      .soft(
+        [...page.querySelectorAll(".usage-metric-badge strong")].map((value) =>
+          value.textContent?.trim(),
+        ),
+      )
+      .toEqual(["100", "$1.00", "1"]);
+  }
   // Selection narrows accounting and exports, not the roster available for comparison.
-  expect(
-    new Set([...page.querySelectorAll(".session-bar-row")].map((row) => row.getAttribute("title"))),
-  ).toEqual(
-    new Set(
-      (query ? ["first", "third"] : ["first", "second", "third"]).map(
-        (label) => `agent:main:${label}`,
+  expect
+    .soft(
+      new Set(
+        [...page.querySelectorAll(".session-bar-row")].map((row) => row.getAttribute("title")),
       ),
-    ),
-  );
+    )
+    .toEqual(
+      new Set(
+        ("menuProvider" in scenario
+          ? expected
+          : query
+            ? ["first", "third"]
+            : ["first", "second", "third"]
+        ).map((label) => `agent:main:${label}`),
+      ),
+    );
   const menu = page.querySelector(".usage-export-menu")!;
   for (const value of ["sessions-csv", "json"]) {
     expect(menu.querySelector(`[value="${value}"]`)!.hasAttribute("disabled")).toBe(
@@ -148,8 +193,8 @@ it.each([
   expect
     .soft(payload.sessions.map((session) => session.key).toSorted((a, b) => a.localeCompare(b)))
     .toEqual(keys);
-  expect(payload.totals?.totalTokens).toBe(tokens);
-  expect(payload.daily.reduce((sum, day) => sum + day.totalTokens, 0)).toBe(tokens);
+  expect.soft(payload.totals?.totalTokens).toBe(tokens);
+  expect.soft(payload.daily.reduce((sum, day) => sum + day.totalTokens, 0)).toBe(tokens);
   expect
     .soft(payload.sessions.reduce((sum, session) => sum + (session.usage?.totalTokens ?? 0), 0))
     .toBe(tokens);
