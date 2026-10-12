@@ -433,6 +433,47 @@ describe("CLI attempt execution", () => {
     },
   );
 
+  it("forwards the lightContext bootstrap mode to CLI execution", async () => {
+    const sessionKey = "agent:main:cli-light-context";
+    const sessionEntry = makeSessionEntry("session-cli-light-context");
+    const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("light"));
+
+    await runStoredAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "Reply with exactly OK",
+      runId: "cli-light-context",
+      opts: {
+        bootstrapContextMode: "lightweight",
+        bootstrapContextRunKind: "default",
+      },
+    });
+
+    expect(firstRunCliAgentArg()).toMatchObject({
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "default",
+    });
+  });
+
+  it("keeps forwarding the lightContext bootstrap mode to embedded execution", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "embedded-light-context",
+      opts: {
+        bootstrapContextMode: "lightweight",
+        bootstrapContextRunKind: "default",
+      },
+    });
+
+    expect(embeddedArg).toMatchObject({
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "default",
+    });
+  });
+
   it.each(["updated", "replaced", "revised"])(
     "refreshes a %s session after CLI placement admission",
     async (change) => {
