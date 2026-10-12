@@ -2,11 +2,12 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const workflow = parse(readFileSync(".github/workflows/clawsweeper-dispatch.yml", "utf8")) as {
-  jobs: { dispatch: { steps: { name: string; run?: string }[] } };
+  jobs: { dispatch: { steps: { name: string; run?: string; if?: string }[] } };
 };
 const install = workflow.jobs.dispatch.steps.find(
   (step) => step.name === "Install GitHub API backoff helper",
@@ -152,6 +153,34 @@ fi`,
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ClawSweeper activity relay cutover", () => {
+  const condition = workflow.jobs.dispatch.steps.find(
+    (step) => step.name === "Dispatch GitHub activity to ClawSweeper",
+  )?.if;
+
+  it.each([
+    ["issues", false],
+    ["issue_comment", false],
+    ["pull_request_target", false],
+    ["push", true],
+    ["pull_request_review", true],
+    ["pull_request_review_comment", true],
+  ])("retains the intended %s activity path", (event, uncovered) => {
+    expect(condition).toBeTypeOf("string");
+    if (!condition) {
+      throw new Error("activity relay must have an explicit cutover condition");
+    }
+    const expression = condition.replace(/^\s*\$\{\{|\}\}\s*$/g, "");
+    for (const gate of ["", "0", "1"]) {
+      const admitted = runInNewContext(expression, {
+        github: { event_name: event },
+        vars: { CLAWSWEEPER_GITHUB_ACTIVITY_RELAY_DISABLED: gate },
+      });
+      expect(admitted).toBe(gate !== "1" || uncovered);
     }
   });
 });
