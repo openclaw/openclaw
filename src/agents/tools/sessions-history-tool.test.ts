@@ -451,10 +451,30 @@ describe("sessions_history", () => {
       },
       ...visibleMessages,
     ];
+    const nestedDetails = {
+      exitCode: 0,
+      openclawSkillUsage: { skillName: "demo-skill", skillSource: "workspace", activation: "read" },
+    };
+    const gatewayMessages = messages.map((message) =>
+      Array.isArray(message.content)
+        ? {
+            ...message,
+            content: message.content.map((block) =>
+              block.type === "toolResult" ? { ...block, details: nestedDetails } : block,
+            ),
+          }
+        : message,
+    );
     const tool = createSessionsHistoryTool({
       config: {},
       callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
-        ({ messages, offset: 0, nextOffset: 7, hasMore: true, totalMessages: 10 }) as T,
+        ({
+          messages: gatewayMessages,
+          offset: 0,
+          nextOffset: 7,
+          hasMore: true,
+          totalMessages: 10,
+        }) as T,
     });
 
     for (const includeTools of [undefined, false]) {
@@ -474,10 +494,15 @@ describe("sessions_history", () => {
       });
     }
 
-    const withTools = readHistoryDetails(
-      await tool.execute("with-tools", { sessionKey: "main", offset: 0, includeTools: true }),
-    );
+    const withToolsResult = await tool.execute("with-tools", {
+      sessionKey: "main",
+      offset: 0,
+      includeTools: true,
+    });
+    const withTools = readHistoryDetails(withToolsResult);
+    // Display metadata on nested tool results stays out of model-facing history.
     expect(withTools.messages).toEqual(messages);
+    expect(JSON.stringify(withToolsResult.content)).not.toContain("openclawSkillUsage");
     expect(withTools.nextOffset).toBe(7);
   });
 

@@ -1345,6 +1345,76 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.toolMediaUrls).toStrictEqual([]);
   });
 
+  it("keeps a skill read's attribution after legacy extensions replace details", async () => {
+    const registry = createEmptyPluginRegistry();
+    const factory = async (codex: {
+      on: (
+        event: "tool_result",
+        handler: (event: { result: AgentToolResult<unknown> }) => Promise<{
+          result: AgentToolResult<unknown>;
+        }>,
+      ) => void;
+    }) => {
+      codex.on("tool_result", async (event) => ({
+        result: { content: event.result.content, details: { replaced: true } },
+      }));
+    };
+    registry.codexAppServerExtensionFactories.push({
+      pluginId: "legacy",
+      pluginName: "Legacy",
+      rawFactory: factory,
+      factory,
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const skillDir = path.join("/workspace", ".agents", "skills", "demo-skill");
+    const bridge = createBridgeWithToolResult(
+      "read",
+      textToolResult("# Demo", { kind: "text", content: "# Demo" }),
+      {
+        runId: "run-codex-skill",
+        workspaceDir: "/workspace",
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "demo-skill" }],
+          resolvedSkills: [
+            {
+              name: "demo-skill",
+              description: "Demo",
+              filePath: path.join(skillDir, "SKILL.md"),
+              baseDir: skillDir,
+              source: "workspace",
+              sourceInfo: {
+                path: path.join(skillDir, "SKILL.md"),
+                source: "workspace",
+                scope: "project",
+                origin: "top-level",
+                baseDir: skillDir,
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+      },
+    );
+
+    const skillRead = await bridge.handleToolCall(
+      createDynamicToolCall("read", { path: ".agents/skills/demo-skill/SKILL.md" }, "call-skill"),
+    );
+    const otherRead = await bridge.handleToolCall(
+      createDynamicToolCall("read", { path: "README.md" }, "call-readme"),
+    );
+
+    expect(skillRead.transcriptDetails).toEqual({
+      replaced: true,
+      openclawSkillUsage: { skillName: "demo-skill", skillSource: "workspace", activation: "read" },
+    });
+    expect(otherRead.transcriptDetails).toEqual({ replaced: true });
+    expect(JSON.stringify(toCodexDynamicToolProtocolResponse(skillRead))).not.toContain(
+      "openclawSkillUsage",
+    );
+  });
+
   it("keeps config out of Codex tool-result contexts", async () => {
     const config = { session: { store: "/tmp/openclaw-session-store.json" } };
     const registry = createEmptyPluginRegistry();

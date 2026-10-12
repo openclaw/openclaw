@@ -10,6 +10,7 @@ import {
   finalizeToolTerminalPresentation,
   peekAdjustedParamsForToolCall,
 } from "../agent-tools.before-tool-call.js";
+import { attachToolCallSkillUsage } from "../agent-tools.before-tool-call.state.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ToolResultEvent } from "../sessions/extensions/types.js";
@@ -109,7 +110,7 @@ export function buildEmbeddedExtensionFactories(params: {
       }
       return {
         content: result.content,
-        details: result.details,
+        details: attachToolCallSkillUsage(result, toolCallId, runId).details,
         ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
         ...(hasError ? { isError } : {}),
       };

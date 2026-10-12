@@ -3,12 +3,24 @@
  * The adapter and wrapper both consult this map so later execution can use the
  * normalized payload selected by hook processing.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { DiagnosticSkillUsedEvent } from "../infra/diagnostic-events.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
 // A tracked call starts pending (false), then crosses the implementation boundary (true).
 const trackedToolCallIds = new Map<string, boolean>();
 const batchAdmittedToolCallIds = new Set<string>();
+
+/** The public skill.used identity of one completed tool call. */
+export type ToolCallSkillUsage = Pick<
+  DiagnosticSkillUsedEvent,
+  "skillName" | "skillSource" | "activation"
+>;
+const MAX_PENDING_TOOL_CALL_SKILL_USAGE = 1024;
+const skillUsageByToolCallId = new Map<string, ToolCallSkillUsage>();
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -111,6 +123,41 @@ export function clearBatchAdmittedToolCallsForRun(runId: string): void {
   }
 }
 
+/**
+ * Hold a completed call's skill use until its harness finalizes the transcript result.
+ * Best effort: a call that never reaches finalization (skill command dispatch, a
+ * cancellation-ignoring tool finishing after its run ended) leaves an entry that only
+ * the size cap removes.
+ */
+export function recordToolCallSkillUsage(
+  toolCallId: string,
+  runId: string | undefined,
+  usage: ToolCallSkillUsage,
+): void {
+  skillUsageByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), usage);
+  pruneMapToMaxSize(skillUsageByToolCallId, MAX_PENDING_TOOL_CALL_SKILL_USAGE);
+}
+
+/**
+ * Moves a call's recorded skill use into the result its transcript entry keeps. Harnesses
+ * call this on their final result, after middleware and extensions; the tool's own
+ * return value stays exactly as declared for output-schema validation. String or array
+ * details stay as returned, without attribution.
+ */
+export function attachToolCallSkillUsage<T>(result: T, toolCallId: string, runId?: string): T {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const usage = skillUsageByToolCallId.get(key);
+  skillUsageByToolCallId.delete(key);
+  if (!usage || !isRecord(result)) {
+    return result;
+  }
+  const details = result.details ?? undefined;
+  if (details !== undefined && !isRecord(details)) {
+    return result;
+  }
+  return { ...result, details: { ...details, openclawSkillUsage: usage } };
+}
+
 /** Clear adjusted tool parameters between isolated tests. */
 export function resetAdjustedParamsByToolCallIdForTests(): void {
   adjustedParamsByToolCallId.clear();
@@ -118,4 +165,5 @@ export function resetAdjustedParamsByToolCallIdForTests(): void {
   trackedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
   batchAdmittedToolCallIds.clear();
+  skillUsageByToolCallId.clear();
 }

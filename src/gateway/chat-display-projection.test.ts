@@ -390,6 +390,43 @@ it.each([
   },
 );
 
+const skillUsage = { skillName: "demo-skill", skillSource: "workspace", activation: "read" };
+// Loaders keep over-long names with a warning; history drops only names over its text cap.
+const longSkillUsage = { ...skillUsage, skillName: "s".repeat(200) };
+it.each([
+  { openclawSkillUsage: skillUsage, expected: skillUsage },
+  { openclawSkillUsage: { ...skillUsage, skillFile: "/private/SKILL.md" }, expected: skillUsage },
+  { openclawSkillUsage: longSkillUsage, expected: longSkillUsage },
+  { openclawSkillUsage: longSkillUsage, maxChars: 199, expected: undefined },
+  ...[
+    { ...skillUsage, skillName: " demo-skill " },
+    { ...skillUsage, skillName: "" },
+    { ...skillUsage, skillSource: "openclaw-workspace" },
+    { ...skillUsage, activation: "invoke" },
+    "demo-skill",
+  ].map((openclawSkillUsage) => ({ openclawSkillUsage, expected: undefined })),
+])("keeps the skill a tool call used in history (%j)", (testCase) => {
+  const { openclawSkillUsage, expected } = testCase;
+  const maxChars = "maxChars" in testCase ? testCase.maxChars : undefined;
+  const block = (usage: unknown) => ({
+    type: "toolResult",
+    toolName: "read",
+    ...(usage ? { details: { openclawSkillUsage: usage } } : {}),
+  });
+  expect(
+    sanitizeChatHistoryMessages(
+      [
+        { role: "toolResult", ...block(openclawSkillUsage) },
+        { role: "assistant", content: [block(openclawSkillUsage)] },
+      ],
+      maxChars,
+    ),
+  ).toEqual([
+    { role: "toolResult", ...block(expected) },
+    { role: "assistant", content: [block(expected)] },
+  ]);
+});
+
 it.each([
   { toolName: "exec", details: { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false } },
   { toolName: "sessions_spawn", details: { ok: true, sessionKey: "agent:helper:main" } },

@@ -4,6 +4,7 @@ import { createNestedToolActivity } from "../../../sessions/nested-tool-activity
 import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
+import { attachToolCallSkillUsage } from "../../agent-tools.before-tool-call.state.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import {
   copyInternalToolResultState,
@@ -78,7 +79,11 @@ export function createSubscribedToolSearchExecutor(params: {
               toolCallId: toolParams.toolCallId,
               toolName: toolParams.toolName,
               input: terminal.executedArguments,
-              result: terminal.readSanitizedResult(),
+              result: attachToolCallSkillUsage(
+                terminal.readSanitizedResult(),
+                toolParams.toolCallId,
+                attempt.runId,
+              ),
               isError: terminal.isError,
               startedAt,
               timestamp: Date.now(),

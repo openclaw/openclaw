@@ -2,6 +2,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type { AgentToolResultMiddlewareEvent } from "../../plugins/agent-tool-result-middleware-types.js";
+import { attachToolCallSkillUsage } from "../agent-tools.before-tool-call.state.js";
 import { runWithToolExecutionValidation } from "../agent-tools.execution-validation.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
 import {
@@ -93,16 +94,21 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       rawFailureKind,
     };
     params.onExecutionResult?.(execution);
-    const result = await params.applyMiddleware({
-      threadId: params.call.threadId,
-      turnId: params.call.turnId,
-      toolCallId: params.call.toolCallId,
-      toolName: params.call.toolName,
-      args: structuredClone(execution.executedArguments),
-      cwd: params.call.cwd,
-      isError: execution.rawIsError,
-      result: rawResult,
-    });
+    // Adapters finish middleware and their own result extensions before this point.
+    const result = attachToolCallSkillUsage(
+      await params.applyMiddleware({
+        threadId: params.call.threadId,
+        turnId: params.call.turnId,
+        toolCallId: params.call.toolCallId,
+        toolName: params.call.toolName,
+        args: structuredClone(execution.executedArguments),
+        cwd: params.call.cwd,
+        isError: execution.rawIsError,
+        result: rawResult,
+      }),
+      params.call.toolCallId,
+      params.runId,
+    );
     const presentation = resolveAgentHarnessToolResultPresentation({
       result,
       executionIsError: execution.rawIsError,

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createTerminalPresentationContractTool,
@@ -21,6 +22,7 @@ import type {
 } from "../plugins/agent-tool-result-middleware-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
   consumeAdjustedParamsForToolCall,
   recordAdjustedParamsForToolCall,
@@ -230,6 +232,94 @@ describe("buildEmbeddedExtensionFactories", () => {
       consumeAdjustedParamsForToolCall("call-terminal-middleware", "run-terminal-middleware"),
     ).toEqual({ url: "https://approved.example" });
   });
+
+  it.each([
+    { middleware: "none", text: "# Demo", details: { kind: "text", content: "# Demo" } },
+    { middleware: "replace", text: "# Demo", details: { redacted: true } },
+    { middleware: "null details", text: "# Demo", details: null },
+    {
+      middleware: "throws",
+      text: "Tool output unavailable due to post-processing error.",
+      details: { status: "error", middlewareError: true },
+      isError: true,
+    },
+  ] as const)(
+    "adds the skill a wrapped call used to its finalized result (middleware: $middleware)",
+    async (testCase) => {
+      const { middleware, text, details } = testCase;
+      if (middleware === "none") {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      } else {
+        installMiddleware((event) => {
+          if (middleware === "throws") {
+            throw new Error("redaction failed");
+          }
+          return { result: { content: event.result.content, details } };
+        });
+      }
+      const runId = "run-skill-use";
+      const skillDir = path.join("/workspace", ".agents", "skills", "demo-skill");
+      const skillPath = ".agents/skills/demo-skill/SKILL.md";
+      const hookContext = {
+        runId,
+        workspaceDir: "/workspace",
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "demo-skill" }],
+          resolvedSkills: [
+            createCanonicalFixtureSkill({
+              name: "demo-skill",
+              description: "Demo",
+              filePath: path.join(skillDir, "SKILL.md"),
+              baseDir: skillDir,
+              source: "workspace",
+            }),
+          ],
+        },
+      };
+      const readTool = (result: ReturnType<typeof textToolResult>) =>
+        wrapToolWithBeforeToolCallHook(
+          createTerminalPresentationContractTool({ name: "read", result, format: () => undefined }),
+          hookContext,
+        );
+      const toolResult = textToolResult("# Demo", { kind: "text", content: "# Demo" });
+      const read = readTool(toolResult);
+      const failedRead = readTool(textToolResult("missing", { status: "error", error: "ENOENT" }));
+      const handler = await createToolResultHandler({ runId });
+      const finalize = async (tool: typeof read, toolCallId: string, filePath: string) => {
+        const raw = await tool.execute(toolCallId, { path: filePath }, undefined, undefined);
+        return await handler({ toolName: "read", toolCallId, ...raw });
+      };
+      const errorFlag = "isError" in testCase ? { isError: true } : {};
+
+      const skillRead = await finalize(read, "call-skill", skillPath);
+      expect(skillRead).toEqual({
+        content: [{ type: "text", text }],
+        details: {
+          ...details,
+          openclawSkillUsage: {
+            skillName: "demo-skill",
+            skillSource: "workspace",
+            activation: "read",
+          },
+        },
+        ...errorFlag,
+      });
+      expect(await finalize(read, "call-readme", "README.md")).toEqual({
+        content: [{ type: "text", text }],
+        details,
+        ...errorFlag,
+      });
+      // A read that failed records no skill use, whatever its presentation becomes.
+      expect(JSON.stringify(await finalize(failedRead, "call-failed", skillPath))).not.toContain(
+        "openclawSkillUsage",
+      );
+      // Catalog calls validate the tool's own result against its closed output schema.
+      expect(await read.execute("call-raw", { path: skillPath }, undefined, undefined)).toEqual(
+        toolResult,
+      );
+    },
+  );
 
   it("clears terminal presentation when middleware blocks the result", async () => {
     installMiddleware(() => ({

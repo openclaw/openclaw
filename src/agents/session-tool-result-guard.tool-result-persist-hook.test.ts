@@ -189,6 +189,7 @@ describe("session persistence hooks", () => {
       spilledChars: 2_000_000,
       spillTruncated: true,
       spill,
+      openclawSkillUsage: { skillName: "demo-skill", skillSource: "workspace", activation: "read" },
       aggregated: "x".repeat(120_000),
       tail: "tail ".repeat(800),
       sessions: Array.from({ length: 10 }, (_, i) => ({
@@ -209,7 +210,32 @@ describe("session persistence hooks", () => {
     expect(details.spilledChars).toBe(2_000_000);
     expect(details.spillTruncated).toBe(true);
     expect(details.spill).toEqual(spill);
+    expect(details.openclawSkillUsage).toEqual({
+      skillName: "demo-skill",
+      skillSource: "workspace",
+      activation: "read",
+    });
     expect(serialized).toContain(tokenValue);
+  });
+
+  it("keeps the skill a call used when oversized details are summarized", () => {
+    const openclawSkillUsage = {
+      skillName: "demo-skill",
+      skillSource: "workspace",
+      activation: "read",
+    };
+    const sm = createGuardedSession();
+    appendToolResultDetails(
+      sm,
+      { kind: "text", content: "x".repeat(20_000), openclawSkillUsage },
+      "skill instructions",
+      "read",
+    );
+
+    const { details } = requirePersistedToolResult(sm);
+    expect(details.persistedDetailsTruncated).toBe(true);
+    expect(details.content).toBeUndefined();
+    expect(details.openclawSkillUsage).toEqual(openclawSkillUsage);
   });
 
   it("caps oversized toolResult details without serializing the original payload", () => {
