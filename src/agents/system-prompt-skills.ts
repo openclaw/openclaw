@@ -34,8 +34,10 @@ export function buildSkillsSection(params: {
     return [
       "## Skills",
       "Use a skill when the task matches its trigger or the user names it.",
+      "Check listed skills once when a new task starts. Search or read again only when scope changes or the user names a skill.",
       `Search with ${search} when the task likely needs a reusable workflow you don't see listed.`,
       `Read the matching skill's complete instructions with ${read} before task actions and follow them.`,
+      "Relative helper/reference paths: search the exact skill name for its location, then resolve them from the skill directory, not the workspace.",
       "Several: most specific. No relevant skill: read none. Up-front max one.",
       "Search covers installed skills; it does not install skills.",
       "External writes: batch safely; no tight loops; honor 429/Retry-After.",

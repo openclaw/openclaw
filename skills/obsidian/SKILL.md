@@ -1,6 +1,6 @@
 ---
 name: obsidian
-description: "Work with Obsidian vaults using the official obsidian CLI: read/search/create/edit notes, tasks, links, properties, plugins."
+description: "Read, search, or edit Obsidian notes and tasks via its CLI."
 homepage: https://obsidian.md/cli
 metadata: { "openclaw": { "emoji": "💎", "requires": { "bins": ["obsidian"] } } }
 ---

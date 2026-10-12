@@ -157,6 +157,11 @@ describe("installed skill prompt guidance", () => {
       expect(prompt).toContain(`- zebra: ${skills[0]!.description.trim().slice(0, 60)}`);
       expect(prompt).not.toContain("<location>");
       expect(prompt).not.toContain(demo.filePath);
+      expect(prompt).toContain("search the exact skill name for its location");
+      expect(prompt).toContain("Check listed skills once when a new task starts.");
+      expect(prompt).toContain(
+        "Search or read again only when scope changes or the user names a skill.",
+      );
       expect(prompt).not.toContain("Before work involving files");
       expect(render(skills.toReversed())).toBe(prompt);
       expect(render(skills)).toBe(prompt);

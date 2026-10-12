@@ -881,6 +881,11 @@ The agent uses a skill when the task matches its trigger or the user names it.
 It searches when a task likely needs a reusable workflow that is not listed,
 then reads the matching skill's complete instructions. Ordinary file edits do
 not by themselves require a skill search.
+The agent checks listed skills once at the start of a new task. It searches or
+reads again only when the task's scope changes or the user names a skill.
+If instructions use relative helper or reference paths, the agent searches the
+exact skill name for its location and resolves those paths from the skill's
+directory, not from the agent workspace.
 
 When either tool is unavailable, CLI backends, native harnesses with their own
 policy, and remote workers retain the existing directory with locations and
@@ -953,6 +958,9 @@ characters. The catalog has a fixed 4,000-character cap: if it exceeds the cap,
 OpenClaw drops all triggers before dropping names. If names alone exceed the
 cap, it shows the installed count and directs the agent to `skills_search`.
 Full instructions remain on demand through `skills_read`.
+Write descriptions with the concrete trigger first: the compact catalog uses
+their first 60 characters. Put additional details after the trigger; no separate
+trigger field is required.
 
 Other runtimes retain the existing XML directory and its default 18,000-character
 budget. Its cost follows a fixed formula and scales linearly per skill:
