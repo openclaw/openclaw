@@ -193,7 +193,11 @@ export function createCodexAppServerModelCatalog(runtime: string) {
             // Empty cold responses or account/config churn can race native startup.
             // Re-read both observations once on the same current client.
             const retryIsCurrent = captureSharedCodexAppServerCatalogLifetime(client);
-            return retryIsCurrent() ? discover() : first;
+            if (retryIsCurrent()) {
+              const retry = await discover();
+              return retry;
+            }
+            return first;
           } catch (error) {
             // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
             if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
