@@ -121,6 +121,7 @@ function writeHookPackManifest(params: {
   hooks: string[];
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
   extensions?: string[];
 }) {
   fs.writeFileSync(
@@ -134,6 +135,7 @@ function writeHookPackManifest(params: {
       },
       ...(params.dependencies ? { dependencies: params.dependencies } : {}),
       ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
+      ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
     }),
     "utf-8",
   );
@@ -147,12 +149,14 @@ function writeHookPackFiles(params: {
   heading: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 }) {
   writeHookPackManifest({
     pkgDir: params.pkgDir,
     hooks: [`./hooks/${params.hookName}`],
     dependencies: params.dependencies,
     optionalDependencies: params.optionalDependencies,
+    peerDependencies: params.peerDependencies,
   });
   const hookDir = path.join(params.pkgDir, "hooks", params.hookName);
   fs.mkdirSync(hookDir, { recursive: true });
@@ -354,7 +358,7 @@ describe("installHooksFromPath", () => {
     }
   });
 
-  it.each(["dependencies", "optionalDependencies"] as const)(
+  it.each(["dependencies", "optionalDependencies", "peerDependencies"] as const)(
     "installs %s with lifecycle scripts disabled",
     async (dependencyField) => {
       const workDir = makeTempDir();

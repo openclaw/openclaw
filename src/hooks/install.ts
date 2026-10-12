@@ -34,6 +34,8 @@ type HookPackageManifest = {
   version?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 } & Partial<Record<typeof MANIFEST_KEY, { extensions?: string[]; hooks?: string[] }>>;
 
 export type InstallHooksResult =

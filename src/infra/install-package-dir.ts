@@ -41,13 +41,23 @@ type HiddenProjectConfigFile = {
 type InstallPackageDirFailure = { ok: false; error: string };
 type InstallPackageDirSuccess = { ok: true };
 
-export function hasPackageRuntimeDependencies(manifest: {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-}): boolean {
+export function hasPackageRuntimeDependencies(
+  manifest: {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+  },
+  ignoredPeerDependencies: readonly string[] = [],
+): boolean {
   return (
     Object.keys(manifest.dependencies ?? {}).length > 0 ||
-    Object.keys(manifest.optionalDependencies ?? {}).length > 0
+    Object.keys(manifest.optionalDependencies ?? {}).length > 0 ||
+    Object.keys(manifest.peerDependencies ?? {}).some(
+      (name) =>
+        !ignoredPeerDependencies.includes(name) &&
+        manifest.peerDependenciesMeta?.[name]?.optional !== true,
+    )
   );
 }
 

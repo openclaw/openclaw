@@ -497,6 +497,41 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
+  it.each(["optional", "host"] as const)(
+    "does not invoke npm for an archive with only a %s peer",
+    async (peerKind) => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const hostRoot = suiteTempRootTracker.makeTempDir();
+      vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(hostRoot);
+      const pluginId = `archive-${peerKind}-peer`;
+      const archivePath = await ensureDynamicArchiveTemplate({
+        outName: `${pluginId}.tgz`,
+        packageJson: {
+          name: pluginId,
+          version: "1.0.0",
+          openclaw: { extensions: ["./dist/index.js"] },
+          ...(peerKind === "host"
+            ? { peerDependencies: { openclaw: "*" } }
+            : {
+                peerDependencies: { "optional-runtime-peer": "*" },
+                peerDependenciesMeta: { "optional-runtime-peer": { optional: true } },
+              }),
+        },
+      });
+      const result = await installPluginFromArchive({
+        archivePath,
+        extensionsDir: path.join(stateDir, "extensions"),
+      });
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+      if (result.ok && peerKind === "host") {
+        const hostLink = path.join(result.targetDir, "node_modules", "openclaw");
+        expect(fs.lstatSync(hostLink).isSymbolicLink()).toBe(true);
+        expect(fs.realpathSync(hostLink)).toBe(fs.realpathSync(hostRoot));
+      }
+    },
+  );
+
   it("reports direct local archive installs as user-provided archive sources", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(stateDir, "extensions");
