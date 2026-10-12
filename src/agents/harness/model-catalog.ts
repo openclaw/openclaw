@@ -345,6 +345,13 @@ export function isPreparedNativeModelCatalogReady(params: {
   catalogAcquired?: boolean;
 }): boolean {
   const { selection, snapshot, pluginGeneration } = params;
+  if (
+    !selection &&
+    snapshot.refreshFailed &&
+    !hasPreparedNativeModelCatalogReadiness({ pluginGeneration, snapshot })
+  ) {
+    return true;
+  }
   if (!selection) {
     return (
       params.catalogAcquired === true &&
@@ -379,8 +386,13 @@ export function isPreparedNativeModelCatalogReady(params: {
     (registration) => registration.harness.id === selection.runtime,
   )?.harness;
   const selectedProvider = normalizeProviderId(selection.provider);
+  const runtimeOutcomes =
+    snapshot.nativeProviderOutcomes &&
+    Object.hasOwn(snapshot.nativeProviderOutcomes, selection.runtime)
+      ? snapshot.nativeProviderOutcomes[selection.runtime]
+      : undefined;
   if (
-    snapshot.nativeProviderOutcomes?.[selection.runtime]?.some(
+    runtimeOutcomes?.some(
       (outcome) =>
         normalizeProviderId(outcome.provider) === selectedProvider && outcome.status !== "ready",
     )
@@ -404,6 +416,23 @@ export function isPreparedNativeModelCatalogReady(params: {
             ...(selection.authProfileId ? { authProfileId: selection.authProfileId } : {}),
           }),
       ) !== undefined)
+  );
+}
+
+export function hasPreparedNativeModelCatalogReadiness(params: {
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  snapshot: ModelCatalogSnapshot;
+}): boolean {
+  const runtimes = new Set(
+    params.snapshot.routeVariants
+      .map((entry) => entry.nativeRuntime)
+      .filter((runtime): runtime is string => Boolean(runtime)),
+  );
+  return Boolean(
+    params.pluginGeneration.pluginRegistry?.agentHarnesses.some(
+      ({ harness }) =>
+        runtimes.has(harness.id) && typeof harness.readModelCatalogReadiness === "function",
+    ),
   );
 }
 

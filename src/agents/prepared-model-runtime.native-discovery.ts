@@ -45,6 +45,7 @@ export function createPreparedNativeCatalogDiscoveryTracker(params: {
 
 function createPreparedNativeCatalogInventory(params: {
   completed: boolean;
+  hasFailures: boolean;
   rawCatalog: ModelCatalogSnapshot;
   latestInventory: PreparedModelCatalogInventory | undefined;
   fallbackCatalog: ModelCatalogSnapshot;
@@ -52,7 +53,7 @@ function createPreparedNativeCatalogInventory(params: {
   pluginFingerprint: string;
   nativeSource: string;
 }): PreparedModelCatalogInventory | undefined {
-  if (!params.completed) {
+  if (!params.completed && !params.hasFailures) {
     return params.latestInventory;
   }
   return {
@@ -71,7 +72,6 @@ function createPreparedNativeCatalogInventory(params: {
 
 type PreparedNativeSelectionDiscoveryStatus = {
   outcomes: readonly ProviderCatalogOutcome[];
-  failedProviders: readonly string[];
   unknownProviderFailure: boolean;
 };
 
@@ -85,9 +85,6 @@ function createPreparedNativeSelectionDiscoveryStatus(params: {
     outcomes: params.selection
       ? (params.catalog.nativeProviderOutcomes?.[params.selection.runtime] ?? [])
       : [],
-    failedProviders: params.failures.flatMap(({ providers }) =>
-      (providers ?? []).map(params.normalizeProvider),
-    ),
     unknownProviderFailure: params.failures.some(({ providers }) => providers === undefined),
   };
 }
@@ -114,7 +111,6 @@ function isPreparedNativeSelectionDiscoveryReady(params: {
         entry.nativeRuntime === params.selection.runtime,
     ) &&
     !status.unknownProviderFailure &&
-    !status.failedProviders.includes(selectedProvider) &&
     !status.outcomes.some(
       (outcome) =>
         params.normalizeProvider(outcome.provider) === selectedProvider &&
@@ -246,6 +242,7 @@ export function applyPreparedNativeCatalogResult(params: {
     ? params.latestInventory
     : createPreparedNativeCatalogInventory({
         completed: params.completed,
+        hasFailures: params.failures.length > 0,
         rawCatalog: params.rawCatalog,
         latestInventory: params.latestInventory,
         fallbackCatalog: params.fallbackCatalog,

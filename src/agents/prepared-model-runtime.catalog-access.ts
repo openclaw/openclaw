@@ -242,8 +242,7 @@ export async function createFullModelCatalogAccess(
         inventory.catalog,
         getPreparedModelFullCatalogAuth(candidate.inventory.catalog) ?? currentAuth,
       );
-      // Commit the current counterpart synchronously. A worker's promise settlement leaves a
-      // microtask gap in which native selection may publish, even after discovery has finished.
+      // Commit synchronously; worker settlement leaves a microtask gap for native publication.
       const baseline = source === "native" ? (previous.catalog ?? staticCatalog) : undefined;
       next = preparePublication(
         inventory,
@@ -397,14 +396,13 @@ export async function createFullModelCatalogAccess(
       const ready =
         !refresh &&
         !profileScopedSelection &&
-        ((!selection && snapshot.refreshFailed) ||
-          isPreparedNativeModelCatalogReady({
-            input,
-            pluginGeneration: params.pluginGeneration,
-            snapshot,
-            selection,
-            catalogAcquired: published.nativeCatalogAcquired,
-          }));
+        isPreparedNativeModelCatalogReady({
+          input,
+          pluginGeneration: params.pluginGeneration,
+          snapshot,
+          selection,
+          catalogAcquired: published.nativeCatalogAcquired,
+        });
       // Readiness invokes plugin code, which may close the captured authority.
       assertObservationCurrent();
       return ready ? snapshot : undefined;
@@ -414,18 +412,17 @@ export async function createFullModelCatalogAccess(
       options?.onSelectionReady?.(true);
       return Promise.resolve(readyCatalog);
     }
-    const previousNative = nativePending;
     let failedProviders: readonly string[] | undefined;
     const promise = (async () => {
-      await previousNative?.catch(() => undefined);
+      await using _ = {
+        [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
+      };
+      await nativePending?.catch(() => undefined);
       const settledCatalog = readReadyCatalog();
       if (settledCatalog) {
         options?.onSelectionReady?.(true);
         return settledCatalog;
       }
-      await using _ = {
-        [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
-      };
       const discovery = nativeDiscovery.createPreparedNativeCatalogDiscoveryTracker({
         startupProviders: new Set(params.agentFacts.providerIds.map(normalizeProvider)),
         normalizeProvider,
@@ -468,7 +465,7 @@ export async function createFullModelCatalogAccess(
           failures,
           normalizeProvider,
         });
-      if (!discovery.completed && failures.length) {
+      if (!discovery.completed && failures.length && (selection || refresh)) {
         failedProviders = failures.flatMap((failure) => failure.providers ?? []);
         throw failures[0]!.error;
       }
@@ -490,15 +487,13 @@ export async function createFullModelCatalogAccess(
         assertObservationCurrent();
         return catalog;
       }
-      // Selected native membership is a foreground harness fact, not a provider-auth refresh.
-      // Full inventory acquisition alone discovers additional paired provider credentials.
+      // Native membership is a foreground harness fact; full acquisition discovers paired credentials.
       const nativeAuth =
         !selection && discovery.completed && discovery.providers.length
           ? await worker.loadAuth({ providerIds: discovery.providers })
           : undefined;
       assertCurrent();
-      // Provider renewal may finish during native discovery. Commit native observations onto
-      // that latest provider publication; a captured pre-await inventory must never replace it.
+      // Commit native observations onto latest provider state; never replace a post-await publication.
       const latest = published;
       const latestInventory = latest.inventory;
       const auth =
@@ -658,7 +653,6 @@ export async function createFullModelCatalogAccess(
             throw error;
           },
         );
-        // Optional native failure cannot discard accepted provider facts.
         attempt.published(providerIds, "provider", () => publishCatalog(candidate, "provider"));
       }
       return includeNative

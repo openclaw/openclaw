@@ -335,6 +335,7 @@ export function selectProviderModelRouteAuth(params: {
     params.sourcePlan.orderedProfiles.some((source) => source.authRequirement === null);
   if (
     params.allowNativeAuthOnSingleRoute === true &&
+    params.resolution.routes.length === 1 &&
     params.sourcePlan.kind === "automatic" &&
     !params.sourcePlan.profiles.explicitOrder &&
     !params.sourcePlan.preserveProfilePriority &&
