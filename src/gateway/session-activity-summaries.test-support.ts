@@ -1,4 +1,7 @@
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.entry.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
+import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SessionActivitySummaryService } from "./session-activity-summaries.js";
 
 export const target = { key: "agent:main:recap", agentId: "main" };
@@ -36,4 +39,37 @@ export function terminal(service: SessionActivitySummaryService) {
     stream: "lifecycle",
     data: { phase: "end" },
   });
+}
+
+export const preparedActivityRecapModel = {
+  config: {},
+  authProfileId: undefined,
+  provider: "test",
+  model: "utility",
+  agentId: "main",
+  agentDir: "/tmp/unused",
+  outputTextPolicy: "strict-visible" as const,
+};
+export const activityRecapResult = (text: string) => ({
+  text,
+  provider: "test",
+  model: "utility",
+  owner: { kind: "harness" as const, id: "test" },
+});
+
+export async function createActivityRecapSessionFixture() {
+  const state = await createOpenClawTestState({ scenario: "minimal" });
+  try {
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      lifecycleRevision: "lifecycle-1",
+      updatedAt: 1,
+    });
+    // Cleanup closes each test's database handle even when the worker survives.
+    await prewarmSessionHistoryWorker({ agentId: scope.agentId, env: state.env });
+    return state;
+  } catch (error) {
+    await state.cleanup();
+    throw error;
+  }
 }
