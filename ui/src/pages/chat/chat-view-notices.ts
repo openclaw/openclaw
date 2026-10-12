@@ -3,6 +3,7 @@ import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
+import { resolveSessionRuntimeErrorCopy } from "../../../../packages/gateway-protocol/src/session-run-error-copy.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
@@ -188,6 +189,9 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
 
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   const contention = props.runError?.kind === "state_contention";
+  const runtimeErrorCopy = props.runError
+    ? resolveSessionRuntimeErrorCopy(props.runError.summary)
+    : undefined;
   const refresh = props.onRefresh
     ? html`<button
         class="btn btn--sm chat-error__refresh"
@@ -212,7 +216,7 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
     }
     ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger", props.runError.kind === "stop" ? undefined : t(contention ? "chat.errorBusySummary" : props.runError.kind === "auth_refresh" ? "chat.errorSignInSummary" : "chat.errorReplySummary")) : nothing}
+    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger", props.runError.kind === "stop" ? undefined : (runtimeErrorCopy ?? t(contention ? "chat.errorBusySummary" : props.runError.kind === "auth_refresh" ? "chat.errorSignInSummary" : "chat.errorReplySummary"))) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,

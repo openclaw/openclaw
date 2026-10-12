@@ -1,4 +1,5 @@
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { resolveSessionRuntimeErrorCopy } from "../../../packages/gateway-protocol/src/session-run-error-copy.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiExternalText } from "./format-error.ts";
@@ -43,10 +44,13 @@ export function sessionRowAttention(
   return {
     kind: "error",
     reason:
-      formatUiExternalText(row.lastRunError) ||
-      t(
-        row.status === "timeout" ? "sessionsView.runErrorTimedOut" : "sessionsView.runErrorUnknown",
-      ),
+      (row.lastRunError ? resolveSessionRuntimeErrorCopy(row.lastRunError) : undefined) ??
+      (formatUiExternalText(row.lastRunError) ||
+        t(
+          row.status === "timeout"
+            ? "sessionsView.runErrorTimedOut"
+            : "sessionsView.runErrorUnknown",
+        )),
     sourceSessionKey: row.key,
   };
 }

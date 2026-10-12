@@ -32,6 +32,44 @@ function createLifecycle(runId: string) {
 }
 
 describe("createAgentCommandLifecycle", () => {
+  it.each(["basic", "post-turn", "result"] as const)(
+    "publishes recovery and retains EPIPE diagnostics through %s",
+    (source) => {
+      emitAgentEvent.mockClear();
+      const lifecycle = createLifecycle("broken-pipe");
+      const error = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+      const terminal = {
+        metadata: {},
+        outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+      };
+      if (source === "basic") {
+        lifecycle.emitBasicError(error);
+      } else if (source === "post-turn") {
+        lifecycle.emitPostTurnError(error, terminal);
+      } else {
+        lifecycle.emitResultError(
+          {
+            meta: {
+              durationMs: 0,
+              error: {
+                kind: "incomplete_turn",
+                message: "write EPIPE | EPIPE",
+                fallbackSafe: false,
+              },
+            },
+          },
+          true,
+          terminal,
+        );
+      }
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toContain("The agent runtime disconnected.");
+      expect(event.data.error).toContain("Check the task before retrying.");
+      expect(event.data.error).toContain("write EPIPE");
+      expect(event.data.executionSettled).toBe(true);
+    },
+  );
+
   it("publishes an outer timeout that arrives after a yielded result", () => {
     emitAgentEvent.mockClear();
     const controller = new AbortController();

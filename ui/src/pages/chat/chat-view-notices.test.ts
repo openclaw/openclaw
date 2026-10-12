@@ -11,6 +11,29 @@ afterEach(() => {
 
 it.each([
   [
+    "Error: write EPIPE | EPIPE",
+    "The agent runtime disconnected. Check the task before retrying. If its worktree was removed, restore it in Worktrees or start a new session.",
+  ],
+  [
+    "This turn did not run: managed worktree was removed: /private/example/worktree",
+    "This session's worktree is unavailable. Restore it in Worktrees, then retry, or start a new session in the source repository. Your transcript is preserved.",
+  ],
+])("shows actionable runtime recovery without expanding details: %s", (diagnostic, recovery) => {
+  const container = document.body.appendChild(document.createElement("div"));
+  render(
+    renderChatComposerNotices({ connected: true, messages: [], runError: { summary: diagnostic } }),
+    container,
+  );
+  const notice = container.querySelector(".chat-error");
+  const details = notice?.querySelector("details");
+  expect(details?.open).toBe(false);
+  expect(notice?.querySelector("summary strong")?.textContent).toBe(recovery);
+  expect(notice?.querySelector("pre")?.textContent).toBe(diagnostic);
+  expect(notice?.querySelector("summary")?.textContent).not.toContain("/private/example");
+});
+
+it.each([
+  [
     "transferring",
     25 * 1_024 * 1_024,
     "Updating worker runtime · 25 MB of 100 MB (25%)",

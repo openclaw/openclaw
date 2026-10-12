@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import {
+  formatSessionRuntimeErrorForDisplay,
+  resolveSessionRuntimeErrorCopy,
+} from "../../packages/gateway-protocol/src/session-run-error-copy.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
 import {
@@ -35,13 +39,14 @@ export async function recordGatewaySessionRunFailure(
 ): Promise<void> {
   const { runId } = params;
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
+  const displayError = formatSessionRuntimeErrorForDisplay(error);
   const report: CustomMessageReportAppend = {
     customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
     content:
       params.errorKind === "state_contention"
         ? STATE_CONTENTION_SUMMARY
         : (renderCodexAppServerFailureCopy(error) ??
-          `Your request couldn't be completed: ${error}`),
+          (displayError !== error ? displayError : `Your request couldn't be completed: ${error}`)),
     display: true,
     details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
   };
@@ -82,7 +87,8 @@ export function resolveSessionRunError(
   if (outcome.errorKind === "state_contention") {
     return STATE_CONTENTION_SUMMARY;
   }
-  const error = sanitizeSessionRunError(outcome.error);
+  const sanitized = sanitizeSessionRunError(outcome.error);
+  const error = resolveSessionRuntimeErrorCopy(sanitized) ?? sanitized;
   if (error.length <= SESSION_RUN_ERROR_MAX_CHARS) {
     return error || undefined;
   }

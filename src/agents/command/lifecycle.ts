@@ -1,7 +1,7 @@
+import { formatSessionRuntimeErrorForDisplay } from "../../../packages/gateway-protocol/src/session-run-error-copy.js";
 import { classifyGatewayStaleInstall } from "../../gateway/stale-install.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
@@ -23,7 +23,12 @@ const formatLifecycleError = (error: unknown): string => {
   const staleInstall = classifyGatewayStaleInstall(error);
   return staleInstall
     ? staleInstall.error.message
-    : formatErrorMessageForDisplay(error, renderFailoverCodeUserCopy(getFailoverErrorCode(error)));
+    : formatSessionRuntimeErrorForDisplay(
+        formatErrorMessageForDisplay(
+          error,
+          renderFailoverCodeUserCopy(getFailoverErrorCode(error)),
+        ),
+      );
 };
 
 function resolveTerminalLogLevel(
@@ -110,7 +115,7 @@ export function createAgentCommandLifecycle(params: {
         ...(livenessState ? { livenessState } : {}),
         ...(timeoutPhase ? { timeoutPhase } : {}),
         ...(providerStarted !== undefined ? { providerStarted } : {}),
-        ...(error ? { error: formatErrorMessage(error) } : {}),
+        ...(error ? { error: formatLifecycleError(error) } : {}),
         ...(error && params.state.lifecycleErrorObservation
           ? { errorObservation: params.state.lifecycleErrorObservation }
           : {}),

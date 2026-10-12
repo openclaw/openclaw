@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { formatSessionRuntimeErrorForDisplay } from "../../../packages/gateway-protocol/src/session-run-error-copy.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
@@ -58,11 +59,11 @@ function formatChatSendError(error: unknown): string {
       `\n\n${String(error)}`
     );
   }
-  return (
+  return formatSessionRuntimeErrorForDisplay(
     resolveStateContentionPresentation(error)?.errorMessage ??
-    renderAgentHarnessPreflightUserMessage(error) ??
-    renderFailoverCodeUserCopy(describeFailoverError(error).code) ??
-    String(error)
+      renderAgentHarnessPreflightUserMessage(error) ??
+      renderFailoverCodeUserCopy(describeFailoverError(error).code) ??
+      String(error),
   );
 }
 

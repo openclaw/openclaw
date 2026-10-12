@@ -74,7 +74,11 @@ export function withGitLockTransition<T>(id: string, task: () => Promise<T>): Pr
   return enqueueKeyedTask({ tails: gitLockTransitionTails, key: id, task });
 }
 
-async function retainGitLock(context: OpenClawStateWorkerContext, id: string): Promise<void> {
+async function retainGitLock(
+  context: OpenClawStateWorkerContext,
+  record: ManagedWorktreeRecord,
+): Promise<void> {
+  const id = record.id;
   await withGitLockTransition(id, async () => {
     const held = heldGitLocks.get(id) ?? { refcount: 0, gitLocked: false };
     const needsLock = held.refcount === 0 && !held.gitLocked;
@@ -83,12 +87,7 @@ async function retainGitLock(context: OpenClawStateWorkerContext, id: string): P
     if (!needsLock) {
       return;
     }
-    let record: ManagedWorktreeRecord | undefined;
     try {
-      record = await readRegistryWorktree(context, id);
-      if (!record) {
-        return;
-      }
       const options = { beforeRun: () => context.admission.assertCurrent() };
       await assertManagedWorktreeRemovalComplete(record, options);
       await lockWorktreeForProcess(record, options);
@@ -96,7 +95,7 @@ async function retainGitLock(context: OpenClawStateWorkerContext, id: string): P
     } catch (error) {
       heldGitLocks.delete(id);
       throw new Error(
-        `managed worktree is unusable because its Git removal guard could not be acquired: ${record?.path ?? id}; checkout preserved. Repair its Git metadata or create a new worktree before retrying: ${errorMessage(error)}`,
+        `managed worktree is unusable because its Git removal guard could not be acquired: ${record.path}; checkout preserved. Repair its Git metadata or create a new worktree before retrying: ${errorMessage(error)}`,
         { cause: error },
       );
     }
@@ -359,9 +358,18 @@ async function acquireWorktreeRunLeaseInScope(
         cleanup.rowDeleted = kind === "not-entered";
       },
     );
-    const record = opts.allowMissingCheckout ? await readRegistryWorktree(context, id) : undefined;
-    if (!record || (await worktreePathExists(record.path))) {
-      await retainGitLock(context, id);
+    const record = await readRegistryWorktree(context, id);
+    if (!record) {
+      throw new Error(`managed worktree was removed: ${id}`);
+    }
+    // Git can lock a registered checkout after its directory disappears. Refuse
+    // ordinary runs before workspace bootstrap can recreate an empty directory.
+    const checkoutExists = await worktreePathExists(record.path);
+    if (!checkoutExists && !opts.allowMissingCheckout) {
+      throw new Error(`managed worktree checkout is missing: ${record.path}`);
+    }
+    if (checkoutExists) {
+      await retainGitLock(context, record);
       cleanup.gitRetained = true;
       cleanup.refcountReleased = false;
     }

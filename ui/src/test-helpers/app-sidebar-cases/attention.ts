@@ -112,12 +112,27 @@ describe("AppSidebar session attention", () => {
     expect(row.querySelector('[data-session-attention="question"]')).toBeNull();
     expect(row.querySelector(".session-glyph__ring")).not.toBeNull();
   });
-  it("preserves diagnostic paths in failed-run previews", async () => {
+  it.each([
+    [
+      "runtime disconnect",
+      "write EPIPE | EPIPE",
+      "The agent runtime disconnected. Check the task before retrying. If its worktree was removed, restore it in Worktrees or start a new session.",
+    ],
+    [
+      "missing worktree",
+      "managed worktree was removed: /tmp/example/deleted-worktree",
+      "This session's worktree is unavailable. Restore it in Worktrees, then retry, or start a new session in the source repository. Your transcript is preserved.",
+    ],
+    [
+      "unclassified diagnostic",
+      "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
+      "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
+    ],
+  ])("renders the %s failed-run preview", async (_name, diagnostic, expected) => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [
       failedRow(sessionKey, {
-        lastRunError:
-          "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
+        lastRunError: diagnostic,
       }),
     ]);
     const { sidebar } = await mountSidebar(
@@ -126,9 +141,8 @@ describe("AppSidebar session attention", () => {
     );
     const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
 
-    expect(row?.textContent).toContain(
-      "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
-    );
+    expect(row?.textContent).toContain(expected);
+    expect(row?.textContent).not.toContain("/tmp/example/deleted-worktree");
   });
 
   it("projects canonical main attention onto the agent header across row refresh ordering", async () => {

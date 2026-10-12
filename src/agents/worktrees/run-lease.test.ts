@@ -144,29 +144,51 @@ describe("worktree run lease", () => {
     }
   });
 
-  it("rejects admission when the linked Git admin directory is missing", async () => {
-    const created = await createSessionWorktree();
-    const knownFile = path.join(created.path, "README.md");
-    const gitAdminDir = await git(created.path, "rev-parse", "--absolute-git-dir");
-    const displacedGitAdminDir = path.join(root, "git-admin-aside");
-    await fs.rename(gitAdminDir, displacedGitAdminDir);
+  it.each(["checkout", "Git admin directory"])(
+    "rejects admission when the %s is missing",
+    async (missing) => {
+      const created = await createSessionWorktree();
+      const knownFile = path.join(created.path, "README.md");
+      const original =
+        missing === "checkout"
+          ? created.path
+          : await git(created.path, "rev-parse", "--absolute-git-dir");
+      const displaced = path.join(root, "checkout-aside");
+      await fs.rename(original, displaced);
+      let admitted: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
 
-    try {
-      const acquisition = acquireWorktreeRunLease(created.id, { env });
-      await expect(acquisition).rejects.toThrow(
-        `managed worktree is unusable because its Git removal guard could not be acquired: ${created.path}`,
-      );
-      await expect(acquisition).rejects.toMatchObject({ cause: expect.any(Error) });
+      try {
+        const acquisition = acquireWorktreeRunLease(created.id, { env }).then(
+          (lease) => (admitted = lease),
+        );
+        await expect(acquisition).rejects.toThrow(
+          missing === "checkout"
+            ? "managed worktree checkout is missing"
+            : `managed worktree is unusable because its Git removal guard could not be acquired: ${created.path}`,
+        );
+        if (missing !== "checkout") {
+          await expect(acquisition).rejects.toMatchObject({ cause: expect.any(Error) });
+        }
+        expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+        expect(
+          await fs.readFile(
+            missing === "checkout" ? path.join(displaced, "README.md") : knownFile,
+            "utf8",
+          ),
+        ).toBe("base\n");
+        if (missing === "checkout") {
+          await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      } finally {
+        await admitted?.release();
+        await fs.rename(displaced, original);
+      }
+
+      const lease = await acquireWorktreeRunLease(created.id, { env });
+      await lease.release();
       expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
-      expect(await fs.readFile(knownFile, "utf8")).toBe("base\n");
-    } finally {
-      await fs.rename(displacedGitAdminDir, gitAdminDir);
-    }
-
-    const lease = await acquireWorktreeRunLease(created.id, { env });
-    await lease.release();
-    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
-  });
+    },
+  );
 
   it.each([
     { settlement: "completed", guard: "live" },
