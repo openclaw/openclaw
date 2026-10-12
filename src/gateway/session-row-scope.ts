@@ -1,8 +1,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
-import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import { applyGatewaySessionStoreAdmission } from "../config/sessions/combined-store-gateway.js";
+import type { CombinedSessionStoreScopeTargets } from "../config/sessions/combined-store.types.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -248,18 +248,27 @@ export function prepareSessionRowScopes(
   cfg: OpenClawConfig,
   agentIds: Iterable<string>,
   residentPaths: ReadonlyMap<string, string>,
-  discovery?: GatewaySessionStoreDiscovery,
+  prepared: CombinedSessionStoreScopeTargets,
 ) {
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
   const aliases = new Map<string, Map<string, string>>();
   const capture = (options: { agentId?: string; configuredAgentsOnly?: boolean }) => {
     try {
-      const resolved = resolveGatewaySessionStoreTargets(cfg, {
-        ...options,
-        discovery,
-        includeIncognito: false,
-      });
+      const key = options.agentId
+        ? `agent:${options.agentId}`
+        : options.configuredAgentsOnly
+          ? "configured"
+          : "all";
+      const captured = prepared.get(key);
+      if (captured instanceof Error) {
+        return captured;
+      }
+      const resolved = applyGatewaySessionStoreAdmission(
+        cfg,
+        { ...options, includeIncognito: false },
+        expectDefined(captured, "prepared scope topology"),
+      );
       for (const [identity, physical] of resolved.physicalTargets) {
         const separator = identity.indexOf("\0");
         const agentId = identity.slice(0, separator);

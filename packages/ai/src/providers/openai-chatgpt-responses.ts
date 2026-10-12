@@ -643,9 +643,8 @@ export const streamOpenAICodexResponses: StreamFunction<
           ? formatRequestTimeoutError(requestTimeoutMs, error)
           : error;
       compactRequest?.reject(normalizedError);
-      for (const block of output.content) {
-        // partialJson is only a streaming scratch buffer; never persist it.
-        delete (block as { partialJson?: string }).partialJson;
+      for (const block of output.content.filter((candidate) => candidate.type === "toolCall")) {
+        delete block.partialJson;
       }
       const providerRefusal = readCodexProviderRefusal(normalizedError);
       if (providerRefusal) {

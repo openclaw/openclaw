@@ -76,9 +76,10 @@ vi.mock("../../agents/model-fallback-attempt.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
+// mock-isolation: Reply-runner cases fix auth mode without reading host profiles or environment keys.
 vi.mock("../../agents/model-auth.js", () => ({
   isMissingProviderAuthError: () => false,
-  resolveModelAuthMode: () => "api-key",
+  resolveModelAuthModeAsync: () => "api-key",
 }));
 
 vi.mock("../../agents/embedded-agent.js", () => {

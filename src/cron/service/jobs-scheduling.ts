@@ -457,7 +457,10 @@ function normalizeJobTickState(params: {
   }
 
   // Event schedules cannot retain a timed slot, including one preserved by a force run.
-  if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
+  if (
+    (!isJobEnabled(job) && job.state.forcePreservedNextRunAtMs !== job.state.nextRunAtMs) ||
+    !isTimeScheduledJob(job)
+  ) {
     for (const key of TIME_SCHEDULE_STATE_FIELDS) {
       if (
         key === "forcePreservedNextRunAtMs" &&
@@ -472,13 +475,6 @@ function normalizeJobTickState(params: {
     }
   }
   if (!isJobEnabled(job)) {
-    if (
-      job.state.queuedAtMs !== undefined &&
-      !ownsCronRunMarker(ownership, job.id, job.state.queuedAtMs, true)
-    ) {
-      job.state.queuedAtMs = undefined;
-      changed = true;
-    }
     if (
       job.state.runningAtMs !== undefined &&
       !ownsCronRunMarker(ownership, job.id, job.state.runningAtMs, true) &&
@@ -513,6 +509,7 @@ function normalizeJobTickState(params: {
   if (
     typeof runningAt === "number" &&
     Math.abs(nowMs - runningAt) > CRON_STUCK_RUN_MS &&
+    !ownership.isJobActive(job.id) &&
     !ownsCronRunMarker(ownership, job.id, runningAt)
   ) {
     log.warn({ jobId: job.id, runningAtMs: runningAt }, "cron: clearing stuck running marker");
@@ -692,7 +689,18 @@ export function recomputeNextRunsForMaintenance(
   for (const job of state.store.jobs) {
     changed =
       recomputeSingleJobForMaintenance(state, job, opts, {
-        reservations: state.queuedRunReservationsByJobId,
+        reservations: new Map(
+          state.store.jobs.flatMap((entry) =>
+            typeof entry.state.queuedAtMs === "number"
+              ? [
+                  [
+                    entry.id,
+                    { markerAtMs: entry.state.queuedAtMs, preserveWhenDisabled: true },
+                  ] as const,
+                ]
+              : [],
+          ),
+        ),
         isJobActive: isCronJobActive,
       }) || changed;
   }

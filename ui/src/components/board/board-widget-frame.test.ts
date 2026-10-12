@@ -1,13 +1,25 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { WIDGET_PROMPT_EVENT } from "../mcp-app-security.ts";
 import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
-import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
+import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
+
+const disposers: Array<() => void> = [];
+function mountFrame(lifecycle: BoardWidgetFrameLifecycle, widget: BoardWidget, root: HTMLElement) {
+  const [revision, setRevision] = createSignal(0);
+  disposers.push(mountSolid(() => lifecycle.render(widget, revision), { container: root }).unmount);
+  flush();
+  return () => {
+    setRevision((value) => value + 1);
+    flush();
+  };
+}
 
 type LifecycleInternals = {
   boardHostNonce: string;
@@ -46,6 +58,9 @@ function createTicketRefreshLifecycle(
 }
 
 afterEach(() => {
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -146,7 +161,7 @@ describe("board widget frame scroll handoff", () => {
         widget: () => widget,
       });
       lifecycle.connect();
-      render(lifecycle.render(widget), container);
+      mountFrame(lifecycle, widget, container);
       const frame = container.querySelector<HTMLIFrameElement>(".board-widget__frame")!;
       const resourceReady = createDeferred<{ renderId: string }>();
       const hostNonces: string[] = [];
@@ -273,6 +288,7 @@ describe("board widget frame message confirmation", () => {
     document.body.append(root);
     let confirmationRendered: ReturnType<typeof createDeferred<void>> | undefined;
     let active = true;
+    let updateView = () => {};
     const lifecycle = new BoardWidgetFrameLifecycle({
       active: () => active,
       connected: () => root.isConnected,
@@ -281,7 +297,7 @@ describe("board widget frame message confirmation", () => {
       reportContentHeight: () => {},
       scrollBy: () => {},
       requestUpdate: () => {
-        render(lifecycle.render(widget), root);
+        updateView();
         if (root.querySelector('[role="alertdialog"]')) {
           confirmationRendered?.resolve();
         }
@@ -291,7 +307,7 @@ describe("board widget frame message confirmation", () => {
       widget: () => widget,
     });
     lifecycle.connect();
-    render(lifecycle.render(widget), root);
+    updateView = mountFrame(lifecycle, widget, root);
     lifecycle.update();
     const frame = root.querySelector<HTMLIFrameElement>("iframe")!;
     frame.checkVisibility = () => true;

@@ -588,7 +588,7 @@ describe("conversation position rail", () => {
     }
   });
 
-  it("keeps focused previews after pointer exit and resets interaction when the session changes", () => {
+  it("keeps focused previews after pointer exit and resets interaction when the session changes", async () => {
     const messages = Array.from({ length: 40 }, (_, index) =>
       message(
         `message-${index}`,
@@ -666,6 +666,7 @@ describe("conversation position rail", () => {
       markers()[0]!.focus();
       expect(preview()).toBeDefined();
       render(nothing, container);
+      await Promise.resolve();
       const escapeAfterRemoval = new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,

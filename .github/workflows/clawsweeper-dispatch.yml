@@ -4,10 +4,10 @@ on:
   issues:
     types: [opened, reopened, edited, labeled, unlabeled]
   issue_comment:
-    types: [created, edited]
+    types: [created, edited, deleted]
   push:
     branches: [main]
-  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned external dispatch; no checkout or untrusted PR code execution
+  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned dispatch and label automation; trusted base checkout only, no untrusted PR code execution
     types: [opened, reopened, synchronize, ready_for_review, edited, labeled, unlabeled]
   pull_request_review:
     types: [submitted, edited, dismissed]
@@ -31,7 +31,8 @@ jobs:
           (github.event_name != 'issues' && github.event_name != 'pull_request_target') ||
           !github.event.changes || toJSON(github.event.changes) != '{}') &&
         (github.event_name != 'issue_comment' ||
-          (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')) &&
+          (github.event.action != 'deleted' &&
+            github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')) &&
         !(
           endsWith(github.actor, '[bot]') &&
           (github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
@@ -483,3 +484,132 @@ jobs:
           else
             echo "::warning::Skipping ClawSweeper comment dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi
+
+  # Barnacle triage shares this listener so one GitHub event starts one run,
+  # not one per workflow. It keeps its own event set, admission, credentials and
+  # per-item concurrency; the dispatch job's cancellation never reaches it.
+  auto-response:
+    if: >-
+      ${{ (
+        (
+          (github.event_name == 'issues' &&
+            contains(fromJSON('["opened", "edited", "labeled"]'), github.event.action)) ||
+          (github.event_name == 'issue_comment' && github.event.action == 'created') ||
+          (github.event_name == 'pull_request_target' &&
+            contains(fromJSON('["opened", "edited", "synchronize", "reopened", "labeled", "unlabeled"]'), github.event.action))
+        ) &&
+        !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association || github.event.pull_request.author_association) &&
+        (github.event_name != 'issue_comment' || github.event.comment.user.type != 'Bot') &&
+        (github.event.action != 'edited' || !github.event.changes ||
+          github.event.changes.title || github.event.changes.body || github.event.changes.base) &&
+        (
+          github.event_name != 'pull_request_target' ||
+          (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+          (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')
+        )
+      ) }}
+    concurrency:
+      group: auto-response-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: write
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: write
+      - name: Run Barnacle auto-response
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const { pathToFileURL } = require("node:url");
+            const moduleUrl = pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/scripts/github/barnacle-auto-response.mjs`,
+            );
+            const { runBarnacleAutoResponse } = await import(moduleUrl.href);
+
+            await runBarnacleAutoResponse({ github, context, core });
+
+  # Security Review reads approvals from live comments and only needs to hear
+  # about approval-command activity. GitHub starts one run per subscribing
+  # workflow, so this listener owns comment admission and forwards only comments
+  # whose current or previous body is an approval command, including the edits
+  # and deletions that revoke one. The dispatch comes from repository automation;
+  # Security Review rejects dispatches from anyone else.
+  security-review-command:
+    if: >-
+      ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+      (contains(github.event.comment.body, '/allow-security-sensitive-change') ||
+      contains(github.event.comment.body, '/allow-dependencies-change') ||
+      (github.event.action == 'edited' &&
+      (contains(github.event.changes.body.from, '/allow-security-sensitive-change') ||
+      contains(github.event.changes.body.from, '/allow-dependencies-change')))) }}
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the approval command parser
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/github/guard-shared.mjs
+            /scripts/lib/bounded-response.mjs
+          sparse-checkout-cone-mode: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+      - name: Forward approval command activity to Security Review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          is_command="$(node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            import { parseApprovalCommands } from "./scripts/github/guard-shared.mjs";
+            const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8"));
+            const current = parseApprovalCommands(event.comment?.body).length > 0;
+            const previous =
+              event.action === "edited" && parseApprovalCommands(event.changes?.body?.from).length > 0;
+            console.log(current || previous);
+          ')"
+          if [ "$is_command" != "true" ]; then
+            echo "Comment quotes an approval command without issuing one; Security Review is unchanged."
+            exit 0
+          fi
+          gh workflow run security-review.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH" \
+            -f pull_request="$PR_NUMBER"
+          echo "Requested Security Review for #${PR_NUMBER}."

@@ -297,6 +297,11 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Producer-only cumulative argument JSON while the call streams. Producers remove it before
+   * `toolcall_end` or terminal cleanup; it never appears in final messages or transcripts.
+   */
+  partialJson?: string;
   thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
   executionMode?: "sequential" | "parallel";
 }

@@ -14,7 +14,6 @@ import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 const hoisted = vi.hoisted(() => ({
   installContextEngineLoopHook: vi.fn(),
   installToolResultContextGuard: vi.fn(),
-  installHistoryImagePruneContextTransform: vi.fn(),
   invalidateComputerFrameIfMissing: vi.fn(),
   isCacheTtlEligibleProvider: vi.fn(() => false),
   readLastCacheTtlTimestamp: vi.fn(() => null as number | null),
@@ -23,9 +22,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../tool-result-context-guard.js", () => ({
   installContextEngineLoopHook: hoisted.installContextEngineLoopHook,
   installToolResultContextGuard: hoisted.installToolResultContextGuard,
-}));
-vi.mock("./history-image-prune.js", () => ({
-  installHistoryImagePruneContextTransform: hoisted.installHistoryImagePruneContextTransform,
 }));
 vi.mock("../../tools/computer-tool.js", () => ({
   invalidateComputerFrameIfMissing: hoisted.invalidateComputerFrameIfMissing,
@@ -126,7 +122,6 @@ describe("installEmbeddedAttemptContextGuards", () => {
     vi.clearAllMocks();
     hoisted.installContextEngineLoopHook.mockReturnValue(vi.fn());
     hoisted.installToolResultContextGuard.mockReturnValue(vi.fn());
-    hoisted.installHistoryImagePruneContextTransform.mockReturnValue(vi.fn());
     hoisted.isCacheTtlEligibleProvider.mockReturnValue(false);
     hoisted.readLastCacheTtlTimestamp.mockReturnValue(null);
   });
@@ -159,11 +154,8 @@ describe("installEmbeddedAttemptContextGuards", () => {
     });
 
     const removeToolResultGuard = hoisted.installToolResultContextGuard.mock.results[0]?.value;
-    const removeHistoryGuard =
-      hoisted.installHistoryImagePruneContextTransform.mock.results[0]?.value;
     guards.remove();
     expect(input.activeSession.agent.transformContext).toBe(originalTransform);
-    expect(removeHistoryGuard).toHaveBeenCalledOnce();
     expect(removeToolResultGuard).toHaveBeenCalledOnce();
   });
 
@@ -179,6 +171,58 @@ describe("installEmbeddedAttemptContextGuards", () => {
     input.activeSession[agentSessionDeferThresholdCompaction] = false;
     expect(() => guards.checkMidTurnPrecheck(request)).toThrow(MidTurnPrecheckSignal);
     guards.remove();
+  });
+
+  it("hydrates current images and their failure notice before context transforms", async () => {
+    const message: AgentMessage & { __openclaw: unknown } = {
+      role: "user",
+      content: [
+        { type: "text", text: "inspect" },
+        { type: "image", data: "%%%", mimeType: "image/png" },
+      ],
+      timestamp: 1,
+      __openclaw: {
+        media: [{ kind: "image" }],
+        mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+      },
+    };
+    const original = JSON.stringify(message);
+    const onCurrentTurnImageFailure = vi.fn();
+    const input = createInput({
+      onCurrentTurnImageFailure,
+      attempt: {
+        ...createInput().attempt,
+        model: { ...cacheModel, input: ["text", "image"] },
+      },
+    });
+    input.activeSession.agent.transformContext = async (messages) =>
+      messages.map((entry) =>
+        entry.role === "user" && Array.isArray(entry.content)
+          ? {
+              ...entry,
+              content: entry.content.map((block) =>
+                block.type === "text" ? { ...block, text: `transformed: ${block.text}` } : block,
+              ),
+            }
+          : entry,
+      );
+    const guards = installEmbeddedAttemptContextGuards(input as never);
+    try {
+      const replay = await input.activeSession.agent.transformContext?.([message]);
+      expect(onCurrentTurnImageFailure).toHaveBeenCalledWith(1);
+      expect(replay?.[0]).toMatchObject({
+        content: [
+          { type: "text", text: "transformed: inspect" },
+          {
+            type: "text",
+            text: expect.stringMatching(/^transformed: .*1.*image contents.*unavailable/s),
+          },
+        ],
+      });
+      expect(JSON.stringify(message)).toBe(original);
+    } finally {
+      guards.remove();
+    }
   });
 
   it("composes context-engine and tool-result cleanup while exposing checkpoints", () => {

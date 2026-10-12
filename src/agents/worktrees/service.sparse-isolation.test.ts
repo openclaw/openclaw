@@ -104,9 +104,9 @@ describe("ManagedWorktreeService sparse isolation", () => {
       );
       const calls = vi.mocked(backend.cloneTemplate).mock.calls.length;
       const created = await service.create({ repoRoot: repo, name, baseRef: commit, profiles });
-      // Sparse setup enables shared worktreeConfig, keeping later full creates on Git.
+      // Only explicitly profiled creates need native sparse materialization.
       expect(vi.mocked(backend.cloneTemplate).mock.calls.length > calls, name).toBe(
-        name === "full-cold" || name === "full-warm",
+        !profiles?.length,
       );
       for (const sibling of siblings) {
         expect(await fs.readFile(sibling.index), sibling.label).toEqual(sibling.indexBytes);

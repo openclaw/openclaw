@@ -1,7 +1,10 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import {
+  resolveModelAuthLabel,
+  resolveModelAuthLabelAsync,
+} from "../../agents/model-auth-label.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import {
@@ -10,6 +13,7 @@ import {
 } from "../../agents/prepared-model-runtime.errors.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { ReplyPayload } from "../types.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import {
@@ -91,14 +95,16 @@ function parseModelsArgs(raw: string): ParsedModelsCommand {
   }
 }
 
-function resolveProviderLabel(params: {
+type ProviderLabelParams = {
   provider: string;
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
-}): string {
+};
+
+function resolveProviderLabelParams(params: ProviderLabelParams) {
   const harnessPolicy = resolveAgentHarnessPolicy({
     config: params.cfg,
     provider: params.provider,
@@ -109,20 +115,31 @@ function resolveProviderLabel(params: {
     harnessRuntime: harnessPolicy.runtime,
     config: params.cfg,
   });
-  const authLabel = resolveModelAuthLabel({
+  return {
     provider: params.provider,
     acceptedProviderIds,
     cfg: params.cfg,
     sessionEntry: params.sessionEntry,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
-  });
-  if (!authLabel || authLabel === "unknown") {
-    return params.provider;
-  }
-  return `${params.provider} · 🔑 ${authLabel}`;
+  };
 }
 
+function formatProviderLabel(provider: string, authLabel: string | undefined): string {
+  if (!authLabel || authLabel === "unknown") {
+    return provider;
+  }
+  return `${provider} · 🔑 ${authLabel}`;
+}
+
+async function resolveProviderLabelAsync(params: ProviderLabelParams): Promise<string> {
+  return formatProviderLabel(
+    params.provider,
+    await resolveModelAuthLabelAsync(resolveProviderLabelParams(params)),
+  );
+}
+
+/** @deprecated Use formatModelsAvailableHeaderAsync. Removed at the next Plugin SDK major. */
 export function formatModelsAvailableHeader(params: {
   provider: string;
   total: number;
@@ -133,7 +150,28 @@ export function formatModelsAvailableHeader(params: {
   sessionEntry?: ModelsCommandSessionEntry;
   availability?: ModelsProviderMenu;
 }): string {
-  const providerLabel = resolveProviderLabel(params);
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "formatModelsAvailableHeader",
+    replacement: "formatModelsAvailableHeaderAsync",
+  });
+  const providerLabel = formatProviderLabel(
+    params.provider,
+    resolveModelAuthLabel(resolveProviderLabelParams(params)),
+  );
+  return formatModelsHeader(params, providerLabel);
+}
+
+export async function formatModelsAvailableHeaderAsync(
+  params: Parameters<typeof formatModelsAvailableHeader>[0],
+): Promise<string> {
+  return formatModelsHeader(params, await resolveProviderLabelAsync(params));
+}
+
+function formatModelsHeader(
+  params: Parameters<typeof formatModelsAvailableHeader>[0],
+  providerLabel: string,
+): string {
   const count =
     params.availability && params.availability.available !== params.total
       ? `${params.availability.available} of ${params.total}`
@@ -188,15 +226,15 @@ export async function resolveModelsCommandReply(
     }
     throw error;
   }
-  const reply = buildModelsCommandReply(params, parsed, data);
+  const reply = await buildModelsCommandReply(params, parsed, data);
   return { ...reply, text: [data.refreshWarning, reply.text].filter(Boolean).join("\n\n") };
 }
 
-function buildModelsCommandReply(
+async function buildModelsCommandReply(
   params: ModelsCommandReplyParams,
   parsed: ParsedModelsCommand,
   data: PreparedModelsProviderData,
-): ReplyPayload & { text: string } {
+): Promise<ReplyPayload & { text: string }> {
   const { byProvider, providers } = data;
   const availability =
     parsed.action === "list" && parsed.provider
@@ -284,7 +322,7 @@ function buildModelsCommandReply(
     if (checking) {
       return { text: checking };
     }
-    const emptyProviderLabel = resolveProviderLabel({ ...params, provider });
+    const emptyProviderLabel = await resolveProviderLabelAsync({ ...params, provider });
     return {
       text: [
         `Models (${emptyProviderLabel}) — none`,
@@ -310,7 +348,7 @@ function buildModelsCommandReply(
   });
   if (interactiveChannelData) {
     return {
-      text: formatModelsAvailableHeader({
+      text: await formatModelsAvailableHeaderAsync({
         ...params,
         provider,
         total,
@@ -342,7 +380,7 @@ function buildModelsCommandReply(
   const startIndex = (safePage - 1) * effectivePageSize;
   const endIndexExclusive = Math.min(total, startIndex + effectivePageSize);
   const pageModels = models.slice(startIndex, endIndexExclusive);
-  const providerLabel = resolveProviderLabel({ ...params, provider });
+  const providerLabel = await resolveProviderLabelAsync({ ...params, provider });
   const lines = [
     `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`,
   ];

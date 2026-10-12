@@ -8,16 +8,17 @@ import {
   validateSessionsResolveParams,
   validateSessionsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  resolveExistingAgentSessionStoreTargetsSync,
-  resolveSessionStorePathCore,
-} from "../../config/sessions.js";
-import {
-  listSessionEntriesReadOnly,
-  withSessionEntryReadOnlyScope,
-} from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
+import { canonicalSessionKeyMigrationRequiredError } from "../../config/sessions/session-canonical-key.js";
 import { SessionTranscriptColdError } from "../../config/sessions/session-cold-storage-state.js";
+import {
+  readSessionEntriesFromStoreInWorker,
+  readSessionEntrySummariesInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
+import { resolveExistingAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
+import type { SessionStoreTarget } from "../../config/sessions/targets.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   isIncognitoSessionKey,
@@ -38,12 +39,9 @@ import {
   canAccessIncognitoSession,
   createSessionListEntryFilter,
   isGatewayAdmin,
-  prepareSessionSharingTargets,
-  resolveSessionSharingTarget,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
-import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-candidates.js";
 import {
   listProjectedSessions,
   type SessionsPreviewEntry,
@@ -97,7 +95,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       }
       return;
     }
-    const prepareSearch = () => {
+    const discoveredTargets = new Map<string, Promise<SessionStoreTarget[]>>();
+    const prepareSearch = async () => {
       sessionMutationAuthorization?.assertCurrent();
       const cfg = context.getRuntimeConfig();
       const policyConfig = context.getCommittedRuntimeConfig?.() ?? cfg;
@@ -113,11 +112,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         ? createSessionListEntryFilter({ client, cfg: policyConfig })
         : undefined;
       const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
-      const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-      const canSearchSessionKey = (
-        sessionKey: string,
-        prepared?: ReturnType<typeof prepareSessionSharingTargets>[number],
-      ) => {
+      const canSearchSessionKey = (sessionKey: string, entry?: SessionEntry) => {
         if (
           isIncognitoSessionKey(sessionKey) &&
           !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
@@ -127,13 +122,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         if (!roleVisibilityFilter) {
           return true;
         }
-        if (prepared && !prepared.ok) {
-          throw prepared.error;
-        }
-        const target = prepared
-          ? prepared.value
-          : resolveSessionSharingTarget({ cfg, sessionKey, agentId, targetDiscoveryCache });
-        return Boolean(target && roleVisibilityFilter(target.storeKey, target.entry));
+        return Boolean(entry && roleVisibilityFilter(sessionKey, entry));
       };
       if (requestedAgentId && !params.sessionKeys && configured) {
         respond(
@@ -143,60 +132,74 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         );
         return undefined;
       }
-      const scopedSessionKeys = (
-        configured
-          ? sessionKeys
-          : sessionKeys?.filter((sessionKey) => {
-              const sessionAgentId =
-                requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-                  ? requestedAgentId
-                  : resolveSessionStoreAgentId(cfg, sessionKey);
-              return sessionAgentId === agentId;
-            })
-      )?.filter((sessionKey) => canSearchSessionKey(sessionKey));
+      const scopedSessionKeys = configured
+        ? sessionKeys
+        : sessionKeys?.filter((sessionKey) => {
+            const sessionAgentId =
+              requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
+                ? requestedAgentId
+                : resolveSessionStoreAgentId(cfg, sessionKey);
+            return sessionAgentId === agentId;
+          });
+      const discoveryKey = JSON.stringify([agentId, cfg.session?.store]);
+      let discovery = discoveredTargets.get(discoveryKey);
+      if (!configured && !discovery) {
+        discovery = resolveExistingAgentSessionStoreTargetsAsync(cfg, agentId);
+        discoveredTargets.set(discoveryKey, discovery);
+      }
       const searchTargets = configured
         ? [{ agentId, storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }]
-        : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
+        : await discovery!;
       if (!configured && (searchTargets.length === 0 || scopedSessionKeys?.length === 0)) {
         respond(true, { results: [] }, undefined);
         return undefined;
       }
-      return searchTargets.flatMap((target) => {
-        const targetSessionKeys =
-          scopedSessionKeys ??
-          (restrictVisibility
-            ? withSessionEntryReadOnlyScope(target, () => {
-                const keys = listSessionEntriesReadOnly({
-                  agentId: target.agentId,
-                  storePath: target.storePath,
-                  projection: "list",
-                  clone: false,
-                })
-                  .map((entry) => entry.sessionKey)
-                  .filter((sessionKey) => {
-                    // A shared physical store can include rows owned by another agent.
-                    const parsed = parseAgentSessionKey(sessionKey);
-                    return !parsed || normalizeAgentId(parsed.agentId) === agentId;
-                  });
-                const prepared = roleVisibilityFilter
-                  ? prepareSessionSharingTargets({
-                      cfg,
-                      targets: keys
-                        .filter((sessionKey) => !isIncognitoSessionKey(sessionKey))
-                        .map((sessionKey) => ({ sessionKey, agentId })),
+      const entriesByTarget = restrictVisibility
+        ? await Promise.all(
+            searchTargets.map(async (target) =>
+              scopedSessionKeys
+                ? (
+                    await readSessionEntriesFromStoreInWorker({
+                      ...target,
+                      sessionKeys: scopedSessionKeys,
+                      projection: "list",
                     })
-                  : [];
-                let ordinal = 0;
-                return keys.filter((sessionKey) => {
-                  // Incognito checks retain their scalar lookup and place in the error order.
-                  const sharing =
-                    roleVisibilityFilter && !isIncognitoSessionKey(sessionKey)
-                      ? prepared[ordinal++]
-                      : undefined;
-                  return canSearchSessionKey(sessionKey, sharing);
-                });
-              })
-            : undefined);
+                  ).entries
+                : readSessionEntrySummariesInWorker(target),
+            ),
+          )
+        : undefined;
+      const entries = new Map<string, SessionEntry>();
+      if (roleVisibilityFilter) {
+        for (const rows of entriesByTarget ?? []) {
+          for (const { sessionKey, entry } of rows) {
+            const parsed = parseAgentSessionKey(sessionKey);
+            if (
+              isIncognitoSessionKey(sessionKey) ||
+              (parsed && normalizeAgentId(parsed.agentId) !== agentId)
+            ) {
+              continue;
+            }
+            if (entries.has(sessionKey)) {
+              throw canonicalSessionKeyMigrationRequiredError(
+                `duplicate rows resolve to canonical session key ${sessionKey}`,
+              );
+            }
+            entries.set(sessionKey, entry);
+          }
+        }
+      }
+      return searchTargets.flatMap((target, index) => {
+        const candidateKeys =
+          scopedSessionKeys ?? entriesByTarget?.[index]?.map(({ sessionKey }) => sessionKey);
+        const targetSessionKeys = candidateKeys?.filter((sessionKey) => {
+          // A shared physical store can include rows owned by another agent.
+          const parsed = parseAgentSessionKey(sessionKey);
+          return (
+            (!parsed || normalizeAgentId(parsed.agentId) === agentId) &&
+            canSearchSessionKey(sessionKey, entries.get(sessionKey))
+          );
+        });
         if (targetSessionKeys?.length === 0) {
           return [];
         }
@@ -214,7 +217,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     };
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const requests = prepareSearch();
+        const requests = await prepareSearch();
         if (!requests) {
           return;
         }
@@ -222,7 +225,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           requests.map((request) => searchSessionTranscripts(request)),
         );
         // Current configuration, identity, and sharing must authorize the whole result page.
-        const current = prepareSearch();
+        const current = await prepareSearch();
         if (!current) {
           return;
         }
@@ -251,6 +254,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           seenHits.add(identity);
           return true;
         });
+        sessionMutationAuthorization?.assertCurrent();
         respond(true, {
           results: hits.slice(0, limit),
           ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),

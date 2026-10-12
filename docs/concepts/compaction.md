@@ -57,6 +57,8 @@ If the provider rejects a request after tool calls have completed, the built-in 
 
 For OpenAI-compatible Chat Completions, an automatically context-capped response that ends with `length` also enters this recovery. OpenClaw withholds the incomplete candidate and its tool calls until the finish reason is known. This buffering is bounded; an oversized response resumes ordinary streaming and retains its normal `length` result. Explicit output limits retain their normal behavior.
 
+Before automatically reducing the output budget for an OpenAI-compatible tool request, OpenClaw uses a minimum output budget equal to one eighth of the model’s declared maximum output, bounded between 16 and 2,048 tokens. If that minimum cannot fit, compaction runs before the request is sent. Requests without active tools keep the 16-token floor, and explicit output limits that fit remain valid.
+
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
 
 If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
