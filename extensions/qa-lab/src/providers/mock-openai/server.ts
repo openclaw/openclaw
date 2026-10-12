@@ -545,7 +545,6 @@ async function buildResponsesPayload(
     return cronBlockedOutcomeTurn;
   }
   const perTurnSendBudgetResponse = resolvePerTurnSendBudgetResponse({
-    allInputText,
     input,
     hasDeclaredTool: (tool: string) => hasDeclaredTool(body, tool),
     buildToolCallEventsWithArgs,

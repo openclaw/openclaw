@@ -8,9 +8,9 @@ import { randomUUID } from "node:crypto";
 //
 // Two seams are used, each the tightest one that exposes the behavior:
 //   * A real scripted agent turn (inbound -> mock model emits several `message`
-//     sends in one run -> qa-channel delivery) proves the soft nudge counts only
-//     confirmed deliveries. The ledger keys on the agent run, so this is the only
-//     way to observe it end to end. The nudge text is read from the tool result the
+//     sends in one run -> qa-channel delivery) proves the soft nudge counts sends that
+//     reached delivery and releases suppressed ones. The ledger keys on the agent run,
+//     so this is the only way to observe it end to end. The nudge text is read from the tool result the
 //     runtime fed back to the model (the mock provider's request log).
 //   * conversations_send has an owner-gated tool and returns a Code-Mode-only
 //     structured `details` object that is not serialized to the model, bus, or
@@ -28,6 +28,7 @@ import { createQaBusState, startQaBusServer } from "../../../../extensions/qa-la
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import { ConversationSendResultSchema } from "../../../../packages/gateway-protocol/src/schema/agent.js";
 import { createConversationsSendTool } from "../../../../src/agents/tools/conversation-tools.js";
+import { expectedTurnSendNotice } from "../../../../src/agents/tools/message-tool.test-support.js";
 import {
   buildTurnSendLedgerSessionKey,
   buildTurnSendTargetKey,
@@ -267,6 +268,86 @@ async function waitForMockRequestText(
     await sleep(200);
   }
   throw new Error(`timed out after ${timeoutMs}ms waiting for a matching mock request text`);
+}
+
+async function readMockRequestCursor(mockBaseUrl: string): Promise<number> {
+  const response = await fetch(`${mockBaseUrl}/debug/request-cursor`);
+  const { cursor } = (await response.json()) as { cursor: unknown };
+  if (typeof cursor !== "number") {
+    throw new Error("mock provider returned no request cursor");
+  }
+  return cursor;
+}
+
+function inputItemText(item: Record<string, unknown>): string {
+  const content = item.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  return Array.isArray(content)
+    ? content
+        .map((entry) =>
+          entry && typeof entry === "object" && typeof entry.text === "string" ? entry.text : "",
+        )
+        .join("\n")
+    : "";
+}
+
+// The tool outputs the runtime fed back to the model during ONE QA-PTSB turn, read from
+// the request that carries the most of them (the turn's last request replays all earlier
+// ones). Two bounds keep other scenarios out: only requests recorded after `cursor`, and
+// only output items after this turn's own directive message. The shared session replays
+// earlier turns' outputs into every later request, so the cursor alone is not enough.
+async function fetchTurnToolOutputs(
+  mockBaseUrl: string,
+  cursor: number,
+  directive: string,
+): Promise<string[]> {
+  const response = await fetch(`${mockBaseUrl}/debug/requests?after=${cursor}`);
+  if (!response.ok) {
+    throw new Error(`mock request log after ${cursor} failed: ${response.status}`);
+  }
+  let turnOutputs: string[] = [];
+  for (const request of (await response.json()) as MockRequestSnapshot[]) {
+    const items = inputItemsOf(request);
+    const directiveIndex = items.findLastIndex(
+      (item) => item.role === "user" && inputItemText(item).includes(directive),
+    );
+    if (directiveIndex < 0) {
+      continue;
+    }
+    const outputs = items
+      .slice(directiveIndex + 1)
+      .filter((item) => item.type === "function_call_output" && typeof item.output === "string")
+      .map((item) => item.output as string);
+    if (outputs.length > turnOutputs.length) {
+      turnOutputs = outputs;
+    }
+  }
+  return turnOutputs;
+}
+
+// Waits until the turn's final model request carries all `count` send outputs, so the
+// turn has made its last model call before the scenario asserts or the next one starts.
+async function waitForTurnToolOutputs(
+  mockBaseUrl: string,
+  cursor: number,
+  directive: string,
+  count: number,
+  timeoutMs = 60_000,
+): Promise<string[]> {
+  const startedAt = Date.now();
+  let outputs: string[] = [];
+  while (Date.now() - startedAt < timeoutMs) {
+    outputs = await fetchTurnToolOutputs(mockBaseUrl, cursor, directive);
+    if (outputs.length >= count) {
+      return outputs;
+    }
+    await sleep(200);
+  }
+  throw new Error(
+    `timed out after ${timeoutMs}ms waiting for ${count} tool outputs of "${directive}"; saw ${outputs.length}`,
+  );
 }
 
 // One registry row read back from the running Gateway (conversations.list). Its
@@ -1020,29 +1101,48 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
     );
   });
 
-  // These scenarios change the Gateway config (message-tool replies, the hard cap) and read
-  // the mock provider's request log, which accumulates for the Gateway's lifetime. Scenarios 1
-  // and 3 both expect "already submitted 2" and only scenario 3 rules out "already submitted 3", so each
-  // gets its own Gateway to keep those reads unambiguous.
-  describe("per-scenario Gateway", () => {
-    afterEach(stopHarness);
+  // Scenarios 1 and 3 drive real message-tool turns on one Gateway with message-tool replies.
+  // Both turns run in the same DM session, so its transcript and the mock provider log carry
+  // the earlier turn. The QA-PTSB fixture reads only the latest user turn, and each scenario
+  // reads its own tool outputs through fetchTurnToolOutputs (request cursor + its own
+  // directive message), so neither can satisfy or break the other's assertions.
+  describe("shared message-tool-replies Gateway", () => {
+    let shared: { state: BusState; harness: LiveHarness } | undefined;
+    const sharedHarness = () => {
+      if (!shared) {
+        throw new Error("shared message-tool Gateway fixture did not start");
+      }
+      return shared;
+    };
+
+    beforeAll(async () => {
+      // message_tool mode maps to sourceReplyDeliveryMode "message_tool_only", the only
+      // embedded configuration that admits the `message` tool into the turn's toolset
+      // (openclaw-tools.ts includeMessageTool). Without it the model has no message tool
+      // to call, so the send-budget fixture cannot fan out. Visible replies then flow
+      // through message(action=send) to the current source, which is exactly the real
+      // path the per-turn budget guards.
+      shared = await bootHarness(withMessageToolReplies);
+    }, SCENARIO_TIMEOUT_MS);
+
+    afterAll(async () => {
+      shared = undefined;
+      await stopHarness();
+    });
 
     it(
-      "scenario 1: second confirmed message send in one turn nudges and both deliveries land",
+      "scenario 1: second message send in one turn nudges and both deliveries land",
       { timeout: SCENARIO_TIMEOUT_MS },
       async () => {
-        // message_tool mode maps to sourceReplyDeliveryMode "message_tool_only", the only
-        // embedded configuration that admits the `message` tool into the turn's toolset
-        // (openclaw-tools.ts includeMessageTool). Without it the model has no message tool
-        // to call, so the send-budget fixture cannot fan out. Visible replies then flow
-        // through message(action=send) to the current source, which is exactly the real
-        // path the per-turn budget guards.
-        const { state: busState, harness: live } = await bootHarness(withMessageToolReplies);
+        const { state: busState, harness: live } = sharedHarness();
+        const mockBaseUrl = live.mock!.baseUrl;
+        const directive = "QA-PTSB-SEND tool=message count=2 marker=SBM";
+        const cursor = await readMockRequestCursor(mockBaseUrl);
         busState.addInboundMessage({
           conversation: { id: "qa-operator", kind: "direct" },
           senderId: "qa-user",
           senderName: "QA User",
-          text: "Per-turn budget check. QA-PTSB-SEND tool=message count=2 marker=SBM",
+          text: `Per-turn budget check. ${directive}`,
         });
         // Both explicit tool sends must reach the peer on the bus.
         const first = await waitForOutboundText(busState, (message) => message.text === "SBM-1");
@@ -1058,23 +1158,19 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
           "SBM-2",
         ]);
 
-        // The runtime feeds the soft nudge back to the model on the 2nd send, but that
-        // model-facing tool result only lands in a follow-up request after SBM-2's delivery
-        // is observed on the bus. Wait for the nudge to appear in the mock's recorded
-        // requests rather than sampling once (which races the follow-up request).
-        await waitForMockRequestText(live.mock!.baseUrl, (text) =>
-          text.includes("already submitted 2 messages to this target this turn"),
-        );
-        const mockTexts = await fetchMockRequestTexts(live.mock!.baseUrl);
-        const noticePresent = mockTexts.some((text) =>
-          text.includes("already submitted 2 messages to this target this turn"),
-        );
-        expect(noticePresent).toBe(true);
+        // The model-facing results of this turn's two sends, in order: the first carries no
+        // reminder, the second carries the exact count-2 reminder.
+        const outputs = await waitForTurnToolOutputs(mockBaseUrl, cursor, directive, 2);
+        const notice = expectedTurnSendNotice(2, "target");
+        expect(outputs).toHaveLength(2);
+        expect(outputs[0]).not.toContain("already submitted");
+        expect(outputs[1]).toContain(notice);
+        const noticePresent = outputs[1]!.includes(notice);
 
         recordTurnSendProofSuccess(verdict.scenarios, {
           id: "soft-nudge",
           status: "success",
-          scenario: "message soft nudge counts confirmed deliveries",
+          scenario: "message soft nudge counts submitted sends",
           deliveriesRecorded: sendDeliveries.length,
           toolResults: [
             { status: "sent", noticePresent: false, schemaValid: true },
@@ -1087,30 +1183,33 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
     );
 
     it(
-      "scenario 3: a suppressed message send does not charge the per-turn budget",
+      "scenario 3: a message send rejected before delivery does not charge the per-turn budget",
       { timeout: SCENARIO_TIMEOUT_MS },
       async () => {
         // Drive the real message tool through the qa-lab directive (as scenario 1 does),
-        // but interleave a suppressed send between two visible ones: outcomes=ok,suppress,ok.
-        // The suppressed round sends an empty message, so real core delivery returns
-        // deliveryStatus "suppressed" (no_visible_payload) and hits the exact
-        // message-tool-execution.ts `deliveredNothing` branch at the real boundary. If that
-        // send were counted, the second visible send (SBM3-3) would be the 3rd and nudge
-        // "already submitted 3 messages"; because it is not counted, SBM3-3 is the 2nd counted
-        // send and nudges at 2. The "failed"/throwing branches of the same predicate are
-        // covered at the message-tool seam in message-tool.test.ts ("does not count a
-        // failed best-effort send" / "does not count a throwing send"); a real transport
-        // failure is not producible through the qa-channel bus, which always accepts a
-        // delivery.
-        const { state: busState, harness: live } = await bootHarness(withMessageToolReplies);
+        // but interleave a rejected send between two visible ones: outcomes=ok,reject,ok.
+        // The rejected round sends an empty message; the budget reserves it, then
+        // runMessageAction throws "send requires text or media or location" and the
+        // message tool releases the reservation. If that send were charged, the second
+        // visible send (SBM3-3) would be the 3rd and carry the count-3 reminder; because it
+        // is not, SBM3-3 is the 2nd counted send and carries the count-2 reminder. This
+        // Gateway has no cap, so the reminder reflects committed sends only; releasing the
+        // in-flight cap reservation is covered in message-tool.turn-send-budget.test.ts.
+        // qa-channel handles `send` in its plugin action, so a core-suppressed delivery
+        // (deliveryStatus "suppressed") is not reachable here; that branch and the failed
+        // best-effort branch are covered in message-tool.turn-send-budget.test.ts.
+        const { state: busState, harness: live } = sharedHarness();
+        const mockBaseUrl = live.mock!.baseUrl;
+        const directive = "QA-PTSB-SEND tool=message count=3 marker=SBM3 outcomes=ok,reject,ok";
+        const cursor = await readMockRequestCursor(mockBaseUrl);
         busState.addInboundMessage({
           conversation: { id: "qa-operator", kind: "direct" },
           senderId: "qa-user",
           senderName: "QA User",
-          text: "Per-turn budget check. QA-PTSB-SEND tool=message count=3 marker=SBM3 outcomes=ok,suppress,ok",
+          text: `Per-turn budget check. ${directive}`,
         });
 
-        // Only the two visible sends reach the bus; the suppressed (empty) send never lands.
+        // Only the two visible sends reach the bus; the rejected send never lands.
         const first = await waitForOutboundText(busState, (message) => message.text === "SBM3-1");
         const third = await waitForOutboundText(busState, (message) => message.text === "SBM3-3");
         expect(first.conversation.id).toBe("qa-operator");
@@ -1124,31 +1223,29 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
           "SBM3-3",
         ]);
 
-        // The nudge fires on the 2nd COUNTED send. Because the suppressed send in between
-        // did not charge the budget, the count is 2 (not 3) when SBM3-3 is delivered. The
-        // nudge lands in a follow-up model request after SBM3-3's bus delivery, so wait for
-        // it rather than sampling once (which races that request).
-        await waitForMockRequestText(live.mock!.baseUrl, (text) =>
-          text.includes("already submitted 2 messages to this target this turn"),
-        );
-        const mockTexts = await fetchMockRequestTexts(live.mock!.baseUrl);
-        const nudgeAtTwo = mockTexts.some((text) =>
-          text.includes("already submitted 2 messages to this target this turn"),
-        );
-        const nudgeAtThree = mockTexts.some((text) =>
-          text.includes("already submitted 3 messages to this target this turn"),
+        // This turn's three results, in order. Only the last carries a reminder, and it
+        // reports two counted sends because the rejected one in between was released.
+        const outputs = await waitForTurnToolOutputs(mockBaseUrl, cursor, directive, 3);
+        expect(outputs).toHaveLength(3);
+        expect(outputs[0]).not.toContain("already submitted");
+        // The middle send failed inside runMessageAction, after the budget reserved it.
+        expect(outputs[1]).toContain("send requires text or media or location");
+        expect(outputs[1]).not.toContain("already submitted");
+        const nudgeAtTwo = outputs[2]!.includes(expectedTurnSendNotice(2, "target"));
+        const nudgeAtThree = outputs.some((output) =>
+          output.includes(expectedTurnSendNotice(3, "target")),
         );
         expect(nudgeAtTwo).toBe(true);
         expect(nudgeAtThree).toBe(false);
 
         recordTurnSendProofSuccess(verdict.scenarios, {
-          id: "suppressed-not-charged",
+          id: "rejected-not-charged",
           status: "success",
-          scenario: "suppressed send does not charge the per-turn budget",
+          scenario: "send rejected before delivery does not charge the per-turn budget",
           deliveriesRecorded: sendDeliveries.length,
           toolResults: [
             { status: "sent", noticePresent: false, schemaValid: true },
-            { status: "suppressed", noticePresent: false, schemaValid: true },
+            { status: "error", noticePresent: false, schemaValid: true },
             { status: "sent", noticePresent: nudgeAtTwo, schemaValid: true },
           ],
           ledgerCounts: { "qa-channel:qa-operator": sendDeliveries.length },
@@ -1156,6 +1253,11 @@ describe("per-turn per-target send budget (real Gateway + qa-channel)", () => {
         });
       },
     );
+  });
+
+  // Scenario 6 needs the opt-in hard cap, a different Gateway config, so it boots its own.
+  describe("capped message-tool Gateway", () => {
+    afterEach(stopHarness);
 
     it(
       "scenario 6: two byte-identical direct message sends under the cap are cap-blocked (exactly-once delivery) — proves the cap-block path, NOT idempotent admission",
