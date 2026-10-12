@@ -148,6 +148,11 @@ export function sanitizeExecApprovalDisplayText(commandText: string): string {
   return sanitizeExecApprovalDisplayTextInternal(commandText).text;
 }
 
+/** Card and grant lists apply a shorter UTF-16-safe budget after sanitization. */
+export function boundExecApprovalVisibleText(text: string, maxChars: number): string {
+  return truncateUtf16Safe(sanitizeExecApprovalDisplayText(text), maxChars);
+}
+
 /**
  * Sanitizes exec command text for approval UI and reports whether size caps changed it.
  */
