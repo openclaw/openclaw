@@ -8,25 +8,20 @@ read_when:
 
 ## Quick start
 
-Most days:
+Select proof using the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+Use the commands below for the suite you need:
 
-- Full gate (expected before push): `pnpm build && pnpm check && pnpm check:test-types && pnpm test`
-- Faster local full-suite run on a roomy machine: `pnpm test:max`
-- Direct Vitest watch loop: `pnpm test:watch`
-- Direct file targeting routes plugin/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
-- Prefer targeted runs first when iterating on a single failure.
-- Docker-backed QA site: `pnpm qa:lab:up`
-- Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
+- Focused test: `pnpm test <file> --maxWorkers=1`
+- Watch loop: `pnpm test:watch`
+- Full suite: `pnpm test`; higher worker cap: `pnpm test:max`
+- Informational coverage: `pnpm test:coverage`
+- E2E: `pnpm test:e2e`
+- Docker QA site: `pnpm qa:lab:up`
+- Linux VM QA: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
-The last two lanes need tooling the other commands do not: `qa:lab:up` needs a
-running Docker daemon and a source checkout, because the npm tarball omits QA
-Lab, and the `multipass` runner needs Multipass installed. See
-[QA-specific runners](/help/testing/qa-runners).
-
-When you touch tests or want extra confidence:
-
-- Informational V8 coverage report: `pnpm test:coverage`
-- E2E suite: `pnpm test:e2e`
+The QA site requires Docker and source (the npm tarball omits QA Lab); the VM
+runner requires Multipass. See [QA runners](/help/testing/qa-runners).
 
 Oxlint's `max-lines` rule warns when files exceed the per-scope limits in
 `.oxlintrc.json`; these warnings remain visible in lint logs and do not fail CI.
@@ -509,11 +504,10 @@ frozen release targets may not support this advisory selector.
 
 ## Which suite should I run?
 
-Use this decision table:
-
-- Editing logic/tests: run `pnpm test` (and `pnpm test:coverage` if you changed a lot)
-- Touching gateway networking / WS protocol / pairing: add `pnpm test:e2e`
-- Debugging "my bot is down" / provider-specific failures / tool calling: run a narrowed `pnpm test:live`
+Follow the [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+Target the touched owner first. Gateway networking, WebSocket, and pairing
+contracts have E2E lanes; provider/tool-calling diagnosis may require a narrowed
+live lane. Suite descriptions above identify their scope and prerequisites.
 
 ## Live (network-touching) tests
 

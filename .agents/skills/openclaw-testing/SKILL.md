@@ -5,131 +5,77 @@ description: Choose proportional OpenClaw tests and checks, diagnose failures, a
 
 # OpenClaw Testing
 
-Prove the changed contract with the smallest meaningful check, complete required
-checks, then finish. Broaden or repeat only for changed inputs, failures, or
-unresolved risks. For behavioral proof, use the [boundary guide](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary);
-use `$test-audit` when authoring or reviewing tests.
+## Proof policy
 
-For ordinary local tests, start at `docs/reference/test.md#routine-local-order`
-and `#core-commands`; read `docs/ci.md` when CI scope or runner behavior matters. Follow the touched subtree's `AGENTS.md`.
+- **PR CI is the default broad proof.** Open a ready PR once the change builds
+  and focused tests pass. Let CI run broad suites; do not delay a PR for
+  pre-PR suite runs.
+- **Before the PR, prove locally and narrowly:** touched tests with
+  `pnpm test <file> --maxWorkers=1`, targeted typecheck, lint, and format.
+  Local proof is the default for trusted work.
+- **Boxes are the exception.** Use Crabbox/Testbox only for what CI and the local
+  machine cannot cover: another OS/device, live providers/channels, long E2E,
+  or heavy benchmarks. Use a box only when granted right away. If it queues,
+  stop the queued task-owned allocation and run locally instead. Never wait on
+  a box queue or chain Testbox → AWS → Hetzner fallbacks. If the local machine
+  cannot cover the contract safely, record the gap; do not fake that proof.
+- **Do not rerun or re-push just for green.** Fix real failures; read the CI
+  failure classification when present before attributing a red.
 
-## Select The Proof
+Prove the changed contract, complete required gates, then finish. Broaden or
+repeat only for changed inputs, failures, or a named unresolved risk. Follow
+scoped `AGENTS.md`; use the [boundary guide](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary)
+and [test-audit](../test-audit/SKILL.md) when authoring or reviewing tests.
 
-Trusted development tests, changed checks, typecheck/lint, and builds run
-locally, including broader suites when the contract warrants them. Remote
-compute is for isolation, clean installation, packaging, Docker, live services,
-desktop/platform behavior, or an explicit operator request.
+## Select the proof
 
-| Change or question                             | Starting point                                                                   |
-| ---------------------------------------------- | -------------------------------------------------------------------------------- |
-| Runtime defect                                 | Reproduce narrowly; rerun that proof after the repair, plus relevant siblings    |
-| Trusted source diff                            | `pnpm changed:lanes --json`, `pnpm check:changed`, focused tests                 |
-| Public SDK/plugin contract                     | Changed checks plus representative consumer tests; no automatic all-plugin sweep |
-| Build output, lazy imports, package boundaries | Include `pnpm build`                                                             |
-| Workflow                                       | `git diff --check` and `pnpm check:workflows`                                    |
-| Documentation only                             | Relevant docs/link/format sanity and `git diff --check`; no runtime tests        |
+- Runtime defect: reproduce the real entry point, then rerun it and relevant siblings.
+- Trusted source: `pnpm changed:lanes --json`, `pnpm check:changed`, focused tests.
+- Public SDK/plugin contract: add representative consumers, not an all-plugin sweep.
+- Build output, lazy imports, package boundaries: include `pnpm build`.
+- Workflow: `git diff --check` and `pnpm check:workflows`.
+- Docs only: relevant docs/link/format checks and `git diff --check`; no runtime tests.
 
-For specialized proof, load only the selected route:
+Read on demand: [local commands](../../../docs/reference/test.md),
+[Crabbox](../crabbox/SKILL.md) and [OpenClaw remote setup](../../../docs/reference/test/remote-proof.md),
+[package/Docker proof](references/package-and-docker.md),
+[release CI](../release-openclaw-ci/SKILL.md),
+[plugin release matrix](../release-openclaw-plugin-testing/SKILL.md),
+[Docker authoring](../openclaw-docker-e2e-authoring/SKILL.md), or the channel skill/
+[Control UI E2E](../control-ui-e2e/SKILL.md). Mock-Gateway boundary proof is valid;
+state live gaps. Release proof preserves candidate/Tooling SHAs and never grants
+publication authority.
 
-- Remote leases and credentials: [`$crabbox`](../crabbox/SKILL.md), with the
-  OpenClaw bootstrap binding below.
-- Package installation, plugin package trust, Docker/live lane selection or
-  reruns: [Package And Docker Proof](references/package-and-docker.md).
-- Release candidates, full-validation dispatch, evidence identity or recovery:
-  [`$release-openclaw-ci`](../release-openclaw-ci/SKILL.md). A narrow green rerun
-  does not itself authorize publication. Do not substitute moving `main` for
-  the recorded candidate or Tooling SHA.
-- Plugin release matrix: [`$release-openclaw-plugin-testing`](../release-openclaw-plugin-testing/SKILL.md).
-- New or changed Docker lanes: [`$openclaw-docker-e2e-authoring`](../openclaw-docker-e2e-authoring/SKILL.md).
-- Channel/UI behavior: the relevant channel proof skill or
-  [`$control-ui-e2e`](../control-ui-e2e/SKILL.md); mock-Gateway boundary proof is
-  valid when it covers the changed path. State concrete live-proof gaps.
+## Source and state boundaries
 
-## Source And State Boundaries
+- Never execute untrusted contributor/fork code, wrappers, or config locally.
+  Use secretless fork CI or sanitized direct AWS through Crabbox, never
+  credential-hydrated Testbox. Credentialed execution needs maintainer approval
+  after review; never hydrate an untrusted lease.
+- Use isolated state and a free port. Never restart, edit, or test an operator
+  Gateway or real data without explicit per-task approval. Preserve unrelated
+  processes and shared dependency installs.
+- Concurrent test/check commands must use separate
+  `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` values or run serially; checks can run
+  Vitest too. Use repository wrappers, not raw Vitest. In prepared linked
+  worktrees, `node scripts/check-changed.mjs` and
+  `node scripts/run-vitest.mjs <file> --maxWorkers=1` avoid pnpm reconciliation.
 
-Untrusted contributor/fork tooling must never execute locally, including its
-wrapper or config. Use secretless fork CI or sanitized direct AWS under
-`$crabbox`; never credential-hydrated Testbox. Credentialed execution requires
-maintainer approval after review, and never hydrates an untrusted lease.
+## CI failures
 
-For untrusted OpenClaw AWS proof, supply the clean trusted `main` copy of
-`scripts/crabbox-untrusted-bootstrap.sh` as Crabbox's
-`<trusted-bootstrap-script>`. Bind the fresh lease and `--fresh-pr` checkout to
-the reviewed full head SHA. The trusted bootstrap verifies that SHA, the IMDSv2
-no-role boundary, and the package-manager pin before installing into an isolated
-`HOME`. Keep `CRABBOX_ENV_ALLOW=CI`, `--no-hydrate`, no instance role, and no
-Tailscale. A moved head needs a fresh lease; missing no-role proof or no remote
-PR means secretless CI. Read the Crabbox untrusted procedure before allocation.
-
-For trusted remote proof, use `node scripts/crabbox-wrapper.mjs` with the
-resolved provider; do not silently switch providers or bypass sync/security
-exclusions. Save and reuse task-owned leases, verify the materialized candidate,
-keep evidence outside the synced checkout, and stop owned leases at handoff.
-
-Use isolated state and a free port. Never restart, edit, or test against an
-operator Gateway or real data without explicit per-task approval. Do not kill
-unrelated processes or reconcile a shared dependency install while jobs use it.
-
-## Local Commands
-
-```bash
-pnpm changed:lanes --json
-pnpm check:changed
-pnpm test <path-or-filter>
-pnpm test:changed
-```
-
-`check:changed` selects formatting, typecheck, lint, and guard work and may run
-targeted owner Vitest tests. Inspect its plan with
-`node scripts/check-changed.mjs --dry-run -- <paths...>`; it is not the full test
-suite. `test:changed` chooses direct tests, mapped/sibling tests, and import
-dependents; shared harness/config edits can need explicit targets or the broad
-fallback `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed`.
-`pnpm verify` runs the full `check` and then `test` when that scope is justified.
-
-Use repository wrappers rather than raw Vitest so project routing and setup
-remain correct. If dependencies are ready in a linked worktree, these bypass
-pnpm dependency reconciliation:
-
-```bash
-node scripts/check-changed.mjs
-node scripts/run-vitest.mjs <path-or-filter>
-```
-
-Concurrent test/check commands must not share a Vitest filesystem module cache:
-serialize them, group tests in one invocation, or give each command a distinct
-`OPENCLAW_VITEST_FS_MODULE_CACHE_PATH`. Checks can schedule Vitest too.
-For worker-sensitive failures, `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path>`
-provides a focused serial probe; do not make a forced environment the repair.
-
-## CI Failures
-
-```bash
-gh run list --branch <branch> --limit 10 --json databaseId,headSha,status,conclusion,url
-gh run view <run-id> --json status,conclusion,headSha,url,jobs
-gh run view <run-id> --job <failed-job-id> --log
-```
-
-Bind the diagnosis to the exact SHA and job. Check whether cancellation means a
-newer same-branch run superseded it. Fetch relevant failed logs once and reuse
-them; prefer exact run/job state over a stale PR rollup. Separate product,
-harness, infrastructure, and credential failures before choosing a retry.
-
-For prompt snapshot drift that passes on macOS, reproduce in CI's Linux/Node
-environment before regenerating; a local pass cannot override failing CI bytes.
-Fix related failures and rerun the affected proof. Route unrelated failures with
-evidence rather than broadening this task automatically.
+Bind diagnosis to the exact SHA and job. Fetch failed logs once; prefer exact
+run/job state to stale PR rollups. Distinguish product, harness, infrastructure,
+credentials, and superseded-run cancellation. For snapshots passing on macOS
+but failing in CI, reproduce Linux/Node bytes before regenerating.
 
 ### Test failure policy
 
-Treat test failures as defects and make a bounded, best-effort attempt to
-reproduce them (same shard order first), identify their cause, and fix the owning
-fixture, shared state, ordering, or product. When a safe fix is established, add
-a regression and document the cause; cite another owner's fix when applicable.
-If reasonable investigation cannot establish or complete a safe fix, record the
-original failure, attempted reproductions, evidence, and remaining uncertainty in
-the PR, then continue under the normal CI and review gates. The unresolved
-failure alone must not block landing or trigger an extra approval request. Never
-claim a passing replay proves a fix. Do not rerun, re-push, or refresh merely to
-get green, or conceal failures with retries, longer timeouts, weaker assertions,
-broader mocks, or altered baselines.
+Treat failures as defects. Make a bounded attempt to reproduce (same shard
+order first), identify the owner, and fix product, fixture, shared-state, or
+ordering bugs. Add a regression for a proven repair; cite another owner's fix
+when applicable. If a safe fix cannot be established or completed, record the
+original failure, attempts, evidence, and uncertainty in the PR, then continue
+under normal CI/review gates. An unresolved failure alone neither blocks landing
+nor requires extra approval. A passing replay does not prove a fix. Never hide
+failures with retries, longer timeouts, weaker assertions, broader mocks, or
+altered baselines.

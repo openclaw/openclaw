@@ -5,9 +5,10 @@ description: "Crabbox and Blacksmith Testbox remote testing: isolation, cross-pl
 
 # Crabbox
 
-Remote and clean-machine proof. Packages. Docker. Live providers. Desktop.
-Cross-OS. The consumer repository owns when its validation needs a remote
-environment; Crabbox availability alone is not a reason to offload local work.
+Use only for exceptional proof under the [proof policy](../openclaw-testing/SKILL.md#proof-policy)
+and only when a box is granted right away. If it queues, stop your queued
+allocation and run locally; preserve the untrusted-code boundary and report
+uncovered requirements. Never wait on queues or chain provider fallbacks.
 
 Backends:
 
@@ -21,98 +22,54 @@ Crabbox.”
 
 ## Repository Contract
 
-This canonical skill owns portable Crabbox policy and CLI operations only.
-Consumer-specific setup belongs in that repository's `AGENTS.md`, package
-scripts, hydration workflow, or another file outside the synchronized skill.
-
-Resolve these placeholders from trusted repository instructions before running
-an example:
-
-- `<check-command>`: the repository's focused or broad validation command.
-- `<install-and-check-command>`: its clean-container install plus validation.
-- `<trusted-bootstrap-script>`: a maintainer-reviewed untrusted-PR bootstrap
-  stored outside the untrusted checkout.
-- `<container-image>` and `<owner/repo#number>`: the consumer's runtime and PR.
-
-Never invent a missing command or copy a command from another consumer.
+Resolve example commands, bootstrap, container image, and PR from trusted
+consumer instructions; never invent commands or copy another consumer's setup.
+Consumer-specific setup stays outside this portable skill. See
+[placeholder definitions](references/operations.md#repository-contract).
 
 ## Authorization and Isolation
 
-Routine use of the configured Crabbox/Testbox environment is part of completing
-the requested task; do not ask for separate approval. This includes creating,
-reusing and stopping task-owned leases, temporary state, and clean checkouts or
-worktrees needed for proof or a task-required Crabbox repair.
-
-A dirty, missing or occupied checkout is a reason to use a clean task-owned
-checkout or worktree, not a permission blocker. Preserve existing checkouts,
-branches and unrelated edits. Keep source-trust, credential, production-access,
-budget and publication boundaries; routine-use approval does not waive them.
+Task-needed creation, reuse, cleanup, temporary state, and clean checkouts are
+pre-approved. Preserve existing branches, checkouts, and unrelated edits.
+Source trust, credentials, production access, budget, and publication remain
+authority boundaries. Use isolated state; never touch an operator Gateway
+without per-task approval.
 
 ## Route First
 
-Source trust determines which providers are allowed. It does not select one.
-
-- Trusted development tests/checks/builds: follow the consumer's local-first
-  policy; use remote when its environment is needed or explicitly requested.
-- Trusted + remote proof: inspect and preserve the resolved provider.
-- Blacksmith Testbox: use when already resolved or explicitly requested.
-- Direct AWS: use when AWS semantics are required or explicitly requested.
-- Untrusted contributor/fork: secretless fork CI or sanitized direct AWS.
-- Never untrusted code on credential-hydrated Testbox.
-- Never run untrusted repo wrapper/config locally.
-- No speculative warmup. Acquire when first heavy command ready. Reuse id. Stop.
-- Use the consumer's smallest proven remote profile. Large/high-memory profiles
-  are explicit exceptions for a named command with measured memory need or a
-  controlled total-cost benefit. Record the reason before allocation; a generic
-  failure, queue delay, or timeout is not a reason to upsize. Do not raise worker
-  counts to compensate for a smaller machine.
-- For delegated Testbox sizing, select a documented workflow through
-  `--blacksmith-workflow`; direct-provider `--class`/`--type` flags do not choose
-  the Testbox runner. Change profiles with a fresh lease.
-
-Test size, expected duration, and hydration failure do not authorize a provider
-override. Omit `--provider` for normal work. Add it only when the user requests
-that backend or the proof specifically tests its semantics.
+- Preserve the resolved provider: Testbox for trusted source, direct AWS when
+  its semantics are required, secretless CI/AWS for untrusted code. Never run
+  untrusted wrappers/config locally or hydrate an untrusted lease.
+- Acquire when the command is ready, reuse the owned ID, then stop.
+- Use the smallest proven profile. Larger profiles need recorded memory evidence
+  or measured total-cost benefit, not generic failure, delay, or timeout. Do not
+  raise worker counts to compensate.
+- Testbox sizing uses `--blacksmith-workflow`, not direct `--class`/`--type`;
+  profile changes require fresh leases.
+- Size, duration, hydration failure, and capacity do not authorize provider
+  overrides; explicit user selection or required backend semantics do.
 
 ## Preflight
 
-Run from repo root.
-
-```sh
-command -v crabbox
-crabbox --version
-crabbox config show --json | jq '{provider, profile, target}'
-crabbox run --help | sed -n '1,100p'
-command -v blacksmith
-blacksmith --version
-```
-
-Set the checked installed binary once. A consumer may document a different
-trusted wrapper, but the shared skill never assumes a sibling checkout or
-repository-specific script.
+From the trusted repo root, read `.crabbox.yaml`, resolve the installed binary,
+and inspect its provider and commands:
 
 ```sh
 export CRABBOX="$(command -v crabbox)"
 test -n "$CRABBOX"
 "$CRABBOX" --version
 "$CRABBOX" config show --json | jq '{provider, profile, target}'
+"$CRABBOX" run --help
 ```
 
-Read `.crabbox.yaml` and `config show`; the resolved provider can also come from
-user or environment configuration. If the binary is missing, follow the
-consumer's trusted install instructions. For a source build or repair, verify
-the canonical upstream and use a clean task-owned checkout or worktree. Never
-assume a sibling checkout is trusted or overwrite its unrelated work. Keep
-task-specific builds separate from the operator's installed binary.
+Use the consumer's trusted wrapper/install instructions. For repairs, verify
+upstream and use a clean task-owned checkout; preserve the installed binary
+and unrelated source. Never trust a sibling checkout merely by its name.
 
 ## Trusted Testbox
 
-Use this section only when `config show` resolves `blacksmith-testbox` or the
-user explicitly requested Testbox. These provider-neutral commands preserve the
-resolved configuration; add `--provider blacksmith-testbox` only for that
-explicit override.
-
-One-shot heavy gate:
+When the resolved provider is Testbox (or explicitly requested), these commands
+preserve it. Add `--provider blacksmith-testbox` only for an explicit override:
 
 ```sh
 "$CRABBOX" run --timing-json -- CI=1 <check-command>
@@ -129,10 +86,9 @@ Several commands: warm once, save id, reuse, stop.
 Rules:
 
 - One lease, one active command. No sync/reclaim during run.
-- Compound payloads: prefer `bash -c`, not `bash -lc`. Bash syntax support does
-  not require login startup; login profiles can change directories. Before
-  validation, assert the exact physical checkout and expected source/patch
-  inside the shell that runs it. A matching HEAD alone cannot prove dirty sync.
+- Prefer `bash -c`; login profiles can change directories. Assert physical
+  checkout and expected source/patch in the executing shell; HEAD alone does
+  not prove dirty sync. Follow a consumer's documented hydration shell contract.
 - Native Testbox runs own sync, including reused `--id` runs. Never rely on
   `--no-sync` to preserve a remote baseline: Blacksmith has no native bypass,
   and released Crabbox versions can silently ignore the flag. An unchanged
@@ -148,20 +104,8 @@ Rules:
 
 ### Blacksmith directory downloads
 
-Blacksmith CLI 0.4.60 (verified 2026-09-19) needs a trailing `/` on the **remote
-directory argument** to enable recursive SCP; otherwise it fails with
-`not a regular file`. A local trailing slash does not help, and SCP may add `/`
-in the error text even when the caller omitted it.
-
-```sh
-mkdir -p ./downloads
-blacksmith testbox download --id <tbx_id> screenshots/ ./downloads/
-```
-
-Use an explicit destination: this writes `./downloads/screenshots/`; omitting
-it can duplicate the basename (`screenshots/screenshots/`). Reuse the task-owned
-lease and existing key path (`--ssh-private-key` when needed). Verify the downloaded
-tree and hashes; recheck this workaround after CLI upgrades.
+For recursive downloads and the required remote trailing slash, read
+[directory downloads](references/operations.md#blacksmith-directory-downloads).
 
 ## Untrusted AWS
 
@@ -205,191 +149,52 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   "$CRABBOX" stop --provider aws <cbx_id>
 ```
 
-The consumer-owned bootstrap proves the IMDSv2 IAM credential endpoint returns
-404, verifies the full SHA, removes inherited runtime injection variables,
-pins the repository toolchain, isolates `HOME`, installs, and tests.
-
-Head moved? Stop. Rewarm. No reuse across revisions. No remote PR or no-role
-proof unavailable? Secretless fork CI. No exceptions.
+The trusted bootstrap must prove IMDSv2 IAM credentials return 404, verify SHA,
+remove runtime injection variables, pin the toolchain, and isolate `HOME` before
+install/test. Changed head needs a fresh lease. Missing remote PR or no-role
+proof means secretless fork CI.
 
 ## Direct AWS
 
-Trusted direct run:
-
-```sh
-"$CRABBOX" run \
-  --provider aws \
-  --idle-timeout 90m --ttl 240m --timing-json \
-  --shell -- \
-  "<check-command>"
-```
-
-Focused:
-
-```sh
-"$CRABBOX" run \
-  --provider aws --timing-json --shell -- \
-  "<check-command>"
-```
-
-Stale sync: retry `--full-resync` once. Still bad: fresh lease. One-shot should
-stop itself; after failure/interruption verify `"$CRABBOX" list --provider aws`.
-
-Broker auth, not cloud keys:
-
-```sh
-"$CRABBOX" config show
-"$CRABBOX" doctor
-"$CRABBOX" whoami
-"$CRABBOX" login --url <broker-url> --provider aws
-```
-
-Normal validation asking for AWS keys usually means wrong path.
-
-## Fresh PR / Container
-
-`--fresh-pr <owner/repo#123>`: clean remote checkout. Add `--apply-local-patch`
-only for intentional local fixup. Direct providers only.
-
-Use local Docker only when the resolved configuration selects it or the user
-explicitly requests a local-container lane:
-
-```sh
-"$CRABBOX" run \
-  --provider local-container \
-  --local-container-image <container-image> \
-  --no-hydrate --fresh-pr <owner/repo#number> \
-  --timing-json --shell -- \
-  "<install-and-check-command>"
-```
-
-Report `local-container`; not AWS/Testbox. Keep `--no-hydrate` and use a
-repository-local dependency cache when host-mounted caches cannot cross filesystems.
+For trusted AWS commands, auth diagnostics, resync, or clean PR/container
+runs, read [direct providers](references/operations.md#direct-aws). Preserve
+`--no-hydrate` on container runs and report local-container proof as local.
 
 ## Observability
 
-Prefer built-ins:
-
-- `--preflight`: target/workspace/tool probes.
-- `--debug --timing-json`: sync, command, total timing.
-- `--script <file>` / `--script-stdin`: safe multiline direct-provider command.
-- `--allow-env NAME` + `--env-from-profile <file>`: exact direct-provider env.
-- `CRABBOX_ENV_ALLOW=NAME,...`: exact ambient env allowlist.
-- `--capture-stdout`, `--capture-stderr`: direct-provider local capture.
-- `--capture-on-fail`: test artifacts. Treat as secret-bearing until reviewed.
-- `--keep-on-failure`: retain failed lease for debugging.
-- `--results-auto` / `--junit <path>`: structured failure digest.
-- `CRABBOX_PHASE:<name>` lines: phase timing.
-
-Secrets: exact key only. One command. Never print. Never repo file. Never shell
-history. No safe injection path? Report live auth blocked. No fake-key upgrade to
-“live proof.”
+Read [capture and environment flags](references/operations.md#observability)
+when collecting artifacts or injecting credentials. Exact key, one command;
+never print secrets, write them in the repo, or put them in shell history.
+No safe injection path means live auth is blocked, not fake-key proof.
 
 ## Real E2E
 
-“Test in Crabbox” means user path, not merely remote unit tests.
-
-1. Reproduce entrypoint when feasible.
-2. Patch. Narrow local test.
-3. Remote install/update/onboard/CLI/service/API path.
-4. Record provider, id, command, environment shape, redacted secret source,
-   observed result.
-5. Cleanup.
-
-Route:
-
-- Install/package: pack tarball; install like user; matching Docker/package lane.
-- Provider/auth: real provider. Scrub unrelated provider vars.
-- Integration: setup, config, send/receive, and inspect redacted logs.
-- Service/session/tool: real CLI or API; inspect persisted state and result.
-- Parser/config: focused tests enough only when OS/package/service cannot matter.
-
-Before/after: same Testbox when practical. Detached temp worktrees under `/tmp`.
-Never checkout refs in synced root. For native Testbox, prepare and compare both
-revisions within one synced invocation; later runs sync the local checkout again.
-Full-screen CLI: real PTY. Interactive Clack: exact arrows/Enter; raw search
-typing can lie.
-
-Use the consumer's documented temporary state/config directory so proof cannot
-mutate the operator's normal installation.
+Exercise the requested user entry point with isolated consumer state, not just
+remote unit tests. Read [E2E procedure](references/operations.md#real-e2e) for
+install/provider/interactive proof and comparing revisions safely.
 
 ## Desktop / Cross-OS
 
-Static hosts:
-
-```sh
-"$CRABBOX" run --provider ssh --target macos \
-  --static-host <macos-host> -- <check-command>
-"$CRABBOX" run --provider ssh --target windows --windows-mode normal \
-  --static-host <windows-host> -- pwsh -NoProfile -Command '<check-command>'
-"$CRABBOX" run --provider ssh --target windows --windows-mode wsl2 \
-  --static-host <windows-host> -- <check-command>
-```
-
-Windows/WSL2: prefer Azure when advertised/configured. Native Windows uses
-OpenSSH + PowerShell + Git + tar. Actions hydration Linux-only.
-
-Brokered macOS: paid EC2 Mac. First quota/no-spend preflight. No silent
-substitution for Linux proof.
-
-```sh
-"$CRABBOX" admin hosts quota --provider aws --target macos \
-  --region eu-west-1 --type mac2.metal --json
-"$CRABBOX" admin hosts allocate --provider aws --target macos \
-  --region eu-west-1 --type mac2.metal --dry-run --json
-```
-
-Human desktop: WebVNC preferred when the resolved provider supports it. Do not
-change providers only to gain desktop support.
-
-```sh
-"$CRABBOX" warmup --desktop --browser --keep
-"$CRABBOX" desktop launch --id <id> \
-  --browser --url https://example.com --webvnc --open --take-control
-"$CRABBOX" desktop doctor --id <id>
-"$CRABBOX" webvnc status --id <id>
-"$CRABBOX" artifacts collect --id <id> --all --output artifacts/<slug>
-```
-
-Before handoff, prove CLI/app from neutral `~`:
-
-```sh
-"$CRABBOX" run --id <id> --shell -- \
-  "cd ~ && command -v <command> && <command> --version"
-```
-
-Visible desktop alone proves nothing. Keep browser windowed unless capture task.
-Never commit proof assets to product repo.
+Read [desktop and cross-OS commands](references/operations.md#desktop-and-cross-os)
+for SSH targets, paid macOS preflight, WebVNC, and app handoff verification.
 
 ## Failure Triage
 
-Identify layer: wrapper, provider, hydration, sync, SSH, command.
+Identify wrapper, provider, hydration, sync, SSH, or command failure:
 
 ```sh
 "$CRABBOX" doctor
-"$CRABBOX" status --id <id> --wait
+"$CRABBOX" status --id <id>
 "$CRABBOX" inspect --id <id> --json
-"$CRABBOX" history --limit 20
 "$CRABBOX" logs <run_id>
 "$CRABBOX" results <run_id>
 blacksmith testbox list --all
 blacksmith testbox status --id <tbx_id>
 ```
 
-- Provider/CLI old: follow the consumer's trusted Crabbox update path.
-- Config/auth: `config show`, `doctor`, `whoami`.
-- Sync quiet/stale: `--debug --timing-json`, then `--full-resync` once.
-- Testbox capacity: no retry storm. Report the blocker; change providers only
-  with explicit user approval.
-- Command failure: read phase, failed test, JUnit, skipped shell segment. Focused
-  rerun first.
-- Cleanup unclear: list exact provider. Stop only owned ids.
-- Consumer wrapper broken: use the installed Crabbox CLI only to isolate the
-  wrapper, preserving the same resolved provider.
-
-Crabbox stop does not accept `--timing-json`.
-
-## Boundary
-
-Crabbox stays generic: lease, sync, command, logs, results, timing, cleanup.
-Consumer setup belongs in that repository's hydration workflow and scripts.
+Queued capacity: stop owned allocations and follow proof policy. No retry
+storm or provider switching. Stale sync: `--debug --timing-json`, then
+`--full-resync` once on direct providers. Read failed phase/JUnit before a
+focused rerun. Diagnose a broken wrapper with the installed CLI on the same
+provider; update through the consumer's trusted path. Stop only owned IDs;
+`stop` takes no `--timing-json`.

@@ -8,6 +8,9 @@ title: "Tests"
 - Full testing kit (suites, live, Docker): [Testing](/help/testing)
 - Update and plugin package validation: [Testing updates and plugins](/help/testing-updates-plugins)
 
+For proof selection, follow the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+
 This page is an index. The testing reference is documented on six pages, one
 per reader job. Open the page that matches your task.
 
