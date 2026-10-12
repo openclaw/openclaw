@@ -479,31 +479,13 @@ describe("memory plugin e2e", () => {
     );
   });
 
-  test("preserves memory-core sidecar capability when registering public artifacts", async () => {
+  // Sidecar merging is host-owned and needs registrar-declared slot ownership, which a direct
+  // SDK registration cannot express; src/plugins/memory-state.test.ts covers that merge.
+  test("keeps public artifacts available beside the provider runtime", async () => {
     const workspaceDir = path.join(getTmpDir(), "workspace-sidecar-public-artifacts");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-05-18.md"), "# Daily\n", "utf8");
-    const runtime = {
-      async getMemorySearchManager() {
-        return { manager: null, error: "test" };
-      },
-      resolveMemoryBackendConfig() {
-        return { backend: "builtin" as const };
-      },
-    };
-    const flushPlanResolver = vi.fn(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "flush",
-      systemPrompt: "flush",
-      relativePath: "memory/sidecar.md",
-    }));
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver,
-      runtime,
-    });
     const registerMemoryCapabilityForPlugin = vi.fn((capability: MemoryPluginCapability) => {
       registerMemoryCapability("memory-lancedb", capability);
     });
@@ -514,10 +496,11 @@ describe("memory plugin e2e", () => {
     registerTestPlugin(memoryPlugin, mockApi);
 
     expect(registerMemoryCapabilityForPlugin).toHaveBeenCalledOnce();
-    expect(
-      getMemoryCapabilityRegistration()?.capability.flushPlanResolver?.({})?.relativePath,
-    ).toBe("memory/sidecar.md");
-    expect(getMemoryCapabilityRegistration()?.capability.runtime).toBe(runtime);
+    const capability = getMemoryCapabilityRegistration()?.capability;
+    expect(capability?.providerRuntime).toMatchObject({ open: expect.any(Function) });
+    // No file-shaped runtime, and Active Memory keeps its existing recall-tool defaults.
+    expect(capability?.runtime).toBeUndefined();
+    expect(capability?.recallToolNames).toBeUndefined();
     await expect(
       listActiveMemoryPublicArtifacts({
         cfg: {

@@ -49,7 +49,15 @@ export type MemoryQueryFilter = {
   value: string | number;
 };
 
-type MemoryQueryOptions = {
+type MemoryReadGuard = {
+  /**
+   * Runs once the table is prepared, synchronously before the read is dispatched. A caller
+   * whose authority can lapse during that preparation throws here to stop the read.
+   */
+  beforeRead?: () => void;
+};
+
+type MemoryQueryOptions = MemoryReadGuard & {
   columns: MemoryQueryColumn[];
   filter?: MemoryQueryFilter;
   limit?: number;
@@ -186,16 +194,17 @@ export class MemoryDB {
     vector: number[],
     limit = 5,
     minScore = 0.5,
-    executionOptions?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs">,
+    options?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs"> & MemoryReadGuard,
   ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
+    options?.beforeRead?.();
 
     // LanceDB applies metadata predicates before vector ranking. Foreign rows
     // must never enter this agent's candidate set or top-K.
     const results = await this.table!.vectorSearch(vector)
       .where(memoryAgentPredicate(agentId))
       .limit(limit)
-      .toArray(executionOptions);
+      .toArray(options?.timeoutMs === undefined ? undefined : { timeoutMs: options.timeoutMs });
 
     const mapped = results.map((row) => {
       const distance = row["_distance"] ?? 0;
@@ -241,6 +250,7 @@ export class MemoryDB {
 
   async query(agentId: string, options: MemoryQueryOptions): Promise<Record<string, unknown>[]> {
     await this.ensureInitialized();
+    options.beforeRead?.();
 
     let query = this.table!.query()
       // LanceDB 0.30 replaces rather than combines repeated where() calls.
