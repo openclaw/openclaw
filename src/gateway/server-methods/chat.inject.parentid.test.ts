@@ -7,6 +7,10 @@ import { describe, expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -43,6 +47,7 @@ async function createSqliteTranscriptFixture(params: {
   const sessionKey = "main";
   const agentId = "main";
   const storePath = path.join(dir, "sessions.json");
+  setRuntimeConfigSnapshot({});
   await replaceSessionEntry(
     { agentId, sessionKey, storePath },
     { sessionId: params.sessionId, updatedAt: Date.now() },
@@ -55,6 +60,7 @@ async function cleanupFixture(fixture: { dir: string }) {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   fs.rmSync(fixture.dir, { recursive: true, force: true });
 }
 

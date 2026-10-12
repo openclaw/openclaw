@@ -9,6 +9,7 @@ import {
   setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-cleanup.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -40,6 +41,7 @@ it.each(["keyed", "unkeyed"])(
           },
         };
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const runtimes = [];
         for (const [agentId, server] of [
           ["doomed", doomed],

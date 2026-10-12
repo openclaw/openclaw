@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
@@ -64,6 +64,8 @@ vi.mock("./github-publication-availability.js", async () => {
     })),
   };
 });
+
+afterEach(() => resetConfigRuntimeState());
 
 async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) => Promise<void>) {
   await withStateDirEnv("gateway-global-lookup-", async ({ stateDir }) => {
@@ -134,6 +136,7 @@ describe("global session lookup ownership", () => {
             ),
           },
         };
+        setRuntimeConfigSnapshot(cfg, cfg);
         const key = `agent:${scenario.agentId}:dashboard:new-session`;
         if (scenario.unreadableRegistry) {
           mkdirSync(path.join(stateDir, "state", "openclaw.sqlite"), { recursive: true });
@@ -198,6 +201,7 @@ describe("global session lookup ownership", () => {
             store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
           },
         };
+        setRuntimeConfigSnapshot(cfg, cfg);
         const key = "agent:main:retained";
         for (const sessionKey of duplicate ? [key, "agent:main:main"] : [key]) {
           await replaceSessionEntry(
@@ -318,6 +322,7 @@ describe("retained exact row publications", () => {
           agents: { entries: { main: {}, research: {} } },
           session: { scope: "global" },
         };
+        setRuntimeConfigSnapshot(cfg, cfg);
         const key = "global";
         await replaceSessionEntry(
           { agentId: "main", sessionKey: key },
@@ -432,6 +437,7 @@ describe("retained exact row publications", () => {
   it("checks incognito snapshots without SQL and fences keyed writes and handle retirement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg, cfg);
       const key = "agent:main:dashboard:incognito-retained";
       const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
       await withGatewaySessionStoreTarget(

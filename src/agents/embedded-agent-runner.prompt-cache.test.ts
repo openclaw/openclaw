@@ -14,6 +14,7 @@ import {
 } from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { RUNTIME_CONTEXT_HEADER } from "../llm/types.js";
@@ -296,6 +297,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
             mcp: mcp.config,
           };
           await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
           const registry = await loadAndActivateRootPluginRegistry({
             config,
             workspaceDir: state.workspaceDir,

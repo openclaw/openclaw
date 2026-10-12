@@ -1392,12 +1392,12 @@ src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-models.ts	1
 src/agents/sessions/agent-session-tree.ts	1
 src/agents/sessions/agent-session-utils.ts	1
-src/agents/sessions/auth-storage.ts	3
+src/agents/sessions/auth-storage.ts	1
 src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	14
 src/agents/sessions/extensions/types.ts	1
 src/agents/sessions/keybindings.ts	2
-src/agents/sessions/model-registry.ts	7
+src/agents/sessions/model-registry.ts	5
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	1
 src/agents/sessions/session-manager-codec.ts	5
@@ -2091,12 +2091,10 @@ src/infra/clawhub-install-trust.ts	2
 src/infra/control-ui-assets.ts	1
 src/infra/delivery-queue-sqlite-bound.ts	2
 src/infra/delivery-recovery.shared.ts	4
-src/infra/diagnostic-event-listener-presence.ts	3
-src/infra/diagnostic-events.ts	4
+src/infra/diagnostic-events.ts	2
 src/infra/diagnostic-model-request.ts	1
 src/infra/diagnostic-semantic-run-progress.ts	1
-src/infra/diagnostic-trace-context.ts	2
-src/infra/diagnostic-trace-propagation.ts	3
+src/infra/diagnostic-trace-propagation.ts	1
 src/infra/directory-durability.ts	3
 src/infra/exec-approval-channel-runtime.ts	4
 src/infra/exec-approval-policy-snapshot.ts	2
@@ -2313,7 +2311,7 @@ src/plugin-sdk/file-lock.ts	10
 src/plugin-sdk/inbound-reply-dispatch.ts	1
 src/plugin-sdk/lazy-value.ts	1
 src/plugin-sdk/memory-host-core.ts	2
-src/plugin-sdk/migration-runtime.ts	2
+src/plugin-sdk/migration-runtime.ts	1
 src/plugin-sdk/migration.ts	7
 src/plugin-sdk/plugin-test-api.ts	1
 src/plugin-sdk/provider-auth-login-flow-runtime.ts	2
@@ -2737,7 +2735,6 @@ ui/src/pages/chat/talk/shared.ts	3
 ui/src/pages/chat/talk/webrtc.ts	1
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/settings-search.ts	1
-ui/src/pages/config/settings-select-row.ts	1
 ui/src/pages/config/view-diff.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/labs/labs-registry.ts	4

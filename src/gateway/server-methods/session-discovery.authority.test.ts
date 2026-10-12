@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -84,6 +85,7 @@ async function withDiscoveryState(
       skills: { load: { watch: false } },
       agents: { entries: { main: { workspace: state.workspaceDir } } },
     };
+    setRuntimeConfigSnapshot(cfg);
     await seed();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
@@ -97,6 +99,7 @@ async function withDiscoveryState(
         projection,
         setConfig: (value) => {
           cfg = value;
+          setRuntimeConfigSnapshot(cfg);
         },
         async call(method, client, hasCurrentClientAuthority) {
           const responses: Parameters<RespondFn>[] = [];

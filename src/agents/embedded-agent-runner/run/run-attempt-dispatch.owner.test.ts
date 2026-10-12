@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
@@ -244,6 +245,30 @@ it.each(dispatchCases)(
       "Co-authored-by: ada <20+ada@users.noreply.github.com>";
     vi.mocked(resolveSessionGitCoauthorPrompt).mockResolvedValue(gitCoauthorPrompt);
     await withOpenClawTestState({ label: "harness-owner" }, async (state) => {
+      const config = {
+        agents: {
+          ownership: "explicit" as const,
+          entries: {
+            main: {},
+            work: { sandbox: { mode: realManagedWorkspace ? ("off" as const) : ("all" as const) } },
+          },
+          defaults: {
+            skipBootstrap: true,
+            sandbox: {
+              mode: "off" as const,
+              backend: realManagedWorkspace ? "docker" : "owner-fixture",
+              scope: "agent" as const,
+              workspaceAccess:
+                diffBaseline || skillCatalog === "sandbox" ? ("rw" as const) : ("none" as const),
+              workspaceRoot: state.path("sandbox"),
+              prune: { idleHours: 0, maxAgeDays: 0 },
+              browser: { enabled: false },
+            },
+          },
+        },
+        session: { scope: "global" as const },
+      };
+      setRuntimeConfigSnapshot(config);
       let workspaceDir = retirePlacement
         ? state.path("workspace-after-retirement")
         : state.workspaceDir;
@@ -313,29 +338,6 @@ it.each(dispatchCases)(
           "---\nname: demo\ndescription: Demo skill\n---\n\n# Demo\n",
         );
       }
-      const config = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: {
-            main: {},
-            work: { sandbox: { mode: realManagedWorkspace ? ("off" as const) : ("all" as const) } },
-          },
-          defaults: {
-            skipBootstrap: true,
-            sandbox: {
-              mode: "off" as const,
-              backend: realManagedWorkspace ? "docker" : "owner-fixture",
-              scope: "agent" as const,
-              workspaceAccess:
-                diffBaseline || skillCatalog === "sandbox" ? ("rw" as const) : ("none" as const),
-              workspaceRoot: state.path("sandbox"),
-              prune: { idleHours: 0, maxAgeDays: 0 },
-              browser: { enabled: false },
-            },
-          },
-        },
-        session: { scope: "global" as const },
-      };
       const provisioned: string[] = [];
       const setupFile = path.join(workspaceDir, "sandbox-setup.txt");
       const localBackend = vi.fn<SandboxBackendFactory>(async ({ scopeKey }) => {

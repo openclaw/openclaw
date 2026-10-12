@@ -3,7 +3,7 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** A transient discovery failure must survive successful runtime cancellation. */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
@@ -30,6 +30,10 @@ import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
 
 it.for(["complete", "reject undefined"] as const)(
   "coalesces fresh refresh batches in the enclosing scope before %s",

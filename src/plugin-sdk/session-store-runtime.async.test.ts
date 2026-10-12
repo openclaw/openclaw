@@ -1,8 +1,12 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync } from "node:fs";
-import { afterEach, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, expect, expectTypeOf, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   withIncognitoSessionActor,
@@ -34,11 +38,15 @@ import {
 const tempDirs = createTempDirTracker();
 const probe = useIncognitoActorProbe();
 const authority = { assertCurrent() {} };
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
 afterEach(async () => {
   for (const stateDir of tempDirs.dirs) {
     await cleanupSessionStateForTest({ stateDir });
   }
   tempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
 });
 
 const completeEntry: InternalSessionEntry = {

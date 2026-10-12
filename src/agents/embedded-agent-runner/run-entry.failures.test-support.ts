@@ -1,4 +1,5 @@
 import { expect, it, vi, type Mock } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { runEmbeddedAgentEntry } from "./run-entry.test-harness.js";
 import {
   createDirectHarness,
@@ -31,6 +32,7 @@ export function registerRunEntryFailureTests(state: {
       const { withLocalSessionPlacementTurnSettlement } =
         await import("../session-placement-admission.js");
       const fixture = await createOpenClawTestState({ label: "entry-cli-acceptance" });
+      setRuntimeConfigSnapshot({});
       const identity = {
         runId: "retained-parent",
         agentId: "main",
@@ -189,6 +191,7 @@ export function registerRunEntryFailureTests(state: {
     const { saveSubagentRegistryChangesToSqlite, loadSubagentRegistryFromSqlite } =
       await import("../subagents/registry/subagent-registry-state.fixture.test-support.js");
     const fixture = await createOpenClawTestState({ label: "entry-failure-settlement" });
+    setRuntimeConfigSnapshot({});
     const identity = {
       runId: "failed-entry",
       agentId: "main",

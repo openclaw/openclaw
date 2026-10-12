@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
 import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
@@ -16,10 +20,12 @@ import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.tes
 it.each(["none", "cleanup", "after-open", "during-open"] as const)(
   "fences a cache creator's reader proof (failure=%s)",
   async (failure) => {
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const failCleanup = failure === "cleanup";
     const failDuringOpen = failure === "during-open";
     const failAfterOpen = failure === "after-open" || failDuringOpen;
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const sessionFile = state.path("cache-creation.jsonl");
       await fs.writeFile(
         sessionFile,

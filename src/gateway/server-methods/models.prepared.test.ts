@@ -42,6 +42,7 @@ it("serves the published model-list projection and replaces it with its metadata
           defaults: { model: "test/first", modelPolicy: { allow: ["test/*"] } },
         },
       };
+      setRuntimeConfigSnapshot(config);
       const pluginRegistry = createEmptyPluginRegistry();
       const catalog = Array.from({ length: 64 }, (_, index) =>
         providerCatalogEntry("test", index === 0 ? "first" : `model-${index}`),
@@ -203,6 +204,7 @@ it("bounds saved-session reads while projecting configured models and runtime ch
         plugins: { entries: { codex: { enabled: true } } },
       };
       await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
       const sessionKey = "agent:main:catalog-reader";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },

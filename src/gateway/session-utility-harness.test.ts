@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as simpleCompletionExecution from "../agents/simple-completion-execution.js";
 import * as simpleCompletionRuntime from "../agents/simple-completion-runtime.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -57,6 +58,7 @@ describe("utility completion with an unavailable implicit harness", () => {
       },
       plugins: { entries: { codex: { enabled: false } } },
     };
+    setRuntimeConfigSnapshot(config);
     runtimeMocks.acquire.mockReset().mockResolvedValue({
       snapshot: {
         config,

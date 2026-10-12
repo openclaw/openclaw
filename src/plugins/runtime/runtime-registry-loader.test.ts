@@ -1,5 +1,6 @@
 // Runtime registry loader tests cover the surviving process-root load scopes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimeConfig from "../../config/io.runtime.js";
 
 const mocks = vi.hoisted(() => ({
   loadAndActivateRootPluginRegistry:
@@ -153,6 +154,23 @@ describe("ensurePluginRegistryLoaded", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
+  });
+
+  it("prepares omitted config before loading configured channel owners", async () => {
+    const config = { channels: { demo: { enabled: true } } };
+    const reader = Object.assign(async () => config, { assertCurrent: () => {} });
+    const capture = vi
+      .spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader")
+      .mockReturnValue(reader);
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel"]);
+    try {
+      await ensurePluginRegistryLoaded({ scope: "configured-channels" });
+      expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
+        expect.objectContaining({ config }),
+      );
+    } finally {
+      capture.mockRestore();
+    }
   });
 
   it("loads configured channel owners through the canonical root loader", async () => {

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -68,6 +68,10 @@ import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-a
 import * as notices from "./session-state-notices.js";
 import { upsertSessionUpstreamLink } from "./session-upstream-links.js";
 import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();

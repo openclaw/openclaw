@@ -1,6 +1,10 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -107,6 +111,8 @@ describe("restart recovery claim successors", () => {
       "sessions.json",
     );
     const sessionKey = "agent:main:telegram:group:chat";
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const sessionId = "session";
     const sourceTurnId = "channel-turn";
     const deliveryContext = { channel: "telegram", to: "chat", accountId: "default" };

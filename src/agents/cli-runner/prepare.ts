@@ -1189,7 +1189,7 @@ async function prepareCliRunContextWithinReadFence(
       skipLocalCredential: skipLocalCredentialEpoch,
     });
     const authBindingFingerprint = params.onSuccessfulAuthBinding
-      ? resolveCliAuthBindingFingerprint({
+      ? await resolveCliAuthBindingFingerprint({
           provider: params.provider,
           config: runConfig,
           agentDir,

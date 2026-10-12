@@ -29,7 +29,9 @@ beforeEach(() => {
   vi.doMock("./server-cron.js", () => ({ buildGatewayCronService }));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const { clearRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+  clearRuntimeConfigSnapshot();
   vi.doMock("./server-cron.js", () => ({ buildGatewayCronService }));
 });
 
@@ -48,6 +50,8 @@ function createCronState() {
 }
 
 async function createFixture() {
+  const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot({});
   const { createGatewayReloadHandlers } = await import("./server-reload-hot.js");
   const { buildGatewayReloadPlan } = await import("./config-reload-plan.js");
   const { state: previous, cron: previousCron } = createCronState();

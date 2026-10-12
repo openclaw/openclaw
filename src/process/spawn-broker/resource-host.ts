@@ -122,9 +122,6 @@ export class BrokerResourceClaims {
           throw new SpawnBrokerError("Native resource is closed");
         }
         const sequence = claim.ownerSequence + 1;
-        if (!Number.isSafeInteger(sequence)) {
-          throw new SpawnBrokerError("Native resource owner sequence exhausted");
-        }
         const serialized = serialize({ type: "resource-owner", id: captured.id, sequence, value });
         if (
           this.bufferedBytes + serialized.length > MAX_PENDING_BYTES ||
@@ -169,9 +166,6 @@ export class BrokerResourceClaims {
           return claim.pending.completion.promise;
         }
         const requestId = --this.closeSequence;
-        if (!Number.isSafeInteger(requestId)) {
-          return Promise.reject(new SpawnBrokerError("Native resource close sequence exhausted"));
-        }
         const completion = createDeferredCore();
         void completion.promise.catch(() => {});
         claim.pending = { requestId, completion };

@@ -33,7 +33,7 @@ describe("archived session composer banner", () => {
       renderChatComposer({
         ...props,
         disabledBanner: {
-          ...props.disabledBanner!,
+          kind: "composer-replacement",
           text: "This session is still archived.",
           actionLabel: "Unarchive",
           onAction: refreshedAction,

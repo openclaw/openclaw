@@ -9,6 +9,10 @@ import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
@@ -150,6 +154,7 @@ describe("sessions tools", () => {
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     installMessagingTestRegistry();
+    setRuntimeConfigSnapshot(TEST_CONFIG);
     await seedSession("agent:main:main");
   });
   afterEach(() =>
@@ -158,6 +163,7 @@ describe("sessions tools", () => {
       resetGatewayWorkAdmission,
       resetSystemEventsForTest,
       resetAdjustedParamsByToolCallIdForTests,
+      clearRuntimeConfigSnapshot,
     ),
   );
   afterAll(() =>

@@ -5,7 +5,7 @@ import { seedRecoveryOwner } from "../../commands/doctor/shared/installed-plugin
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import {
@@ -74,7 +74,9 @@ describe("updater plugin commit cancellation", () => {
       ).rejects.toBe(refusal);
       expect(controller.signal.aborted).toBe(false);
       expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({});
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual({});
     });
   });
 });
@@ -113,7 +115,9 @@ describe("updater explicit reference intent", () => {
           expect(written.browser.executablePath).toBe(
             explicit ? "${BROWSER_BIN}" : "$${BROWSER_BIN}",
           );
-          expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({});
+          expect(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          ).toEqual({});
         },
       );
     },
