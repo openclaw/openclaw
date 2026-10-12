@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { FailoverError } from "../agents/failover-error.js";
 import { createAgentRunSupersededAbortError } from "../agents/run-termination.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
@@ -19,6 +20,8 @@ import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
+// Keep lazy execution imports outside cron's setup deadline.
+import "./isolated-agent/run-executor.runtime.js";
 
 vi.doUnmock("./isolated-agent/model-preflight.runtime.js");
 
@@ -65,6 +68,7 @@ async function runPersistedDiagnosticCase(params: {
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-cron-execution-diagnostics-" },
     async (state) => {
+      setRuntimeConfigSnapshot(params.cfg);
       const events: CronEvent[] = [];
       const storePath = state.path("cron", "jobs.json");
       const cron = new CronService({
