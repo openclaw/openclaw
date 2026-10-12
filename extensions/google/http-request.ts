@@ -8,6 +8,7 @@ import {
   DEFAULT_GOOGLE_API_BASE_URL,
   normalizeGoogleGenerativeAiBaseUrl,
 } from "./provider-policy.js";
+import { isOperatorTrustedGoogleGenerativeAiBaseUrl } from "./src/google-trusted-origins.js";
 
 type GoogleGenerativeAiRequestOverrides = ProviderRequestTransportOverrides & {
   allowPrivateNetwork?: boolean;
@@ -22,8 +23,9 @@ function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
     );
   }
   if (
-    url.protocol !== "https:" ||
-    url.hostname.toLowerCase() !== "generativelanguage.googleapis.com"
+    (url.protocol !== "https:" ||
+      url.hostname.toLowerCase() !== "generativelanguage.googleapis.com") &&
+    !isOperatorTrustedGoogleGenerativeAiBaseUrl(normalized)
   ) {
     throw new Error(
       "Google Generative AI baseUrl must use https://generativelanguage.googleapis.com",

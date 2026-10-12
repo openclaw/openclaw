@@ -21,6 +21,7 @@ import {
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
   type SearchConfigRecord,
+  withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
   writeCachedSearchPayload,
@@ -34,6 +35,7 @@ import {
   resolveGeminiModel,
   type GeminiConfig,
 } from "./gemini-web-search-provider.shared.js";
+import { isOperatorTrustedPrivateGoogleGenerativeAiBaseUrl } from "./google-trusted-origins.js";
 
 type GeminiFreshness = "day" | "week" | "month" | "year";
 
@@ -267,7 +269,12 @@ async function runGeminiSearch(params: {
     operatorHeaders: params.headers,
   });
 
-  return withTrustedWebSearchEndpoint(
+  // Trusted web-tool endpoints refuse private addresses. An operator-declared
+  // proxy origin on a private IP literal is the one self-hosted exception.
+  const withSearchEndpoint = isOperatorTrustedPrivateGoogleGenerativeAiBaseUrl(params.baseUrl)
+    ? withSelfHostedWebSearchEndpoint
+    : withTrustedWebSearchEndpoint;
+  return withSearchEndpoint(
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,

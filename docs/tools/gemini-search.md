@@ -144,6 +144,12 @@ that is unset, Gemini web search reuses `models.providers.google.baseUrl`. A pla
 `https://generativelanguage.googleapis.com/v1beta`; custom proxy paths are kept
 as provided after trimming trailing slashes.
 
+Web search refuses private network addresses by default. A credential-injecting
+proxy on a private IP literal (for example a host-side proxy at
+`http://172.17.0.1:8443`) is reachable only when the operator declares its exact
+origin in `OPENCLAW_GOOGLE_GENERATIVE_AI_TRUSTED_ORIGINS`; see
+[Google provider trusted proxy origins](/providers/google#trusted-proxy-origins).
+
 ## Related
 
 - [Web Search overview](/tools/web) -- all providers and auto-detection
