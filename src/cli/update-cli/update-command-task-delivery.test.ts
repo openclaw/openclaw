@@ -169,3 +169,23 @@ it.each(["foreign-gateway"] as const)(
     }
   },
 );
+
+it("rolls back recovered rows when ledger schema refuses admission", () => {
+  const f = seededOrphans();
+  inspect(f.filename, (db) =>
+    db.exec(`CREATE TRIGGER unknown_ledger_trigger
+    BEFORE INSERT ON update_runs BEGIN SELECT RAISE(ABORT, 'reject ledger insert'); END;`),
+  );
+  expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
+    /unknown_ledger_trigger/,
+  );
+  inspect(f.filename, (db) => {
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
+    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
+  });
+  expect(
+    fs
+      .readdirSync(path.dirname(f.filename))
+      .filter((name) => name.startsWith("openclaw-task-delivery-recovery-")),
+  ).toHaveLength(1);
+});

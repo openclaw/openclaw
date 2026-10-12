@@ -223,6 +223,22 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     },
   );
 
+  it("uses authoritative remote bytes when a stale local file exists", async () => {
+    const remotePath = `${remoteWorkspaceRoot}/reused-upload.txt`;
+    await writeFile(path.join(localWorkspaceRoot, "reused-upload.txt"), "stale local content\n");
+
+    const result = await prepareCodexRemoteWorkspaceMessageMedia({
+      args: { filePath: remotePath },
+      localWorkspaceRoot,
+      remoteWorkspaceRoot,
+      readRemoteFile: createRemoteFileReader({ [remotePath]: "authoritative remote content\n" }),
+    });
+
+    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
+      "authoritative remote content\n",
+    );
+  });
+
   it("preserves the original argument object for URL-backed media", async () => {
     const args = {
       action: "send",

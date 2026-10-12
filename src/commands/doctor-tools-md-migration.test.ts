@@ -498,4 +498,24 @@ describe("TOOLS.md migration", () => {
     );
     await expectMissing(fixture.toolsPath);
   });
+
+  it("keeps TOOLS.md untouched when the original cannot be archived", async () => {
+    const fixture = await createFixture();
+    const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
+    const tools = "Local camera: kitchen → wide angle\n";
+    await fs.writeFile(fixture.agentsPath, agents);
+    await fs.writeFile(fixture.toolsPath, tools);
+    await fs.writeFile(fixture.stateDir, "not a directory");
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(agents);
+    await expect(fs.readFile(fixture.toolsPath, "utf8")).resolves.toBe(tools);
+  });
 });
