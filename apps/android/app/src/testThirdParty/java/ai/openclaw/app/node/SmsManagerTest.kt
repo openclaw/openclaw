@@ -253,6 +253,50 @@ class SmsManagerTest {
   }
 
   @Test
+  fun resolveSendPlanUsesPrimaryDividerWhenItSucceeds() {
+    val plan = SmsManager.resolveSendPlan("hello") { listOf("a", "b") }
+    assertTrue(plan.useMultipart)
+    assertEquals(listOf("a", "b"), plan.parts)
+  }
+
+  @Test
+  fun resolveSendPlanFallsBackToChunkingWhenPrimaryDividerThrowsSecurityException() {
+    val message = "x".repeat(200)
+    val plan =
+      SmsManager.resolveSendPlan(message, fallbackChunkSize = 153) {
+        throw SecurityException("getGroupIdLevel1")
+      }
+    assertTrue(plan.useMultipart)
+    assertEquals(listOf(message.take(153), message.drop(153)), plan.parts)
+  }
+
+  @Test
+  fun resolveSendPlanUsesUcs2BoundariesForNonGsmFallback() {
+    val message = "€".repeat(80)
+    val plan =
+      SmsManager.resolveSendPlan(message) {
+        throw SecurityException("getGroupIdLevel1")
+      }
+    assertTrue(plan.useMultipart)
+    assertEquals(listOf(message.take(67), message.drop(67)), plan.parts)
+  }
+
+  @Test
+  fun resolveSendPlanFallbackNeverSplitsASurrogatePair() {
+    val emoji = "😀"
+    val message = "a".repeat(66) + emoji + "b".repeat(10)
+    val plan =
+      SmsManager.resolveSendPlan(message) {
+        throw SecurityException("getGroupIdLevel1")
+      }
+    assertEquals(message, plan.parts.joinToString(""))
+    plan.parts.forEach { part ->
+      assertFalse(part.isNotEmpty() && Character.isHighSurrogate(part.last()))
+      assertFalse(part.isNotEmpty() && Character.isLowSurrogate(part.first()))
+    }
+  }
+
+  @Test
   fun parseQueryParamsAcceptsEmptyPayload() {
     val result = SmsManager.parseQueryParams(null)
     assertTrue(result is SmsManager.QueryParseResult.Ok)
