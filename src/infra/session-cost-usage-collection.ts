@@ -322,14 +322,6 @@ export async function resolveUsageCostTranscriptSources(
   return results;
 }
 
-export async function resolveUsageCostTranscriptFile(
-  sessionFile: string,
-  access: UsageCostCollectionAccess,
-): Promise<UsageCostTranscriptFile | undefined> {
-  const source = await resolveUsageCostTranscriptSource(sessionFile, access);
-  return materializeUsageCostTranscriptSourceBestEffort(source, access);
-}
-
 async function materializeUsageCostTranscriptSourceBestEffort(
   source: UsageCostTranscriptSource | undefined,
   access: UsageCostCollectionAccess,
