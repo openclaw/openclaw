@@ -148,7 +148,9 @@ describe("edit tool", () => {
   it("recovers success after a post-write throw when the edit already applied", async () => {
     // Some backends throw after flushing content; a readback match is the
     // contract that lets the tool report success without duplicating edits.
-    const filePath = await createTempFile('const value = "foo";\r\n');
+    const original = 'const value = "foo";\r\n';
+    const expected = 'const value = "foobar";\r\n';
+    const filePath = await createTempFile(original);
     const operations: EditOperations = {
       access: async (absolutePath) => {
         await fs.access(absolutePath);
@@ -173,7 +175,14 @@ describe("edit tool", () => {
       type: "text",
       text: `Successfully replaced 1 block(s) in ${filePath}.`,
     });
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe('const value = "foobar";\r\n');
+    const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("Expected the recovered edit to report a change.");
+    }
+    expect(details.diff).toContain('+1 const value = "foobar";');
+    expect(applyPatch(original, details.patch)).toBe(expected);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
   });
 
   it("does not recover false success when the file never changed", async () => {

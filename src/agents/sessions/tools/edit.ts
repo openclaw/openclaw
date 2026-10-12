@@ -12,6 +12,7 @@ import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-ex
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import { decodeUtf8File } from "../../utf8-file.js";
+import type { FileDiff } from "./file-diff.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
@@ -151,6 +152,7 @@ export function createEditTool(
 
         let editCount = 0;
         let expectedContent: string | undefined;
+        let receipt: FileDiff | undefined;
 
         try {
           await ops.access(absolutePath);
@@ -181,6 +183,7 @@ export function createEditTool(
           }
           editCount = plan.editCount;
           expectedContent = plan.content;
+          receipt = plan.receipt;
           await ops.writeFile(absolutePath, expectedContent);
           assertFileToolNotAborted(signal);
           assertCurrent();
@@ -204,12 +207,13 @@ export function createEditTool(
             .catch(() => rawContent);
           if (
             expectedContent !== undefined &&
+            receipt !== undefined &&
             (await verifyPersistedUtf8File(absolutePath, expectedContent, ops))
           ) {
             assertCurrent();
             return textResult<EditToolDetails>(
               `Successfully replaced ${editCount} block(s) in ${path}.`,
-              { changed: true, diff: "", patch: "" },
+              { changed: true, ...receipt },
             );
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
