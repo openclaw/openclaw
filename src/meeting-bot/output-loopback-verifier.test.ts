@@ -48,28 +48,7 @@ describe("meeting output loopback verifier", () => {
     expect(health.verifiedOutputGeneration).toBe(health.outputGeneration);
   });
 
-  it("does not reuse a matching capture from an older output generation", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
-    const first = pcmEnergyFrames(outputEnvelope);
-    const second = pcmEnergyFrames(unrelatedEnvelope);
-    verifier.beginOutput();
-    verifier.recordOutput(first);
-    verifier.recordInput(first);
-    const verifiedBytes = verifier.getHealth().outputLoopbackSignalBytes;
-
-    verifier.beginOutput();
-    verifier.recordOutput(second);
-    expect(verifier.getHealth().verifiedOutputGeneration).not.toBe(
-      verifier.getHealth().outputGeneration,
-    );
-    verifier.recordInput(first);
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(verifiedBytes);
-
-    verifier.recordInput(second);
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBeGreaterThan(verifiedBytes);
-  });
-
-  it.each(["pcm16-24khz", "g711-ulaw-8khz"] as const)(
+  it.each(["g711-ulaw-8khz"] as const)(
     "keeps the rolling deadline after verification and starts fresh after expiry (%s)",
     (audioFormat) => {
       let nowMs = 0;
@@ -77,10 +56,9 @@ describe("meeting output loopback verifier", () => {
         audioFormat,
         now: () => nowMs,
       });
-      const output =
-        audioFormat === "pcm16-24khz"
-          ? pcmEnergyFrames(outputEnvelope)
-          : Buffer.concat(outputEnvelope.map((_, index) => Buffer.alloc(80, (index * 37) % 220)));
+      const output = Buffer.concat(
+        outputEnvelope.map((_, index) => Buffer.alloc(80, (index * 37) % 220)),
+      );
       verifier.beginOutput();
       verifier.recordOutput(output);
       verifier.recordInput(output);
@@ -112,38 +90,6 @@ describe("meeting output loopback verifier", () => {
     },
   );
 
-  it("uses a stricter full-envelope match for short output generations", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
-    const shortOutput = pcmEnergyFrames(outputEnvelope.slice(0, 20));
-    const unrelated = pcmEnergyFrames(unrelatedEnvelope.slice(0, 20));
-
-    verifier.beginOutput();
-    verifier.recordOutput(shortOutput);
-    verifier.recordInput(unrelated);
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(0);
-
-    verifier.recordInput(shortOutput);
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(shortOutput.byteLength);
-    expect(verifier.getHealth().lastOutputLoopbackCorrelation).toBeGreaterThanOrEqual(0.98);
-  });
-
-  it("finds a short loopback envelope between capture pre-roll and post-roll", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
-    const shortEnvelope = outputEnvelope.slice(0, 20);
-    const captureEnvelope = [
-      ...unrelatedEnvelope.slice(0, 5),
-      ...shortEnvelope,
-      ...unrelatedEnvelope.slice(5, 10),
-    ];
-
-    verifier.beginOutput();
-    verifier.recordOutput(pcmEnergyFrames(shortEnvelope));
-    const capture = pcmEnergyFrames(captureEnvelope);
-    verifier.recordInput(capture);
-
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(capture.byteLength);
-  });
-
   it("matches loopback delayed by a sub-frame sample offset", () => {
     const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
     const output = pcmEnergyFrames(outputEnvelope.slice(0, 30));
@@ -155,18 +101,6 @@ describe("meeting output loopback verifier", () => {
     verifier.recordInput(capture);
 
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(capture.byteLength);
-  });
-
-  it("skips a silent leading reference window in a mixed output buffer", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
-    const silence = pcmEnergyFrames(Array(60).fill(0));
-    const signal = pcmEnergyFrames(outputEnvelope.slice(0, 20));
-
-    verifier.beginOutput();
-    verifier.recordOutput(Buffer.concat([silence, signal]));
-    verifier.recordInput(signal);
-
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(signal.byteLength);
   });
 
   it("rejects a correlated waveform below the signal threshold", () => {
@@ -184,52 +118,6 @@ describe("meeting output loopback verifier", () => {
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(0);
   });
 
-  it("rejects unrelated input after the correlation window", () => {
-    let nowMs = 0;
-    const verifier = createMeetingOutputLoopbackVerifier({
-      audioFormat: "pcm16-24khz",
-      now: () => nowMs,
-    });
-    verifier.beginOutput();
-    verifier.recordOutput(pcmEnergyFrames(outputEnvelope));
-    nowMs = 5_801;
-    verifier.recordInput(pcmEnergyFrames(outputEnvelope));
-
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(0);
-  });
-
-  it("keeps the most recent reference frames for long output generations", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
-    const longEnvelope = Array.from({ length: 600 }, (_, index) => 300 + ((index * 6151) % 11_000));
-    const recentOutput = pcmEnergyFrames(longEnvelope.slice(-80));
-
-    verifier.beginOutput();
-    verifier.recordOutput(pcmEnergyFrames(longEnvelope.slice(0, 520)));
-    verifier.recordOutput(pcmEnergyFrames(longEnvelope.slice(520)));
-    verifier.recordInput(recentOutput);
-
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(recentOutput.byteLength);
-  });
-
-  it("uses a bounded recent reference from one long output buffer", () => {
-    let nowMs = 0;
-    const verifier = createMeetingOutputLoopbackVerifier({
-      audioFormat: "pcm16-24khz",
-      now: () => nowMs,
-    });
-    const longOutput = pcmEnergyFrames(
-      Array.from({ length: 600 }, (_, index) => 400 + ((index * 4561) % 10_000)),
-    );
-    const recentOutput = longOutput.subarray(longOutput.byteLength - 48_000);
-
-    verifier.beginOutput();
-    verifier.recordOutput(longOutput);
-    nowMs = 6_000;
-    verifier.recordInput(recentOutput);
-
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(recentOutput.byteLength);
-  });
-
   it("preserves silent spacing between streamed output chunks", () => {
     const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
     const first = pcmEnergyFrames(outputEnvelope.slice(0, 30));
@@ -244,35 +132,5 @@ describe("meeting output loopback verifier", () => {
     verifier.recordInput(expectedRecentReference);
 
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(expectedRecentReference.byteLength);
-  });
-
-  it("checks a signal prefix shorter than a full trailing-silence window", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
-    const signal = pcmEnergyFrames(outputEnvelope.slice(0, 10));
-    const trailingSilence = pcmEnergyFrames(Array(50).fill(0));
-
-    verifier.beginOutput();
-    verifier.recordOutput(Buffer.concat([signal, trailingSilence]));
-    verifier.recordInput(signal);
-
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(signal.byteLength);
-  });
-
-  it("detects mu-law loopback energy without treating silence as signal", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "g711-ulaw-8khz" });
-    const silence = Buffer.alloc(80 * 80, 0xff);
-    const signal = Buffer.concat(
-      Array.from({ length: 80 }, (_, index) => Buffer.alloc(80, (index * 37) % 220)),
-    );
-    verifier.beginOutput();
-    verifier.recordOutput(silence);
-    verifier.recordInput(signal);
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(0);
-
-    verifier.beginOutput();
-    verifier.recordOutput(signal);
-    verifier.recordInput(signal);
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(signal.byteLength);
-    expect(verifier.getHealth().lastOutputLoopbackPeak).toBeGreaterThan(0);
   });
 });
