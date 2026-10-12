@@ -654,22 +654,26 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       // agent-shifted scope this raw identity cannot reproduce, so that candidate's
       // settlement hands its exact prepared scope to this owner-held collection. A caller
       // that retries a live model switch with this runId takes both scopes and clears them
-      // at its own terminal instead. Missing slots are harmless.
-      const releaseTurnSendLedgerScope =
-        params.retainTurnSendLedgerScope ?? clearTurnSendLedgerForRun;
-      releaseTurnSendLedgerScope({
-        agentId: params.identity.agentId,
-        sessionKey: canonicalizeMainSessionAlias({
-          cfg: params.selection.cfg,
+      // at its own terminal instead. Missing slots are harmless. The alias fold and the
+      // caller's retain callback can throw; the lease is still disposed.
+      try {
+        const releaseTurnSendLedgerScope =
+          params.retainTurnSendLedgerScope ?? clearTurnSendLedgerForRun;
+        releaseTurnSendLedgerScope({
           agentId: params.identity.agentId,
-          sessionKey: params.identity.sessionKey?.trim() || params.identity.sessionId,
-        }),
-        runId: params.identity.runId,
-      });
-      for (const scope of deferredTurnSendLedgerScopes) {
-        releaseTurnSendLedgerScope(scope);
+          sessionKey: canonicalizeMainSessionAlias({
+            cfg: params.selection.cfg,
+            agentId: params.identity.agentId,
+            sessionKey: params.identity.sessionKey?.trim() || params.identity.sessionId,
+          }),
+          runId: params.identity.runId,
+        });
+        for (const scope of deferredTurnSendLedgerScopes) {
+          releaseTurnSendLedgerScope(scope);
+        }
+      } finally {
+        await contextEngineLogicalTurnLease.dispose();
       }
-      await contextEngineLogicalTurnLease.dispose();
     }
   }
 }
