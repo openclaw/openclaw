@@ -41,7 +41,11 @@ function fakeElement() {
   };
 }
 
-async function mountDashboard(search: string, openReleasePage = () => Promise.resolve()) {
+async function mountDashboard(
+  search: string,
+  openReleasePage = () => Promise.resolve(),
+  bootstrap = { phase: "connected", setupError: undefined as string | undefined },
+) {
   const elements = new Map<string, ReturnType<typeof fakeElement>>();
   const invoked: string[] = [];
   const listeners = new Map<string, (event: { payload: Record<string, unknown> }) => void>();
@@ -64,6 +68,9 @@ async function mountDashboard(search: string, openReleasePage = () => Promise.re
           }
           if (command === "open_release_page") {
             return openReleasePage();
+          }
+          if (command === "bootstrap") {
+            return Promise.resolve(bootstrap);
           }
           return Promise.resolve({ phase: "connected" });
         },
@@ -102,6 +109,26 @@ async function mountDashboard(search: string, openReleasePage = () => Promise.re
     },
   };
 }
+
+test("automatic setup failure returns to Gateway choices with the native error", async () => {
+  const { element, invoked } = await mountDashboard("", undefined, {
+    phase: "missingCli",
+    setupError: "Bundled runtime could not be installed.",
+  });
+  assert.equal(element("#title").textContent, "Where should your assistant live?");
+  assert.equal(element("#description").textContent, "Bundled runtime could not be installed.");
+  assert.equal(element("#connection-choices").classList.contains("hidden"), false);
+  assert.equal(element("#welcome-screen").classList.contains("hidden"), true);
+  assert.equal(invoked.includes("install_cli"), false);
+  assert.equal(invoked.includes("connect_remote_gateway"), false);
+});
+
+test("automatic setup success does not display manual first-run choices", async () => {
+  const { element, invoked } = await mountDashboard("");
+  assert.equal(element("#welcome-screen").classList.contains("hidden"), true);
+  assert.equal(element("#connection-choices").classList.contains("hidden"), true);
+  assert.equal(invoked.filter((command) => command === "bootstrap").length, 1);
+});
 
 test("missing CLI mode offers installation without retrying bootstrap", async () => {
   const { element, invoked } = await mountDashboard("?mode=missingCli");

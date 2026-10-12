@@ -7,12 +7,12 @@ libatk-adaptor, xvfb, xauth and dbus-x11 installed:
 
 Use the unbundled 0.1.0 development build: local setup on a release build
 intentionally starts installation instead of showing the channel chooser.
---local-start-failure uses a fixture CLI to exercise failed local startup.
+--local-start-failure uses a fixture CLI to exercise automatic startup fallback.
 --inline-browser uses a synthetic saved Gateway to exercise native child WebViews
 and requires xdotool for real pointer input.
 --window-chrome checks dragging, resizing, and window controls with xdotool and Openbox.
 --gateway-switch checks saved connections, native windows and the private credential vault.
---gateway-onboarding checks native authority after local model setup under a Gateway base path.
+--gateway-onboarding checks automatic first run and native authority under a Gateway base path.
 --quick-chat checks real Quick Chat streaming, disclosure, drafts and agent selection
 and requires a private gnome-keyring-daemon.
 --desktop-sharing checks the real native settings bridge and an owned synthetic CLI process tree.
@@ -180,27 +180,25 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
             inline_fixture.exercise(app, binary, wait, Atspi)
         return
 
-    wait("Welcome to OpenClaw", "heading")
     if local_start_failure:
-        for attempt in range(2):
-            click("Get started")
-            wait("Where should your assistant live?", "heading")
-            click("On this computer", "toggle button", prefix=True)
-            click("Continue")
-            wait("OpenClaw needs attention", "heading")
-            wait(START_FAILURE)
-            wait("Try again", "push button")
-            if attempt == 0:
-                click("Try again")
-                wait("Welcome to OpenClaw", "heading")
+        wait("Where should your assistant live?", "heading")
+        wait(START_FAILURE)
+        click("On another computer", "toggle button", prefix=True)
+        empty_entry("Gateway URL")
+        click("On this computer", "toggle button", prefix=True)
+        click("Continue")
+        wait("OpenClaw needs attention", "heading")
+        wait(START_FAILURE)
+        wait("Try again", "push button")
         calls = Path("cli-calls.log").read_text().splitlines()
         if calls.count("gateway install --json") != 2:
             raise RuntimeError(f"Expected two failed Gateway installs, observed {calls!r}")
         setup = "browser extension setup --action install --json --wait-ms 1000"
         if calls.count(setup) != 1:
             raise RuntimeError(f"Expected one automatic local Chrome setup, observed {calls!r}")
-        print("PASS: failed local startup reports its error and stays retryable", flush=True)
+        print("PASS: automatic local startup falls back with its error and remains retryable", flush=True)
         return
+    wait("Welcome to OpenClaw", "heading")
     click("Get started")
     wait("Where should your assistant live?", "heading")
     click("On another computer", "toggle button", prefix=True)
@@ -374,7 +372,7 @@ def main():
     scenarios.add_argument(
         "--local-start-failure",
         action="store_true",
-        help="Verify failed startup with an installed CLI remains visible and retryable",
+        help="Verify automatic startup falls back to manual choices with a visible, retryable error",
     )
     scenarios.add_argument(
         "--inline-browser",
@@ -392,7 +390,7 @@ def main():
     )
     scenarios.add_argument(
         "--gateway-onboarding", action="store_true",
-        help="Verify native controls survive local onboarding and remain within the Gateway base path",
+        help="Verify automatic local onboarding and native controls within the Gateway base path",
     )
     scenarios.add_argument(
         "--quick-chat", action="store_true",
@@ -496,6 +494,12 @@ def main():
                 "    raise RuntimeError('Unexpected CLI command: ' + command)\n"
             )
             cli.chmod(0o700)
+        elif not any((args.inline_browser, args.gateway_switch, args.gateway_onboarding,
+                      args.quick_chat, args.desktop_sharing)):
+            # A saved config preserves manual setup, including the window-chrome scenario.
+            config = root / ".openclaw/openclaw.json"
+            config.parent.mkdir(mode=0o700, parents=True)
+            config.write_text("{}\n")
         # Native AT-SPI calls can block Python signal handlers. Keep the deadline
         # and cleanup outside that process, with its app in the same owned group.
         command = [sys.executable, str(Path(__file__).resolve()), "--driver"]

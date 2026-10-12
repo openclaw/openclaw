@@ -398,6 +398,10 @@ pub(crate) fn has_configured_gateway() -> Result<bool, String> {
         .is_some_and(|gateway| !gateway.is_empty()))
 }
 
+pub(crate) fn has_saved_config() -> Result<bool, String> {
+    Ok(read_config(&config_path()?)?.is_some())
+}
+
 fn valid_secret_name(value: &str) -> bool {
     let mut bytes = value.bytes();
     !value.is_empty()

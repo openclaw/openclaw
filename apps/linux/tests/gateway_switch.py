@@ -462,16 +462,24 @@ class GatewaySwitchFixture(GatewayFixture):
 ONBOARDING_CONTROLS = """<nav style="margin:0 38px">
 <button id="chat">Open chat</button><button id="reload">Reload chat</button>
 <button id="outside">Open sibling path</button><button id="manage">Manage Gateways</button>
+<button id="permissions">Review permissions</button><button id="ai-setup">Open AI setup</button>
 </nav><script>
 function showRoute() {
   document.querySelector('h1').textContent = location.pathname.includes('model-setup')
-    ? 'Local model setup' : location.pathname.startsWith('/fixture/') ? 'Custodian chat' : 'Sibling path';
+    ? 'Local model setup' : location.pathname.includes('device/permissions') ? 'Native permissions'
+    : location.pathname.startsWith('/fixture/') ? 'Custodian chat' : 'Sibling path';
 }
 function navigate(path) { history.pushState({}, '', path); showRoute(); void report(); }
+function openPanel(panel) {
+  window.webkit.messageHandlers.openclawDeviceSettings.postMessage({type:'open',panel})
+    .catch(error => document.querySelector('h1').textContent = 'Device settings action failed: ' + error);
+}
 document.getElementById('chat').onclick = () => navigate('/fixture/chat/custodian');
 document.getElementById('outside').onclick = () => navigate('/fixture-sibling/chat');
 document.getElementById('reload').onclick = () => location.reload();
-document.getElementById('manage').onclick = () => send({type:'open-settings'});
+document.getElementById('manage').onclick = () => openPanel('gateways');
+document.getElementById('permissions').onclick = () => openPanel('permissions');
+document.getElementById('ai-setup').onclick = () => openPanel('ai-setup');
 showRoute();
 </script>"""
 
@@ -480,7 +488,8 @@ class OnboardingHandler(SwitchHandler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         if not self.headers.get("Upgrade") and parsed.path in (
-            "/fixture/", "/fixture/settings/model-setup", "/fixture/chat/custodian",
+            "/fixture/", "/fixture/custodian", "/fixture/settings/model-setup",
+            "/fixture/settings/device/permissions", "/fixture/chat/custodian",
         ):
             self.server.document_requests.append({"path": parsed.path, "query": parse_qs(parsed.query)})
             self.server.loads["primary"] += 1
@@ -560,23 +569,26 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
             self.chrome.command("xdotool", "mousemove", str(bounds.x + bounds.width // 2),
                                 str(bounds.y + bounds.height // 2), "click", "1")
 
-        wait("Welcome to OpenClaw", "heading")
-        click("Get started")
-        wait("Where should your assistant live?", "heading")
-        click("On this computer", prefix=True)
-        click("Continue")
-        wait("Choose a release channel", "heading")
-        click("Install OpenClaw")
-        wait("Local model setup", "heading")
+        wait("Custodian chat", "heading")
         if not Path("fixture-installer-called").is_file() or not Path("fixture-runtime-installed.json").is_file():
             raise RuntimeError("The native installation/bundled-runtime entrypoint did not run")
         if not self.document_requests or self.document_requests[0] != {
-            "path": "/fixture/settings/model-setup", "query": {"firstRun": ["explicit"]},
+            "path": "/fixture/custodian", "query": {"onboarding": ["1"]},
         }:
             raise RuntimeError(f"Native onboarding did not preserve the canonical base: {self.document_requests!r}")
         self.config_hash = self.primary_hash()
         main = self.chrome.until(lambda: next(iter(self.windows(app)), None), "onboarding window")
-        self.capture("model-setup")
+        self.chrome.record("fresh launch installs locally and opens custodian without setup input", True)
+        self.capture("automatic-first-run")
+        click("Review permissions")
+        wait("Native permissions", "heading")
+        if self.document_requests[-1]["path"] != "/fixture/settings/device/permissions":
+            raise RuntimeError("Native permissions left the selected Gateway base path")
+        click("Open AI setup")
+        wait("Local model setup", "heading")
+        if self.document_requests[-1]["path"] != "/fixture/settings/model-setup":
+            raise RuntimeError("Native AI setup left the selected Gateway base path")
+        self.chrome.record("native setup actions open permissions and AI setup on the selected Gateway", True)
         click("Open chat")
         wait("Custodian chat", "heading")
         click("Maximize window")
@@ -601,7 +613,7 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
         click("Open sibling path")
         wait("Sibling path", "heading")
         click("Manage Gateways")
-        wait("Gateway action failed:", prefix=True)
+        wait("Device settings action failed:", prefix=True)
         click("Maximize window")
         wait("Window action failed:", prefix=True)
         if len(self.windows(app)) != 1 or "_NET_WM_STATE_MAXIMIZED_HORZ" in self.chrome.state(main):

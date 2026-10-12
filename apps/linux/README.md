@@ -81,6 +81,17 @@ profiles, or URLs. Platform bootstrap support comes from the CLI result rather
 than the app platform: a Windows app build alone does not establish that native
 host bootstrap is supported or verified.
 
+## Native setup actions
+
+The shared native device settings bridge also accepts
+`{type: "open", panel: "gateways" | "permissions" | "ai-setup"}`. Use it through
+the Control UI's shell-agnostic native capability layer. `gateways` opens the
+existing Manage Gateways window; the other panels navigate the selected main
+dashboard to `settings/device/permissions` or `settings/model-setup`, preserving
+its Gateway base path. These actions resolve to `null` and reject unsupported
+panels or stale documents. They share the existing document token, origin/path,
+and generation checks; reading tabs receive no access.
+
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
@@ -255,8 +266,24 @@ against a synthetic CLI/service, including explicit runtime activation.
 
 ## First-run setup
 
-The welcome screen explains what OpenClaw can do and asks where your assistant
-should live:
+On Linux and Windows, a fresh install with no saved OpenClaw configuration or
+Gateway profiles starts local setup automatically. It uses the same CLI installer,
+bundled runtime, and Gateway service owners as **On this computer**, then opens
+the Control UI's custodian onboarding. Release builds select their matching stable
+version; development builds use Development. Nearby Gateways are never joined
+automatically.
+
+The custodian prepares available AI access and explains what was selected. Its
+**Use a different Gateway**, **Review permissions**, and **Open AI setup** actions
+open Manage Gateways, this computer's permissions, and Model Setup respectively.
+Existing configurations and saved remote connections keep their current startup
+behavior. If automatic setup fails, the app shows the error alongside the existing
+local and remote choices so you can retry or connect elsewhere. Windows local
+installation depends on the Windows installer and service support available in
+the build.
+
+The manual setup screen explains what OpenClaw can do and asks where your
+assistant should live:
 
 - **On this computer** installs the CLI when needed and, on Linux, runs fresh installations
   on the bundled OpenClaw Bun fork, then starts the Gateway as a systemd user
@@ -333,7 +360,7 @@ Gateway windows alone. **Connection Settings** continues to edit the Primary
 connection. Saved Tauri connections are separate from the native macOS app's
 saved connections and browser sign-in sessions.
 
-After connecting, Model Setup discovers AI access available to the selected
+After connecting through manual setup, Model Setup discovers AI access available to the selected
 Gateway and shows it as a choice. Discovery never imports or copies an account,
 and the companion never selects, tests, installs, or saves a provider until you
 click its action. The list includes supported installed providers and official
@@ -349,7 +376,7 @@ Gateway, run `openclaw onboard --auth-choice custom-api-key` on the Gateway host
 message; custom-provider secrets must be entered on their owning host. The
 desktop companion does not copy remote provider secrets to this computer.
 
-On a fresh install, setup also asks whether existing native Claude and Codex
+During manual setup, Model Setup also asks whether existing native Claude and Codex
 conversations should appear in OpenClaw. This is discovery only, not an import
 or copy. The option starts unchecked; declining disables both native session
 catalogs. Existing installations keep their current catalog behavior during an
