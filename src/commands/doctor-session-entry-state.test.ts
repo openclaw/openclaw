@@ -498,6 +498,27 @@ it("refuses a failed raw scan without treating its store as clean", async () => 
   expect(legacy.readRaw()).toBe(legacy.raw);
 });
 
+it("directs a corrupt agent database to session SQLite recovery", async () => {
+  state = await createOpenClawTestState({
+    prefix: "openclaw-entry-scan-corrupt-",
+    scenario: "minimal",
+  });
+  const pathname = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
+  closeOpenClawAgentDatabasesForTest();
+  const file = fs.openSync(pathname, "r+");
+  fs.writeSync(file, "XXXXXXXXX", 0);
+  fs.closeSync(file);
+  const refusal = await repairLegacySessionEntryStates({
+    apply: false,
+    cfg: {},
+    env: state.env,
+  }).catch((error: unknown) => error);
+  expect(refusal).toBeInstanceOf(DoctorStateMigrationRefusalError);
+  const { message, stepReceipts } = refusal as DoctorStateMigrationRefusalError;
+  expect(message).toContain("openclaw doctor --session-sqlite recover --session-sqlite-agent main");
+  expect(stepReceipts[0]?.refusal?.code).toBe("agent-database-corrupt");
+});
+
 it("normalizes only scalar state while leaving malformed identity for its repair owner", async () => {
   state = await createOpenClawTestState({
     prefix: "openclaw-entry-malformed-refusal-",

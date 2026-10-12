@@ -37,7 +37,12 @@ it.each([
       const error = new AgentDatabaseAdmissionError(
         createAgentDatabaseInspectionRefusal({ agentId: "main", paths: [], reason, cause }),
       );
-      expect(error.message.includes("doctor --fix")).toBe(!failure.capacity);
+      // A non-capacity SQLITE_CORRUPT read proves serving damage; its repair is session recovery.
+      expect(
+        error.message.includes(
+          "openclaw doctor --session-sqlite recover --session-sqlite-agent main",
+        ),
+      ).toBe(!failure.capacity);
       if (failure.capacity) {
         expect(error.message).toContain("retry the update");
       }
