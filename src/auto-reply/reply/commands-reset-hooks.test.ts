@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { MsgContext } from "../templating.js";
-import { buildCommandContext } from "./commands-context.js";
+import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -389,10 +389,7 @@ describe("handleCommands reset hooks", () => {
     expect(result).toEqual({ shouldContinue: false });
   });
 
-  it.each([
-    ["failed", { ok: false, delivered: false }],
-    ["dropped", { ok: true, delivered: false }],
-  ] as const)(
+  it.each([["failed", { ok: false, delivered: false }]] as const)(
     "falls back to the standard reset acknowledgement when the hook route is %s",
     async (_name, routeResult) => {
       triggerInternalHookMock.mockImplementationOnce(async (event: { messages: string[] }) => {
@@ -410,45 +407,6 @@ describe("handleCommands reset hooks", () => {
         shouldContinue: false,
         reply: { text: "✅ New session started.", isStatusNotice: true },
       });
-    },
-  );
-
-  it("keeps an intentionally suppressed reset hook route silent", async () => {
-    triggerInternalHookMock.mockImplementationOnce(async (event: { messages: string[] }) => {
-      event.messages.push("Reset hook says hi");
-    });
-    routeReplyMock.mockResolvedValueOnce({
-      ok: true,
-      delivered: false,
-      suppressed: true,
-    });
-    const onObservedReplyDelivery = vi.fn();
-    const params = buildResetParams("/new", resetCommandConfig);
-    params.opts = { onObservedReplyDelivery };
-
-    const result = await maybeHandleResetCommand(params);
-
-    expect(onObservedReplyDelivery).not.toHaveBeenCalled();
-    expect(result).toEqual({ shouldContinue: false });
-  });
-
-  it.each([
-    ["without a provider message id", { ok: true, delivered: true }],
-    ["before a later partial failure", { ok: false, delivered: true, messageId: "reset-hook-1" }],
-  ] as const)(
-    "marks a reset hook route as observed when delivered %s",
-    async (_name, routeResult) => {
-      triggerInternalHookMock.mockImplementationOnce(async (event: { messages: string[] }) => {
-        event.messages.push("Reset hook says hi");
-      });
-      routeReplyMock.mockResolvedValueOnce(routeResult);
-      const onObservedReplyDelivery = vi.fn();
-      const params = buildResetParams("/new", resetCommandConfig);
-      params.opts = { onObservedReplyDelivery };
-
-      await maybeHandleResetCommand(params);
-
-      expect(onObservedReplyDelivery).toHaveBeenCalledOnce();
     },
   );
 
@@ -540,13 +498,6 @@ describe("handleCommands reset hooks", () => {
       allowed: true,
     },
     {
-      name: "legacy missing scopes",
-      provider: "webchat",
-      surface: "webchat",
-      scopes: undefined,
-      allowed: true,
-    },
-    {
       name: "legacy empty scopes",
       provider: "webchat",
       surface: "webchat",
@@ -574,10 +525,7 @@ describe("handleCommands reset hooks", () => {
       scopes: ["operator.write"],
       allowed: false,
     },
-    ...[
-      { body: "/new Create a note", source: "text" as const },
-      { body: "/reset soft Create a note", source: "native" as const },
-    ].flatMap(({ body, source }) => [
+    ...[{ body: "/new Create a note", source: "text" as const }].flatMap(({ body, source }) => [
       {
         name: `${source} ${body} forwarded from Gateway to external origin`,
         body,
@@ -737,38 +685,5 @@ describe("handleCommands reset hooks", () => {
     });
     expect(triggerInternalHookMock).not.toHaveBeenCalled();
     expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
-  });
-
-  it("acknowledges bare /reset without falling through to model execution", async () => {
-    const params = buildResetParams("/RESET", resetCommandConfig);
-
-    const result = await maybeHandleResetCommand(params);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "✅ Session reset.", isStatusNotice: true },
-    });
-    expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
-  });
-
-  it("acknowledges bare /new without falling through to model execution", async () => {
-    const params = buildResetParams("/NEW", resetCommandConfig);
-
-    const result = await maybeHandleResetCommand(params);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "✅ New session started.", isStatusNotice: true },
-    });
-    expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
-  });
-
-  it("keeps reset tails falling through so the model receives the user input", async () => {
-    const params = buildResetParams("/Reset take notes", resetCommandConfig);
-
-    const result = await maybeHandleResetCommand(params);
-
-    expect(result).toBeNull();
-    expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
   });
 });

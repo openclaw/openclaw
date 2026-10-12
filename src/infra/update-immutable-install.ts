@@ -104,6 +104,12 @@ export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateI
       preparedAtMs: prepared.preparedAtMs,
     };
   }
+  if (descriptor.releaseRetention) {
+    result.releaseRetention = {
+      ...descriptor.releaseRetention,
+      generations: record.releases ?? [],
+    };
+  }
   return result;
 }
 
@@ -181,16 +187,34 @@ export async function adoptImmutableInstall(params: {
   build?: ImmutableInstallDescriptor["build"];
   previousUpdaterStopped: true;
   enableActivation?: boolean;
+  inspectReleaseRetention?: boolean;
 }): Promise<UpdateImmutableInstall> {
   requireUpdater();
-  const { installImmutableLauncher, verifyImmutableGeneration } =
-    await import("./update-immutable-generation.js");
+  const {
+    installImmutableLauncher,
+    verifyImmutableGeneration,
+    assertImmutableGenerationControlVersion,
+  } = await import("./update-immutable-generation.js");
   const { verifyImmutableService } = await import("./update-immutable-service.js");
   const { ImmutableInstallDescriptorSchema } = await import("./update-immutable-install-schema.js");
   if (!params.previousUpdaterStopped) {
     throw new Error("The previous updater must be stopped before adoption.");
   }
   const root = await fs.realpath(params.root);
+  if (params.inspectReleaseRetention) {
+    if (!params.enableActivation) {
+      throw new Error("Release retention inspection requires --enable-activation.");
+    }
+    // Check the installed bridge before executor admission can create metadata.
+    const layout = readImmutableLayout(root);
+    await assertImmutableGenerationControlVersion(layout.current.path, 3);
+    const existing = await readImmutableInstallRecord(root);
+    if (existing?.activation?.operation || existing?.descriptor.version === 1) {
+      throw new Error(
+        "Complete version-2 bridge activation and recovery before adopting retention inspection.",
+      );
+    }
+  }
   return withImmutableUpdateOwner(root, async (assertOwner) => {
     const layout = readImmutableLayout(root);
     const runtime = await fs.realpath(params.runtime);
@@ -211,8 +235,18 @@ export async function adoptImmutableInstall(params: {
     }
     const generation = await verifyImmutableGeneration(layout.current.path, layout.current.sha);
     const descriptor: ImmutableInstallDescriptor = {
-      version: params.enableActivation ? 2 : 1,
+      version: params.inspectReleaseRetention ? 3 : params.enableActivation ? 2 : 1,
       ...(params.enableActivation ? { activationEnabled: true as const } : {}),
+      ...(params.inspectReleaseRetention
+        ? {
+            releaseRetention: {
+              version: 1 as const,
+              mode: "inspect" as const,
+              keepVerifiedGenerations: 3 as const,
+              pins: [],
+            },
+          }
+        : {}),
       kind: "immutable",
       root,
       ...layout,
@@ -233,6 +267,14 @@ export async function adoptImmutableInstall(params: {
       assertImmutableInstallRecordCurrent,
     } = await import("./package-update-activation-immutable.js");
     const existing = await readImmutableInstallRecord(root);
+    if (existing?.descriptor.releaseRetention) {
+      descriptor.version = existing.descriptor.version;
+      descriptor.activationEnabled = existing.descriptor.activationEnabled;
+      descriptor.releaseRetention = existing.descriptor.releaseRetention;
+    }
+    if (descriptor.version === 3) {
+      await assertImmutableGenerationControlVersion(layout.current.path, 3);
+    }
     assertCurrent();
     if (existing) {
       if (existing.activation?.operation) {
@@ -243,18 +285,23 @@ export async function adoptImmutableInstall(params: {
         version: _version,
         activationEnabled: _enabled,
         current: previous,
+        releaseRetention: _retention,
         ...original
       } = existing.descriptor;
       const {
         version: _nextVersion,
         activationEnabled: _nextEnabled,
         current: selected,
+        releaseRetention: _nextRetention,
         ...requested
       } = descriptor;
-      const upgrade = params.enableActivation && existing.descriptor.version === 1;
+      const retentionUpgrade =
+        params.inspectReleaseRetention && !existing.descriptor.releaseRetention;
+      const upgrade =
+        (params.enableActivation && existing.descriptor.version === 1) || retentionUpgrade;
       if (
         !isDeepStrictEqual(original, requested) ||
-        (!upgrade && !isDeepStrictEqual(previous, selected))
+        ((!upgrade || retentionUpgrade) && !isDeepStrictEqual(previous, selected))
       ) {
         throw new Error("Existing immutable adoption differs; preserve its original owner.");
       }
@@ -303,7 +350,10 @@ export async function adoptImmutableInstall(params: {
             await installImmutableLauncher({
               root,
               runtimePath: runtime,
-              upgradeFromV1: { assertCurrent: assertServing },
+              upgrade: {
+                version: existing.descriptor.version === 1 ? 1 : 2,
+                assertCurrent: assertServing,
+              },
             });
             assertServing();
             const prepared = existing.prepared;
@@ -383,6 +433,7 @@ export async function prepareImmutableUpdate(params: {
       resolveImmutableGenerationEnv,
       sealImmutableGeneration,
       verifyImmutableGeneration,
+      assertImmutableGenerationControlVersion,
     } = await import("./update-immutable-generation.js");
     const runner = await buildUpdateCommandRunner();
     const defaultCommandEnv = resolveImmutableGenerationEnv({
@@ -492,6 +543,7 @@ export async function prepareImmutableUpdate(params: {
       if (current.buildDigest !== descriptor.current.buildDigest) {
         throw new Error("Current sealed generation has changed since adoption.");
       }
+      await assertImmutableGenerationControlVersion(descriptor.current.path, descriptor.version);
       assertCurrent();
       if (selectedSha === descriptor.current.sha) {
         return result("already-current");
@@ -504,6 +556,7 @@ export async function prepareImmutableUpdate(params: {
           );
         }
         const existing = await verifyImmutableGeneration(destination, selectedSha, runCommand);
+        await assertImmutableGenerationControlVersion(destination, descriptor.version);
         if (
           existing.identity !== record.prepared.identity ||
           existing.buildDigest !== record.prepared.buildDigest
@@ -549,6 +602,7 @@ export async function prepareImmutableUpdate(params: {
           throw new Error("Candidate schema metadata is unreadable.");
         }
         assertCurrent();
+        await assertImmutableGenerationControlVersion(candidate, descriptor.version);
         await sealImmutableGeneration(candidate);
         const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
         await verifyService();

@@ -3,50 +3,8 @@ import { t } from "../../i18n/index.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { icons } from "../icons.ts";
-
-export const BOARD_SIZE_PRESETS = {
-  sm: { w: 3, h: 3 },
-  md: { w: 6, h: 4 },
-  lg: { w: 8, h: 6 },
-  xl: { w: 12, h: 8 },
-} as const;
-
-export function closeBoardWidgetMenu(root: ParentNode): void {
-  const menu = root.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
-  if (menu) {
-    menu.open = false;
-  }
-}
-
-export type BoardWidgetPageMenu = {
-  widget: BoardWidget;
-  tabs: readonly BoardTab[];
-  canMutate: boolean;
-  onSelect: (value: string) => void;
-};
-
-export function renderBoardWidgetMenu(options: {
-  widget: BoardWidget;
-  tabs: readonly BoardTab[];
-  disabled: boolean;
-  onSelect: (event: CustomEvent<{ item: { value?: string } }>) => void;
-}): TemplateResult {
-  const { onSelect } = options;
-  return html`
-    <wa-dropdown class="board-widget__menu" placement="bottom-end" @wa-select=${onSelect}>
-      <button
-        class="board-widget__menu-trigger"
-        slot="trigger"
-        type="button"
-        aria-label=${t("board.widget.menuLabel")}
-        title=${t("board.widget.menuLabel")}
-      >
-        ⋮
-      </button>
-      ${renderBoardWidgetMenuItems(options)}
-    </wa-dropdown>
-  `;
-}
+import { BOARD_SIZE_PRESETS } from "./board-widget-cell-options.ts";
+export type { BoardWidgetPageMenu } from "./board-widget-cell-options.ts";
 
 export function renderBoardWidgetMenuItems(options: {
   widget: BoardWidget;
@@ -107,84 +65,33 @@ export function renderBoardWidgetMenuItems(options: {
   `;
 }
 
-export function renderBoardWidgetRejected(options: {
-  disabled: boolean;
-  onRemove: () => void;
-}): TemplateResult {
+export function renderBoardWidgetError(
+  error: unknown,
+  options: { onRetry?: () => void; action?: boolean; inline?: boolean } = {},
+): TemplateResult {
   return html`
-    <div class="board-widget__grant board-widget__grant--rejected" data-test-id="board-rejected">
-      <strong>${t("board.widget.rejected")}</strong>
-      <span>${t("board.widget.rejectedDetail")}</span>
-      <button
-        class="btn btn--small"
-        type="button"
-        ?disabled=${options.disabled}
-        @click=${options.onRemove}
+    <div
+      class=${`board-widget__error${options.action ? ` ${options.inline ? "board-widget__error--inline" : ""}` : ""}`}
+      role="alert"
+      data-test-id=${options.action ? "board-widget-action-error" : "board-widget-error"}
+    >
+      <strong
+        >${t(options.action ? "board.widget.actionErrorTitle" : "board.widget.errorTitle")}</strong
       >
-        ${t("board.widget.remove")}
-      </button>
-    </div>
-  `;
-}
-
-export function renderBoardDisabledPlugin(options: {
-  pluginId: string;
-  disabled: boolean;
-  onRemove: () => void;
-  content?: TemplateResult;
-}): TemplateResult {
-  return html`
-    <div class="board-widget__disabled-plugin" data-test-id="board-disabled-plugin">
-      ${
-        options.content ??
-        html`<strong>${t("board.widget.disabledPlugin", { pluginId: options.pluginId })}</strong>`
-      }
-      <button
-        class="btn btn--small"
-        type="button"
-        ?disabled=${options.disabled}
-        @click=${options.onRemove}
+      <span
+        >${t(options.action ? "board.widget.actionErrorDetail" : "board.widget.errorDetail")}</span
       >
-        ${t("board.widget.remove")}
-      </button>
-    </div>
-  `;
-}
-
-export function renderBoardWidgetError(error: unknown, onRetry?: () => void): TemplateResult {
-  const message = formatUiError(error);
-  return html`
-    <div class="board-widget__error" role="alert" data-test-id="board-widget-error">
-      <strong>${t("board.widget.errorTitle")}</strong>
-      <span>${t("board.widget.errorDetail")}</span>
       <details>
         <summary>${t("board.widget.errorShow")}</summary>
-        <code>${message}</code>
+        <code>${options.action ? error : formatUiError(error)}</code>
       </details>
       ${
-        onRetry
-          ? html`<button class="btn btn--small" type="button" @click=${onRetry}>
+        options.onRetry
+          ? html`<button class="btn btn--small" type="button" @click=${options.onRetry}>
               ${t("board.widget.retry")}
             </button>`
           : nothing
       }
-    </div>
-  `;
-}
-
-export function renderBoardWidgetActionError(error: string, inline = false): TemplateResult {
-  return html`
-    <div
-      class=${`board-widget__error ${inline ? "board-widget__error--inline" : ""}`}
-      role="alert"
-      data-test-id="board-widget-action-error"
-    >
-      <strong>${t("board.widget.actionErrorTitle")}</strong>
-      <span>${t("board.widget.actionErrorDetail")}</span>
-      <details>
-        <summary>${t("board.widget.errorShow")}</summary>
-        <code>${error}</code>
-      </details>
     </div>
   `;
 }

@@ -12,7 +12,7 @@ import {
 import * as deliveryStore from "../config/sessions/conversation-delivery-store.js";
 import {
   registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
 import * as conversationRegistry from "../config/sessions/conversation-registry.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
@@ -77,7 +77,10 @@ describe("runGatewayConversationSend", () => {
     "admits the initial writable lookup before sending (aborted=%s)",
     async (aborted) => {
       const deps = await createDeps();
-      const scope = resolveConversationRegistryScope({ agentId: "main", config: deps.config });
+      const scope = await prepareConversationRegistryScope({
+        agentId: "main",
+        config: deps.config,
+      });
       const writer = holdConversationWriterForTest(scope);
       await writer.entered;
       const controller = new AbortController();
@@ -127,7 +130,7 @@ describe("runGatewayConversationSend", () => {
   it("joins accepted send reconciliation on its original store after cancellation and config rotation", async () => {
     const deps = await createDeps();
     const replacement = await createConversationDeliveryTestStore();
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: deps.config });
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config: deps.config });
     const blocked = createDeferred<ReturnType<typeof holdConversationWriterForTest>>();
     const controller = new AbortController();
     let currentConfig = deps.config;

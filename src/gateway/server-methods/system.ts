@@ -30,6 +30,7 @@ import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
+import { readHostFreeMemoryBytes } from "../../infra/host-memory.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { readSystemDisks } from "../../infra/system-disks.js";
@@ -50,7 +51,7 @@ import { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
@@ -166,7 +167,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     ...(cpuModel ? { cpuModel } : {}),
     ...(loadAverage.some((value) => value !== 0) ? { loadAverage } : {}),
     memoryTotalBytes: os.totalmem(),
-    memoryFreeBytes: os.freemem(),
+    memoryFreeBytes: readHostFreeMemoryBytes(),
     ...readGatewayProcessVitals(context.getEventLoopHealth),
     // Keep the existing state-volume reading when native discovery is unavailable;
     // an empty successful discovery intentionally stays empty.
@@ -317,9 +318,14 @@ export const systemHandlers: GatewayRequestHandlers = {
       read?.snapshot.assertCurrent();
       const targetSession = binding
         ? read?.entry
-        : loadGatewaySessionEntryReadOnly(requestedSessionKey, {
-            agentId: requestedAgentId,
-          }).entry;
+        : (
+            await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg,
+              key: requestedSessionKey,
+              agentId: requestedAgentId,
+              assertActive: authority.assertCurrent,
+            })
+          ).entry;
       if (!targetSession || targetSession.archivedAt !== undefined) {
         respond(
           false,

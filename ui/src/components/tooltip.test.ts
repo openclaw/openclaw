@@ -59,9 +59,13 @@ function interactiveTooltipContent(tooltip: TooltipElement) {
 }
 
 function expectSharedTooltipSkin(tooltip: TooltipElement) {
-  const styles = [...(tooltip.shadowRoot?.querySelectorAll("style") ?? [])]
-    .map((style) => style.textContent)
-    .join("\n");
+  const root = tooltip.shadowRoot!;
+  const styles = [
+    ...[...root.querySelectorAll("style")].map((style) => style.textContent),
+    ...[...(root.adoptedStyleSheets ?? [])].flatMap((sheet) =>
+      [...sheet.cssRules].map((rule) => rule.cssText),
+    ),
+  ].join("\n");
   expect(styles).toContain("--wa-tooltip-background-color:");
   expect(styles).toContain("--wa-tooltip-border-color:");
   expect(styles).toContain("--wa-tooltip-border-width: 1px");
@@ -70,7 +74,21 @@ function expectSharedTooltipSkin(tooltip: TooltipElement) {
   expect(styles).toContain("var(--overlay-border, var(--border-strong))");
   expect(styles).toContain("var(--overlay-shadow, var(--shadow-md))");
   expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
-  expect(styles).toContain("animation: none");
+  if (root.adoptedStyleSheets?.length) {
+    const animationNames = root.adoptedStyleSheets
+      .flatMap((sheet) => Array.from(sheet.cssRules))
+      .filter(
+        (rule): rule is CSSMediaRule =>
+          rule instanceof CSSMediaRule && rule.conditionText === "(prefers-reduced-motion: reduce)",
+      )
+      .flatMap((rule) => Array.from(rule.cssRules))
+      .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule)
+      .map((rule) => rule.style.animationName);
+    // WebKit serializes the `animation: none` shorthand as `animation: auto`.
+    expect(animationNames).toContain("none");
+  } else {
+    expect(styles).toContain("animation: none");
+  }
 }
 
 describe("openclaw-tooltip", () => {
@@ -848,6 +866,8 @@ describe("title tooltips", () => {
       wrapper.append(link);
       document.body.append(provider, wrapper);
       dispatchMousePointer(link, "pointerover");
+      // previewForAnchor arms its hover timer after the tooltip's first commit.
+      await commitTooltip(document.querySelector<TooltipElement>("openclaw-tooltip")!);
       await vi.advanceTimersByTimeAsync(200);
       await expectOpenCount(1);
       provider.append(moved === "link" ? link : wrapper);
@@ -861,6 +881,7 @@ describe("title tooltips", () => {
       dispatchMousePointer(link, "pointerleave");
       expect(link.title).toBe("Pull request details");
       dispatchMousePointer(link, "pointerover");
+      await commitTooltip(document.querySelector<TooltipElement>("openclaw-tooltip")!);
       await vi.advanceTimersByTimeAsync(200);
       await expectOpenCount(1);
       expect(link.href).toBe("https://github.com/openclaw/openclaw/pull/99816");

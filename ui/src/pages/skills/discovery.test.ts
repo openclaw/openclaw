@@ -1,14 +1,14 @@
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
+import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createSkill } from "./view.test-support.ts";
-import { renderSkills } from "./view.ts";
+afterEach(cleanupSkillsViews);
 
 function renderDiscovery(
   props: Parameters<typeof createProps>[0],
   container = document.createElement("div"),
 ) {
-  render(renderSkills(createProps({ surface: "discovery", ...props })), container);
+  renderSkills(createProps({ surface: "discovery", ...props }), container);
   return container;
 }
 
@@ -112,7 +112,9 @@ describe("unified skill discovery", () => {
     expect(inputs).toHaveLength(1);
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(2);
     expect(
-      container.querySelectorAll("wa-switch, .skills-group, .plugin-catalog-chips"),
+      container.querySelectorAll(
+        "input.settings-toggle__input, .skills-group, .plugin-catalog-chips",
+      ),
     ).toHaveLength(0);
     const local = container.querySelector('[data-skill-id="local:repo-skill"]')!;
     expect(local.querySelector('[role="img"]')?.getAttribute("title")).toContain("Ready");

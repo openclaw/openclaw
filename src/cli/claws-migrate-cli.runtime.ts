@@ -15,6 +15,9 @@ import { withConfigSourceLocks } from "../config/write-lock.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { emitClawFailure, logClawExperimentalWarning } from "./claws-cli-output.js";
 import type { ClawsMigrateOptions } from "./claws-cli.js";
+import { offlineClawAction } from "./claws-cli.state-owner.js";
+
+export const runClawsMigrateCommand = offlineClawAction("migrate", runClawsMigrateCommandLocal);
 
 async function readMigrationConfig() {
   const snapshot = await readConfigFileSnapshot({ observe: false, isolateEnv: true });
@@ -80,7 +83,7 @@ function emitMigrationFailure(
   });
 }
 
-export async function runClawsMigrateCommand(
+async function runClawsMigrateCommandLocal(
   agentId: string,
   opts: ClawsMigrateOptions,
   runtime: RuntimeEnv = defaultRuntime,

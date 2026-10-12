@@ -288,6 +288,7 @@ suite.define(() => {
           const assertAnchor = async (
             samples: ReturnType<typeof sampleAnchor>,
             allowShortTranscript = false,
+            anchor = { track: collapsed.top, tick: tickTop },
           ) => {
             for (const position of await samples) {
               expect(position.connected).toBe(true);
@@ -299,8 +300,8 @@ suite.define(() => {
                 continue;
               }
               expect(position.display).toBe("block");
-              expect(position.track).toBe(collapsed.top);
-              expect(position.tick).toBe(tickTop);
+              expect(position.track).toBe(anchor.track);
+              expect(position.tick).toBe(anchor.tick);
             }
           };
           for (const open of [true, false, true, false, true]) {
@@ -405,12 +406,30 @@ suite.define(() => {
               await page.locator(".chat-queue__item", { hasText: text }).waitFor();
               await assertAnchor(queueSamples, true);
             }
-            const shortTranscriptSamples = sampleAnchor();
             // Without docked progress, use a shorter window to reach the same rail cutoff.
             await page.setViewportSize({ width: 1440, height: 600 });
+            // Window resizing moves the rail; only subsequent composer changes retain its anchor.
+            const resizedAnchor = await track.evaluate(
+              (element, index) =>
+                new Promise<{ track: number; tick: number }>((resolve) => {
+                  const observer = new ResizeObserver(() => {
+                    observer.disconnect();
+                    requestAnimationFrame(() => {
+                      const tick = element.querySelectorAll(".chat-position-rail__tick")[index]!;
+                      resolve({
+                        track: element.getBoundingClientRect().top,
+                        tick: tick.getBoundingClientRect().top,
+                      });
+                    });
+                  });
+                  observer.observe(element.closest(".chat-main__conversation")!);
+                }),
+              anchorIndex,
+            );
+            const shortTranscriptSamples = sampleAnchor();
             await textarea.fill("Keep the complete review draft available.\n".repeat(12));
             await track.waitFor({ state: "hidden" });
-            await assertAnchor(shortTranscriptSamples, true);
+            await assertAnchor(shortTranscriptSamples, true, resizedAnchor);
             const transcriptContentHeight = () =>
               page.locator(".chat-thread").evaluate((element) => {
                 const style = getComputedStyle(element);

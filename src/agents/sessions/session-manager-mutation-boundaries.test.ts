@@ -5,10 +5,10 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,

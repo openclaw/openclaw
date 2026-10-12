@@ -1,60 +1,67 @@
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { SYNCED_PREF_KEYS, type ServerUiPrefs } from "./server-prefs-state.ts";
 import {
   clearBackgroundPreferenceIdentity,
   setBackgroundPreferenceIdentity,
 } from "./settings-background.ts";
-import { refreshUiPreferences } from "./settings.ts";
 
-type ProfileAppearancePrefs = { profileId: string; scope: string; prefs: ServerUiPrefs };
+type ProfileAppearancePrefs = {
+  profileId: string;
+  scope: string;
+  prefs: ServerUiPrefs;
+};
+export type ProfilePreferencesReadOptions = {
+  isCurrent: () => boolean;
+};
 
-let profileAppearancePrefs: ProfileAppearancePrefs | null = null;
-let profileAppearanceIdentity: { profileId: string; scope: string } | null = null;
-let profilePreferencesRequestId = 0;
+// The asynchronous reader borrows this same owner, never a copied publication state.
+export type ProfilePreferencesState = {
+  appearance: ProfileAppearancePrefs | null;
+  identity: { profileId: string; scope: string } | null;
+  requestId: number;
+};
+export const profilePreferencesState: ProfilePreferencesState = {
+  appearance: null,
+  identity: null,
+  requestId: 0,
+};
+
+// Eager identity updates and the deferred reader share this owner and request generation.
+const state = profilePreferencesState;
 
 export function resolveProfilePreferenceScope(scope: string, profileId?: string | null): string {
   return profileId ? `${scope}:profile:${profileId}` : scope;
+}
+
+export function resolveProfileAppearanceProfileId(scope: string): string | null {
+  return state.identity?.scope === scope ? state.identity.profileId : null;
 }
 
 export function resolveProfileAppearancePrefs(
   scope: string,
   profileId?: string | null,
 ): ServerUiPrefs | null {
-  return profileId &&
-    profileAppearancePrefs?.profileId === profileId &&
-    profileAppearancePrefs.scope === scope
-    ? profileAppearancePrefs.prefs
+  return profileId && state.appearance?.profileId === profileId && state.appearance.scope === scope
+    ? state.appearance.prefs
     : null;
-}
-
-export function resolveProfileAppearanceProfileId(scope: string): string | null {
-  return profileAppearanceIdentity?.scope === scope ? profileAppearanceIdentity.profileId : null;
 }
 
 export function rememberProfileAppearanceIdentity(
   scope: string,
   profileId: string | null,
 ): boolean {
-  if (
-    profileAppearanceIdentity?.scope !== scope ||
-    profileAppearanceIdentity.profileId !== profileId
-  ) {
-    profilePreferencesRequestId += 1;
-    profileAppearancePrefs = null;
+  if (state.identity?.scope !== scope || state.identity.profileId !== profileId) {
+    state.requestId += 1;
+    state.appearance = null;
   }
-  profileAppearanceIdentity = profileId ? { scope, profileId } : null;
-  const changed = setBackgroundPreferenceIdentity(scope, profileId);
-  if (changed) {
-    refreshUiPreferences();
-  }
-  return changed;
+  state.identity = profileId ? { scope, profileId } : null;
+  return setBackgroundPreferenceIdentity(scope, profileId);
 }
 
-/** A write retires reads started before its commit without discarding the current projection. */
+/** A commit retires older reads without discarding the current projection. */
 export function invalidateProfileAppearanceReads(clearSnapshot = false): void {
-  profilePreferencesRequestId += 1;
+  state.requestId += 1;
   if (clearSnapshot) {
-    profileAppearancePrefs = null;
+    state.appearance = null;
   }
 }
 
@@ -63,13 +70,8 @@ export function recordProfileAppearanceCommit(
   profileId: string,
   batch: ServerUiPrefs,
 ): void {
-  if (
-    profileAppearanceIdentity?.scope !== scope ||
-    profileAppearanceIdentity.profileId !== profileId
-  ) {
-    return;
-  }
-  if (!profileAppearancePrefs) {
+  const prefs = resolveProfileAppearancePrefs(scope, profileId);
+  if (state.identity?.scope !== scope || state.identity.profileId !== profileId || !prefs) {
     return;
   }
   for (const key of SYNCED_PREF_KEYS) {
@@ -77,36 +79,16 @@ export function recordProfileAppearanceCommit(
       continue;
     }
     if (batch[key] === null) {
-      delete profileAppearancePrefs.prefs[key];
+      delete prefs[key];
     } else {
-      Object.assign(profileAppearancePrefs.prefs, { [key]: batch[key] });
+      Object.assign(prefs, { [key]: batch[key] });
     }
   }
 }
 
 export function resetProfileAppearancePrefs(): void {
-  profileAppearancePrefs = null;
-  profileAppearanceIdentity = null;
+  state.appearance = null;
+  state.identity = null;
+  state.requestId += 1;
   clearBackgroundPreferenceIdentity();
-  refreshUiPreferences();
-  profilePreferencesRequestId += 1;
-}
-
-export async function loadProfileAppearancePrefs(
-  client: GatewayBrowserClient,
-  profileId: string,
-  scope: string,
-): Promise<boolean> {
-  rememberProfileAppearanceIdentity(scope, profileId);
-  const requestId = ++profilePreferencesRequestId;
-  const { readProfileAppearancePrefs } = await import("./server-prefs-profile-runtime.ts");
-  if (requestId !== profilePreferencesRequestId) {
-    return false;
-  }
-  const prefs = await readProfileAppearancePrefs(client, profileId);
-  if (requestId !== profilePreferencesRequestId || !prefs) {
-    return false;
-  }
-  profileAppearancePrefs = { profileId, scope, prefs };
-  return true;
 }

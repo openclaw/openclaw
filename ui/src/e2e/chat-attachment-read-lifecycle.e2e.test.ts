@@ -18,6 +18,8 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat attachment read lifecycle",
@@ -122,7 +124,8 @@ suite.define(() => {
         buffer: Buffer.from("Synthetic attachment payload survives Home handoff."),
       });
       await home.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
-      await page.getByRole("link", { name: "Agents", exact: true }).click();
+      const pages = await openSidebarPages(page);
+      await pages.getByRole("link", { name: "Agents", exact: true }).click();
       await page.waitForURL((url) => url.pathname.endsWith("/agents"));
       await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
       await page.locator(".sidebar-footer-bar__home").click();
@@ -145,7 +148,7 @@ suite.define(() => {
         }
         await proof.finish();
       });
-      await page.locator("a.nav-item--home").click();
+      await openHomeFullPage(page);
       await composer.waitFor({ state: "visible" });
       await expect.poll(() => dockComposer.isVisible()).toBe(false);
       const receipt = {

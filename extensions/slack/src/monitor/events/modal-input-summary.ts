@@ -1,4 +1,7 @@
-import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictFiniteNumber,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalObjectRecord,
   normalizeUniqueTrimmedStringList,
@@ -190,4 +193,41 @@ export function summarizeSlackViewState(values: unknown): ModalInputSummary[] {
     }
   }
   return entries;
+}
+
+export function formatInteractionSelectionLabel(params: {
+  actionId: string;
+  summary: SlackActionSummary;
+  buttonText?: string;
+}): string {
+  if (params.summary.actionType === "button" && params.buttonText?.trim()) {
+    return params.buttonText.trim();
+  }
+  const selected = params.summary.selectedLabels?.length
+    ? params.summary.selectedLabels
+    : params.summary.selectedValues;
+  if (selected?.length) {
+    return selected.length <= 3
+      ? selected.join(", ")
+      : `${selected.slice(0, 3).join(", ")} +${selected.length - 3}`;
+  }
+  if (params.summary.selectedDate) {
+    return params.summary.selectedDate;
+  }
+  if (params.summary.selectedTime) {
+    return params.summary.selectedTime;
+  }
+  if (typeof params.summary.selectedDateTime === "number") {
+    const selectedDateTime = timestampMsToIsoString(params.summary.selectedDateTime * 1000);
+    if (selectedDateTime) {
+      return selectedDateTime;
+    }
+  }
+  if (params.summary.richTextPreview) {
+    return params.summary.richTextPreview;
+  }
+  if (params.summary.value?.trim()) {
+    return params.summary.value.trim();
+  }
+  return params.actionId;
 }

@@ -115,6 +115,30 @@ describe("state poll store", () => {
     ).resolves.toBeNull();
   });
 
+  it("isolates poll metadata and vote buckets between accounts", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-msteams-polls-accounts-"));
+    const defaultStore = createMSTeamsPollStoreState();
+    const supportStore = createMSTeamsPollStoreState({ accountId: "support" });
+    await defaultStore.createPoll(poll({ question: "Default?", votes: { shared: ["0"] } }));
+    expect(await supportStore.getPoll("poll-1")).toBeNull();
+    await supportStore.createPoll(poll({ question: "Support?", votes: { shared: ["1"] } }));
+    await supportStore.recordVote({ pollId: "poll-1", voterId: "new-user", selections: ["1"] });
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    expect(
+      await createMSTeamsPollStoreState({ accountId: "default" }).getPoll("poll-1"),
+    ).toMatchObject({
+      question: "Default?",
+      votes: { shared: ["0"] },
+    });
+    expect(
+      await createMSTeamsPollStoreState({ accountId: "support" }).getPoll("poll-1"),
+    ).toMatchObject({
+      question: "Support?",
+      votes: { shared: ["1"], "new-user": ["1"] },
+    });
+  });
+
   it("serializes concurrent votes for the same poll", async () => {
     const stateDir = tempDirs.make("openclaw-msteams-polls-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

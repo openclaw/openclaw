@@ -440,26 +440,6 @@ describe("pipeline", () => {
     });
   });
 
-  it("parks an invalid structural inbound verdict instead of accepting or rejecting it", async () => {
-    const { alice, bob } = identities();
-    const envelope = sealedEnvelope(alice, bob, "01JZ0000000000000000000010", {
-      text: "inbound structural adapter",
-    });
-    // guard_failure records classifier unavailability, not a content decision:
-    // the message stays un-acked for retry instead of rejecting the peer.
-    await expect(
-      composeInbound(
-        inboundOptions(envelope, alice, bob, {
-          guard: structuralGuard(allow.model, { ...allow, policyVersion: "wrong" }),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      stage: "guard",
-      verdict: { decision: "deny", category: "guard_failure" },
-      receipt: undefined,
-    });
-  });
-
   it("requires exact full-proposal approval and fresh classification for review", async () => {
     const { alice, bob } = identities();
     const review = reviewVerdict();

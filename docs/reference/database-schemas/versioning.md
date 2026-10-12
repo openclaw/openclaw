@@ -30,6 +30,19 @@ all incompatibilities without modifying the source files.
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
+Agent deletion adds a nullable `phase TEXT` column to its existing journal on
+first deletion or Doctor reconstruction. `draining` closes ingress while existing
+runs abort and settle before database retirement. The deletion owner then records
+`retiring` and completes cleanup. Recovery resumes the recorded phase after a
+restart; retries never move retirement back to draining. Journals without the
+column, or with a null phase, retain their previous retirement meaning without
+rewriting their paths or completion state. Older readers continue treating every
+journal row as a deletion fence and may require an explicit cleanup retry. The
+numeric schema version, journal retention, and rollback backup policy are unchanged.
+Retirement-only callers leave the phase null. Automatic Gateway recovery leaves
+those journals with retained Claw ownership to the existing Claw removal owner;
+its selective package and workspace cleanup still requires a removal-plan retry.
+
 Linux Node worker cleanup uses the additive `node_worker_launch_process_scopes`
 companion table. Its launch-bound `linux-subreaper` certificate records kernel
 descendant extinction independently of `node_worker_launch_cleanup.lineage_settled`.
@@ -70,10 +83,11 @@ Historical metadata remains private to its snapshot unless the owner positively
 matches it to the current committed admission. Rollback restores both staged
 publication and connection-local version facts.
 
-A fresh `PRAGMA data_version` check still observes foreign commits on the next
-unpinned read, even within the same event-loop turn. It invalidates cached row
-facts without rereading `schema_version`, `user_version`, or the catalog. SQLite
-read snapshots retain their view until they end; the next read then observes
+The Gateway owns runtime database state. Committed in-process write receipts
+invalidate cached rows across handles and workers without querying `data_version`,
+`schema_version`, `user_version`, or the catalog. Other processes must route writes
+through the Gateway or hold exclusive offline ownership. SQLite read snapshots
+retain their view until they end; statements outside an open snapshot see current
 committed rows. Initial admission still refuses unsupported versions. Doctor,
 explicit verification, migration, and snapshot consistency checks retain their
 own contracts. This changes no stored schema, migration, durability, or update
@@ -462,6 +476,12 @@ original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
 
+The mutable JSON predicate projections require
+[agent schema 26](/reference/database-schemas/agent-schema-history#json-predicate-columns).
+Older writers must be fenced because they update canonical JSON without maintaining
+the promoted columns. The forward migration backfills every retained row once;
+NULL-only repair on reopen cannot make a downgrade and re-upgrade safe.
+
 ### Schema bumps and older updaters
 
 OpenClaw 2026.9.2 introduced the update ledger but reopens it with old code after
@@ -481,8 +501,11 @@ completed rebuild. This requires no new table,
 configuration option, or environment override.
 
 Current content is ready for readers even while its version is unpublished.
-Ordinary CLI commands can run alongside the Gateway throughout this window;
-publication alone does not trigger schema repair or require stopping the Gateway.
+Read-only CLI operations and Gateway-routed mutations can run alongside the
+Gateway throughout this window. Independent SQLite writers require exclusive
+ownership while the Gateway is stopped; the older update driver retains the
+explicit handoff contract below. Publication alone does not trigger schema repair
+or require stopping the Gateway.
 
 A subsequent update can run during this window. Its migration verification and
 rollback checks compare applied content versions from private database snapshots.

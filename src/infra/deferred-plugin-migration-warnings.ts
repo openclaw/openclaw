@@ -1,7 +1,7 @@
 /** Match both shipped warning forms without reading retired migration reports. */
 export async function readResolvedDeferredPluginMigrationWarnings(
   messages: readonly (string | undefined)[],
-): Promise<ReadonlyMap<string, number>> {
+): Promise<ReadonlySet<string>> {
   const pluginWarnings = new Map<string, string>();
   for (const message of messages) {
     const pluginId =
@@ -14,22 +14,15 @@ export async function readResolvedDeferredPluginMigrationWarnings(
     }
   }
   if (!pluginWarnings.size) {
-    return new Map();
+    return new Set();
   }
-  const { readDeferredPluginMigrationCompletionsAsync } =
-    await import("./deferred-plugin-migrations.js");
-  const completions = new Map(
-    (await readDeferredPluginMigrationCompletionsAsync()).map(({ pluginId, completedAtMs }) => [
-      pluginId,
-      completedAtMs,
-    ]),
+  const { readDeferredPluginMigrationsAsync } = await import("./deferred-plugin-migrations.js");
+  const pending = new Set(
+    (await readDeferredPluginMigrationsAsync()).map(({ pluginId }) => pluginId),
   );
-  const resolved = new Map<string, number>();
-  for (const [message, pluginId] of pluginWarnings) {
-    const completedAtMs = completions.get(pluginId);
-    if (completedAtMs !== undefined) {
-      resolved.set(message, completedAtMs);
-    }
-  }
-  return resolved;
+  return new Set(
+    [...pluginWarnings]
+      .filter(([, pluginId]) => !pending.has(pluginId))
+      .map(([message]) => message),
+  );
 }

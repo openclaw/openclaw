@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   assertTransactionUsable,
@@ -6,6 +7,7 @@ import {
 } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../infra/sqlite-worker-database-context.js";
+import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { loadPersistedAuthProfileStoreAtDatabasePath } from "./auth-profiles/persisted.js";
@@ -15,7 +17,10 @@ import {
   pluginModelCatalogCredentialValues,
   type PluginModelCatalogAuthSnapshot,
 } from "./plugin-model-catalog-auth.js";
-import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repair.js";
+import {
+  isGeneratedPluginModelCatalog,
+  stripPluginModelCatalogCredentials,
+} from "./plugin-model-catalog-repair.js";
 import {
   PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
   PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
@@ -24,6 +29,10 @@ import {
 
 export type PluginModelCatalogCredentialOperations = {
   "catalog.removeCredentials": { input: { credentials: string[] }; output: void };
+  "catalog.pruneRemovedProviders": {
+    input: { removedProviderBaseUrls: Record<string, string> };
+    output: boolean;
+  };
   "catalog.replace": {
     input: {
       planned: Array<[string, string]>;
@@ -33,6 +42,69 @@ export type PluginModelCatalogCredentialOperations = {
     output: boolean;
   };
 };
+
+/** Apply removal-time endpoint facts to the current rows inside the writer transaction. */
+function pruneRemovedProviderCatalogEntriesInDatabase(params: {
+  database: DatabaseSync;
+  removedProviderBaseUrls: Readonly<Record<string, string>>;
+  updatedAt: number;
+}): boolean {
+  const removedProviders = Object.entries(params.removedProviderBaseUrls).flatMap(
+    ([providerId, baseUrl]) => {
+      const normalized = normalizePluginProviderBaseUrl(baseUrl);
+      return normalized ? [[providerId, normalized] as const] : [];
+    },
+  );
+  const kysely = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "cache_entries">>(
+    params.database,
+  );
+  const rows = executeSqliteQuerySync(
+    params.database,
+    kysely
+      .selectFrom("cache_entries")
+      .select(["key", "value_json"])
+      .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE),
+  ).rows;
+  let changed = false;
+  for (const row of rows) {
+    if (row.value_json === null) {
+      continue;
+    }
+    let catalog: unknown;
+    try {
+      catalog = JSON.parse(row.value_json);
+    } catch {
+      continue;
+    }
+    if (!isGeneratedPluginModelCatalog(catalog) || !isRecord(catalog.providers)) {
+      continue;
+    }
+    let removed = false;
+    for (const [providerId, normalizedBaseUrl] of removedProviders) {
+      const provider = catalog.providers[providerId];
+      if (
+        isRecord(provider) &&
+        typeof provider.baseUrl === "string" &&
+        normalizePluginProviderBaseUrl(provider.baseUrl) === normalizedBaseUrl
+      ) {
+        delete catalog.providers[providerId];
+        removed = true;
+      }
+    }
+    if (removed) {
+      executeSqliteQuerySync(
+        params.database,
+        kysely
+          .updateTable("cache_entries")
+          .set({ value_json: JSON.stringify(catalog), updated_at: params.updatedAt })
+          .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE)
+          .where("key", "=", row.key),
+      );
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 /** Reread authorization inside the admitted publication, including outside discovery snapshots. */
 function findRemovedPluginModelCatalogCredentials(
@@ -81,6 +153,13 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       return runSqliteWorkerTransactionSync(context, () => {
+        if (command.type === "catalog.pruneRemovedProviders") {
+          return pruneRemovedProviderCatalogEntriesInDatabase({
+            database: context.database,
+            removedProviderBaseUrls: command.input.removedProviderBaseUrls,
+            updatedAt: Date.now(),
+          });
+        }
         if (command.type === "catalog.replace") {
           const { planned, authSnapshot, env } = command.input;
           const removedCredentials =

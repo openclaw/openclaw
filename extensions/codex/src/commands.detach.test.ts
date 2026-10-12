@@ -1,5 +1,5 @@
 import path from "node:path";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import * as conversationBindingInspection from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -12,7 +12,10 @@ import {
   retainCodexAppServerLiveThread,
 } from "./app-server/client-runtime.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
-import { testCodexAppServerBindingStore } from "./app-server/session-binding.test-helpers.js";
+import {
+  createConversationInspection,
+  testCodexAppServerBindingStore,
+} from "./app-server/session-binding.test-helpers.js";
 import * as detachSharedClientRuntime from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import { handleCodexCommand } from "./command-dispatch.js";
@@ -475,8 +478,10 @@ describe("codex detach command", () => {
       .spyOn(detachSharedClientRuntime, "getLeasedSharedCodexAppServerClient")
       .mockResolvedValue(f.harness.client);
     const resolvePublic = vi
-      .spyOn(getSessionBindingService(), "resolveByConversation")
-      .mockReturnValue({ bindingId: f.conversation.bindingId } as never);
+      .spyOn(conversationBindingInspection, "inspectConversationBinding")
+      .mockImplementation((conversation) =>
+        createConversationInspection(conversation, f.conversation.bindingId),
+      );
     cleanup.push(() => {
       resolvePublic.mockRestore();
       acquireClient.mockRestore();
@@ -658,7 +663,11 @@ describe("Codex diagnostics confirmation", () => {
   ])("rejects diagnostics confirmation when the $change changes", async ({ replacement }) => {
     let binding: CodexAppServerThreadBinding = supervisedTestBinding("thread-scope-change");
     const f = await fixture(binding, {}, { supervision: { enabled: true } });
-    f.deps.bindingStore = { ...bindingStore, read: () => binding };
+    f.deps.bindingStore = {
+      ...bindingStore,
+      read: () => binding,
+      readAsync: async () => binding,
+    };
     const token = readDiagnosticsConfirmationToken(await f.run("diagnostics"));
     binding = replacement;
     await expect(f.run(`diagnostics confirm ${token}`)).resolves.toEqual({

@@ -5,12 +5,12 @@ import { createModel } from "./model.test-support.js";
 
 const cloudModel = createModel("kimi-k2.5:cloud", "Kimi K2.5 Cloud", { contextWindow: 131072 });
 
-function legacyLocalConfig(): OpenClawConfig {
+function legacyLocalConfig(baseUrl = "http://127.0.0.1:11434"): OpenClawConfig {
   return {
     models: {
       providers: {
         ollama: {
-          baseUrl: "http://127.0.0.1:11434",
+          baseUrl,
           api: "ollama",
           apiKey: "OLLAMA_API_KEY",
           models: [cloudModel],
@@ -28,6 +28,26 @@ function legacyLocalConfig(): OpenClawConfig {
 }
 
 describe("ollama doctor contract", () => {
+  it.each(["https://OLLAMA.COM:443/api", "${OLLAMA_BASE_URL}"])(
+    "preserves hosted authentication and model references during preflight with baseUrl %s",
+    (baseUrl) => {
+      const config = legacyLocalConfig(baseUrl);
+      config.agents = { defaults: { model: "ollama/kimi-k2.5:cloud@ollama:default" } };
+      const original = structuredClone(config);
+      expect(
+        legacyConfigRules[0]?.match(
+          config.models?.providers?.ollama,
+          config as unknown as Record<string, unknown>,
+        ),
+      ).toBe(false);
+      expect(normalizeCompatibilityConfig({ cfg: config })).toEqual({
+        config: original,
+        changes: [],
+      });
+      expect(config).toEqual(original);
+    },
+  );
+
   it("migrates the pre-#123190 local marker without replacing its catalog or default", () => {
     const config = legacyLocalConfig();
     const localRule = legacyConfigRules[0];

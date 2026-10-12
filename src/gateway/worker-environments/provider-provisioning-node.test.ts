@@ -29,7 +29,7 @@ import * as support from "./service.test-support.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 describe("node worker provider provisioning", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
   afterEach(() => closeOpenClawAgentDatabases());
 
   it.each([

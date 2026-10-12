@@ -15,7 +15,10 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.types.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { prepareIncognitoSessionHistoryRead } from "../config/sessions/session-incognito-history-read.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { SessionTranscriptContextProjectionSource } from "../config/sessions/session-transcript-context-read.js";
 import type { SessionTranscriptContextReader } from "../config/sessions/session-transcript-context-reader.js";
 import {
@@ -29,7 +32,10 @@ import type {
   TranscriptEntryAnchor,
 } from "../config/sessions/transcript-entry-anchor.js";
 import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
-import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  withSessionTranscriptWriteAssertion,
+} from "../config/sessions/transcript-write-context.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -63,6 +69,54 @@ export function captureCodexSessionContextReader(
   source: SessionTranscriptRuntimeTarget,
   signal?: AbortSignal,
 ): SessionTranscriptContextReader | undefined {
+  const memory = getSessionActorStorageBinding(source);
+  if (memory) {
+    const target = captureSessionTranscriptTargetBinding(source);
+    const assertOwned = captureOwnedTranscriptWriteAssertion(target);
+    const admission = resolveSessionTranscriptReadFence(target);
+    const authority = {
+      ...memory.authority,
+      assertCurrent() {
+        signal?.throwIfAborted();
+        memory.authority.assertCurrent();
+        memory.actor.assertReadable();
+        assertOwned();
+      },
+    };
+    return async (readTarget, read) => {
+      if (
+        readTarget.agentId !== target.agentId ||
+        readTarget.sessionKey !== target.sessionKey ||
+        readTarget.sessionId !== target.sessionId
+      ) {
+        throw new SessionTranscriptReadFenceError(
+          "Context reader belongs to another transcript target",
+        );
+      }
+      const snapshot = await memory.actor.storage!.read(
+        {
+          type: "session.history.context-messages",
+          input: { sessionId: target.sessionId, admission },
+        },
+        authority,
+      );
+      // Detached content reflects the committed read; only live disclosure authority matters now.
+      const messages = (function* () {
+        for (const message of snapshot.messages) {
+          authority.assertCurrent();
+          yield message;
+        }
+      })();
+      try {
+        authority.assertCurrent();
+        const result = await read(messages, snapshot.header);
+        authority.assertCurrent();
+        return result;
+      } finally {
+        messages.return(undefined);
+      }
+    };
+  }
   const binding = captureIncognitoSessionBinding(source);
   if (!binding) {
     return undefined;
@@ -91,12 +145,15 @@ export function captureCodexSessionContextReader(
       const { bindIncognitoSessionComputeReader } =
         await import("../config/sessions/session-incognito-compute-read.js");
       assertCurrent();
-      return bindIncognitoSessionComputeReader({
-        actor,
-        authority: { assertCurrent },
-        target: input,
+      const prepared = prepareIncognitoSessionHistoryRead(
+        { actor, authority: { assertCurrent }, target: input },
+        { ...readTarget, env: target.env },
         signal,
-      }).nativeContext(readTarget, read);
+      );
+      return bindIncognitoSessionComputeReader({ ...prepared, signal }).nativeContext(
+        { ...readTarget, storePath: actor.path },
+        read,
+      );
     });
     assertCurrent();
     actor.assertReadable();
@@ -105,7 +162,7 @@ export function captureCodexSessionContextReader(
 }
 
 function assertCodexSessionSyncAccess(target: SessionTranscriptReadScope, method: string) {
-  if (captureIncognitoSessionBinding(target)) {
+  if (getSessionActorStorageBinding(target) || captureIncognitoSessionBinding(target)) {
     throw new IncognitoSessionSyncAccessError(method, "captureCodexSessionContextReader");
   }
 }
@@ -223,12 +280,21 @@ export type CodexSessionTranscriptMirrorWriteContext = Omit<
   }>;
 };
 
-/** Runs ordered optimistic mirror writes and returns each committed message's sequence. */
+/**
+ * Runs ordered optimistic mirror writes and returns each committed message's sequence.
+ * `assertCurrent` guards every commit; it is prepared before the writer is reserved,
+ * because its session-row reads cannot run while this write holds the database.
+ */
 export async function withCodexSessionTranscriptMirrorWrite<T>(
-  params: InternalSessionTranscriptWriteLockParams,
+  params: InternalSessionTranscriptWriteLockParams & { assertCurrent?: SessionSourceAssertion },
   run: (context: CodexSessionTranscriptMirrorWriteContext) => Promise<T> | T,
 ): Promise<T> {
-  return withMirrorWrite(params, run, "sequence");
+  const { assertCurrent, ...scope } = params;
+  return assertCurrent
+    ? withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+        withMirrorWrite(scope, run, "sequence"),
+      )
+    : withMirrorWrite(scope, run, "sequence");
 }
 
 async function withMirrorWrite<T>(

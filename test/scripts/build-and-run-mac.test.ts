@@ -167,7 +167,6 @@ const nativeScripts = [
   "scripts/codesign-mac-app.sh",
   "scripts/create-dmg.sh",
   "scripts/dev/computer-use-macos-live-rig.sh",
-  "scripts/dev/ios-pull-gateway-log.sh",
   "scripts/e2e/parallels-macos-smoke.sh",
   "scripts/e2e/parallels-windows-prepare.sh",
   "scripts/format-swift.sh",

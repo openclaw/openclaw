@@ -87,7 +87,7 @@ its saved plan at the recorded source commit; see
 This command is for local archive validation only. It is not a fallback upload
 path after `pnpm android:release:upload` fails.
 
-Generate deterministic phone and Wear OS Google Play screenshots:
+Generate repeatable phone and Wear OS Google Play screenshots:
 
 ```bash
 pnpm android:screenshots
@@ -214,7 +214,7 @@ Release rules:
 - `pnpm android:release:signing:sync:pull` pulls encrypted Android signing assets from `apps-signing`.
 - `pnpm android:release:signing:sync:push` creates or refreshes encrypted Android signing assets in `apps-signing`.
 - `pnpm android:screenshots` builds and installs the phone and Wear OS debug
-  apps, launches deterministic screenshot scenes, and writes Play-ready JPEGs
+  apps, launches fixed screenshot scenes, and writes Play-ready JPEGs
   to the matching `phoneScreenshots` and `wearScreenshots` metadata folders.
 - `pnpm android:release:archive` builds the signed phone Play AAB, Wear AAB, and third-party APK into `apps/android/build/release-artifacts/`. It uses pinned defaults unless `OPENCLAW_ANDROID_RELEASE_PLAN` selects a saved plan matching the source commit; replay also requires the saved `OPENCLAW_MOBILE_RELEASE_NOTES` artifact.
 - `pnpm android:release:upload` commits the phone AAB, Wear AAB, metadata, and screenshots in one Google Play edit across the configured phone and `wear:` form-factor tracks. The default tracks are `internal` and `wear:internal`. With `--destination internal`, it uses those Internal testing tracks and generated notes without screenshot capture or listing updates.

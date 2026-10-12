@@ -62,6 +62,7 @@ import {
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -1341,8 +1342,7 @@ describe("gateway agent handler", () => {
   });
 
   it("settles ordinary async gateway agent rejections as failed", async () => {
-    const providerError = new Error("provider request failed");
-    mocks.agentCommand.mockRejectedValueOnce(providerError);
+    mocks.agentCommand.mockRejectedValueOnce(new Error("provider request failed"));
     const context = makeContext();
     const onSettled = vi.fn(() => true);
     const respond = vi.fn();
@@ -1478,7 +1478,7 @@ describe("gateway agent handler", () => {
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
     mocks.loadSessionEntry.mockImplementation((key: string) => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: key === sessionKey ? "wechat-session-id" : "main-session-id",
         updatedAt: Date.now(),
@@ -1580,7 +1580,7 @@ describe("gateway agent handler", () => {
           sessionKey: "agent:main:main",
           sessionId: "stale-session-id",
           reason: "daily",
-          storePath: "/tmp/sessions.json",
+          storePath: getAgentTestStorePath(),
           nextSessionId: call.sessionId,
           nextSessionKey: "agent:main:main",
         },
@@ -1592,7 +1592,7 @@ describe("gateway agent handler", () => {
           sessionKey: "agent:main:main",
           sessionId: call.sessionId,
           resumedFrom: "stale-session-id",
-          storePath: "/tmp/sessions.json",
+          storePath: getAgentTestStorePath(),
         },
       );
       await vi.advanceTimersByTimeAsync(100);
@@ -1916,7 +1916,7 @@ describe("gateway agent handler", () => {
           sessionKey: "agent:main:main",
           sessionId: "current-session-id",
           reason: "new",
-          storePath: "/tmp/sessions.json",
+          storePath: getAgentTestStorePath(),
           nextSessionId: "caller-selected-session-id",
           nextSessionKey: "agent:main:main",
           endedTranscript: expect.objectContaining({ available: true }),
@@ -1929,7 +1929,7 @@ describe("gateway agent handler", () => {
           sessionKey: "agent:main:main",
           sessionId: "caller-selected-session-id",
           resumedFrom: "current-session-id",
-          storePath: "/tmp/sessions.json",
+          storePath: getAgentTestStorePath(),
         },
       );
       await vi.advanceTimersByTimeAsync(100);
@@ -2005,7 +2005,7 @@ describe("gateway agent handler", () => {
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:ops:main");
     mocks.loadSessionEntry.mockReturnValue({
       cfg: { session: { scope: "global" } },
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-session-id",
         updatedAt: Date.now(),
@@ -2045,7 +2045,7 @@ describe("gateway agent handler", () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: { session: { scope: "global" } },
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-work-session-id",
         updatedAt: Date.now(),
@@ -2100,7 +2100,7 @@ describe("gateway agent handler", () => {
     }).config;
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-ops-session-id",
         updatedAt: Date.now(),
@@ -2144,7 +2144,7 @@ describe("gateway agent handler", () => {
     mockGlobalSessionAgentRoster();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-work-session-id",
         updatedAt: Date.now(),
@@ -2184,7 +2184,7 @@ describe("gateway agent handler", () => {
     mockGlobalSessionAgentRoster();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-work-session-id",
         updatedAt: Date.now(),
@@ -2234,7 +2234,7 @@ describe("gateway agent handler", () => {
     mockGlobalSessionAgentRoster();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-work-session-id",
         updatedAt: Date.now(),

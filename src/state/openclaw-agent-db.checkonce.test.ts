@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -71,7 +71,7 @@ it.each(["transaction", "implicit snapshot"] as const)(
       if (snapshot === "transaction") {
         runSqliteDeferredTransactionSync(reader, migrateWhileReading);
       } else {
-        runSqlitePinnedReadSnapshotSync(reader, migrateWhileReading);
+        runSqliteSchemaReadSnapshotSync(reader, migrateWhileReading);
       }
       const observed = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {

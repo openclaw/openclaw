@@ -9,6 +9,10 @@ import {
   sqliteSessionFileMarkerMatchesTarget,
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.entry.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { assertSessionEntryPatchAuthority } from "../config/sessions/session-entry-patch-authority.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -67,7 +71,8 @@ const PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS = new Set([
 export function createPluginSessionOwnership(
   state: PluginRegistryState,
   pluginId: string,
-  resolveRegistry: () => PluginRegistry = () => state.registry,
+  resolveRegistry: () => PluginRegistry,
+  assertRuntimeOwnerCurrent: () => void,
 ) {
   const { registryParams } = state;
   // SAFETY: Logical session resolution only reads the immutable runtime config snapshot.
@@ -185,6 +190,79 @@ export function createPluginSessionOwnership(
     }
     assertReservedSessionKeyOwned(params.sessionKey, params.action);
   };
+  const readOwnershipEntry = (
+    params: Parameters<PluginRuntime["agent"]["session"]["getSessionEntry"]>[0],
+  ) => {
+    const source = captureIncognitoSessionSource(params);
+    if (!source) {
+      return registryParams.runtime.agent.session.getSessionEntry(params);
+    }
+    if ("kind" in source) {
+      return undefined;
+    }
+    const key = resolveSqliteSessionKey(params.sessionKey, source.actor.agentId);
+    const sharing = source.actor.sessions.readSharing(key)?.entry;
+    if (!sharing) {
+      return undefined;
+    }
+    const policy = source.actor.sessions.readCapability(key);
+    return {
+      ...sharing,
+      pluginOwnerId: policy?.pluginOwnerId,
+      agentHarnessId: policy?.agentHarnessId,
+      agentRuntimeOverride: policy?.agentRuntimeOverride,
+    };
+  };
+  const listOwnershipEntries = (params: { agentId?: string; storePath?: string }) => {
+    const ambient = params.storePath ? undefined : captureIncognitoSessionSource();
+    const source = captureIncognitoSessionSource(
+      ambient
+        ? { ...params, storePath: "kind" in ambient ? ambient.path : ambient.actor.path }
+        : params,
+    );
+    if (!source) {
+      return registryParams.runtime.agent.session.listSessionEntries({ ...params, readOnly: true });
+    }
+    if ("kind" in source) {
+      return [];
+    }
+    return source.actor.sessions.deadlines().flatMap(({ sessionKey }) => {
+      const entry = readOwnershipEntry({ ...params, sessionKey, storePath: source.actor.path });
+      return entry ? [{ sessionKey, entry }] : [];
+    });
+  };
+  const withPreparedSessionOwnership = async <T>(
+    params: { agentId?: string; storePath?: string; sessionKey?: string; sessionFile?: string },
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    const marker = params.sessionFile && parseSqliteSessionFileMarker(params.sessionFile);
+    const target = marker ? { ...params, ...marker } : params;
+    const ambient =
+      !target.sessionKey && !target.storePath ? captureIncognitoSessionSource() : undefined;
+    const source = captureIncognitoSessionSource(
+      ambient
+        ? { ...target, storePath: "kind" in ambient ? ambient.path : ambient.actor.path }
+        : target,
+    );
+    if (!source || "kind" in source) {
+      return await run();
+    }
+    return source.actor.sessions.withSharedState(async () => {
+      const assertCurrent = () => {
+        assertRuntimeOwnerCurrent();
+        source.admissionSignal?.throwIfAborted();
+        source.actor.assertReadable();
+      };
+      // Publish exact ownership facts once; final guards consume their live postimages.
+      await source.actor.sessions.list(
+        { assertCurrent },
+        { projection: "list" },
+        source.admissionSignal,
+      );
+      assertCurrent();
+      return await run();
+    });
+  };
   const resolveStoredSessionOwnershipTarget = (params: {
     agentId?: string;
     env?: NodeJS.ProcessEnv;
@@ -206,7 +284,7 @@ export function createPluginSessionOwnership(
       return { entry: target.entry, sessionKey: target.canonicalKey };
     }
     return {
-      entry: registryParams.runtime.agent.session.getSessionEntry({
+      entry: readOwnershipEntry({
         sessionKey: params.sessionKey,
         readConsistency: "latest",
         ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
@@ -278,10 +356,9 @@ export function createPluginSessionOwnership(
     if (sessionIds.size === 0 && sessionFiles.size === 0) {
       return;
     }
-    const entries = registryParams.runtime.agent.session.listSessionEntries({
+    const entries = listOwnershipEntries({
       ...(agentId ? { agentId } : {}),
       ...(storePath ? { storePath } : {}),
-      readOnly: true,
     });
     for (const { sessionKey, entry } of entries) {
       if (sessionIds.has(entry.sessionId)) {
@@ -317,10 +394,9 @@ export function createPluginSessionOwnership(
       if (!marker) {
         throw new Error("Plugin session ownership checks require a SQLite transcript marker.");
       }
-      const markerEntries = registryParams.runtime.agent.session.listSessionEntries({
+      const markerEntries = listOwnershipEntries({
         agentId: marker.agentId,
         storePath: marker.storePath,
-        readOnly: true,
       });
       const matches = markerEntries.filter(({ entry }) => entry.sessionId === marker.sessionId);
       if (matches.length === 0) {
@@ -366,7 +442,7 @@ export function createPluginSessionOwnership(
           })
         : storePath;
     const entry = sessionKey
-      ? registryParams.runtime.agent.session.getSessionEntry({
+      ? readOwnershipEntry({
           sessionKey,
           readConsistency: "latest",
           ...(agentId ? { agentId } : {}),
@@ -532,6 +608,7 @@ export function createPluginSessionOwnership(
     }
   };
   return {
+    withPreparedSessionOwnership,
     createSessionEntry: async (
       session: PluginSessionRuntime,
       params: Parameters<PluginSessionRuntime["createSessionEntry"]>[0],
@@ -573,18 +650,54 @@ export function createPluginSessionOwnership(
         initialEntry: { ...initialEntry, pluginOwnerId: pluginId },
       });
     },
+    prepareSessionEntryPatch: async (
+      session: PluginSessionRuntime,
+      params: Parameters<PluginSessionRuntime["prepareSessionEntryPatch"]>[0],
+      assertRuntimeCurrent: () => void,
+    ) => {
+      assertSessionEntryPatchAuthority(params.authority);
+      return await session.prepareSessionEntryPatch({
+        ...params,
+        authority: {
+          kind: "source",
+          source: composeSessionSourceAssertion(
+            [params.authority?.kind === "source" ? params.authority.source : undefined],
+            (assertSources) => {
+              assertRuntimeCurrent();
+              if (params.authority?.kind === "host") {
+                params.authority.assertCurrent();
+              }
+              assertSources();
+            },
+          ),
+        },
+        prepare: async (entry, context) => {
+          assertStoreEntryOwned({
+            action: "patch",
+            before: context.existingEntry,
+            entry,
+            sessionKey: params.sessionKey,
+          });
+          const patch = await params.prepare(entry, context);
+          assertRuntimeCurrent();
+          if (patch) {
+            assertStoreEntryOwned({
+              action: "patch",
+              before: context.existingEntry,
+              entry: params.replaceEntry ? patch : { ...entry, ...patch },
+              sessionKey: params.sessionKey,
+            });
+          }
+          return patch;
+        },
+      });
+    },
     patchSessionEntry: async (
       session: PluginSessionRuntime,
       params: Parameters<PluginSessionRuntime["patchSessionEntry"]>[0],
       assertRuntimeCurrent: () => void,
     ) => {
-      assertStoredSessionEntryOwned({
-        action: "patch",
-        sessionKey: params.sessionKey,
-        ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-        ...(params.env !== undefined ? { env: params.env } : {}),
-        ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-      });
+      assertStoredSessionEntryOwned({ ...params, action: "patch" });
       return await session.patchSessionEntry({
         ...params,
         update: async (entry, context) => {
@@ -607,31 +720,35 @@ export function createPluginSessionOwnership(
     upsertSessionEntry: async (
       session: PluginSessionRuntime,
       params: Parameters<PluginSessionRuntime["upsertSessionEntry"]>[0],
+      assertRuntimeCurrent: () => void,
     ) => {
-      const before = assertStoredSessionEntryOwned({
-        action: "upsert",
-        sessionKey: params.sessionKey,
-        ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-        ...(params.env !== undefined ? { env: params.env } : {}),
-        ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
+      await session.prepareSessionEntryPatch({
+        ...params,
+        fallbackEntry: params.entry,
+        replaceEntry: true,
+        authority: { kind: "host", assertCurrent: assertRuntimeCurrent },
+        prepare: (entry, context) => {
+          assertStoreEntryOwned({
+            action: "upsert",
+            before: context.existingEntry,
+            entry,
+            sessionKey: params.sessionKey,
+          });
+          assertStoreEntryOwned({
+            action: "upsert",
+            before: context.existingEntry,
+            entry: params.entry,
+            sessionKey: params.sessionKey,
+          });
+          return params.entry;
+        },
       });
-      assertStoreEntryOwned({
-        action: "upsert",
-        before,
-        entry: params.entry,
-        sessionKey: params.sessionKey,
-      });
-      await session.upsertSessionEntry(params);
     },
     prepareSessionStoreUpdate: (
       params: Parameters<PluginSessionRuntime["updateSessionStoreEntry"]>[0],
       assertRuntimeCurrent: () => void,
     ): Parameters<PluginSessionRuntime["updateSessionStoreEntry"]>[0]["update"] => {
-      assertStoredSessionEntryOwned({
-        action: "update",
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      });
+      assertStoredSessionEntryOwned({ ...params, action: "update" });
       return async (entry) => {
         const patch = await params.update(entry);
         assertRuntimeCurrent();

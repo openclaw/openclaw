@@ -4,6 +4,7 @@ import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import type { BoundAgentRunSessionTarget } from "../agents/run-session-target.types.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { WorkerInferenceExecutor } from "../gateway/worker-environments/connection-identity.js";
 import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import {
@@ -24,6 +25,7 @@ export async function bindWorkerFixtureTurnSource(
   store: WorkerSessionPlacementStore,
   claim: WorkerSessionTurnClaim,
   target: BoundAgentRunSessionTarget,
+  inference: WorkerInferenceExecutor,
 ) {
   const entry = loadSessionEntry(target);
   if (!entry || entry.sessionId !== claim.sessionId) {
@@ -64,6 +66,7 @@ export async function bindWorkerFixtureTurnSource(
   }
   let assignment: WorkerLaunchPlan["assignment"];
   bindWorkerTurnCapabilities(store, claim, {
+    inference,
     toolSurface: createWorkerGatewayToolRuntime({
       assertCurrent: assertSourceCurrent,
       signal: lifetime.signal,

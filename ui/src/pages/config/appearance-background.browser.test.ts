@@ -50,6 +50,7 @@ async function mount(preference: BackgroundPreference = DEFAULT_BACKGROUND_PREFE
     mode: "dark",
     resolvedMode: "dark",
     serverSelection: null,
+    appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,
     refresh: () => themeListeners.forEach((listener) => listener()),

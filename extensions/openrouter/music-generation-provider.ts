@@ -7,7 +7,7 @@ import type {
   MusicGenerationSourceImage,
 } from "openclaw/plugin-sdk/music-generation";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -293,7 +293,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_OPENROUTER_MUSIC_MODEL,
     models: [...OPENROUTER_MUSIC_MODELS],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "openrouter", ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,

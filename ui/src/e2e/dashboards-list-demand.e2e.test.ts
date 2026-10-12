@@ -24,7 +24,7 @@ const DASHBOARD_REQUEST_PARAMS = {
   includeGlobal: true,
   includeUnknown: true,
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-  rowMode: "compact",
+  rowMode: "dashboard",
   source: "dashboard",
 } as const;
 
@@ -345,7 +345,16 @@ suite.define(() => {
             "sessions.list",
             sessionsResult(`agent:main:canonical-${index + 1}`, canonicalLabel, 10 + index),
           );
-          await page.getByText(canonicalLabel, { exact: true }).first().waitFor();
+          const sidebar = page.locator("openclaw-app-sidebar");
+          // The profileless roster has no ownership identities, so its title stays plain.
+          await expect
+            .poll(() =>
+              sidebar
+                .locator(".sidebar-session-toolbar .sidebar-recent-sessions__label-text")
+                .textContent(),
+            )
+            .toBe("Sessions");
+          await sidebar.getByText(canonicalLabel, { exact: true }).waitFor();
         }),
       );
 

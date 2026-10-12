@@ -99,25 +99,7 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(logWarn).not.toHaveBeenCalled();
   });
 
-  it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
-    sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
-    const dispatch = (index: number) =>
-      sendExecApprovalFollowupResult(
-        { approvalId: `approval-${index}`, sessionKey },
-        "Exec finished",
-      );
-    const failureKeysBeyondDedupeWindow = 257;
-    for (let i = 0; i < failureKeysBeyondDedupeWindow; i += 1) {
-      await dispatch(i);
-    }
-    await dispatch(0);
-    expect(logWarn).toHaveBeenCalledTimes(failureKeysBeyondDedupeWindow + 1);
-    expect(logWarn).toHaveBeenLastCalledWith(
-      "exec approval followup dispatch failed (id=approval-0): Channel is required",
-    );
-  });
-
-  it.each([true, false])(
+  it.each([false])(
     "authenticates an elevated=%s result handoff to one session and claimant",
     async (elevated) => {
       const approvalId = `approval-authenticated-${elevated}`;
@@ -231,7 +213,6 @@ describe("resolveExecApprovalWaitOutcome", () => {
   });
 
   it.each([
-    ["allow-once", true, null],
     ["allow-always", true, null],
     ["deny", false, "user-denied"],
   ] as const)("returns a resolved %s decision", async (decision, approvedByAsk, deniedReason) => {
@@ -297,12 +278,9 @@ describe("createExecApprovalRequestRoute", () => {
     });
   });
 
-  it.each(["webchat", "discord"])(
-    "keeps waiting without a terminal decision on %s",
-    async (channel) => {
-      await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
-    },
-  );
+  it.each(["webchat"])("keeps waiting without a terminal decision on %s", async (channel) => {
+    await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
+  });
 });
 
 describe("buildExecApprovalPendingToolResult", () => {

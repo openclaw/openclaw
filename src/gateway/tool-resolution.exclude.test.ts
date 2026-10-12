@@ -44,7 +44,7 @@ vi.mock("../agents/openclaw-tools.js", () => ({
 
 // mock-isolation: Filter synthetic mediated tools without filesystem or exec initialization.
 vi.mock("../agents/agent-tools.js", () => ({
-  createOpenClawCodingToolsAsync: async (...args: Parameters<typeof codingTools>) =>
+  createOpenClawCodingToolsInternalAsync: async (...args: Parameters<typeof codingTools>) =>
     codingTools(...args),
 }));
 

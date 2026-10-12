@@ -30,6 +30,7 @@ import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
+  withSessionTranscriptWrite,
   type SessionTranscriptAssistantMirrorAppendParams,
 } from "./session-transcript-runtime.js";
 
@@ -74,6 +75,64 @@ describe("channel-final transcript mirrors", () => {
       scope.sessionId,
     );
   const entries = () => readVisibleSessionTranscriptMessageEntries(scope);
+
+  it.each([false, true])(
+    "correlates queued answers from the source run (identical text: %s)",
+    async (identical) => {
+      const firstText = "The train leaves at noon.";
+      const secondText = identical ? firstText : "The next train leaves at two.";
+      await append(
+        { role: "assistant", content: firstText, __openclaw: { runId: "queued-run" } },
+        "first-answer",
+      );
+      await append({ role: "user", content: "And the next train?" });
+      await append(
+        { role: "assistant", content: secondText, __openclaw: { runId: "queued-run" } },
+        "second-answer",
+      );
+      // Delivery can settle after another run has already appended its answer.
+      await append(
+        { role: "assistant", content: firstText, __openclaw: { runId: "later-run" } },
+        "later-answer",
+      );
+      const facts = await withSessionTranscriptWrite(scope, (writer) =>
+        writer.readMessageFacts({ idempotencyKeys: [], sourceRunId: "queued-run" }),
+      );
+      expect(facts.sourceEvents).toMatchObject([{ id: "first-answer" }, { id: "second-answer" }]);
+      const first = { ...delivery("first-delivery", firstText), sourceRunId: "queued-run" };
+      const second = { ...delivery("second-delivery", secondText), sourceRunId: "queued-run" };
+      await appendAssistantMirrorMessageByIdentity(first);
+      await appendAssistantMirrorMessageByIdentity(second);
+
+      expect((await entries()).filter((entry) => entry.idempotencyKey)).toMatchObject([
+        { message: { openclawDeliveryMirror: { sourceAssistantMessageId: "first-answer" } } },
+        { message: { openclawDeliveryMirror: { sourceAssistantMessageId: "second-answer" } } },
+      ]);
+      const beforeReplay = rows();
+      await appendAssistantMirrorMessageByIdentity(first);
+      await appendAssistantMirrorMessageByIdentity(second);
+      expect(rows()).toEqual(beforeReplay);
+    },
+  );
+
+  it("does not correlate another run's matching text when the source run does not match", async () => {
+    await append(
+      {
+        role: "assistant",
+        content: "The train leaves at noon.",
+        __openclaw: { runId: "other-run" },
+      },
+      "other-answer",
+    );
+    const request = {
+      ...delivery("unmatched-run-delivery"),
+      sourceRunId: "source-run",
+    };
+    await appendAssistantMirrorMessageByIdentity(request);
+    expect((await entries()).at(-1)?.message).not.toHaveProperty(
+      "openclawDeliveryMirror.sourceAssistantMessageId",
+    );
+  });
 
   it.each([
     { name: "different answer", message: { role: "assistant", content: "A different departure." } },

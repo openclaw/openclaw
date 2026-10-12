@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import { getRefsFileExtents } from "../../../test/helpers/refs.js";
+import { getRefsFullClusterLcns } from "../../../test/helpers/refs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
@@ -37,7 +37,7 @@ describe.skipIf(process.platform !== "win32" || !refsRoot)(
       vi.stubEnv("GIT_ATTR_NOSYSTEM", "1");
       vi.stubEnv("GIT_CONFIG_GLOBAL", configPath);
       const repo = await initializeRepository(root);
-      const payload = Buffer.alloc(128 * 1024, 0x5a);
+      const payload = Buffer.alloc(128 * 1024 + 1, 0x5a);
       await fs.writeFile(path.join(repo, "payload"), payload);
       await git(repo, "add", "payload");
       await git(repo, "commit", "-m", "ReFS source fixture");
@@ -56,11 +56,11 @@ describe.skipIf(process.platform !== "win32" || !refsRoot)(
       expect(path.relative(worktreeRoot, first.path).startsWith("..")).toBe(false);
       const second = await service.create({ repoRoot: repo, name: "second", baseRef: "HEAD" });
       expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
-      const templateExtents = getRefsFileExtents(path.join(template.path, "payload"));
-      expect(templateExtents.some((extent) => extent.lcn >= 0n)).toBe(true);
+      const templateExtents = getRefsFullClusterLcns(path.join(template.path, "payload"));
+      expect(templateExtents.some((lcn) => lcn >= 0n)).toBe(true);
       for (const record of [first, second]) {
         expect(await fs.readFile(path.join(record.path, "payload"))).toEqual(payload);
-        expect(getRefsFileExtents(path.join(record.path, "payload"))).toEqual(templateExtents);
+        expect(getRefsFullClusterLcns(path.join(record.path, "payload"))).toEqual(templateExtents);
         expect(await git(record.path, "status", "--porcelain")).toBe("");
         expect(await git(record.path, "symbolic-ref", "--short", "HEAD")).toBe(record.branch);
       }

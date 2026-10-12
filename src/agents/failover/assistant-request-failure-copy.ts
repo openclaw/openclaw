@@ -5,6 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   formatTransportErrorCopy,
   parseApiErrorInfo,
@@ -78,8 +79,7 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   timeout:
     "The request took too long. Check the conversation for any completed work before trying again.",
   tls_certificate: `Couldn't connect securely to the AI service. ${ERROR_DETAILS_HINT}`,
-  context_overflow:
-    "This conversation is too long for the model. Try /compact, or start a new conversation with /new.",
+  context_overflow: CONTEXT_OVERFLOW_ERROR_MESSAGE,
   model_not_found:
     "This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
   session_expired:
@@ -146,6 +146,11 @@ export function renderFormatErrorCopy(raw: string): string {
   }
   if (isSessionTranscriptValidationErrorMessage(candidate)) {
     return "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.";
+  }
+  const embeddingModel = candidate.match(/^"([\w./:-]{1,200})" does not support chat$/u)?.[1];
+  if (embeddingModel) {
+    const model = escapeMarkdownText(redactSensitiveText(embeddingModel, { mode: "tools" }));
+    return `${model} is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
   }
   if (PROVIDER_CACHE_CONTROL_LIMIT_RE.test(candidate)) {
     return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.";
@@ -291,7 +296,7 @@ export function renderRecordedAssistantFailureCopy(message: {
           isContextOverflowErrorFromTables(value)),
     )
   ) {
-    return "This conversation is too long for the model. Try /compact, or start a new conversation with /new.";
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   const formatCopy =
     !classification?.reason || classification.reason === "format"

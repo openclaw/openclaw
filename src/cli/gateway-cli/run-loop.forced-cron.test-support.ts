@@ -57,7 +57,7 @@ const cron = new CronService({
     }),
 });
 
-await runGatewayLoop({
+const code = await runGatewayLoop({
   ownsProcessLifecycle: true,
   start: async () => {
     starts += 1;
@@ -117,12 +117,7 @@ await runGatewayLoop({
       },
     };
   },
-  runtime: {
-    log() {},
-    error: console.error,
-    exit: (code) => {
-      trace(`exit:${code}`);
-      process.exit(code);
-    },
-  },
 });
+trace(`exit:${code}`);
+process.disconnect?.();
+process.exitCode = code;

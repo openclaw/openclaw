@@ -330,7 +330,28 @@ Personal connections share the Gateway's existing trusted-host boundary. They pr
 
 When a Control UI connection is bound to an authenticated Gateway profile, OpenClaw stores its theme, theme mode, and accent color per profile. They live in the existing `user_preferences` table in the shared state database. Those choices follow that person across devices without changing appearance for other people on the same Gateway.
 
-Profile theme and theme mode preferences override their gateway-wide `ui.prefs` settings and otherwise fall back to the active theme's defaults. Plugin themes use namespaced IDs such as `space-pack/xenovessel`. Personal theme definitions created through the agent are stored in the same profile preference store and follow the profile across browsers. The `theme` tool and Appearance share one catalog and selection owner. Plugin hot reload updates that catalog and connected browsers without a Gateway restart. An unavailable plugin theme temporarily renders as Claw while its saved selection is retained. Legacy tweakcn imports are the exception: their palettes stay in the browser that imported them, and are never uploaded automatically. Selecting that local import never follows the profile. Accent precedence is the profile's `ui.accent` preference, gateway-wide `ui.prefs.accent`, `ui.seamColor`, and finally the active theme's default accent. Selecting a different theme in Appearance clears the profile font overrides and stores `ui.accent: "theme"`, explicitly selecting the theme palette without inheriting gateway accent colors. Restoring a default clears only the profile preference. Owner-profile preferences follow the owner across devices. Connections without a profile keep gateway-wide appearance behavior. Language, chat preferences, and sidebar entries continue using gateway configuration.
+Profile theme and theme mode preferences override their gateway-wide `ui.prefs` settings and otherwise fall back to the active theme's defaults. Plugin themes use namespaced IDs such as `space-pack/xenovessel`. Personal theme definitions created through the agent are stored in the same profile preference store and follow the profile across browsers. The `theme` tool and Appearance share one catalog and selection owner. Plugin hot reload updates that catalog and connected browsers without a Gateway restart. An unavailable plugin theme temporarily renders as Claw while its saved selection is retained. Legacy tweakcn imports are the exception: their palettes stay in the browser that imported them, and are never uploaded automatically. Selecting that local import never follows the profile. Accent precedence is the profile's `ui.accent` preference, gateway-wide `ui.prefs.accent`, `ui.seamColor`, and finally the active theme's default accent. Selecting a different theme in Appearance clears the profile font overrides and stores `ui.accent: "theme"`, explicitly selecting the theme palette without inheriting gateway accent colors. Restoring a default clears only the profile preference. Owner-profile preferences follow the owner across devices. Connections without a profile keep gateway-wide appearance behavior. Language and chat preferences continue using gateway configuration. Personal navigation uses the profile preference store described below.
+
+## Personal navigation preferences
+
+For an authenticated profile with write access, the Control UI stores sidebar
+shortcut references and their order in the existing
+`user_preferences` table. These preferences follow that profile across devices without rearranging another
+person's navigation. They are independent of a session's shared metadata and do
+not grant access to a referenced session, dashboard, plugin, or person.
+
+The browser retains device-specific geometry and transient presentation. A profile
+without saved shortcuts starts with an empty rail. Reading preferences never
+imports shared navigation or pinned sessions, and only a user edit writes the
+shortcut preference. Existing saved shortcuts remain unchanged.
+Navigation changes on read-only connections or connections without a durable
+profile stay browser-local rather than writing shared server configuration. See [Navigation rail](/web/control-ui/sessions-and-sidebar#navigation-rail).
+
+The Sessions owner filter is stored separately in the browser for each Gateway
+and profile. A profile without a saved choice starts with **My sessions**;
+unresolved identities and connections without a durable profile show **All owners**.
+Choosing **Involving me**, **All owners**, or a person changes that owner filter
+directly.
 
 ## Write directives, not observations
 

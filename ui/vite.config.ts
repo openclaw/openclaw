@@ -32,6 +32,7 @@ import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
+import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
@@ -42,6 +43,7 @@ const outDir = path.resolve(here, "../dist/control-ui");
 const CONTROL_UI_GIT_READ_TIMEOUT_MS = 2_000;
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
+
 type ControlUiViteAlias = {
   find: string | RegExp;
   replacement: string;
@@ -693,6 +695,7 @@ export default function controlUiViteConfig(
       ],
     },
     build: {
+      target: ["chrome147", "firefox150", "safari26.2"],
       outDir: options.outDir ?? outDir,
       emptyOutDir: true,
       // Release packages omit maps; keep generating them without advertising dead URLs.
@@ -721,6 +724,7 @@ export default function controlUiViteConfig(
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      controlUiSolidPlugin(),
       mermaidClassicBundlePlugin(),
       controlUiIsolatedDesktopRuntimePlugin(),
       {

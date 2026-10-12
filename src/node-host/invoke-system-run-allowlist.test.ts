@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveExecApprovalsFromFile, type ExecCommandSegment } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
+import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   evaluateSystemRunAllowlist,
   resolveSystemRunExecArgv,
@@ -291,6 +292,60 @@ describe("resolveSystemRunExecArgv", () => {
       });
 
       expect(result).toBeNull();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rewrites safe-bin shell payloads that end in whitespace",
+    async () => {
+      const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
+        global: { safeBins: ["head"] },
+      });
+      const approvals = resolveExecApprovalsFromFile({
+        agentId: "main",
+        file: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+        },
+      });
+      const resolveExecArgv = async (payload: string) => {
+        const argv = ["/bin/sh", "-c", payload];
+        const shellCommand = payload.trim();
+        const analysis = await evaluateSystemRunAllowlist({
+          shellCommand,
+          argv,
+          approvals,
+          security: "allowlist",
+          safeBins,
+          safeBinProfiles,
+          trustedSafeBinDirs,
+          cwd: undefined,
+          env: { PATH: "/usr/bin:/bin" },
+          skillBins: [],
+          autoAllowSkills: false,
+        });
+        expect(analysis.segmentSatisfiedBy).toEqual(["safeBins"]);
+        return await resolveSystemRunExecArgv({
+          plannedAllowlistArgv: undefined,
+          argv,
+          security: "allowlist",
+          isWindows: false,
+          policy: {
+            approvedByAsk: false,
+            analysisOk: analysis.analysisOk,
+            allowlistSatisfied: analysis.allowlistSatisfied,
+          },
+          shellCommand,
+          segments: analysis.segments,
+          segmentSatisfiedBy: analysis.segmentSatisfiedBy,
+          authorizationPlan: analysis.authorizationPlan,
+        });
+      };
+
+      const expected = await resolveExecArgv("head -c 16");
+      expect(expected?.[2]).toMatch(/\/head -c 16$/);
+      await expect(resolveExecArgv("head -c 16\n")).resolves.toEqual(expected);
+      await expect(resolveExecArgv("head -c 16 \t")).resolves.toEqual(expected);
     },
   );
 });

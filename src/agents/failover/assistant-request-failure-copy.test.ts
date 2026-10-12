@@ -230,6 +230,31 @@ describe("renderAssistantRequestFailureCopy", () => {
     expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
   });
 
+  it.each(["400 ", "400 Bad Request: "])(
+    "explains an Ollama embedding model rejection in live and saved replies after %s",
+    (prefix) => {
+      const errorBody = JSON.stringify({ error: '"bge-m3:latest" does not support chat' });
+      const assistant = makeAssistantMessageFixture({
+        provider: "ollama",
+        model: "bge-m3:latest",
+        errorMessage: prefix + errorBody,
+        errorBody,
+      });
+      const expected = String.raw`bge\-m3\:latest is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
+      expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+      expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+    },
+  );
+
+  it("keeps other native Ollama capability errors distinct from embedding models", () => {
+    const assistant = makeAssistantMessageFixture({
+      provider: "ollama",
+      model: "chat-only",
+      errorMessage: `400 ${JSON.stringify({ error: '"chat-only" does not support tools' })}`,
+    });
+    expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("is an embedding model");
+  });
+
   it.each([
     "400 [messages.0] is required",
     JSON.stringify({

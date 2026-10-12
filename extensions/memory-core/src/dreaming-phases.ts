@@ -31,11 +31,7 @@ import {
   type DailyIngestionState,
 } from "./dreaming-ingestion-state.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
-import {
-  type DreamNarrativeRequest,
-  type NarrativePhaseData,
-  runDreamNarrative,
-} from "./dreaming-narrative.js";
+import type { NarrativePhaseData, PreparedDreamNarrative } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
 import { findForgottenMemorySessionIds } from "./memory-entry-origins.js";
 import {
@@ -78,15 +74,11 @@ type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type LightDreamingConfig = ReturnType<typeof resolveMemoryLightDreamingConfig>;
 type RemDreamingConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
 type DreamingSweepParams = {
-  // Workspace owner; runDreamNarrative writes a local fallback when no owner is available.
   agentId?: string;
   workspaceDir: string;
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
   logger: Logger;
-  subagent?: DreamNarrativeRequest["subagent"];
-  narrativeTimeoutMs: number;
-  runInBackground?: DreamNarrativeRequest["runInBackground"];
   nowMs?: number;
 };
 type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> =
@@ -1201,7 +1193,7 @@ async function prepareLightDreaming(
     );
   }
 
-  if (params.subagent && capped.length > 0) {
+  if (capped.length > 0) {
     const themes = uniqueStrings(capped.flatMap((e) => e.conceptTags).filter(Boolean));
     return {
       phase: "light",
@@ -1262,7 +1254,7 @@ async function prepareRemDreaming(
     );
   }
 
-  if (params.subagent && entries.length > 0) {
+  if (entries.length > 0) {
     const snippets = preview.candidateTruths.map((t) => t.snippet).filter(Boolean);
     const themes = preview.reflections.filter(
       (r) => !r.startsWith("- No strong") && !r.startsWith("  -"),
@@ -1285,13 +1277,13 @@ async function prepareRemDreaming(
 
 export async function runDreamingSweepPhases(
   params: DreamingSweepParams,
-): Promise<{ degradedPhases: number; pendingNarratives: number }> {
+): Promise<{ narratives: PreparedDreamNarrative[]; failed: boolean }> {
   // All phases in one sweep share the same observation and report timestamp.
   const sweepNowMs =
     typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const admissionPolicy = resolveAdmissionPolicy(params.pluginConfig);
-  let degradedPhases = 0;
-  let pendingNarratives = 0;
+  const narratives: PreparedDreamNarrative[] = [];
+  let failed = false;
   async function runPhase<TConfig extends LightDreamingConfig | RemDreamingConfig>(
     phase: "light" | "rem",
     config: TConfig,
@@ -1306,25 +1298,8 @@ export async function runDreamingSweepPhases(
       // Keep source selection and report publication inside the forget boundary;
       // model work runs outside it and revalidates its inputs before publication.
       const data = await withMemoryWorkspaceLock(params.workspaceDir, () => prepare(phaseParams));
-      if (!data || !params.subagent) {
-        return;
-      }
-      const outcome = await runDreamNarrative({
-        agentId: params.agentId,
-        timeoutMs: params.narrativeTimeoutMs,
-        subagent: params.subagent,
-        workspaceDir: params.workspaceDir,
-        data,
-        nowMs: sweepNowMs,
-        timezone: config.timezone,
-        model: config.execution?.model,
-        logger: params.logger,
-        runInBackground: params.runInBackground,
-      });
-      if (outcome.status === "degraded") {
-        degradedPhases += 1;
-      } else if (outcome.status === "pending") {
-        pendingNarratives += 1;
+      if (data) {
+        narratives.push({ data, timezone: config.timezone, model: config.execution?.model });
       }
     } catch (err) {
       await appendFailedDreamingEvent({
@@ -1335,12 +1310,15 @@ export async function runDreamingSweepPhases(
         nowMs: sweepNowMs,
         logger: params.logger,
       });
-      throw err;
+      params.logger.error(`memory-core: ${phase} dreaming failed: ${formatErrorMessage(err)}`);
+      failed = true;
     }
   }
   await runPhase("light", resolveMemoryLightDreamingConfig(params), prepareLightDreaming);
-  await runPhase("rem", resolveMemoryRemDreamingConfig(params), prepareRemDreaming);
-  return { degradedPhases, pendingNarratives };
+  if (!failed) {
+    await runPhase("rem", resolveMemoryRemDreamingConfig(params), prepareRemDreaming);
+  }
+  return { narratives, failed };
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

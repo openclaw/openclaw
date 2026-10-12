@@ -2,10 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { canReloadControlUiDocument } from "../../../app/document-reload-guard.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
+import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 // The root jsdom ui shard also collects *.browser.test.ts files; CodeMirror
 // needs a real DOM, so this suite only runs in the checks-ui Chromium project.
@@ -54,18 +55,15 @@ async function mountFile(content: FileSidebarContent, width?: number): Promise<D
   files.push(content);
   const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
   panel.content = content;
-  if (width === undefined) {
-    document.body.append(panel);
-    mounted.push(panel);
-  } else {
-    const container = document.createElement("div");
+  const container = createChatSidebarContainer();
+  if (width !== undefined) {
     container.className = "side-panel__panel";
     container.style.cssText = `display:flex;width:${width}px;height:320px;`;
     panel.className = "chat-sidebar";
-    container.append(panel);
-    document.body.append(container);
-    mounted.push(container);
   }
+  container.append(panel);
+  document.body.append(container);
+  mounted.push(container);
   await panel.updateComplete;
   await expect.poll(() => panel.querySelector(".cm-editor"), { timeout: 5_000 }).not.toBeNull();
   return panel;

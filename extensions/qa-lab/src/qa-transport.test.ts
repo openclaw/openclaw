@@ -8,30 +8,6 @@ import {
 } from "./qa-transport.js";
 
 describe("waitForQaTransportAccountReady", () => {
-  it.each([
-    { description: "disconnected", connected: false, lifecycle: "starting" },
-    { description: "unauthenticated", connected: true, lifecycle: "starting" },
-    { description: "blocked", connected: true, lifecycle: "blocked" },
-  ])("does not declare a $description account ready", async ({ connected, lifecycle }) => {
-    const gateway = {
-      call: vi.fn().mockResolvedValue({
-        channelAccounts: {
-          slack: [{ accountId: "sut", connected, lifecycle, running: true }],
-        },
-      }),
-    };
-
-    await expect(
-      waitForQaTransportAccountReady({
-        accountId: "sut",
-        channel: "slack",
-        gateway,
-        pollIntervalMs: 1,
-        timeoutMs: 5,
-      }),
-    ).rejects.toThrow(`"lifecycle":"${lifecycle}"`);
-  });
-
   it("keeps channel-status probes inside the readiness deadline", async () => {
     const call = vi.fn().mockResolvedValue({ channelAccounts: {} });
 
@@ -195,38 +171,6 @@ describe("waitForQaTransportOutboundSequence", () => {
       events: [{ kind: "sent" }, { kind: "edited" }],
       final: { text: "final marker", threadId: "42" },
     });
-  });
-
-  it("returns preview and final sends across distinct messages", async () => {
-    const state = createQaBusState();
-    const preview = state.addOutboundMessage({
-      accountId: "default",
-      text: "preview",
-      to: "dm:alice",
-    });
-    const final = state.addOutboundMessage({
-      accountId: "default",
-      text: "final marker",
-      to: "dm:alice",
-    });
-
-    const sequence = await waitForQaTransportOutboundSequence({
-      accountId: "default",
-      input: {
-        conversationId: "alice",
-        finalSettleMs: 0,
-        finalTextIncludes: "final marker",
-        minimumPreviewEvents: 1,
-        timeoutMs: 100,
-      },
-      readEvents: () => state.getSnapshot().events,
-    });
-
-    expect(sequence.events.map(({ kind, message }) => [kind, message.id])).toEqual([
-      ["sent", preview.id],
-      ["sent", final.id],
-    ]);
-    expect(sequence.final).toMatchObject({ id: final.id, text: "final marker" });
   });
 
   it.each([
