@@ -39,7 +39,6 @@ import {
   pickCliSessionId,
   preferGeminiCliStreamJsonError,
   readClaudeAttributedSubagentProgressId,
-  preferStreamedClaudeTextOverResult,
   readCliUsage,
   readGeminiCliStreamJsonError,
   supportsCliJsonlToolEvents,
@@ -48,7 +47,9 @@ import { appendCliResultText } from "./cli-output-results.js";
 import {
   createClaudeTerminalResultWatcher,
   createCliStreamJsonTurnBudget,
+  createOrdinaryClaudeLineAccountant,
   forEachTerminalResultEvent,
+  resolveCliTerminalReplyText,
 } from "./cli-output-stream-budget.js";
 import {
   CLI_STREAM_JSON_OUTPUT_LIMITS,
@@ -73,6 +74,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   // Streamed text from this offset on is still a candidate to outrank the
   // result envelope; every non-tool boundary or interim result restarts it.
   let preserveFrom = 0;
+  // Whether a tool split actually connects the preserved text to the pending
+  // answer. Without it the preserved text is a draft the envelope supersedes.
+  let preservedTextHasToolSplit = false;
   let sawToolUseSinceText = false;
   let currentMessageHadToolUse = false;
   let previousMessageHadToolUse = false;
@@ -147,8 +151,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       currentMessageStart = assistantText.length + separator.length;
       // Text before a non-tool boundary may be a superseded draft; only text
       // connected to the result through tool splits stays a candidate.
-      if (!isToolSplitBoundary) {
+      if (isToolSplitBoundary) {
+        preservedTextHasToolSplit = true;
+      } else {
         preserveFrom = currentMessageStart;
+        preservedTextHasToolSplit = false;
       }
     }
     pendingMessageSeparator = false;
@@ -212,6 +219,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       handleCustomJsonlEvent(event);
     });
 
+  const accountOrdinaryClaudeLine = createOrdinaryClaudeLineAccountant(turnBudget, (line) =>
+    watchForClaudeTerminalResult(line),
+  );
+
   const observeSessionId = (parsed: Record<string, unknown>) => {
     const parsedSessionId = pickCliSessionId(parsed, params.backend);
     if (parsedSessionId && parsedSessionId !== sessionId) {
@@ -231,7 +242,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if ("errorText" in lifecycle) {
         parseErrorText = lifecycle.errorText;
       } else {
-        if (claudeStreamJson && !turnBudget.chargeChars(rawLine.length + 1)) {
+        if (claudeStreamJson && !accountOrdinaryClaudeLine(line, rawLine.length)) {
           return true;
         }
         for (const parsed of decodeCliRecords(line)) {
@@ -262,7 +273,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (parsed == null) {
       return false;
     }
-    if (claudeStreamJson && !turnBudget.chargeChars(rawLine.length + 1)) {
+    if (claudeStreamJson && !accountOrdinaryClaudeLine("", rawLine.length)) {
       // The line that exhausts the budget may itself be the terminal result.
       dispatchTerminalResultEvents(parsed);
       return true;
@@ -407,17 +418,18 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           result = { ...result, text: taggedResult.visibleText.trim() };
         }
       }
-      // Empty terminal result can follow already-streamed text; keep that text.
-      const streamedText = assistantText.slice(segmentStart).trim();
-      const preservedCandidate = assistantText.slice(preserveFrom).trim();
-      const keepStreamed = preferStreamedClaudeTextOverResult({
-        streamedText: preservedCandidate,
-        finalMessageText: assistantText.slice(currentMessageStart).trim(),
+      const nextText = resolveCliTerminalReplyText({
+        assistantText,
+        segmentStart,
+        preserveFrom,
+        currentMessageStart,
+        // A truncated turn never streamed its closing message, so the preserved
+        // half is kept only while a tool split still connects it to the answer.
+        preservedTextHasToolSplit:
+          turnBudget.exhausted && (preservedTextHasToolSplit || sawToolUseSinceText),
         resultText: result.text,
+        fallbackText: texts.join("\n").trim(),
       });
-      const nextText = (
-        keepStreamed ? preservedCandidate : result.text || streamedText || texts.join("\n").trim()
-      ).trim();
       const { text, textParts, completedText } = appendCliResultText(output, nextText);
       const syntheticNoResponse =
         sawClaudeSyntheticNoResponse &&
@@ -464,6 +476,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       segmentStart = assistantText.length;
       currentMessageStart = segmentStart;
       preserveFrom = segmentStart;
+      preservedTextHasToolSplit = false;
       pendingMessageSeparator = false;
       sawToolUseSinceText = false;
       currentMessageHadToolUse = false;
@@ -604,6 +617,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (!line && !claudeStreamJson) {
       return;
     }
+    turnBudget.observe();
     if (!claudeStreamJson && !turnBudget.chargeLine()) {
       parseErrorText = turnBudget.errorText(false);
       lineBuffer.pending = "";
@@ -614,7 +628,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
     if (!line) {
-      turnBudget.chargeChars(rawLine.length + 1);
+      accountOrdinaryClaudeLine(line, rawLine.length);
       return;
     }
     if (handleCustomJsonlLine(line, rawLine)) {
@@ -630,24 +644,22 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         parsedRecords.length === 1
           ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
           : undefined;
-      const partialMessage = partialChars !== undefined;
-      // Partial-message deltas are discarded as soon as they're assembled, so
-      // they are exempt from the ordinary line odometer (matches #150132/#153545);
-      // every other Claude line still counts toward it.
-      if (!partialMessage && !turnBudget.chargeLine()) {
-        // The line that exhausts the budget may itself be the terminal result.
-        watchForClaudeTerminalResult(line);
-        return;
-      }
       // Neither media omission nor token-envelope discounts may erase wire whitespace.
       const retainedChars =
         partialChars ??
         (normalized
           ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
           : rawLine.length);
-      if (!turnBudget.chargeChars(retainedChars + 1)) {
-        // The line that exhausts the budget may itself be the terminal result.
-        watchForClaudeTerminalResult(line);
+      if (partialChars !== undefined) {
+        // Partial-message deltas are discarded as soon as they're assembled, so
+        // they are exempt from the line odometer (matches #150132/#153545); the
+        // characters they retain are still charged.
+        if (!turnBudget.chargeChars(retainedChars + 1)) {
+          // The line that exhausts the budget may itself be the terminal result.
+          watchForClaudeTerminalResult(line);
+          return;
+        }
+      } else if (!accountOrdinaryClaudeLine(line, retainedChars)) {
         return;
       }
     }
@@ -713,7 +725,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (output) {
         return output;
       }
-      if (turnBudget.lines === 0) {
+      if (turnBudget.observedLines === 0) {
         return null;
       }
       if (sawCustomJsonlEvent) {

@@ -20,7 +20,15 @@
  *  2. unknowable-raw  — the same overflow with NO terminal result. Pins that
  *                       the guard is NOT removed: the turn still fails.
  *  3. recovered-lines — the same recovery for the 20,000-line budget.
- *  4. retention-flat  — 32 MiB pushed AFTER the budget is spent emits zero new
+ *  4. tool-split-silent / tool-split-commentary — pre-tool text, a tool call,
+ *                       the budget spent, then the closing message. Pins that
+ *                       the envelope does not erase the answer's pre-tool half.
+ *  5. superseded-draft — the same shape with NO tool split. Pins that recovery
+ *                       does not resurrect a draft the envelope supersedes.
+ *  6. discounted-output-seen — a recognized partial delta and no terminal
+ *                       envelope. Pins that discounted frames still count as
+ *                       observed output for interrupted-run recovery.
+ *  7. retention-flat  — 32 MiB pushed AFTER the budget is spent emits zero new
  *                       assistant text and grows the heap by a tiny fraction of
  *                       the bytes streamed. Pins that memory is still bounded.
  *
@@ -87,10 +95,22 @@ function createParser(assistantDeltas: string[]) {
 
 type Parser = ReturnType<typeof createParser>;
 
+/**
+ * A spent budget is observable from outside the parser: with no terminal result
+ * yet, `getErrorText()` is exactly the budget's own refusal. Streamed bytes are
+ * NOT a usable stand-in — partial-message envelopes are discounted (#153545), so
+ * a byte-counted loop stops ~96 KB short of the odometer it means to spend.
+ */
+function budgetSpent(parser: Parser): boolean {
+  return parser.getErrorText() !== null;
+}
+
 /** Streams realistic frames until the cumulative character budget is spent. */
 function overflowRawCharBudget(parser: Parser): number {
   let streamed = 0;
-  for (let index = 0; streamed <= CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars; index += 1) {
+  const ceiling = CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars * 4;
+  for (let index = 0; !budgetSpent(parser); index += 1) {
+    assert(streamed < ceiling, `raw budget was not spent after streaming ${streamed} chars`);
     const frames = [
       textDeltaFrame(`step ${index} `),
       toolResultFrame(index, 96_000),
@@ -107,7 +127,124 @@ function overflowRawCharBudget(parser: Parser): number {
 function overflowLineBudget(parser: Parser): number {
   const lines = CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines + 1;
   parser.push("\n".repeat(lines));
+  assert(
+    budgetSpent(parser),
+    `line budget was not spent after ${lines} blank frames; ordinary frames are no longer charged`,
+  );
   return lines;
+}
+
+function messageStartFrame(): string {
+  return JSON.stringify({
+    type: "stream_event",
+    session_id: SESSION_ID,
+    event: { type: "message_start", message: { id: "msg_proof" } },
+  });
+}
+
+function toolUseStartFrame(id: string): string {
+  return JSON.stringify({
+    type: "stream_event",
+    session_id: SESSION_ID,
+    event: {
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "tool_use", id, name: "Read" },
+    },
+  });
+}
+
+/**
+ * The reply the operator actually loses: pre-tool text, then a tool call, then
+ * the budget is spent, then the closing message and a terminal envelope that
+ * restates only that closing message. The complete answer is both halves, so
+ * selecting the envelope alone erases the first one.
+ *
+ * Two overflow shapes, because they exercise different preserved state:
+ *  - `silent` spends the line budget on blank frames, so nothing streams
+ *    between the tool call and the result. This is the review's exact repro.
+ *  - `commentary` spends the character budget on real post-tool text, so the
+ *    preserved half is pre-tool text plus everything assembled before the stop.
+ */
+function scenarioToolSplitRecovered(mode: "silent" | "commentary"): void {
+  const assistantDeltas: string[] = [];
+  const parser = createParser(assistantDeltas);
+  const name = `tool-split-${mode}`;
+
+  parser.push(`${messageStartFrame()}\n`);
+  parser.push(`${textDeltaFrame("Before.")}\n`);
+  parser.push(`${toolUseStartFrame("toolu_proof_split")}\n`);
+  const streamed = mode === "silent" ? overflowLineBudget(parser) : overflowRawCharBudget(parser);
+
+  parser.push(`${messageStartFrame()}\n`);
+  parser.push(`${textDeltaFrame(FINAL_ANSWER)}\n`);
+  parser.push(`${terminalResultFrame()}\n`);
+  parser.finish();
+
+  const output = parser.getOutput();
+  assert(parser.getErrorText() === null, `${name}: parser reported "${parser.getErrorText()}"`);
+  assert(output !== null, `${name}: no output produced`);
+  assert(
+    output.text.startsWith("Before."),
+    `${name}: pre-tool answer text was erased; got ${JSON.stringify(output.text.slice(0, 120))}`,
+  );
+  assert(
+    output.text.endsWith(FINAL_ANSWER),
+    `${name}: the recovered answer is missing; got ${JSON.stringify(output.text.slice(-120))}`,
+  );
+  if (mode === "silent") {
+    const expected = `Before.\n\n${FINAL_ANSWER}`;
+    assert(
+      output.text === expected,
+      `${name}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(output.text)}`,
+    );
+  }
+  assert(
+    parser.getOutputTruncationText()?.includes("stopped assembling output"),
+    `${name}: truncation was not reported to the operator`,
+  );
+  console.log(
+    `[${name}] ${streamed} frames/chars spent between the tool call and the result; recovered ${output.text.length} chars, both halves present`,
+  );
+}
+
+/**
+ * The same shape with no tool split: a draft, the budget spent, then a terminal
+ * envelope with different text. The envelope still supersedes the draft, as it
+ * does on an unbudgeted turn — recovery must not resurrect superseded drafts.
+ */
+function scenarioSupersededDraft(): void {
+  const parser = createParser([]);
+  parser.push(`${messageStartFrame()}\n`);
+  parser.push(`${textDeltaFrame("draft wording")}\n`);
+  overflowLineBudget(parser);
+  parser.push(`${terminalResultFrame()}\n`);
+  parser.finish();
+
+  const output = parser.getOutput();
+  assert(
+    output?.text === FINAL_ANSWER,
+    `superseded-draft: a draft with no tool split must not survive, got ${JSON.stringify(output?.text)}`,
+  );
+  console.log(`[superseded-draft] draft correctly superseded by the envelope`);
+}
+
+/**
+ * Frames the odometers discount are still observed output. An interrupted run
+ * with no terminal envelope must still be able to consume the assembled text.
+ */
+function scenarioDiscountedOutputSeen(): void {
+  const assistantDeltas: string[] = [];
+  const parser = createParser(assistantDeltas);
+  parser.push(`${textDeltaFrame("hello")}\n`);
+  parser.finish();
+
+  const output = parser.getOutput();
+  assert(
+    output?.text === "hello",
+    `discounted-output-seen: assembled text was not reported, got ${JSON.stringify(output)}`,
+  );
+  console.log(`[discounted-output-seen] interrupted run still reports "${output.text}"`);
 }
 
 function scenarioRecovered(name: string, overflow: (parser: Parser) => number): void {
@@ -201,6 +338,10 @@ function scenarioRetentionFlat(): void {
 
 scenarioRecovered("recovered-raw", overflowRawCharBudget);
 scenarioRecovered("recovered-lines", overflowLineBudget);
+scenarioToolSplitRecovered("silent");
+scenarioToolSplitRecovered("commentary");
+scenarioSupersededDraft();
+scenarioDiscountedOutputSeen();
 scenarioUnknowable();
 scenarioRetentionFlat();
 console.log("All runtime assertions passed.");

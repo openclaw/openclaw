@@ -392,6 +392,12 @@ counting their text, thinking, and tool-input payloads. Cumulative snapshots and
 tool results still count toward the output budget. Single-line limits and bounded
 frame counts remain active, including for empty or unrecognized events.
 
+When a Claude turn spends a cumulative budget, OpenClaw stops assembling output
+and keeps watching for the terminal `result` record. A turn that finishes is
+still delivered — including the reply text assembled before the stop, when a
+tool call connects that text to the final message — and the truncation is
+reported alongside it. A turn that never produces a terminal result still fails.
+
 Input modes:
 
 - `input: "arg"` (default) passes the prompt as the last CLI arg.

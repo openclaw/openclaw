@@ -294,6 +294,110 @@ describe("createCliJsonlStreamingParser framing", () => {
     },
   );
 
+  it("keeps pre-budget tool-split text when the budget is spent before the closing message", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      `${joinJsonlFrames(
+        { type: "init", session_id: "tool-split-budget" },
+        claudeStreamEvent({ type: "message_start" }),
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Before." },
+        }),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "Read" }, 1),
+      )}\n`,
+    );
+    // The turn outgrows its budget while the tool is still outstanding.
+    parser.push("\n".repeat(20_001));
+    parser.push(
+      `${joinJsonlFrames(
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeStreamEvent({ type: "message_start" }),
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "DONE" },
+        }),
+        { type: "result", subtype: "success", result: "DONE", session_id: "tool-split-budget" },
+      )}\n`,
+    );
+    parser.finish();
+
+    // Same contract as an unbudgeted tool split: the envelope restates the final
+    // message, it does not replace the answer's pre-tool half.
+    expect(parser.getOutput()).toMatchObject({
+      text: "Before.\n\nDONE",
+      sessionId: "tool-split-budget",
+    });
+    expect(parser.getOutput()?.errorText).toBeUndefined();
+    expect(parser.getOutputTruncationText()).toContain("exceeded 20000 lines");
+  });
+
+  it("lets a post-budget result supersede a draft with no outstanding tool split", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      `${joinJsonlFrames(
+        claudeStreamEvent({ type: "message_start" }),
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "draft wording" },
+        }),
+      )}\n`,
+    );
+    parser.push("\n".repeat(20_001));
+    parser.push(`${JSON.stringify({ type: "result", subtype: "success", result: "DONE" })}\n`);
+    parser.finish();
+
+    expect(parser.getOutput()?.text).toBe("DONE");
+  });
+
+  it.each([
+    {
+      name: "built-in partial deltas",
+      overrides: {},
+      expected: "hello",
+    },
+    {
+      name: "hook-handled text",
+      overrides: { parseJsonlEvent: () => ({ kind: "text" as const, text: "hello" }) },
+      expected: "hello",
+    },
+  ])("reports assembled $name when no result envelope arrives", ({ overrides, expected }) => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      ...overrides,
+    });
+
+    parser.push(
+      `${JSON.stringify(
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "hello" },
+        }),
+      )}\n`,
+    );
+    parser.finish();
+
+    // Frames the odometers discount are still observed output; an interrupted
+    // run must be able to consume their text.
+    expect(parser.getOutput()?.text).toBe(expected);
+  });
+
   it("normalizes empty Claude image data without treating zero omitted bytes as unchanged", () => {
     const results: CliToolResultDelta[] = [];
     const parser = createCliJsonlStreamingParser({
