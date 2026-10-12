@@ -203,7 +203,7 @@ describe("board MCP App cell lifecycle", () => {
     const widgetAppView = vi.fn(async () => readyAppView("retained-view"));
     const cell = await mount(widget(), callbacks({ widgetAppView }));
     await vi.waitFor(() => expect(cell.querySelector("mcp-app-view")).not.toBeNull());
-    const appView = cell.querySelector("mcp-app-view");
+    const appView = cell.querySelector<TestMcpAppView>("mcp-app-view")!;
 
     cell.active = false;
     await settle(cell);
@@ -212,6 +212,7 @@ describe("board MCP App cell lifecycle", () => {
     cell.active = true;
     await settle(cell);
     expect(cell.querySelector("mcp-app-view")).toBe(appView);
+    expect(appView.teardown).not.toHaveBeenCalled();
     expect(widgetAppView).toHaveBeenCalledOnce();
   });
 
