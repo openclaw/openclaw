@@ -1022,10 +1022,6 @@ function resolveEmbeddedRunProgressState(
   return replyInProgress ? "queued" : undefined;
 }
 
-export function isEmbeddedAgentRunInProgress(sessionId: string): boolean {
-  return resolveEmbeddedAgentRunProgressState(sessionId) !== undefined;
-}
-
 export type EmbeddedReplyActivity = Pick<ReplyOperation, "phase" | "lastActivityAtMs"> & {
   /** Terminal outcome committed; only delivery/finalization remains. */
   terminalOutcomeCommitted: boolean;
