@@ -46,7 +46,7 @@ suite.define(() => {
       const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
       localStorage.setItem(
         storageKey,
-        JSON.stringify({ ...settings, sidebarEntries: ["session:agent:main:two-line"] }),
+        JSON.stringify({ ...settings, railShortcuts: ["session:agent:main:two-line"] }),
       );
     }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     await installMockGateway(page, {

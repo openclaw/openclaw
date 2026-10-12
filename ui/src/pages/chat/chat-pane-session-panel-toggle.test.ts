@@ -1,6 +1,6 @@
 import { html, LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import "./components/chat-sidebar-region.runtime.ts";
+import "./components/chat-sidebar-region.runtime.tsx";
 import "../../components/browser/browser-panel.ts";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
