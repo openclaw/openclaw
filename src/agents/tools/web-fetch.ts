@@ -590,16 +590,30 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 
   // Preserve the direct fetch's rejection; replacing it with signal.reason would
   // discard the transport's own error detail.
-  const payload = await fetchWebPayload(params);
-  // Publish only after guard release: cancellation or cleanup failure must not
-  // leave a successful cache entry for a call that never returned its content.
-  throwIfFetchAborted(params.signal);
-  params.output.assertCurrent?.();
-  // Retry a failed sandbox save on the next call; never cache an unavailable spill.
-  if (!params.output.sandbox || !payload.truncated || payload.spill) {
-    writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  const unpublishedSpills = new Set<() => Promise<void>>();
+  try {
+    const payload = await fetchWebPayload({
+      ...params,
+      output: { ...params.output, onCreated: (cleanup) => unpublishedSpills.add(cleanup) },
+    });
+    // Keep custody until transport release and publication checks both succeed.
+    throwIfFetchAborted(params.signal);
+    params.output.assertCurrent?.();
+    // Retry a failed sandbox save on the next call; never cache an unavailable spill.
+    if (!params.output.sandbox || !payload.truncated || payload.spill) {
+      writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    }
+    return payload;
+  } catch (error) {
+    for (const cleanup of unpublishedSpills) {
+      try {
+        await cleanup();
+      } catch (cleanupError) {
+        logWarn(`[web-fetch] failed to remove unpublished spill: ${String(cleanupError)}`);
+      }
+    }
+    throw error;
   }
-  return payload;
 }
 
 async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
