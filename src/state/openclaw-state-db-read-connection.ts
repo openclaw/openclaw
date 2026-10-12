@@ -86,12 +86,6 @@ const retainedReaders = new Map<string, RetainedReader>();
 const corruptedReaders = new WeakSet<DatabaseSync>();
 let unregisterExitClose: (() => void) | undefined;
 
-/** Ordered partial results may carry corruption as data; the same reader owner still retires it. */
-function retireOpenClawStateReadConnectionAfterCorruption(database: DatabaseSync): void {
-  invalidateOpenClawStateRuntimeIntegrity(database);
-  corruptedReaders.add(database);
-}
-
 function retireReader(reader: RetainedReader): void {
   if (retainedReaders.get(reader.identity.key) !== reader) {
     return;
@@ -468,7 +462,8 @@ export function readOpenClawStateReadOnlyLocation<T>(
       };
     } catch (error) {
       if (isSqliteCorruptionError(error)) {
-        retireOpenClawStateReadConnectionAfterCorruption(opened.database.db);
+        invalidateOpenClawStateRuntimeIntegrity(opened.database.db);
+        corruptedReaders.add(opened.database.db);
       }
       result = { status: "unavailable", error };
     }

@@ -373,11 +373,18 @@ describe("Subagents panel data ownership", () => {
     expect(f.data.rows[0]?.activity).toBe("Reading source");
   });
 
-  it("shows tool-only purpose while keeping public narration first and hidden calls out", async () => {
+  it("prefers public progress and tool purpose over the observer digest while hiding routine calls", async () => {
     const row = child("tool-only", {
       status: "running",
       hasActiveRun: true,
       activeRunIds: ["run-1"],
+      observerDigest: {
+        runId: "run-1",
+        headline: "Reviewing the benchmark results",
+        health: "on-track",
+        revision: 1,
+        updatedAt: 1,
+      },
     });
     const f = fixture((method, params) => {
       if (method === "sessions.list") return page(params.spawnedBy ? [row] : []);
@@ -386,6 +393,7 @@ describe("Subagents panel data ownership", () => {
     });
     f.open();
     await f.when(() => f.data.rows[0]?.callCount !== undefined);
+    expect(f.data.rows[0]?.activity).toBe(row.observerDigest?.headline);
     const item = {
       itemId: "exec-item",
       toolCallId: "exec-call",

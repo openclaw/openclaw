@@ -11,7 +11,6 @@ import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronRunResult, CronStatus, CronPayload } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import {
@@ -28,7 +27,7 @@ import {
   buildCronSchedule,
 } from "./form-schedule.ts";
 import { loadCronJobsPage } from "./jobs.ts";
-import { getCronJobPayload } from "./payload.ts";
+import { buildCronPayload, getCronJobPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
 import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
@@ -548,58 +547,6 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   return normalizeCronFormState(next);
 }
 
-function buildCronPayload(form: CronFormState, source: CronPayload | null, isUpdate: boolean) {
-  // Clones carry public restrictions, not the source's capture markers or authority.
-  // Updates must omit caps so the Gateway retains that job's existing authority.
-  const toolsAllow = !isUpdate && source && "toolsAllow" in source ? source.toolsAllow : undefined;
-  const restrictions = toolsAllow ? { toolsAllow: [...toolsAllow] } : {};
-  if (form.payloadKind === "systemEvent") {
-    const text = form.payloadText.trim();
-    if (!text) {
-      throw new Error(t("cron.errors.systemEventTextRequired"));
-    }
-    return { kind: "systemEvent" as const, text, ...restrictions };
-  }
-  if (form.payloadKind !== "agentTurn") {
-    throw new Error(`Cron ${form.payloadKind} payloads are read-only in Control UI.`);
-  }
-  const message = form.payloadText.trim();
-  if (!message) {
-    throw new Error(t("cron.errors.agentMessageRequiredShort"));
-  }
-  const original = source?.kind === "agentTurn" ? source : undefined;
-  const cloned = isUpdate ? undefined : original;
-  // Blank stored overrides clear on update; a new job leaves them inherited.
-  const model =
-    form.payloadModel.trim() || (isUpdate && original?.model !== undefined ? null : undefined);
-  const thinking =
-    form.payloadThinking.trim() ||
-    (isUpdate && original?.thinking !== undefined ? null : undefined);
-  const timeoutRaw = form.timeoutSeconds.trim();
-  const timeoutSeconds = toNumber(timeoutRaw, Number.NaN);
-  const lightContext =
-    form.payloadLightContext || original?.lightContext !== undefined
-      ? form.payloadLightContext
-      : undefined;
-  return {
-    kind: "agentTurn" as const,
-    message,
-    ...(model !== undefined ? { model } : {}),
-    ...(thinking !== undefined ? { thinking } : {}),
-    ...(timeoutRaw && Number.isFinite(timeoutSeconds) && timeoutSeconds >= 0
-      ? { timeoutSeconds }
-      : isUpdate && original?.timeoutSeconds !== undefined
-        ? { timeoutSeconds: null }
-        : {}),
-    ...(lightContext !== undefined ? { lightContext } : {}),
-    ...restrictions,
-    ...(cloned?.fallbacks ? { fallbacks: [...cloned.fallbacks] } : {}),
-    ...(cloned?.allowUnsafeExternalContent !== undefined
-      ? { allowUnsafeExternalContent: cloned.allowUnsafeExternalContent }
-      : {}),
-  };
-}
-
 function normalizePersistedDeliveryChannel(
   value: string,
   options: { preserveLast?: boolean } = {},
@@ -787,8 +734,19 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       }
       result = { saved: true, jobId: editingJob.id };
     } else {
-      const response = await client.request("cron.add", job);
-      resetCronFormToDefaults(state, agentId);
+      let response: unknown;
+      try {
+        response = await client.request("cron.add", job);
+      } catch (error) {
+        if (state.cronForm === form && state.cronEditingJob === editingJob) {
+          throw error;
+        }
+        return;
+      }
+      if (state.cronForm === form && state.cronEditingJob === editingJob) {
+        resetCronFormToDefaults(state, agentId);
+        state.cronCreateOpen = false;
+      }
       result = { saved: true, jobId: extractSavedCronJobId(response) };
     }
     await reloadCronJobsSnapshot(state);

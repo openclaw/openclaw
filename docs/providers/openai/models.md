@@ -197,10 +197,12 @@ openclaw models set openai/gpt-6.1-sol
 ```
 
 It uses the Responses API for tool calls, accepts text and images, and supports
-a 1,050,000-token context window with up to 128,000 output tokens. OpenClaw
-keeps its 272,000-token active input budget by default; native Codex follows
-the selected account's advertised limits. Existing selections and the Astra
-setup default are unchanged. A successful account catalog remains authoritative;
+a 1,050,000-token context window with up to 128,000 output tokens. Direct
+OpenAI API-key traffic keeps its 272,000-token active input budget by default.
+The OpenClaw harness defaults to a 500,000-token active window with ChatGPT/Codex
+subscription auth; native Codex owns its context window and compaction. Explicit
+context budgets, other models, and the Astra setup default are unchanged. A successful account
+catalog remains authoritative, including smaller account-specific windows;
 subscription offline hints do not imply access.
 
 Reasoning defaults to `medium` and supports `low`, `medium`, `high`, `xhigh`,

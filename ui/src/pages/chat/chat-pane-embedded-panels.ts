@@ -55,10 +55,8 @@ type SidebarPanelDefinitionParams = {
   subagentsInputRegion: "page" | "dock";
   subagentsPresented: PresentationValue;
   processesPresented?: PresentationValue;
-  onRefreshProcesses?: () => void;
   subagentsAvailable: boolean;
   subagentsShowRequest?: () => string | null | undefined;
-  onRefreshSubagents: () => void;
   onSubagentSessionSelect: (
     sessionKey: string,
     options?: PaneSessionChangeOptions,
@@ -178,19 +176,6 @@ export function sidebarPanelDefinitions(
       shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
     };
   };
-  const refreshAction = (panel: "subagents" | "processes", onRefresh?: () => void) =>
-    params
-      ? html`<button
-          type="button"
-          class="rail-header__action"
-          aria-label=${t(`chat.${panel}Panel.refresh`)}
-          title=${t(`chat.${panel}Panel.refresh`)}
-          ?disabled=${!params.connected}
-          @click=${onRefresh}
-        >
-          ${icons.refresh}
-        </button>`
-      : undefined;
   const terminal = state?.terminalAvailable
     ? html`<openclaw-terminal-panel
         embedded
@@ -322,7 +307,6 @@ export function sidebarPanelDefinitions(
             .onSessionSelect=${params.onSubagentSessionSelect}
           ></openclaw-chat-subagents-panel>`
         : null,
-      refreshAction("subagents", params?.onRefreshSubagents),
     ),
     definePanel(
       "processes",
@@ -334,7 +318,6 @@ export function sidebarPanelDefinitions(
             .presented=${livePresentation(params.processesPresented ?? false)}
           ></openclaw-chat-processes-panel>`
         : null,
-      refreshAction("processes", params?.onRefreshProcesses),
     ),
     definePanel(
       "detail",

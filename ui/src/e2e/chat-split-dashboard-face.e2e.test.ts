@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -188,7 +189,7 @@ suite.define(() => {
         if (action === "focus") {
           await beta.locator(".chat-pane__header").click();
         } else {
-          await alpha.locator(".chat-pane__close-pane").click();
+          await selectChatLayoutAction(alpha, "Close pane");
         }
         await expect.poll(() => page.url()).toContain("/main/face-beta");
         await expect

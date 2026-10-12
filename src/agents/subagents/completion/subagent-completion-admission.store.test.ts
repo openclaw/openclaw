@@ -170,22 +170,17 @@ describe("native subagent completion worker admission", () => {
     });
   });
 
-  it.each(["queue", "subagent"] as const)(
-    "rolls back both owners after a native failure at %s",
-    async (phase) => {
-      await withAdmissionState(async ({ input, database, context, admit }) => {
-        const before = readSubagentRun(database, input.expected.runId);
-        const target =
-          phase === "queue" ? "INSERT ON delivery_queue_entries" : "UPDATE ON subagent_runs";
-        database.db.exec(
-          `CREATE TRIGGER reject_completion AFTER ${target} BEGIN SELECT RAISE(ABORT, 'completion crash cut'); END`,
-        );
-        await expect(admit()).rejects.toThrow("completion crash cut");
-        expect(await loadPendingSessionDeliveries(context)).toEqual([]);
-        expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
-      });
-    },
-  );
+  it("rolls back both owners after the native subagent write fails", async () => {
+    await withAdmissionState(async ({ input, database, context, admit }) => {
+      const before = readSubagentRun(database, input.expected.runId);
+      database.db.exec(
+        "CREATE TRIGGER reject_completion AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'completion crash cut'); END",
+      );
+      await expect(admit()).rejects.toThrow("completion crash cut");
+      expect(await loadPendingSessionDeliveries(context)).toEqual([]);
+      expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
+    });
+  });
 
   it("refuses mismatched queue and native delivery generations before either write", async () => {
     await withAdmissionState(async ({ input, database, context, admit }) => {

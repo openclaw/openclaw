@@ -152,7 +152,8 @@ async function prepareWorkerGeneration(
   previous?: WorkerGeneration,
   pluginIds?: readonly string[],
 ): Promise<WorkerGeneration> {
-  const { prepareConfiguredModelFacts } = await import("./prepared-model-runtime.facts.js");
+  const { prepareConfiguredModelFacts } =
+    await import("./prepared-model-runtime.configured-facts.js");
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
   // metadata generation. Its source/built artifact selection must survive reconstruction too.
   const metadata =

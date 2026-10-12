@@ -538,7 +538,14 @@ export class SubagentsPanelData {
       return {
         session,
         callCount: metrics ? subagentToolCallCount(metrics) : undefined,
-        activity: tool?.text || headline?.title || undefined,
+        activity:
+          tool?.text ||
+          headline?.title ||
+          (isSessionRunActive(session) &&
+          session.observerDigest?.runId &&
+          session.activeRunIds?.includes(session.observerDigest.runId)
+            ? session.observerDigest.headline.trim() || undefined
+            : undefined),
         toolDisplayName: tool ? resolveToolDisplay({ name: tool.name }).label : undefined,
         canStop:
           isSessionRunActive(session) && session.activeRunIds?.length === 1 && stopAccess.allowed,

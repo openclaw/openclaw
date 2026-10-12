@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -238,7 +239,7 @@ suite.define(() => {
           }
           await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 0 } });
           await capturePanel(page, "mobile-composer-spacing");
-          await page.locator(".chat-side-panel-toggle").click();
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           const picker = page.locator(".side-panel-empty--selector");
           await picker.waitFor();
           await waitForShellLayout(page);
@@ -282,7 +283,7 @@ suite.define(() => {
           await capturePanel(page, "mobile-empty-panel-scrolled");
           await choices.filter({ hasText: "Files" }).click();
           await page.locator('.side-panel__panel[data-panel-slot="workspace"]:visible').waitFor();
-          await page.locator(".chat-side-panel-toggle").click();
+          await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
           await expect.poll(() => picker.isVisible()).toBe(false);
         },
       );

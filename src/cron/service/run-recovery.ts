@@ -132,6 +132,12 @@ async function repairRecoveryProposal(
           ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
           : true,
       },
+      onSettled(outcome) {
+        if (outcome === "unknown") {
+          // A lost reply can hide a committed repair from the cached store.
+          noteCronJobsStoreCommit(input.storeKey);
+        }
+      },
       publish(outcome) {
         if (outcome.result.kind === "repaired") {
           noteCronJobsStoreCommit(input.storeKey);

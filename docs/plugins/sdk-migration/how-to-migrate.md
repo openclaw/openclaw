@@ -9,6 +9,21 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Await durable session persistence
+
+Use the asynchronous `SessionManager` methods for durable sessions on the
+Gateway main thread, including
+`openAsync`, `openModelContextAsync`, `readSessionContextAsync`, and
+`appendMessageAsync`. Deprecated synchronous SDK methods remain compatible until
+the next SDK major. Replace
+`readCodexSessionContext` with the reader from `createCodexSessionContextReader`.
+
+Opaque `AgentHarnessSessionDeletionMutation.commit` callbacks are deprecated.
+Use `createNativeSessionBindingLifecycleV2` for stored native bindings or
+`createNativeSessionCommitFinalizer` for effects that only run after commit.
+These existing participants let session deletion stay in the database worker;
+opaque callbacks retain the synchronous compatibility adapter until removal.
+
 ## Await GitHub publication operations
 
 The Gateway context's `githubPublicationService` provides versioned requests and
@@ -347,11 +362,13 @@ The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
 remain synchronous third-party adapters until the next Plugin SDK major and
 explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
 deprecation warning once per plugin and capability family per process; calls outside a
-plugin invocation warn once per method. Existing return values and completion
-timing stay intact, including recording before an immediate synchronous list.
-Notifications publish after the enclosing transaction commits and are discarded
-on rollback. This migration changes no schema, retained data, retention, or
-update behavior.
+plugin invocation warn once per method. Legacy `recordCommittedInput` queues the
+worker operation after the enclosing transaction commits; rollback discards the
+submission. It no longer completes before an immediate synchronous list. Await
+`recordCommittedInputAsync` before reading the resulting Inbox. Accepted queued
+work drains during orderly shutdown; abrupt process termination can lose a queued
+legacy submission. Other synchronous methods retain their existing completion
+timing. This migration changes no schema, retained data, retention, or update behavior.
 
 ## Await personal model-account operations
 

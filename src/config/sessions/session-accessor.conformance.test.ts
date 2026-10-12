@@ -53,17 +53,14 @@ import {
   type TranscriptMessageAppendResult,
   type TranscriptUpdatePayload,
 } from "./session-accessor.js";
-import {
-  listSessionChildEntriesReadOnly,
-  listSessionEntryRows,
-  replaceSessionEntrySync,
-} from "./session-accessor.sqlite-entry.js";
+import { listSessionEntryRows, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-maintenance-completion.test-support.js";
 import { observeSessionMaintenanceChanges } from "./session-accessor.sqlite-maintenance.test-support.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import { listSessionChildEntriesReadOnly } from "./session-entry-children-read.js";
 import type { SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.
@@ -2230,7 +2227,7 @@ describe("sqlite session normalization", () => {
     ).toThrow("openclaw doctor --fix");
   });
 
-  it("fails loud when imported lineage disagrees with canonical entry JSON", () => {
+  it("fails loud when imported lineage disagrees with canonical entry JSON", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sessionKey = "agent:main:lineage-mismatch";
     const sessionId = "lineage-mismatch-session";
@@ -2250,14 +2247,14 @@ describe("sqlite session normalization", () => {
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(sessionKey);
 
-    expect(() =>
+    await expect(
       listSessionChildEntriesReadOnly({
         agentId: "main",
         env,
         sessionKey: "agent:main:json-parent",
         storePath: paths.sqlitePath,
       }),
-    ).toThrow("openclaw doctor --fix");
+    ).rejects.toThrow("openclaw doctor --fix");
     expect(() =>
       listSessionEntryRows({ agentId: "main", env, storePath: paths.sqlitePath }),
     ).toThrow("openclaw doctor --fix");
