@@ -3,7 +3,6 @@
 import { appendFile, readFile } from "node:fs/promises";
 import {
   createGitHubApi,
-  parseApprovalCommands,
   publishGuardStatus,
   readSecurityReviewHistory,
   withSecurityReviewRecovery,
@@ -246,21 +245,23 @@ async function resolvePullRequests(api, event, eventName, repository) {
     throw new Error("Security review event does not identify the expected repository.");
   }
   const prefix = `/repos/${repository}`;
-  if (eventName === "pull_request_target" || eventName === "issue_comment") {
+  if (eventName === "pull_request_target" || eventName === "workflow_dispatch") {
+    // ClawSweeper Dispatch forwards approval-command comment activity, including
+    // revoking edits and deletions, as a dispatch from repository automation.
+    // The input only names the PR; authorization always uses live comments.
+    // GitHub Actions' bot account; its numeric ID cannot be claimed by a user.
     if (
-      eventName === "issue_comment" &&
-      (!event.issue?.pull_request ||
-        !["created", "edited", "deleted"].includes(event.action) ||
-        // An edit can remove the command entirely. Its previous body still
-        // identifies a revocation; authorization always uses live comments.
-        (parseApprovalCommands(event.comment?.body).length === 0 &&
-          (event.action !== "edited" ||
-            parseApprovalCommands(event.changes?.body?.from).length === 0)))
+      eventName === "workflow_dispatch" &&
+      (event.sender?.id !== 41898282 ||
+        event.sender?.login !== "github-actions[bot]" ||
+        event.sender?.type !== "Bot")
     ) {
-      return { selected: [], truncated: false };
+      throw new Error("Security review requires an automatic pull request or CI event.");
     }
     const number =
-      eventName === "pull_request_target" ? event.pull_request?.number : event.issue?.number;
+      eventName === "pull_request_target"
+        ? event.pull_request?.number
+        : Number(event.inputs?.pull_request);
     if (!positiveInteger(number)) {
       throw new Error("Security review event has no valid pull request number.");
     }

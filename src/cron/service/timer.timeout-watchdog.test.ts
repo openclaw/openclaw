@@ -20,7 +20,8 @@ import { getSuspensionVisibleCronTaskRunCount } from "./active-run-cancellation.
 import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-support.js";
 import { stop } from "./ops-lifecycle.js";
 import type { CronServiceDeps, CronServiceState } from "./state.js";
-import { executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
+import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
+import { runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const SCHEDULED_AT = Date.parse("2026-05-10T09:00:00.000Z");

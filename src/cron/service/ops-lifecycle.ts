@@ -18,7 +18,7 @@ import {
 } from "./foreign-receipt-monitor.js";
 import { nextWakeAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
-import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
+import { stopCronRunQueue, drainCronRunQueue, waitForCronRunQueue } from "./run-queue.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { recoverCronRunProposals } from "./run-recovery.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
@@ -268,13 +268,11 @@ async function startOnce(state: CronServiceState): Promise<void> {
     }
     const proposals: CronRunRecoveryProposal[] = [];
     for (const job of state.store?.jobs ?? []) {
-      job.state ??= {};
-      if (typeof job.state.queuedAtMs === "number") {
-        proposals.push({ jobId: job.id, queuedAtMs: job.state.queuedAtMs });
-      }
-      if (typeof job.state.runningAtMs === "number") {
-        proposals.push({ jobId: job.id, runningAtMs: job.state.runningAtMs });
-      }
+      proposals.push({
+        jobId: job.id,
+        queuedAtMs: job.state.queuedAtMs,
+        runningAtMs: job.state.runningAtMs,
+      });
     }
     try {
       await recoverCronRunProposals(state, proposals, {
@@ -304,6 +302,7 @@ async function startOnce(state: CronServiceState): Promise<void> {
     return;
   }
   try {
+    await drainCronRunQueue(state);
     await runMissedJobs(state, {
       skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
       deferAgentWork: true,
@@ -361,7 +360,14 @@ export function stop(state: CronServiceState) {
   state.schedulerDrain = Promise.all([state.schedulerDrain, state.schedulerScope.stop()]).then(
     () => undefined,
   );
-  cancelCronRunAdmissionWaiters(state);
+  const cancel = stopCronRunQueue(state).catch((error: unknown) =>
+    state.deps.log.warn({ err: String(error) }, "cron: stopped queue left for recovery"),
+  );
+  state.schedulerDrain = Promise.all([
+    state.schedulerDrain,
+    cancel,
+    waitForCronRunQueue(state),
+  ]).then(() => undefined);
   state.schedulerStarted = false;
   stopForeignReceiptMonitor(state);
   stopTimer(state);
@@ -386,6 +392,7 @@ export function resumeScheduling(state: CronServiceState) {
   try {
     armTimer(state);
     resumeForeignReceiptMonitor(state);
+    void drainCronRunQueue(state);
   } catch (err) {
     state.schedulingPaused = true;
     stopTimer(state);

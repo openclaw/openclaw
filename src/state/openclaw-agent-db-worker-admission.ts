@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
+import {
+  readDatabasePathIdentitySync,
+  resolveDatabasePathKey,
+} from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -30,7 +34,12 @@ export async function withWorkerAdmission<T>(
   assertAgentCreationClaimCurrent(options);
   assertAgentCreationClaimAliases(options);
   const creationClaim = captureAgentCreationClaim(options);
-  const identity = readDatabasePathIdentitySync(pathname);
+  const admittedIdentity = borrowedExecution
+    ? getSqliteDatabaseAdmissionIdentityForPath(pathname)
+    : undefined;
+  const identity = admittedIdentity
+    ? { ...admittedIdentity, canonicalPath: resolveDatabasePathKey(pathname) }
+    : readDatabasePathIdentitySync(pathname);
   const agentId = normalizeAgentId(options.agentId);
   if (borrowedExecution) {
     borrowedExecution.assertCurrent();
@@ -53,14 +62,6 @@ export async function withWorkerAdmission<T>(
     borrowedExecution?.assertCurrent();
     creationClaim?.assertCurrent();
     signal?.throwIfAborted();
-    const current = readDatabasePathIdentitySync(pathname);
-    if (
-      current.canonicalPath !== identity.canonicalPath ||
-      (identity.key.startsWith("file:") &&
-        (current.key !== identity.key || current.birthtime !== identity.birthtime))
-    ) {
-      throw new Error("Agent database changed during worker preparation");
-    }
   };
   const resource = {
     agentId,
