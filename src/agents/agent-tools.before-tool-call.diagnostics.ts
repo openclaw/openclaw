@@ -31,6 +31,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { hasActiveDiagnosticTracePropagation } from "../infra/diagnostic-trace-propagation.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -304,6 +305,19 @@ export type SkillUsageMatch = {
   activation: "command" | "read";
 };
 
+/**
+ * Gate for the retained bundle fingerprint on a skill usage match: the field
+ * rides the payload only while an exporter-owned tracing consumer is active.
+ * Delivery producers stamp retained bundle identities for integrity reasons
+ * regardless of tracing, so a receipt or entry-carried stamp reaching this
+ * matcher on a tracing-off (metrics-only) install must never continue into a
+ * diagnostic event that internal listeners can observe. Accounting is never
+ * gated: the skill usage event itself always emits.
+ */
+function gatedSkillFingerprint(fingerprint: string | undefined): string | undefined {
+  return hasActiveDiagnosticTracePropagation() ? fingerprint : undefined;
+}
+
 function canonicalSkillFile(value: string | undefined): string | undefined {
   const skillFile = value?.trim();
   return skillFile && path.isAbsolute(skillFile)
@@ -320,6 +334,7 @@ function resolvedSkillUsageMatch(params: {
     Partial<Pick<Skill, "source" | "sourceInfo" | "bundleFingerprint">>;
 }): SkillUsageMatch {
   const skillFile = canonicalSkillFile(params.skill.filePath);
+  const skillFingerprint = gatedSkillFingerprint(params.skill.bundleFingerprint);
   return {
     skillName: params.skill.name.trim(),
     skillSource: resolveSkillTelemetrySource(params.skill),
@@ -328,8 +343,9 @@ function resolvedSkillUsageMatch(params: {
     // Entry-carried identity is the retained generation stamped by a delivery
     // producer: the local/worker materialization routes, the transfer adapter,
     // and the tracing-gated ordinary-local preparation stamp the projection
-    // entries consumers actually read.
-    ...(params.skill.bundleFingerprint ? { skillFingerprint: params.skill.bundleFingerprint } : {}),
+    // entries consumers actually read. The tracing gate keeps a producer's
+    // integrity stamp from exposing a fingerprint while tracing is inactive.
+    ...(skillFingerprint ? { skillFingerprint } : {}),
   };
 }
 
@@ -440,7 +456,7 @@ export function findSkillUsageMatch(params: {
       // unassociated dispatch omits.
       const associatedFingerprint =
         snapshotMatch && commandFile !== undefined && snapshotMatch.skillFile === commandFile
-          ? snapshotMatch.skillFingerprint
+          ? gatedSkillFingerprint(snapshotMatch.skillFingerprint)
           : undefined;
       return {
         skillName: command.skillName,
@@ -478,20 +494,25 @@ export function findSkillUsageMatch(params: {
       typeof params.toolCallId === "string"
         ? params.ctx?.skillInstructionDeliveryMarkers?.takeInvocationFingerprint(params.toolCallId)
         : undefined;
+    // A serving receipt is the serving boundary's attribution for the bytes it
+    // actually served: transfer and session producers stamp it regardless of
+    // tracing, so the same gate keeps a retained value from reaching internal
+    // diagnostic listeners while tracing is inactive.
+    const gatedReceipt = gatedSkillFingerprint(receipt);
     if (usage) {
       return {
         skillFile: usage.skillFile,
         skillName: usage.skillName,
         skillSource: usage.skillSource,
         activation: "read",
-        ...(receipt ? { skillFingerprint: receipt } : {}),
+        ...(gatedReceipt ? { skillFingerprint: gatedReceipt } : {}),
       };
     }
     const { skillFingerprint: _entryStamp, ...fallback } = resolvedSkillUsageMatch({
       activation: "read",
       skill,
     });
-    return receipt ? { ...fallback, skillFingerprint: receipt } : fallback;
+    return gatedReceipt ? { ...fallback, skillFingerprint: gatedReceipt } : fallback;
   }
   if (params.toolName !== "read") {
     return undefined;
@@ -511,8 +532,9 @@ export function findSkillUsageMatch(params: {
       typeof params.toolCallId === "string"
         ? params.ctx?.skillInstructionDeliveryMarkers?.takeInvocationFingerprint(params.toolCallId)
         : undefined;
+    const gatedMarker = gatedSkillFingerprint(marker);
     const { skillFingerprint: _entryFingerprint, ...readMatch } = instructionMatch;
-    return marker ? { ...readMatch, skillFingerprint: marker } : readMatch;
+    return gatedMarker ? { ...readMatch, skillFingerprint: gatedMarker } : readMatch;
   }
   const match = params.ctx?.skillUsagePaths?.findLast(
     (entry) => path.resolve(entry.readPath) === candidate,
@@ -560,7 +582,14 @@ export function recordSkillUsed(params: {
       skillName: params.match.skillName,
       skillSource: params.match.skillSource,
       activation: params.match.activation,
-      ...(params.match.skillFingerprint && { skillFingerprint: params.match.skillFingerprint }),
+      // The shared emission owner applies the tracing gate once more: a
+      // match constructed off this module's matcher paths (or a producer
+      // stamp that survived them) never exposes a fingerprint while tracing
+      // is inactive, while the skill.used event and skill accounting stay
+      // fully intact.
+      ...(gatedSkillFingerprint(params.match.skillFingerprint)
+        ? { skillFingerprint: params.match.skillFingerprint }
+        : {}),
       toolName: params.toolName,
       ...(params.toolCallId && { toolCallId: params.toolCallId }),
     },

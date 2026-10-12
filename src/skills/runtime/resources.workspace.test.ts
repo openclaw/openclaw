@@ -773,15 +773,23 @@ it("counts underlying delivery-time walks against the per-preparation bound", as
     const acquirers = entries.map((entry) => stamped.deliveredIdentityAcquirers.get(entry));
     expect(acquirers.every((acquirer) => acquirer !== undefined)).toBe(true);
     const orig = f.skillResources.readSkillFiles.getMockImplementation()!;
-    const gates: Array<() => void> = [];
+    // Release gates whose settlement the test can await: `release` only lets a
+    // walk's underlying read proceed; `settled` resolves when that read has
+    // actually settled — the only event that frees a walk-bound slot.
+    const gates: Array<{ release: () => void; settled: Promise<unknown> }> = [];
     f.skillResources.readSkillFiles.mockImplementation(
-      async (skill: Skill, options: { allowMissingRoot: boolean }) => {
+      (skill: Skill, options: { allowMissingRoot: boolean }) => {
         let release!: () => void;
-        gates.push(() => release());
-        await new Promise<void>((resolve) => {
+        const gate = new Promise<void>((resolve) => {
           release = resolve;
         });
-        return orig(skill, options);
+        const settled = gate.then(() => orig(skill, options));
+        // A walk whose race already hit its deadline has no awaiter: keep a
+        // rejecting underlying read from surfacing as an unhandled rejection
+        // when cleanup releases it.
+        void settled.catch(() => undefined);
+        gates.push({ release, settled });
+        return settled;
       },
     );
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -807,27 +815,40 @@ it("counts underlying delivery-time walks against the per-preparation bound", as
       // walk's underlying fs read, and the refused acquisition retries into a
       // fresh walk — a fake-timer-frozen walk would never release its slot.
       vi.useRealTimers();
-      gates[0]!();
-      for (let i = 0; i < 100; i += 1) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
+      // The walk bound releases only when an underlying read settles: release
+      // the first walk and await the controlled reader's own settlement signal
+      // — the promise its release resolves — so the underlying filesystem read
+      // provably finished. That settlement alone is still not the bound's
+      // release: the guarded workspace reader resolves one promise hop later,
+      // and `releaseUnderlying` queues only when that hop runs. The hop's
+      // continuation precedes this await's (it attached to the controlled
+      // read first), so by the time this continuation suspends on a macrotask
+      // the release callback is already queued — and a macrotask boundary
+      // drains it before the retry asks the bound for a slot, without counting
+      // event-loop turns or hoping a busy runner schedules the release first.
+      gates[0]!.release();
+      await gates[0]!.settled;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const retry = acquirers[SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY]!("Use bulk8.", undefined);
       expect(gates).toHaveLength(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY + 1);
-      // The retry's underlying walk settles like any other: release it, and
-      // the opportunistic acquisition verifies its delivered text against the
-      // walked bundle — a mismatch omits — without holding the served read.
-      for (const release of gates.splice(0, gates.length)) {
-        release();
-      }
+      // The retry's underlying walk settles like any other: release and join
+      // it, and the opportunistic acquisition verifies its delivered text
+      // against the walked bundle — a mismatch omits — without holding the
+      // served read.
+      const retryGate = gates[SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY]!;
+      retryGate.release();
+      await retryGate.settled;
       expect(await retry).toBeUndefined();
     } finally {
       vi.useRealTimers();
-      for (const release of gates.splice(0, gates.length)) {
-        release();
+      // Join every released-but-unsettled read so none dangles past the test:
+      // releasing without awaiting would leave the still-gated walks'
+      // underlying reads unresolved past teardown.
+      const released = gates.splice(0, gates.length);
+      for (const gate of released) {
+        gate.release();
       }
-      for (let i = 0; i < 10; i += 1) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
+      await Promise.allSettled(released.map((gate) => gate.settled));
     }
   } finally {
     f.release();
@@ -872,15 +893,20 @@ it("bounds outstanding discovery walks per preparation", async () => {
       resolvedSkills: [...(f.snapshot.resolvedSkills ?? []), ...extraSkills],
     };
     const orig = f.skillResources.readSkillFiles.getMockImplementation()!;
-    const gates: Array<() => void> = [];
+    // Release gates whose settlement the test can await (same shape as the
+    // delivery-walks test): a walk-bound slot frees only when the underlying
+    // read settles, so batch boundaries wait on that signal, never on turns.
+    const gates: Array<{ release: () => void; settled: Promise<unknown> }> = [];
     f.skillResources.readSkillFiles.mockImplementation(
-      async (skill: Skill, options: { allowMissingRoot: boolean }) => {
+      (skill: Skill, options: { allowMissingRoot: boolean }) => {
         let release!: () => void;
-        gates.push(() => release());
-        await new Promise<void>((resolve) => {
+        const gate = new Promise<void>((resolve) => {
           release = resolve;
         });
-        return orig(skill, options);
+        const settled = gate.then(() => orig(skill, options));
+        void settled.catch(() => undefined);
+        gates.push({ release, settled });
+        return settled;
       },
     );
     const pending = stampLocalSkillBundleIdentities({
@@ -899,9 +925,15 @@ it("bounds outstanding discovery walks per preparation", async () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     expect(gates.length).toBe(SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY);
-    for (const release of gates.splice(0, gates.length)) {
-      release();
+    // Release the first batch and await its underlying reads' actual
+    // settlement before asserting the next batch: event-loop turns cannot
+    // establish that a released walk's filesystem read finished, so a busy
+    // runner must not decide whether the bound admits the next batch.
+    const firstBatch = gates.splice(0, gates.length);
+    for (const gate of firstBatch) {
+      gate.release();
     }
+    await Promise.allSettled(firstBatch.map((gate) => gate.settled));
     // The next batch registers exactly the walks beyond the bound, and only
     // now that the first bound has settled.
     const remaining = total - SKILL_BUNDLE_IDENTITY_WALK_CONCURRENCY;
@@ -909,9 +941,12 @@ it("bounds outstanding discovery walks per preparation", async () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     expect(gates.length).toBe(remaining);
-    for (const release of gates.splice(0, gates.length)) {
-      release();
+    const secondBatch = gates.splice(0, gates.length);
+    for (const gate of secondBatch) {
+      gate.release();
     }
+    // Join every released-but-unsettled read so none dangles past the test.
+    await Promise.allSettled(secondBatch.map((gate) => gate.settled));
     const stamped = await pending;
     for (const skill of snapshot.resolvedSkills ?? []) {
       const entry = stamped.snapshot?.resolvedSkills?.find(

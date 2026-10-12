@@ -74,6 +74,16 @@ listeners only — including any in-process plugin subscribed through
 `onInternalDiagnosticEvent` in the Plugin SDK — not the public untrusted
 diagnostic projection.
 
+The fingerprint is emitted only while tracing is active: `skill.used` events on
+an install with no active tracing consumer (for example a metrics-only
+install) omit `skillFingerprint`, including when a skill's retained snapshot
+entry or delivery receipt still carries a stamped identity from an integrity
+producer that stamps regardless of tracing. Any path while tracing is
+inactive omits the fingerprint, so an internal diagnostic listener never
+observes a fingerprint while no exporter-owned tracing consumer is active.
+Skill usage accounting itself is unaffected: the `skill.used` event still
+emits and still counts the skill's use.
+
 When `diagnostics-otel` tracing is active, outbound model requests may include
 a W3C `traceparent` header from the actual exporter-owned model-call span.
 Diagnostic trace IDs and span IDs only correlate events to that span; they are

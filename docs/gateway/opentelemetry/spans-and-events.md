@@ -48,7 +48,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - Optional `openclaw.errorCategory`/`openclaw.errorCode` on errors, `openclaw.deniedReason` and `openclaw.outcome=blocked` when denied by policy or sandbox
 - `openclaw.skill.used`
   - `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation` (`read` or `command`), optional `openclaw.toolName`, optional `openclaw.agent`
-  - Optional `openclaw.skill.fingerprint` (content fingerprint of the loaded skill bundle associated with the activation's delivery; omitted when no bundle identity is established — see [privacy](/gateway/opentelemetry/privacy-and-trace-context))
+  - Optional `openclaw.skill.fingerprint` (content fingerprint of the loaded skill bundle associated with the activation's delivery; emitted only while tracing is active, and omitted when no bundle identity is established — see [privacy](/gateway/opentelemetry/privacy-and-trace-context))
 - `openclaw.exec`
   - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`, `openclaw.exec.command_length`, `openclaw.exec.exit_code`, `openclaw.exec.exit_signal`, `openclaw.exec.timed_out`
 - `openclaw.webhook.processed`

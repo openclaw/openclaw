@@ -19,6 +19,10 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import {
+  registerDiagnosticTracePropagationBridge,
+  resetDiagnosticTracePropagationForTest,
+} from "../../infra/diagnostic-trace-propagation.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { prepareSkillBundle } from "../../skills/library/bundle.js";
 import { formatSkillsCompactForPrompt } from "../../skills/loading/skill-contract.js";
@@ -42,6 +46,10 @@ import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  resetDiagnosticTracePropagationForTest();
+});
 const tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand"> = {
   runWorkspaceCommand: async (command) => {
     command.assertCurrent?.();
@@ -733,6 +741,13 @@ describe("remote-exec skill resources", () => {
         // matcher consumes that invocation's receipt, so the emission asserts
         // the emitted fingerprint belongs to the delivered bundle, never
         // resolved-entry state alone.
+        // Real catalog/matcher route with the active tracing consumer present:
+        // the matcher's fingerprint field is gated on active tracing, so the
+        // emission asserts the fingerprint under the same bridge the
+        // diagnostics-otel service registers while traces are active.
+        registerDiagnosticTracePropagationBridge({
+          resolveTraceContext: () => undefined,
+        });
         const markers = createSkillInstructionDeliveryMarkers();
         const catalog = prepareInstalledSkillCatalog({
           snapshot: resources!.snapshot,
@@ -934,10 +949,15 @@ describe("remote-exec skill resources", () => {
       });
       expect(await readInstalledSkill(catalog, workspaceSkill.name)).toBe(workspaceInstructions);
       expect(await readInstalledSkill(catalog, gatewaySkill.name)).toBe(gatewayInstructions);
-      // Real serving route: each invocation's skills_read tool captures the
-      // receipt for the bytes it actually served, and the matcher consumes that
-      // invocation's receipt — so each emission carries its own delivered
-      // bundle's fingerprint, never the sibling entry's stamp.
+      // Real serving route with the active tracing consumer present (the
+      // matcher's fingerprint field is gated on active tracing): each
+      // invocation's skills_read tool captures the receipt for the bytes it
+      // actually served, and the matcher consumes that invocation's receipt —
+      // so each emission carries its own delivered bundle's fingerprint,
+      // never the sibling entry's stamp.
+      registerDiagnosticTracePropagationBridge({
+        resolveTraceContext: () => undefined,
+      });
       const markers = createSkillInstructionDeliveryMarkers();
       const skillReadTool = createInstalledSkillTools(catalog, {
         skillInstructionDeliveryMarkers: markers,

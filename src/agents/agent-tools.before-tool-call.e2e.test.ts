@@ -17,10 +17,15 @@ import {
   onDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
+import {
+  registerDiagnosticTracePropagationBridge,
+  resetDiagnosticTracePropagationForTest,
+} from "../infra/diagnostic-trace-propagation.js";
 import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -144,6 +149,7 @@ function asAgentTool(tool: { name: string; execute: ReturnType<typeof vi.fn> }):
 
 afterEach(() => {
   resetDiagnosticRunActivityForTest();
+  resetDiagnosticTracePropagationForTest();
   setGlobalHookRunnerForTest(null);
   mockGetGlobalHookRunner.mockReset();
   mockGetGlobalHookRunner.mockImplementation(() => getGlobalHookRunnerForTest());
@@ -1725,6 +1731,18 @@ describe("before_tool_call loop detection behavior", () => {
     };
   }
 
+  // The active-tracing gate the matcher's fingerprint field keys on: a
+  // registered trace-propagation bridge is exactly the exporter-owned tracing
+  // consumer the diagnostics-otel service registers while traces are active,
+  // and a metrics-only install never registers one. Positive fingerprint
+  // assertions drive the real bridge surface; the file-level afterEach resets
+  // the registry between tests.
+  function registerActiveTracingBridge(): () => void {
+    return registerDiagnosticTracePropagationBridge({
+      resolveTraceContext: () => undefined,
+    });
+  }
+
   function createSkillFingerprintContext(params: {
     delivery: ReturnType<typeof createSkillDeliveryState>;
     entryBundleFingerprint?: string;
@@ -1856,6 +1874,7 @@ describe("before_tool_call loop detection behavior", () => {
     // wrapper adds no hashing or filesystem reads for telemetry, so hash and
     // read counts are structurally unchanged; the execute-count assertion
     // below pins the no-extra-reads property on the already-served route.
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
     const tool = createDeliveryWrappedRead(execute, "fp-generation-b", delivery);
@@ -1886,6 +1905,7 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("binds a transferred entry's read to its retained identified bytes", async () => {
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     const underlying = vi.fn().mockResolvedValue(asSkillUsageTextResult("# Changed on disk"));
     const tool = wrapToolWithBeforeToolCallHook(
@@ -1934,7 +1954,9 @@ describe("before_tool_call loop detection behavior", () => {
 
   it("attributes within-generation already-served re-reads while support-file reads emit no skill usage", async () => {
     // Real producer routes ground the sequence: delivery prep reads the source
-    // tree and materialization writes the revision-keyed copy the reader serves.
+    // tree through the resource owner; scoped materialization rm/mkdir's the
+    // revision-keyed directory, so each generation owns its own paths.
+    registerActiveTracingBridge();
     const source = await createPondSource();
     const first = await materializePondGeneration({
       workspace: source.workspace,
@@ -1995,6 +2017,7 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("delivers a real second materialization while stale generation paths read as missing", async () => {
+    registerActiveTracingBridge();
     const source = await createPondSource();
     const scope = {
       sessionId: "skill-fingerprint-cross-generation",
@@ -2230,6 +2253,7 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("attributes command activations from stamped resolved entries", async () => {
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     const ctx = createSkillFingerprintContext({
       delivery,
@@ -2572,6 +2596,7 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("attributes the installed skills_read route from the receipt its serving read captures", async () => {
+    registerActiveTracingBridge();
     const delivery = createSkillDeliveryState();
     // Real receipt shapes: a live-tree entry acquires at delivery against the
     // bytes the invocation serves, a retained entry provably serves its
@@ -2679,6 +2704,156 @@ describe("before_tool_call loop detection behavior", () => {
         skillName: "unarmed",
       });
       expect(used[2]).not.toHaveProperty("skillFingerprint");
+    });
+  });
+
+  it("omits the skill fingerprint from skill.used while tracing is inactive and emits it while active", async () => {
+    // The matcher gates the fingerprint field on the active-tracing signal
+    // (a registered trace-propagation bridge) at every attachment site: the
+    // read activation's delivery marker, the skills_read receipt, and the
+    // entry-carried stamp. Diagnostics stay enabled throughout — this is the
+    // metrics-only install shape — so the skill.used event and ordinary skill
+    // accounting must stay fully intact while the retained fingerprint stays
+    // absent, then appear once the exporter-owned tracing consumer registers.
+    setDiagnosticsEnabledForProcess(true);
+    const inactiveDelivery = createSkillDeliveryState();
+    const readExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
+    const inactiveRead = createDeliveryWrappedRead(
+      readExecute,
+      "fp-generation-b",
+      inactiveDelivery,
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
+      // Read activation whose entry carries a stamped fingerprint and whose
+      // delivery settles a marker: with no bridge registered, both the
+      // entry stamp and the invocation marker are omitted from the event.
+      await inactiveRead.execute(
+        "read-tracing-inactive",
+        { path: pondLocator },
+        undefined,
+        undefined,
+      );
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        type: "skill.used",
+        toolCallId: "read-tracing-inactive",
+        activation: "read",
+        skillName: "pond",
+        toolName: "read",
+      });
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+      // Accounting is never gated: the trusted event still carries the
+      // skill's file identity through private data.
+      expect(privateData[0]?.skillUsage?.skillFile).toBe(pondLocator);
+    });
+
+    // skills_read receipt path: a retained entry provably serves its
+    // producer-stamped bytes, so the serving read captures a receipt — the
+    // matcher consumes it and must still omit it while tracing is inactive.
+    const inactiveSkills = [
+      {
+        name: "pond",
+        description: "Pond skill",
+        location: pondLocator,
+        source: { filePath: pondLocator, readContent: pondInstructions },
+        promptListed: true,
+        attributableBundleFingerprint: "fp-retained",
+      },
+    ];
+    const inactiveTools = createInstalledSkillTools(inactiveSkills, {
+      skillInstructionDeliveryMarkers: inactiveDelivery.markers,
+    });
+    const inactiveSkillsRead = wrapToolWithBeforeToolCallHook(
+      inactiveTools.find((tool) => tool.name === "skills_read")!,
+      createSkillFingerprintContext({
+        delivery: inactiveDelivery,
+        entryBundleFingerprint: "fp-generation-b",
+      }),
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      await inactiveSkillsRead.execute(
+        "skills-read-tracing-inactive",
+        { name: "pond" },
+        undefined,
+        undefined,
+      );
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        type: "skill.used",
+        toolCallId: "skills-read-tracing-inactive",
+        activation: "read",
+        skillName: "pond",
+        toolName: "skills_read",
+      });
+      expect(used[0]).not.toHaveProperty("skillFingerprint");
+    });
+
+    // With the exporter-owned tracing consumer registered, the same routes
+    // emit the retained fingerprint: the bridge is exactly the active-tracing
+    // signal the diagnostics-otel service registers while traces are active.
+    registerActiveTracingBridge();
+    const activeDelivery = createSkillDeliveryState();
+    const activeExecute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
+    const activeRead = createDeliveryWrappedRead(activeExecute, "fp-generation-b", activeDelivery);
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      await activeRead.execute("read-tracing-active", { path: pondLocator }, undefined, undefined);
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        type: "skill.used",
+        toolCallId: "read-tracing-active",
+        activation: "read",
+        skillName: "pond",
+        skillFingerprint: "fp-generation-b",
+      });
+    });
+
+    const activeSkills = [
+      {
+        name: "pond",
+        description: "Pond skill",
+        location: pondLocator,
+        source: { filePath: pondLocator, readContent: pondInstructions },
+        promptListed: true,
+        attributableBundleFingerprint: "fp-retained",
+      },
+    ];
+    const activeTools = createInstalledSkillTools(activeSkills, {
+      skillInstructionDeliveryMarkers: activeDelivery.markers,
+    });
+    const activeSkillsRead = wrapToolWithBeforeToolCallHook(
+      activeTools.find((tool) => tool.name === "skills_read")!,
+      createSkillFingerprintContext({
+        delivery: activeDelivery,
+        entryBundleFingerprint: "fp-generation-b",
+      }),
+    );
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
+      await activeSkillsRead.execute(
+        "skills-read-tracing-active",
+        { name: "pond" },
+        undefined,
+        undefined,
+      );
+      await flush();
+      const used = emitted.filter((evt) => evt.type === "skill.used");
+      expect(used).toHaveLength(1);
+      expectEventFields(used[0], {
+        type: "skill.used",
+        toolCallId: "skills-read-tracing-active",
+        activation: "read",
+        skillName: "pond",
+        skillFingerprint: "fp-retained",
+      });
     });
   });
 
