@@ -221,7 +221,7 @@ describe("automatic security review event resolution", () => {
     );
   });
 
-  it.each(["pull_request_target", "issue_comment", "workflow_dispatch"])(
+  it.each(["pull_request_target", "issue_comment"])(
     "resolves %s through current PR metadata",
     (eventName) => {
       const result = evaluate({
@@ -231,8 +231,6 @@ describe("automatic security review event resolution", () => {
           pull_request: { number: 42 },
           issue: { number: 42, pull_request: {} },
           comment: { body: "/allow-dependencies-change" },
-          inputs: { pull_request: "42" },
-          sender: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
         },
       });
       expect(result).toMatchObject({
@@ -458,9 +456,7 @@ describe("automatic security review event resolution", () => {
 
   it.each([
     { id: 1, login: "maintainer", type: "User" },
-    { id: 41898282, login: "github-actions[bot]", type: "User" },
-    { id: 1, login: "github-actions[bot]", type: "Bot" },
-    { id: 2, login: "clawsweeper[bot]", type: "Bot" },
+    { id: 41898282, login: "github-actions[bot]", type: "Bot" },
   ])("rejects a dispatch from $login ($type, $id) before any API request", (sender) => {
     const result = evaluate({
       eventName: "workflow_dispatch",

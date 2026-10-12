@@ -23,7 +23,7 @@ type WorkflowStep = {
 
 type Workflow = {
   name: string;
-  on: Record<string, { types?: string[]; workflows?: string[]; inputs?: Record<string, unknown> }>;
+  on: Record<string, { types?: string[]; workflows?: string[] }>;
   permissions: Record<string, string>;
   concurrency?: { group: string; "cancel-in-progress": boolean };
   jobs: Record<
@@ -367,7 +367,6 @@ describe("security review workflow trust boundaries", () => {
       "issue_comment",
       "pull_request_target",
       "schedule",
-      "workflow_dispatch",
       "workflow_run",
     ]);
     expect(workflow.on.pull_request_target?.types).toEqual(
@@ -381,10 +380,6 @@ describe("security review workflow trust boundaries", () => {
       ]),
     );
     expect(workflow.on.issue_comment?.types).toEqual(["created", "edited", "deleted"]);
-    expect(workflow.on.workflow_dispatch?.inputs?.pull_request).toMatchObject({
-      required: true,
-      type: "number",
-    });
     expect(workflow.on.workflow_run).toEqual({ workflows: ["CI"], types: ["completed"] });
     expect(workflow.on.schedule).toEqual([{ cron: "4-59/10 * * * *" }]);
     const concurrency = workflow.jobs.resolve!.concurrency!;
@@ -437,7 +432,6 @@ describe("security review workflow trust boundaries", () => {
       { eventName: "schedule", allowed: true },
       { eventName: "workflow_run", sourceEvent: "pull_request", allowed: true },
       { eventName: "workflow_run", sourceEvent: "push", allowed: false },
-      { eventName: "workflow_dispatch", allowed: true },
       { eventName: "workflow_run", sourceEvent: "workflow_dispatch", allowed: true },
       { action: "created", body: "/allow-security-sensitive-change", allowed: true },
       { action: "created", body: "/allow-dependencies-change", allowed: true },
@@ -523,7 +517,6 @@ describe("security review workflow trust boundaries", () => {
       ["pull_request_target", "synchronize", 43, false],
       ["pull_request_target", "closed", 42, false],
       ["issue_comment", "created", 42, false],
-      ["workflow_dispatch", undefined, 42, false],
     ] as const) {
       expect(
         Boolean(

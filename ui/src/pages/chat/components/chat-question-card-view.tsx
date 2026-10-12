@@ -77,3 +77,13 @@ defineSolidBridge<CardProps>(
   },
   { properties: { props: { default: undefined, attribute: false } } },
 );
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-question-card": HTMLAttributes<ChatQuestionCard> & {
+        "prop:props"?: ChatQuestionCard["props"];
+      };
+    }
+  }
+}
