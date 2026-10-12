@@ -10,7 +10,10 @@ import type {
   ExecApprovalsSnapshot,
 } from "./exec-approvals-core.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
-import { ensureExecApprovalsSnapshot, loadExecApprovals } from "./exec-approvals-store.js";
+import {
+  ensureExecApprovalsSnapshot,
+  loadExecApprovalsReadOnlyAsync,
+} from "./exec-approvals-store.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 export * from "./exec-approvals-analysis.js";
@@ -30,6 +33,7 @@ export {
   ensureExecApprovalsSnapshot,
   loadExecApprovals,
   loadExecApprovalsReadOnly,
+  loadExecApprovalsReadOnlyAsync,
   readExecApprovalsSnapshot,
   readExecApprovalsSnapshotAsync,
   restoreExecApprovalsSnapshotLocked,
@@ -79,7 +83,7 @@ export async function resolveExecApprovalsLocked(
 ): Promise<ExecApprovalsResolved> {
   const filePath = resolveExecApprovalsDisplayPath();
   if (!overrides?.requireSocket) {
-    const file = loadExecApprovals();
+    const file = await loadExecApprovalsReadOnlyAsync();
     const resolved = shapeResolvedExecApprovals({
       file,
       filePath,

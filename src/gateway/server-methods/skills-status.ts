@@ -5,7 +5,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
 import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import { ensureSkillsWatcher } from "../../skills/runtime/refresh.js";
 import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
@@ -26,7 +26,7 @@ export async function buildRemoteAwareWorkspaceSkillStatus(
   await prepareRemoteSkillConnections();
   // Remote skill availability depends on the agent's executable-node surface,
   // not only the workspace contents, so status reports include live eligibility.
-  const nodeSkills = resolveNodeExecEligibility({
+  const nodeSkills = await resolveNodeExecEligibilityAsync({
     cfg: resolved.cfg,
     agentId: resolved.agentId,
   });

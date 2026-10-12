@@ -23,7 +23,7 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
-import { resolveExecDefaults } from "../exec-defaults.js";
+import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
@@ -54,14 +54,14 @@ function denyTool(message: string): CliBackendToolPermissionResult {
   return { behavior: "deny", message };
 }
 
-function createPluginToolPermissionHandler(params: {
+async function createPluginToolPermissionHandler(params: {
   context: PreparedCliRunContext;
   abortSignal: AbortSignal;
   onPendingApproval: (delta: 1 | -1) => void;
   env: NodeJS.ProcessEnv;
-}): (request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult> {
+}): Promise<(request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult>> {
   const run = params.context.params;
-  const permission = resolveExecDefaults({
+  const permission = await resolveExecDefaultsAsync({
     cfg: run.config,
     sessionEntry: run.sessionEntry,
     execOverrides: run.execOverrides,
@@ -562,6 +562,12 @@ export async function executePluginOwnedProcess(params: {
     } else {
       params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
+    const requestToolPermission = await createPluginToolPermissionHandler({
+      context: params.context,
+      abortSignal: signal,
+      onPendingApproval: updatePendingApproval,
+      env: params.env,
+    });
     assertCurrent();
     const execution = params.execute({
       command,
@@ -582,14 +588,7 @@ export async function executePluginOwnedProcess(params: {
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
       ...(liveSession ? { liveSession } : {}),
       // Warm transports retain their first turn's async context across plugin refreshes.
-      requestToolPermission: AsyncLocalStorage.bind(
-        createPluginToolPermissionHandler({
-          context: params.context,
-          abortSignal: signal,
-          onPendingApproval: updatePendingApproval,
-          env: params.env,
-        }),
-      ),
+      requestToolPermission: AsyncLocalStorage.bind(requestToolPermission),
       requestUserInput: createPluginUserInputHandler({
         context: params.context,
         abortSignal: signal,

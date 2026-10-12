@@ -6,7 +6,12 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as execApprovals from "../infra/exec-approvals.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { resolveExecDefaults, resolveNodeExecEligibility } from "./exec-defaults.js";
+import {
+  resolveExecDefaults,
+  resolveExecDefaultsAsync,
+  resolveNodeExecEligibility,
+  resolveNodeExecEligibilityAsync,
+} from "./exec-defaults.js";
 
 const execStoreDirs = useSessionStoreTempDirs(afterAll, "openclaw-required-exec-");
 
@@ -21,6 +26,10 @@ describe("resolveExecDefaults", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
+      version: 1,
+      agents: {},
+    });
+    vi.spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync").mockResolvedValue({
       version: 1,
       agents: {},
     });
@@ -68,8 +77,30 @@ describe("resolveExecDefaults", () => {
         }).effectiveHost,
       ).toBe("sandbox");
       expect(resolveNodeExecEligibility({ ...owner, sessionKey }).canExec).toBe(false);
+      expect(await resolveExecDefaultsAsync({ ...owner, sessionKey })).toMatchObject({
+        effectiveHost: "sandbox",
+        canRequestNode: false,
+      });
+      expect(await resolveNodeExecEligibilityAsync({ ...owner, sessionKey })).toEqual({
+        canExec: false,
+      });
+      expect(execApprovals.loadExecApprovalsReadOnlyAsync).not.toHaveBeenCalled();
     },
   );
+
+  it("applies host approval floors prepared asynchronously", async () => {
+    vi.mocked(execApprovals.loadExecApprovalsReadOnlyAsync).mockResolvedValue({
+      version: 1,
+      defaults: { security: "deny", ask: "always" },
+      agents: {},
+    });
+
+    expect(
+      await resolveExecDefaultsAsync({
+        cfg: withDefaultAgent({ tools: { exec: { host: "gateway", mode: "full" } } }),
+      }),
+    ).toMatchObject({ effectiveHost: "gateway", security: "deny", ask: "always" });
+  });
 
   it.each([{ agentId: "isolated", effectiveHost: "sandbox", canExec: false }])(
     "uses $agentId sandbox policy for global exec defaults",

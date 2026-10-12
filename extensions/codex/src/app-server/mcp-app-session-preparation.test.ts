@@ -38,7 +38,10 @@ vi.mock("./config-exec-approvals.js", () => ({
   resolveOpenClawExecPolicyForCodexAppServer: () => ({}),
 }));
 vi.mock("./config-requirements.js", () => ({ readCodexRequirementsToml: () => undefined }));
-vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", () => ({ loadExecApprovals: () => ({}) }));
+// mock-isolation: Native-thread handoff uses a fixed policy; approval database I/O is outside this fixture.
+vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", () => ({
+  loadExecApprovalsReadOnlyAsync: async () => ({}),
+}));
 vi.mock("./launch-args.js", () => ({ isCodexAppServerProxyLaunch: () => false }));
 vi.mock("./client-runtime.js", () => ({ ensureCodexAppServerClientRuntime: mocks.ensure }));
 vi.mock("./plugin-app-cache-key.js", () => ({

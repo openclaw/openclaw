@@ -44,7 +44,6 @@ import {
   loadExecApprovals,
   loadExecApprovalsReadOnly,
   loadExecApprovalsReadOnlyAsync,
-  prepareExecApprovalsCurrentRead,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
@@ -568,8 +567,6 @@ describe("exec approvals SQLite store", () => {
         allowlistSatisfied: true,
       },
     };
-    // Admit the final reader before checking the warmed write path for caller SQL.
-    prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext());
     const sql = observeMainThreadSql();
     const publications: ExecApprovalsPublicationValue[] = [];
     const releaseFacts = execApprovalsPublication.subscribeFacts((change) => {

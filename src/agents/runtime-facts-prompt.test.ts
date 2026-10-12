@@ -65,7 +65,9 @@ describe("approved executable runtime facts", () => {
           other: { allowlist: [{ pattern: "C:\\Private\\other.exe" }] },
         },
       };
-      vi.spyOn(execApprovals, "loadExecApprovals").mockImplementation(() => file);
+      vi.spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync").mockImplementation(
+        async () => file,
+      );
       const initial = await buildRuntimeFactsContext(params);
       expect(initial).toEqual([
         { kind: "conversation-data", text: expect.any(String) },
@@ -94,7 +96,7 @@ describe("approved executable runtime facts", () => {
 
   it("bounds hints and omits command approvals, global wildcards, bare names, and unsafe or oversized tokens", () =>
     withMockedPlatform("win32", async () => {
-      vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
+      vi.spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync").mockResolvedValue({
         version: 1,
         agents: {
           main: {
@@ -128,9 +130,11 @@ describe("approved executable runtime facts", () => {
     "gates approval reads on Windows and exec capability: %s",
     (platform) =>
       withMockedPlatform(platform, async () => {
-        const load = vi.spyOn(execApprovals, "loadExecApprovals").mockImplementation(() => {
-          throw new Error("unavailable");
-        });
+        const load = vi
+          .spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync")
+          .mockImplementation(async () => {
+            throw new Error("unavailable");
+          });
         expect(
           await buildRuntimeFactsContext({ ...params, capabilityToolNames: new Set(["read"]) }),
         ).toEqual([temporalFact]);

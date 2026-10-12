@@ -25,7 +25,7 @@ import {
   createHarnessCompletionSourceAssertion,
   readAdmittedHarnessCompletionInput,
 } from "../agent-harness-completion-recovery.js";
-import { resolveExecDefaults } from "../exec-defaults.js";
+import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import type { MainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
@@ -475,7 +475,7 @@ export async function recoverStore(params: {
         continue;
       }
 
-      const execPolicy = resolveExecDefaults({
+      const execPolicy = await resolveExecDefaultsAsync({
         cfg: params.cfg,
         agentId,
         sessionKey: dispatchSessionKey,

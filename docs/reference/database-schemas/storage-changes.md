@@ -1096,9 +1096,13 @@ read worker. The policy owner captures the original database path before yieldin
 and keeps legacy-file migration checks, normalization, fail-closed results, and
 warning throttling on the host. The reader preserves inherited snapshots and joins
 accepted reads before disposable source cleanup. Missing stores stay absent, and
-worker failures never retry through host SQLite. Synchronous execution-authorization
-callbacks and policy mutation, restore, and initialization keep their existing
-owners.
+worker failures never retry through host SQLite. Execution-authorization callbacks
+consume the current policy from in-process committed write publications, seeded
+by the existing authorization worker operation. Pending or unknown policy writes
+fail closed at execution; completed writes replace the policy before the next
+execution check. The callbacks no longer open or query a native reader. Policy
+mutation, restore, and initialization keep their existing worker owners; Doctor
+retains its synchronous maintenance transaction.
 
 Use Kysely for ordinary queries and mutations. The current
 `getNodeSqliteKysely` facade compiles queries; `executeSqliteQuerySync` runs them

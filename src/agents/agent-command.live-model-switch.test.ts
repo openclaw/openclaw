@@ -647,8 +647,9 @@ vi.mock("./defaults.js", () => ({
 }));
 
 // Exec eligibility is outside model-switch scope; avoid loading its policy graph.
+// mock-isolation: Model-switch tests isolate exec-policy storage and node discovery.
 vi.mock("./exec-defaults.js", () => ({
-  resolveNodeExecEligibility: () => ({ canExec: false }),
+  resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
 }));
 
 vi.mock("./lanes.js", () => ({

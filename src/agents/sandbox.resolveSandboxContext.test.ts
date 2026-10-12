@@ -46,8 +46,9 @@ vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
 
 vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
 
+// mock-isolation: Sandbox provisioning tests must not read the host approval store for skill eligibility.
 vi.mock("./exec-defaults.js", () => ({
-  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
+  resolveNodeExecEligibilityAsync: resolveNodeExecEligibilityMock,
 }));
 
 vi.mock("../skills/runtime/remote.js", () => ({

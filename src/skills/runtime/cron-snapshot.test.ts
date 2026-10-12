@@ -13,8 +13,9 @@ const {
   resolveEffectiveAgentSkillFilterMock: vi.fn(),
 }));
 
+// mock-isolation: Snapshot refresh tests supply eligibility and snapshots without filesystem or approval-store access.
 vi.mock("./cron-snapshot.runtime.js", () => ({
-  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
+  resolveNodeExecEligibilityAsync: resolveNodeExecEligibilityMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveReusableWorkspaceSkillSnapshot: resolveReusableWorkspaceSkillSnapshotMock,
   resolveEffectiveAgentSkillFilter: resolveEffectiveAgentSkillFilterMock,
