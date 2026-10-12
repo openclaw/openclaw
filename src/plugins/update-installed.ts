@@ -77,6 +77,7 @@ import {
   isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
   isTrustedSourceLinkedOfficialNpmUpdate,
+  resolveClawHubNpmUpdateFallback,
   resolveClawHubUpdateSpecs,
   resolveNpmUpdateTarget,
   shouldSkipUnchangedNpmInstall,
@@ -262,6 +263,10 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.installSpec
           : record.spec;
+    const officialNpmFallback = resolveClawHubNpmUpdateFallback(
+      trustedOfficialClawHubInstall,
+      clawhubSpecs,
+    );
     let npmMetadata: Parameters<typeof installPluginFromNpmSpec>[0]["npmMetadata"] =
       npmSpecs?.npmResolution && effectiveSpec
         ? { spec: effectiveSpec, metadata: npmSpecs.npmResolution }
@@ -360,11 +365,15 @@ async function runInstalledPluginUpdate(
           beforePersistentEffect: assertCurrent,
         })) || changed;
     }
-    const recordNpmFailure = async (message: string, code?: string): Promise<void> => {
+    const recordSourceFailure = async (
+      message: string,
+      code?: string,
+      source: "npm" | "clawhub" = "npm",
+    ): Promise<void> => {
       let installedPayloadRunnable = false;
       if (
         (code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
-          (retainOnUnavailable && isUnavailablePluginSource("npm", { ok: false, code }))) &&
+          (retainOnUnavailable && isUnavailablePluginSource(source, { ok: false, code }))) &&
         (params.disableOnFailure || retainOnUnavailable) &&
         !params.dryRun &&
         currentVersion
@@ -401,7 +410,7 @@ async function runInstalledPluginUpdate(
       recordFailure(pluginId, message, { code, installedPayloadRunnable });
     };
     if (npmResolutionError) {
-      await recordNpmFailure(npmResolutionError.message, npmResolutionError.code);
+      await recordSourceFailure(npmResolutionError.message, npmResolutionError.code);
       continue;
     }
     const extensionsDir = resolveRecordedExtensionsDir({
@@ -470,7 +479,7 @@ async function runInstalledPluginUpdate(
             metadataResult.category === "metadata-env"
               ? PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE
               : PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND;
-          await recordNpmFailure(`Failed to check ${pluginId}: ${metadataResult.error}`, code);
+          await recordSourceFailure(`Failed to check ${pluginId}: ${metadataResult.error}`, code);
           continue;
         }
         logger.info?.(
@@ -505,6 +514,7 @@ async function runInstalledPluginUpdate(
           onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
           expectedIntegrity,
           clawhubSpecs,
+          officialNpmFallback,
           trustedSourceLinkedOfficialInstall,
           expectedReplacementPluginId: replacementPluginId,
           onNpmInstall: () => {
@@ -541,7 +551,7 @@ async function runInstalledPluginUpdate(
       continue;
     }
 
-    const { result, activeClawHubInstallSpec, channelFallbackSuffix } = attempt;
+    const { result, activeClawHubInstallSpec, channelFallbackSuffix, npmFallbackSpec } = attempt;
     if (!result.ok) {
       if (
         record.source === "clawhub" &&
@@ -564,12 +574,12 @@ async function runInstalledPluginUpdate(
         continue;
       }
       const phase = params.dryRun ? "check" : "update";
-      const code = record.source === "npm" && "code" in result ? result.code : undefined;
+      const code = "code" in result ? result.code : undefined;
       const message =
-        record.source === "npm"
+        record.source === "npm" || npmFallbackSpec
           ? formatNpmInstallFailure({
               pluginId,
-              spec: effectiveSpec!,
+              spec: officialNpmFallback?.installSpec ?? effectiveSpec!,
               phase,
               result,
             })
@@ -594,7 +604,11 @@ async function runInstalledPluginUpdate(
                   phase,
                   error: result.error,
                 });
-      await recordNpmFailure(message, code);
+      await recordSourceFailure(
+        message + channelFallbackSuffix,
+        code,
+        record.source === "clawhub" && !npmFallbackSpec ? "clawhub" : "npm",
+      );
       continue;
     }
     if (params.dryRun) {
@@ -625,11 +639,11 @@ async function runInstalledPluginUpdate(
 
     const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
     let installRecord: PluginInstallRecord;
-    if (record.source === "npm") {
+    if (record.source === "npm" || npmFallbackSpec) {
       const npmResult = result as NpmPluginUpdateSuccess;
       installRecord = {
         source: "npm",
-        spec: recordSpec,
+        spec: npmFallbackSpec ?? recordSpec,
         ...buildNpmResolutionInstallFields(npmResult.npmResolution),
       };
     } else if (record.source === "clawhub") {

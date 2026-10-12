@@ -413,7 +413,7 @@ async function persistPluginInstallOwned(
               writeOptions: {
                 ...params.snapshot.writeOptions,
                 afterWrite:
-                  params.applyRuntime || params.deferRuntime
+                  params.applyRuntime || params.deferRuntime || migration?.activationWarning
                     ? { mode: "none", reason: "plugin lifecycle applies runtime" }
                     : { mode: "restart", reason: "plugin source changed" },
                 ...(params.beforePersistentApply
@@ -431,25 +431,30 @@ async function persistPluginInstallOwned(
       const receipt = migration ? await migration.publish(next, commit) : await commit();
       // Publish the durable install before activation can fail; keep running metadata unchanged.
       committed = true;
-      params.deferRuntime?.record(
-        {
-          operation: "install",
-          pluginId: params.pluginId,
-          sourceDigests: source?.sourceDigests ?? {},
-          write: receipt,
-        },
-        source?.assertSourceCurrent,
-      );
-      refreshManagedPluginMetadata({ config: next });
-      // Publish and drain the previous generation before removing its source files.
-      await params.applyRuntime?.({
-        config: next,
-        write: receipt.configWrite,
-        pluginIds: ownedPluginIds,
-        reason: "install",
-        assertInvokerOwned: params.beforePersistentApply,
-      });
-      if (replacedInstallRemoval) {
+      const activationWarning = migration?.activationWarning;
+      if (activationWarning) {
+        warn(activationWarning, activationWarning);
+      } else {
+        params.deferRuntime?.record(
+          {
+            operation: "install",
+            pluginId: params.pluginId,
+            sourceDigests: source?.sourceDigests ?? {},
+            write: receipt,
+          },
+          source?.assertSourceCurrent,
+        );
+        refreshManagedPluginMetadata({ config: next });
+        // Publish and drain the previous generation before removing its source files.
+        await params.applyRuntime?.({
+          config: next,
+          write: receipt.configWrite,
+          pluginIds: ownedPluginIds,
+          reason: "install",
+          assertInvokerOwned: params.beforePersistentApply,
+        });
+      }
+      if (replacedInstallRemoval && !activationWarning) {
         const cleanup = async (
           assertCleanupOwned?: () => void,
           reportWarning = (message: string) =>
@@ -492,7 +497,7 @@ async function persistPluginInstallOwned(
         configPath: receipt.configWrite.path,
         reason: "source-changed",
         installRecords: nextInstallRecords,
-        invalidateRuntimeCache: params.invalidateRuntimeCache,
+        invalidateRuntimeCache: activationWarning ? false : params.invalidateRuntimeCache,
         traceCommand: "install",
         logger: {
           warn: (message) =>
