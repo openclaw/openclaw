@@ -12,8 +12,8 @@ import {
 import {
   parseSessionTranscriptAuthorityReceipts,
   retainSessionTranscriptWorkerPublication,
-  type SessionTranscriptAuthorityReceipt,
 } from "../../config/sessions/session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "../../config/sessions/session-transcript-authority.types.js";
 import type { InitialSessionTranscriptWriter } from "../../config/sessions/transcript-write-context.js";
 import {
   observeSqliteWorkerCommittedFacts,

@@ -305,8 +305,9 @@ describe("plugin registry runtime session ownership", () => {
   });
 
   it("limits locked harness session mutation and execution to the harness owner", async () => {
-    setRuntimeConfigSnapshot({});
-    onTestFinished(clearRuntimeConfigSnapshot);
+    const cfg: OpenClawConfig = {};
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const key = {
       reserved: "agent:main:harness:codex:thread-1",
       ordinary: "agent:main:ordinary",
@@ -409,7 +410,7 @@ describe("plugin registry runtime session ownership", () => {
     const gatewayRequest = vi.fn(async () => ({ ok: true }));
     runtime.gateway.isAvailable = vi.fn(async () => true);
     runtime.gateway.request = gatewayRequest as unknown as PluginRuntime["gateway"]["request"];
-    const createApi = createApis(runtime);
+    const createApi = createApis(runtime, cfg);
     const owner = createApi("codex-owner");
     const other = createApi("other-plugin");
     const voice = createApi("voice-call");

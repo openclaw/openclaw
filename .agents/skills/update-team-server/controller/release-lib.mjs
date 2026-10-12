@@ -528,7 +528,7 @@ function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runti
   if (phase === "fetch") demands.push([mirror, footprint]);
   if (phase !== "activate") {
     demands.push([join(servingRoot, "staging"), phase === "fetch" ? empty : footprint]);
-    // Budget all planned copy costs conservatively, even though cache cleanup precedes staging.
+    // Budget full copy costs conservatively, including growth of the retained package store.
     // A shared filesystem owes their sum, not three independent free-space checks.
     const buildDemand = phase === "build" ? footprint : empty;
     demands.push([join(buildHome, "work"), buildDemand], [join(buildHome, "cache"), buildDemand]);
