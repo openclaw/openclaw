@@ -25,6 +25,7 @@ import {
 import {
   buildTurnSendLedgerSessionKey,
   buildTurnSendTargetKey,
+  inspectTurnSendLedger,
   peekTurnSendCount,
   resetTurnSendLedgerForTest,
 } from "./turn-send-ledger.js";
@@ -403,6 +404,37 @@ describe("per-turn send budget", () => {
     const second = await send(tool, "after failure");
     expect(second.details).not.toMatchObject({ status: "suppressed" });
     expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("commits a landed send even when the caller is aborted before the result returns", async () => {
+    // The completed-action revalidation throws after delivery; the reservation must
+    // already be settled by then, not left pending for the rest of the turn.
+    const controller = new AbortController();
+    mocks.runMessageAction.mockReset();
+    mocks.runMessageAction.mockImplementationOnce(async () => {
+      controller.abort();
+      return {
+        kind: "send",
+        action: "send",
+        channel: "imessage",
+        to: currentChat,
+        handledBy: "plugin",
+        payload: {},
+        dryRun: false,
+      } as MessageActionResult;
+    });
+    const sessionKey = "agent:test:imessage:direct:aborted-after-send";
+    const tool = createBudgetTool({ sessionKey, maxPerTurn: 2 });
+    await expect(
+      tool.execute(
+        "call-aborted",
+        { action: "send", channel: "imessage", message: "first" },
+        controller.signal,
+      ),
+    ).rejects.toThrow("aborted");
+    expect(
+      inspectTurnSendLedger().find((slot) => slot.sessionKey.endsWith(sessionKey)),
+    ).toMatchObject({ committed: 1, pending: 0 });
   });
 
   it("does not count broadcast fan-out", async () => {

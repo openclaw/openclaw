@@ -61,7 +61,7 @@ function buildMessageToolTurnSendSessionKey(input: {
  * cross-context write action with a single normalized target, a ledger session key, and
  * a run id; broadcast fan-out and dry-runs are excluded, leaving the budget inert.
  */
-export function resolveTurnSendBudgetContext(input: {
+type TurnSendBudgetContextInput = {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   cfg: OpenClawConfig;
@@ -78,7 +78,11 @@ export function resolveTurnSendBudgetContext(input: {
   /** Raw agent session key; folded to the ledger key here. */
   sessionKey: string | undefined;
   runId: string | undefined;
-}): TurnSendBudgetContext | undefined {
+};
+
+function resolveTurnSendBudgetContext(
+  input: TurnSendBudgetContextInput,
+): TurnSendBudgetContext | undefined {
   const { runId } = input;
   const sessionKey = buildMessageToolTurnSendSessionKey({
     cfg: input.sessionConfig,
@@ -131,7 +135,7 @@ export function resolveTurnSendBudgetContext(input: {
  * reservation and the resolved config so the caller reserves once, then settles exactly
  * once against the same reservation: `settleCompletedResult` on completion,
  * `settleQueuedDelivery` when the Gateway took queue custody, `release()` for any other
- * failure/throw. Inert (no reservation) when `budgetContext` is undefined.
+ * failure/throw. Inert (no reservation) when no budget context applies.
  */
 type MessageToolTurnSendBudget = {
   /**
@@ -153,10 +157,11 @@ type MessageToolTurnSendBudget = {
   /**
    * Settle a completed action: commit when it landed, or release when it did not, then
    * append the normalization notice and, once the target has received >= 2 messages this
-   * turn and the nudge is enabled, the soft-nudge notice to the response.
+   * turn and the nudge is enabled, the soft-nudge notice to the response (the action's
+   * tool result, or its payload as JSON when it has none).
    */
   settleCompletedResult(
-    response: AgentToolResult<unknown>,
+    toolResult: AgentToolResult<unknown> | undefined,
     result: MessageActionResult,
   ): AgentToolResult<unknown>;
 };
@@ -179,8 +184,12 @@ const INACTIVE_BUDGET: MessageToolTurnSendBudget = {
   exhaustedResult: undefined,
   release() {},
   settleQueuedDelivery: (response) => response,
-  settleCompletedResult(response, result) {
-    return appendMessageToolNotices(response, resolveNormalizationNotice(result), undefined);
+  settleCompletedResult(toolResult, result) {
+    return appendMessageToolNotices(
+      toolResult ?? jsonResult(result.payload),
+      resolveNormalizationNotice(result),
+      undefined,
+    );
   },
 };
 
@@ -189,20 +198,23 @@ const INACTIVE_BUDGET: MessageToolTurnSendBudget = {
  * Media sends (`sendAttachment` / `upload-file`) stay visible to the soft nudge but never
  * charge the hard cap. When the delivery route dedups a completed operation through the
  * Gateway, the reservation carries the idempotency key so an idempotent replay is admitted
- * past the cap without recounting.
+ * past the cap without recounting. Call it immediately before dispatch: nothing settles a
+ * reservation except this controller.
  */
-export function prepareMessageToolTurnSendBudget(input: {
-  budgetContext: TurnSendBudgetContext | undefined;
-  cfg: OpenClawConfig;
-  gatewayPresent: boolean;
-  actionIdempotencyKey: string | undefined;
-}): MessageToolTurnSendBudget {
-  const { budgetContext } = input;
+export function prepareMessageToolTurnSendBudget(
+  input: TurnSendBudgetContextInput & {
+    /** Config the per-agent message-tool budget settings are read from. */
+    rawConfig: OpenClawConfig;
+    gatewayPresent: boolean;
+    actionIdempotencyKey: string | undefined;
+  },
+): MessageToolTurnSendBudget {
+  const budgetContext = resolveTurnSendBudgetContext(input);
   if (!budgetContext) {
     return INACTIVE_BUDGET;
   }
   const effectiveMessageTools = resolveEffectiveMessageToolsConfig({
-    cfg: input.cfg,
+    cfg: input.rawConfig,
     agentId: budgetContext.agentId,
   });
   const { action } = budgetContext;
@@ -251,13 +263,13 @@ export function prepareMessageToolTurnSendBudget(input: {
     settleQueuedDelivery(response) {
       return appendMessageToolNotices(response, undefined, commit());
     },
-    settleCompletedResult(response, result) {
+    settleCompletedResult(toolResult, result) {
       const landed = didMessageActionLand(result);
       if (!landed) {
         release();
       }
       return appendMessageToolNotices(
-        response,
+        toolResult ?? jsonResult(result.payload),
         resolveNormalizationNotice(result),
         landed ? commit() : undefined,
       );
