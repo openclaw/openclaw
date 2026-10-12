@@ -33,6 +33,10 @@ export type JsonSchemaRecord = {
   anyOf?: unknown;
   oneOf?: unknown;
   allOf?: unknown;
+  $id?: unknown;
+  $ref?: unknown;
+  $defs?: unknown;
+  definitions?: unknown;
 };
 
 /** Subcommand that hit a replacement guard; it may only recommend flags that subcommand registers. */
@@ -129,23 +133,69 @@ function schemaHasType(schema: JsonSchemaRecord, type: string): boolean {
   return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
 }
 
-function schemaAlternatives(
+/** The local-ref contract this repo's own channel schema normalizer recognizes. */
+const LOCAL_REF_PATTERN = /^#\/(\$defs|definitions)\/([A-Za-z0-9_.-]+)$/;
+
+type ScopedSchema = {
+  schema: JsonSchemaRecord;
+  /** What a local `$ref` resolves against: innermost `$id` resource, else first defs owner. */
+  refOwner?: JsonSchemaRecord;
+};
+
+function refOwnerFor(
   schema: JsonSchemaRecord,
+  inherited: JsonSchemaRecord | undefined,
+): JsonSchemaRecord | undefined {
+  // `$id` opens a new resource, so refs below it name that resource's own definitions, the way the
+  // shared resolver and the plugin validator's nested-resource regression read it. An ordinary
+  // nested `$defs` starts no resource, so the first owner the walk met keeps resolving every ref
+  // below it - that is what makes a mounted plugin fragment its own ref root.
+  if (typeof schema.$id === "string") {
+    return schema;
+  }
+  if (inherited) {
+    return inherited;
+  }
+  return isPlainRecord(schema.$defs) || isPlainRecord(schema.definitions) ? schema : undefined;
+}
+
+function localRefTarget(
+  ref: unknown,
+  refOwner: JsonSchemaRecord | undefined,
+): JsonSchemaRecord | undefined {
+  const match = typeof ref === "string" ? LOCAL_REF_PATTERN.exec(ref) : null;
+  const name = match?.[2];
+  const defs =
+    match && refOwner ? (match[1] === "$defs" ? refOwner.$defs : refOwner.definitions) : undefined;
+  if (!name || !isPlainRecord(defs) || !Object.hasOwn(defs, name)) {
+    return undefined;
+  }
+  const target = defs[name];
+  return isPlainRecord(target) ? target : undefined;
+}
+
+function schemaAlternatives(
+  entry: ScopedSchema,
   seen = new Set<JsonSchemaRecord>(),
-): JsonSchemaRecord[] {
-  if (seen.has(schema)) {
+): ScopedSchema[] {
+  if (seen.has(entry.schema)) {
     return [];
   }
-  seen.add(schema);
-  const alternatives: JsonSchemaRecord[] = [schema];
+  seen.add(entry.schema);
+  const refOwner = refOwnerFor(entry.schema, entry.refOwner);
+  const alternatives: ScopedSchema[] = [{ schema: entry.schema, refOwner }];
+  const target = localRefTarget(entry.schema.$ref, refOwner);
+  if (target) {
+    alternatives.push(...schemaAlternatives({ schema: target, refOwner }, seen));
+  }
   for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-    const entries = schema[key];
+    const entries = entry.schema[key];
     if (!Array.isArray(entries)) {
       continue;
     }
-    for (const entry of entries) {
-      if (isPlainRecord(entry)) {
-        alternatives.push(...schemaAlternatives(entry, seen));
+    for (const item of entries) {
+      if (isPlainRecord(item)) {
+        alternatives.push(...schemaAlternatives({ schema: item, refOwner }, seen));
       }
     }
   }
@@ -167,33 +217,32 @@ function schemaLooksObject(schema: JsonSchemaRecord): boolean {
   );
 }
 
-function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSchemaRecord[] {
-  const schemas: JsonSchemaRecord[] = [];
-  for (const alternative of schemaAlternatives(schema)) {
-    if (Object.keys(alternative).length === 0) {
+function propertySchema(entry: ScopedSchema, segment: PathSegment): ScopedSchema[] {
+  const schemas: ScopedSchema[] = [];
+  for (const alternative of schemaAlternatives(entry)) {
+    const schema = alternative.schema;
+    if (Object.keys(schema).length === 0) {
       schemas.push(alternative);
       continue;
     }
-    if (schemaLooksArray(alternative)) {
+    if (schemaLooksArray(schema)) {
       const index = parseConfigPathArrayIndex(segment);
       if (index !== undefined) {
-        const indexedItem = Array.isArray(alternative.items)
-          ? alternative.items[index]
-          : alternative.items;
+        const indexedItem = Array.isArray(schema.items) ? schema.items[index] : schema.items;
         if (isPlainRecord(indexedItem)) {
-          schemas.push(indexedItem);
+          schemas.push({ schema: indexedItem, refOwner: alternative.refOwner });
         }
       }
       continue;
     }
-    const properties = isPlainRecord(alternative.properties) ? alternative.properties : undefined;
+    const properties = isPlainRecord(schema.properties) ? schema.properties : undefined;
     const explicit = properties?.[segment];
     if (isPlainRecord(explicit)) {
-      schemas.push(explicit);
-    } else if (alternative.additionalProperties === true) {
-      schemas.push({});
-    } else if (isPlainRecord(alternative.additionalProperties)) {
-      schemas.push(alternative.additionalProperties);
+      schemas.push({ schema: explicit, refOwner: alternative.refOwner });
+    } else if (schema.additionalProperties === true) {
+      schemas.push({ schema: {}, refOwner: alternative.refOwner });
+    } else if (isPlainRecord(schema.additionalProperties)) {
+      schemas.push({ schema: schema.additionalProperties, refOwner: alternative.refOwner });
     }
   }
   return schemas;
@@ -202,18 +251,18 @@ function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSch
 function schemasAtPath(
   schema: JsonSchemaRecord | undefined,
   path: readonly PathSegment[],
-): JsonSchemaRecord[] {
+): ScopedSchema[] {
   if (!schema) {
     return [];
   }
-  let schemas = [schema];
+  let entries: ScopedSchema[] = [{ schema, refOwner: refOwnerFor(schema, undefined) }];
   for (const segment of path) {
-    schemas = schemas.flatMap((candidate) => propertySchema(candidate, segment));
-    if (schemas.length === 0) {
+    entries = entries.flatMap((candidate) => propertySchema(candidate, segment));
+    if (entries.length === 0) {
       return [];
     }
   }
-  return schemas;
+  return entries;
 }
 
 export function isConfigSchemaPath(
@@ -231,9 +280,9 @@ function schemaPrefersArrayAtPath(
   schema: JsonSchemaRecord | undefined,
   path: readonly PathSegment[],
 ): boolean | undefined {
-  const candidates = schemasAtPath(schema, path).flatMap((candidate) =>
-    schemaAlternatives(candidate),
-  );
+  const candidates = schemasAtPath(schema, path)
+    .flatMap((candidate) => schemaAlternatives(candidate))
+    .map((alternative) => alternative.schema);
   if (candidates.length === 0) {
     return undefined;
   }
