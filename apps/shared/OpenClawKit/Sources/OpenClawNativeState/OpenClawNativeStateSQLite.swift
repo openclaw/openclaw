@@ -49,7 +49,8 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 /// Synchronous access to the shared native SQLite bootstrap surface.
 /// One recursive connection lock serializes transactions and statement access.
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
-    // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Native clients never upgrade this database.
+    // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION for backend-owned native surfaces.
+    // Device credentials have a separate, exact table contract. Native clients never upgrade this database.
     private static let maximumSupportedSchemaVersion: Int64 = 20
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
@@ -312,7 +313,12 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         try self.withConnectionLock {
             let descriptor = Self.descriptor(table)
             let userVersion = try self.scalarInt64("PRAGMA user_version")
-            guard userVersion <= Self.maximumSupportedSchemaVersion else {
+            let newerSchema = userVersion > Self.maximumSupportedSchemaVersion
+            let deviceCredential = switch table {
+            case .deviceIdentities, .deviceAuthTokens: true
+            case .execApprovalsConfig, .macosPortGuardianRecords: false
+            }
+            guard !newerSchema || deviceCredential else {
                 throw OpenClawNativeStateError(
                     "Native state database uses newer schema version \(userVersion); " +
                         "this build supports \(Self.maximumSupportedSchemaVersion)")
@@ -336,6 +342,9 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
                 }
             }
             try self.validateCanonicalTable(table)
+            if newerSchema {
+                try self.validateDeviceCredentialContract(descriptor)
+            }
         }
     }
 
@@ -552,6 +561,38 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         guard try self.validRequiredIndex(table) else {
             throw OpenClawNativeStateError("\(table.indexName ?? table.name) has an incompatible index schema")
         }
+    }
+
+    /// Unrelated backend migrations must not prevent authenticating to a remote Gateway.
+    /// Admit only the complete credential contract, not merely matching column names:
+    /// new constraints, indexes, or triggers can change the meaning of native writes.
+    private func validateDeviceCredentialContract(_ table: CanonicalTable) throws {
+        let expected = Set(table.createSQL.split(separator: ";")
+            .map { Self.normalizedCredentialSQL(String($0)) }
+            .filter { !$0.isEmpty })
+        let query = try self.prepare("""
+        SELECT sql FROM sqlite_schema WHERE lower(tbl_name) = ? AND sql IS NOT NULL
+        """)
+        try query.bindText(table.name, at: 1)
+        var actual = Set<String>()
+        while try query.step() == .row {
+            try actual.insert(Self.normalizedCredentialSQL(query.requiredText(at: 0, field: "credential schema")))
+        }
+        guard actual == expected else {
+            throw OpenClawNativeStateError("\(table.name) has an incompatible native credential contract")
+        }
+    }
+
+    private static func normalizedCredentialSQL(_ sql: String) -> String {
+        // SQLite removes IF NOT EXISTS and quotes names after a STRICT migration's ALTER TABLE RENAME.
+        // Columns and index keys were already validated; these canonical declarations contain no literals.
+        sql.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(
+                of: "(?i)^CREATE\\s+(TABLE|INDEX)\\s+IF\\s+NOT\\s+EXISTS\\s+",
+                with: "CREATE $1 ",
+                options: .regularExpression)
+            .filter { !$0.isWhitespace && $0 != "\"" }
+            .uppercased()
     }
 
     private func tableColumns(_ tableName: String) throws -> [Column] {

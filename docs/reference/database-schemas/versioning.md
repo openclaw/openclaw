@@ -16,6 +16,24 @@ Each database records its published schema in two places:
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. [`openclaw update`](/cli/update) also refuses a package or source target whose declared schema support is older than an on-disk database. Known stable releases published before schema metadata was added are checked against their shipped schema-1 contract. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
 
+Native clients make a narrow exception for their local `device_identities` and
+`device_auth_tokens` tables. Connecting to a remote Gateway must not depend on
+unrelated local backend migrations. A newer shared-state schema is admitted for
+these stores only when its global metadata matches `user_version` and the
+credential table and index definitions still match the complete native contract,
+with no additional indexes or triggers. Missing or incompatible tables remain
+errors; the native client never repairs them or changes either schema-version
+marker. Existing identity keys and gateway-scoped tokens remain in the same
+database, without a migration or a second source of truth.
+
+These table names, definitions, and credential row meanings are a stable native
+storage contract. Future incompatible credential semantics must change the
+table name or definition so existing clients refuse access; bumping only the
+backend version is not a credential compatibility fence. Config, execution
+approvals, port-guardian state, Gateway startup, and updater admission retain
+their backend schema-version checks. Apps predating this exception still need
+an app update when their local backend advances beyond their supported schema.
+
 When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `openclaw doctor --fix`; run `openclaw doctor --fix` from the compatible install if further migration is required, then restart through the service or deployment owner.
 
 Read admission reports the newer published schema version even when this build
