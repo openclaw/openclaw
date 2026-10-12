@@ -198,7 +198,7 @@ export async function withWorktreeBasePreparation<T>(
       },
       env: { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
     };
-    const settled = (pending: RemoteDefaultAttempt["pending"]) =>
+    const settled = (attempt: RemoteDefaultAttempt, pending: RemoteDefaultAttempt["pending"]) =>
       pending.catch((error: unknown) => {
         attempt.refreshedAt = undefined;
         if (hasWorktreeUnknownOutcome(error)) {
@@ -212,33 +212,34 @@ export async function withWorktreeBasePreparation<T>(
     options.beforeRun();
     let attempt = shared.attempt;
     if (!attempt) {
-      attempt = shared.attempt = {
-        pending: settled(
-          timeWorktreePreparationPhase("baseRefresh", () =>
-            fetchRemoteDefault(repository.repoRoot, options),
-          ).then(async (base) => {
-            // Immutable commits share hydration across refreshes while the Git worker lives.
-            const preparationKey = base.commit;
-            await timeWorktreePreparationPhase("baseHydration", () =>
-              estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
-                signal,
-                assertCurrent: options.beforeRun,
-                preparationKey,
-              }),
-            );
-            base.preparationKey = preparationKey;
-            options.beforeRun();
-            if (base.fetchSucceeded) {
-              started.refreshedAt = Date.now();
-            }
-            return base;
-          }),
-        ),
+      const started: RemoteDefaultAttempt = {
+        pending: timeWorktreePreparationPhase("baseRefresh", () =>
+          fetchRemoteDefault(repository.repoRoot, options),
+        ).then(async (base) => {
+          // Immutable commits share hydration across refreshes while the Git worker lives.
+          const preparationKey = base.commit;
+          await timeWorktreePreparationPhase("baseHydration", () =>
+            estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
+              signal,
+              assertCurrent: options.beforeRun,
+              preparationKey,
+            }),
+          );
+          base.preparationKey = preparationKey;
+          options.beforeRun();
+          if (base.fetchSucceeded) {
+            started.refreshedAt = Date.now();
+          }
+          return base;
+        }),
       };
+      started.pending = settled(started, started.pending);
+      attempt = shared.attempt = started;
     }
     if (localDefault === "fast-forward" && !attempt.forwarded) {
       attempt.forwarded = true;
       attempt.pending = settled(
+        attempt,
         attempt.pending.then(async (base) => {
           const warning = await timeWorktreePreparationPhase("baseFastForward", () =>
             fastForwardLocalDefault(repository, base.branch, base.commit, options),
