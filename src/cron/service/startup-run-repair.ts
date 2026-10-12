@@ -12,6 +12,7 @@ import {
   applyJobResult,
   applyScriptRunResult,
   applyTriggerNoFireResult,
+  isTriggerOnceTerminalRun,
 } from "./timer-outcomes.js";
 import { applyTriggerRunResult } from "./timer-trigger.js";
 
@@ -194,6 +195,12 @@ export function restoreFinalizedStartupRun(params: {
     {
       replay: true,
       scheduleOwnership,
+      // Recovery applies the same terminal-trigger deletion as normal completion.
+      triggerOnceTerminalRun: isTriggerOnceTerminalRun({
+        job,
+        triggerOwnership,
+        triggerEval: params.triggerEval,
+      }),
       ...(scheduleOwnership === "current" && !retiredTriggerStoppedSchedule
         ? { replaySchedule: { nextRunAtMs: entry.nextRunAtMs } }
         : {}),

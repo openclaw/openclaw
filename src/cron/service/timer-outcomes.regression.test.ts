@@ -13,10 +13,11 @@ import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
+import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import type { DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { runMissedJobs } from "./timer-catchup.js";
-import { applyJobResult } from "./timer-outcomes.js";
+import { applyJobResult, applyOutcomeToStoredJob } from "./timer-outcomes.js";
 import { onTimer } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
@@ -48,6 +49,156 @@ function outcomeFixture(
 }
 
 describe("cron timer outcome and failure policy regressions", () => {
+  it.each([
+    {
+      name: "fired and succeeded",
+      deleteAfterRun: true,
+      status: "ok" as const,
+      expectedRemoved: true,
+    },
+    {
+      name: "without deleteAfterRun",
+      deleteAfterRun: false,
+      status: "ok" as const,
+      expectedRemoved: false,
+      enabled: false,
+    },
+    {
+      name: "failed run",
+      deleteAfterRun: true,
+      status: "error" as const,
+      expectedRemoved: false,
+      enabled: true,
+    },
+    {
+      name: "unfired evaluation",
+      deleteAfterRun: true,
+      status: "ok" as const,
+      fired: false,
+      expectedRemoved: false,
+      enabled: true,
+    },
+    {
+      name: "trigger replaced during the run",
+      deleteAfterRun: true,
+      status: "ok" as const,
+      admittedScript: "json({ fire: true, message: 'old' })",
+      expectedRemoved: false,
+      enabled: true,
+    },
+  ])(
+    "retires a trigger-once recurring job only after a current fired success ($name)",
+    async ({
+      name,
+      deleteAfterRun,
+      status,
+      fired = true,
+      admittedScript,
+      expectedRemoved,
+      enabled,
+    }) => {
+      const startedAt = Date.parse("2026-10-08T12:00:00.000Z");
+      const job = createIsolatedRegressionJob({
+        id: `trigger-once-delete-${name.replaceAll(" ", "-")}`,
+        name: "trigger-once cleanup",
+        scheduledAt: startedAt,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+        payload: { kind: "agentTurn", message: "cleanup" },
+        state: { nextRunAtMs: startedAt },
+      });
+      job.trigger = { script: "json({ fire: true })", once: true };
+      job.deleteAfterRun = deleteAfterRun;
+      const state = createCronServiceState({
+        storePath: "/tmp/cron-trigger-once-delete.json",
+        nowMs: () => startedAt,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+      state.store = { version: 1, jobs: [job] };
+
+      const removed = await applyOutcomeToStoredJob(
+        state,
+        {
+          jobId: job.id,
+          job: admittedScript
+            ? { ...structuredClone(job), trigger: { script: admittedScript, once: true } }
+            : structuredClone(job),
+          status,
+          ...(status === "error" ? { error: "synthetic failure" } : {}),
+          completionStatus: status === "ok" ? "succeeded" : "failed",
+          deliveryState: {
+            status: "not-requested",
+            failureNotification: { status: "not-requested" },
+          },
+          startedAt,
+          endedAt: startedAt + 1,
+          triggerEval: { fired, stateChanged: false },
+        },
+        { deferredNotifications: [] },
+      );
+
+      expect(removed !== undefined).toBe(expectedRemoved);
+      if (expectedRemoved) {
+        expect(state.store.jobs).toEqual([]);
+      } else {
+        expect(state.store.jobs).toHaveLength(1);
+        expect(state.store.jobs[0]).toMatchObject({ enabled });
+      }
+    },
+  );
+
+  it.each([
+    { name: "current fired success", deleteAfterRun: true, expectedDelete: true },
+    { name: "without deleteAfterRun", deleteAfterRun: false, expectedDelete: false },
+    {
+      name: "trigger retired before recovery",
+      deleteAfterRun: true,
+      triggerStateRetired: true,
+      expectedDelete: false,
+    },
+  ])(
+    "applies trigger-once retirement when startup recovery replays a finalized run ($name)",
+    ({ name, deleteAfterRun, triggerStateRetired, expectedDelete }) => {
+      // Finalization records history before the row commit, so a crash between
+      // them is recovered here and must reach the same deletion decision.
+      const runningAtMs = Date.parse("2026-10-08T12:00:00.000Z");
+      const job = createIsolatedRegressionJob({
+        id: `trigger-once-recovery-${name.replaceAll(" ", "-")}`,
+        name: "trigger-once recovery",
+        scheduledAt: runningAtMs,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: runningAtMs },
+        payload: { kind: "agentTurn", message: "cleanup" },
+        state: { nextRunAtMs: runningAtMs, runningAtMs },
+      });
+      job.trigger = { script: "json({ fire: true })", once: true };
+      job.deleteAfterRun = deleteAfterRun;
+      const state = createCronServiceState({
+        storePath: "/tmp/cron-trigger-once-recovery.json",
+        nowMs: () => runningAtMs + 1_000,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+
+      const restored = restoreFinalizedStartupRun({
+        state,
+        job,
+        runningAtMs,
+        deferredNotifications: [],
+        triggerEval: { fired: true, stateChanged: false },
+        ...(triggerStateRetired ? { triggerStateRetired } : {}),
+        entry: {
+          ts: runningAtMs + 1_000,
+          jobId: job.id,
+          action: "finished",
+          status: "ok",
+          deliveryStatus: "not-requested",
+          runAtMs: runningAtMs,
+          durationMs: 1_000,
+        },
+      });
+
+      expect(restored?.shouldDelete).toBe(expectedDelete);
+    },
+  );
+
   it("preserves every cadence after a transient recurring retry succeeds", () => {
     const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
     const everyTwelveHoursMs = 12 * 60 * 60 * 1_000;
