@@ -1,5 +1,6 @@
 /** Resolves cron job wall-clock timeout policy. */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { isScheduledBackupCommand, SCHEDULED_BACKUP_TIMEOUT_SECONDS } from "../backup-command.js";
 import type { CronJob } from "../types.js";
 
 /**
@@ -15,6 +16,13 @@ const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
  */
 const AGENT_TURN_SAFETY_TIMEOUT_MS = 60 * 60_000; // 60 minutes
 
+/**
+ * Managed backup schedules written before the archive-sized budget became part of
+ * their payload would otherwise keep the generic command deadline. Their runtime is
+ * content-sized, so they resolve to that budget instead of the generic one.
+ */
+const SCHEDULED_BACKUP_SAFETY_TIMEOUT_MS = SCHEDULED_BACKUP_TIMEOUT_SECONDS * 1000;
+
 /** Resolves the wall-clock timeout for a cron job, including explicit detached-run overrides. */
 export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
   const configuredTimeoutMs =
@@ -25,6 +33,9 @@ export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
       ? (finiteSecondsToTimerSafeMilliseconds(job.payload.timeoutSeconds) ?? 0)
       : undefined;
   if (configuredTimeoutMs === undefined) {
+    if (isScheduledBackupCommand(job)) {
+      return SCHEDULED_BACKUP_SAFETY_TIMEOUT_MS;
+    }
     return job.payload.kind === "agentTurn" ? AGENT_TURN_SAFETY_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
   }
   return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
