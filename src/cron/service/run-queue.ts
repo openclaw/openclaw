@@ -340,6 +340,8 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
           completion: createDeferredCore<CronRunResult>(),
           activation: createDeferredCore(),
         };
+        // Recovered requests have no caller waiting on their completion.
+        void pending.completion.promise.catch(() => {});
         launchState(state).contexts.set(entry.runReceipt.receiptId, pending);
         registerCronRunQueue(state, () => drainCronRunQueue(state));
       }
