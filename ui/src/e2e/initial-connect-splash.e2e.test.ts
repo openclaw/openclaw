@@ -162,6 +162,52 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     openContexts.clear();
   });
 
+  it("clears native macOS window controls without moving the browser splash", async () => {
+    for (const nativeMac of [false, true]) {
+      const page = await createPage();
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.addInitScript(() => {
+        localStorage.setItem(
+          "openclaw.control.settings.v1:ws://" + location.hostname + ":18789",
+          JSON.stringify({ theme: "rose", themeMode: "dark" }),
+        );
+      });
+      const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+      await page.goto(server.baseUrl);
+      await gateway.waitForRequest("connect");
+      const splash = page.locator(".connect-splash");
+      await splash.waitFor();
+      if (nativeMac) {
+        // The dashboard host injects its chrome at document end, after the root exists.
+        await page.evaluate(() => {
+          document.documentElement.classList.add("openclaw-native-macos");
+          document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
+        });
+      }
+      await expect
+        .poll(() => splash.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        const firstPlaceholder = page.locator(
+          width === 1280
+            ? ".connect-splash__sidebar .loading-skeleton__avatar"
+            : ".connect-splash .loading-skeleton__header",
+        );
+        const bounds = await firstPlaceholder.boundingBox();
+        expect(bounds).not.toBeNull();
+        await captureProof(page, (nativeMac ? "macos" : "web") + "-splash-" + width, [
+          firstPlaceholder,
+        ]);
+        expect(bounds!.y, nativeMac ? "macOS splash" : "web splash").toBe(
+          (width === 1280 ? 28 : 20) + (nativeMac ? 52 : 0),
+        );
+      }
+      await page.close();
+    }
+  });
+
   it("shows the splash instead of the login gate while a configured token connects", async () => {
     const page = await createPage();
     await page.addInitScript(() => {
