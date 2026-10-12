@@ -105,10 +105,10 @@ packages; Windows source development uses `OPENCLAW_DESKTOP_CLI`.
 
 Production runtime admission requires a matching Windows entry in the pinned
 OpenClaw Bun release with `authenticodeSigned: true` and `testOnly: false`.
-The current pin has no Windows entry, so local setup reports an actionable
-missing-runtime error while remote Gateways remain available. Enabling local
-setup for end users requires a signed Windows fork release and a shared pin
-update. Unsigned dry-run binaries are proof fixtures only.
+When a pin has no Windows entry, local setup reports an actionable missing-runtime
+error while remote Gateways remain available. The pin must include the signed
+Windows fork release before shipping local setup. Unsigned dry-run binaries
+are never admitted by production builds.
 
 Build on Windows with Rust's MSVC toolchain, Visual Studio C++ build tools, and
 the repository's Node/pnpm development tools:

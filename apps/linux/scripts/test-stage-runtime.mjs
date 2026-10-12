@@ -36,6 +36,7 @@ test("leaves macOS and FreeBSD Tauri runtime behavior unchanged", () => {
 });
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const signerSubject = "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US";
 // Synthetic PE header in a stored ZIP; no executable code or real runtime is included.
 const archive = Buffer.from("UEsDBBQAAAAAALiRS12hAcWLYAAAAGAAAAAXAAAAYnVuLXdpbmRvd3MteDY0L2J1bi5leGVNWgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAUEUAAGSGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQSwECFAMUAAAAAAC4kUtdoQHFi2AAAABgAAAAFwAAAAAAAAAAAAAAgAEAAAAAYnVuLXdpbmRvd3MteDY0L2J1bi5leGVQSwUGAAAAAAEAAQBFAAAAlQAAAAAA", "base64");
 const executable = archive.subarray(53, 149);
@@ -55,7 +56,7 @@ function releaseFixture(t) {
     repository: "openclaw/bun", tag: pin.tag, bun: { commit: pin.commit, revision: pin.revision },
     assets: [{ target: "windows-x64", os: "windows", arch: "x64", name: pin.artifacts["windows-x64"].asset,
       sha256: hash(archive), executable: { path: pin.artifacts["windows-x64"].executable,
-        sha256: hash(executable), authenticodeSigned: true, testOnly: false } }],
+        sha256: hash(executable), authenticodeSigned: true, testOnly: false, signerSubject } }],
   };
   t.mock.method(globalThis, "fetch", async (url) => {
     const bytes = Buffer.from(JSON.stringify(manifest));
@@ -67,15 +68,18 @@ function releaseFixture(t) {
   return { work, pin, manifest };
 }
 
-test("stages the admitted Windows executable bytes and identity", async (t) => {
-  const { work, pin } = releaseFixture(t);
-  assert.equal(await stageWindowsRuntime(work, { platform: "windows", arch: "x64" }, pin), true);
-  assert.deepEqual(fs.readFileSync(path.join(work, "bin/bun.exe")), executable);
-  const embedded = JSON.parse(fs.readFileSync(path.join(work, "manifest.json"), "utf8"));
-  assert.equal(embedded.authenticodeSigned, true);
-  assert.equal(embedded.testOnly, false);
-  assert.deepEqual(embedded.files, { "bin/bun.exe": hash(executable) });
-});
+for (const signingMetadata of [false, true]) {
+  test(`stages admitted Windows bytes with ${signingMetadata ? "signing metadata" : "a four-field pin"}`, async (t) => {
+    const { work, pin } = releaseFixture(t);
+    if (signingMetadata) Object.assign(pin.artifacts["windows-x64"], { authenticodeSigned: true, testOnly: false, signerSubject });
+    assert.equal(await stageWindowsRuntime(work, { platform: "windows", arch: "x64" }, pin), true);
+    assert.deepEqual(fs.readFileSync(path.join(work, "bin/bun.exe")), executable);
+    const embedded = JSON.parse(fs.readFileSync(path.join(work, "manifest.json"), "utf8"));
+    assert.equal(embedded.authenticodeSigned, true);
+    assert.equal(embedded.testOnly, false);
+    assert.deepEqual(embedded.files, { "bin/bun.exe": hash(executable) });
+  });
+}
 
 test("missing Windows pin stages no runtime and never falls back to another platform", async (t) => {
   const { work, pin } = releaseFixture(t);
@@ -88,16 +92,24 @@ test("missing Windows pin stages no runtime and never falls back to another plat
 test("refuses unsigned, test-only, foreign-platform, and unpinned Windows release bytes", async (t) => {
   const { work, pin, manifest } = releaseFixture(t);
   const asset = manifest.assets[0];
+  const pinned = pin.artifacts["windows-x64"];
   for (const [object, key, rejected, expected] of [
     [asset.executable, "authenticodeSigned", false, /Authenticode signed/],
     [asset.executable, "testOnly", true, /Test-only/],
+    [asset.executable, "signerSubject", "CN=Another publisher", /signer mismatch/],
+    [asset.executable, "signerSubject", undefined, /signer mismatch/],
     [asset, "os", "linux", /platform mismatch/],
     [asset, "sha256", "0".repeat(64), /differs from pin/],
+    [pinned, "authenticodeSigned", false, /differs from pin/],
+    [pinned, "testOnly", true, /differs from pin/],
+    [pinned, "signerSubject", "CN=Another publisher", /differs from pin/],
   ]) {
+    const existed = Object.hasOwn(object, key);
     const original = object[key];
     object[key] = rejected;
     await assert.rejects(stageWindowsRuntime(work, { platform: "windows", arch: "x64" }, pin), expected);
     assert.deepEqual(fs.readdirSync(work), []);
-    object[key] = original;
+    if (existed) object[key] = original;
+    else delete object[key];
   }
 });

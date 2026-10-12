@@ -65,10 +65,15 @@ export async function stageWindowsRuntime(work, target, pin) {
   assert.equal(published.arch, target.arch, "Bun release architecture mismatch");
   assert.equal(published.executable.authenticodeSigned, true, "Windows Bun must be Authenticode signed");
   assert.equal(published.executable.testOnly, false, "Test-only Windows Bun cannot be bundled");
-  assert.deepEqual({
+  assert.equal(published.executable.signerSubject, "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US", "Windows Bun signer mismatch");
+  const expected = {
     asset: published.name, sha256: published.sha256, executable: published.executable.path,
     executableSha256: published.executable.sha256,
-  }, artifact, "Bun release artifact differs from pin");
+  };
+  for (const field of ["authenticodeSigned", "testOnly", "signerSubject"]) {
+    if (Object.hasOwn(artifact, field)) expected[field] = published.executable[field];
+  }
+  assert.deepEqual(expected, artifact, "Bun release artifact differs from pin");
   assert.equal(checksum(artifact.asset), artifact.sha256, "Bun release archive sha256 mismatch");
   const archiveBytes = await download(artifact.asset);
   assert.equal(digest(archiveBytes), artifact.sha256, "Bun archive sha256 mismatch");

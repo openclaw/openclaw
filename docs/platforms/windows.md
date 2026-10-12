@@ -31,10 +31,9 @@ Closing the window keeps the app in the tray; the local Gateway has its own
 service lifecycle.
 
 **Local setup requires a signed Windows Bun runtime in the app's pinned release.**
-The current shared pin has no Windows runtime. Builds using that pin report
-“This app does not include a signed Windows Gateway runtime” when local setup
-is requested. Connect to a remote Gateway, or install a newer app once the
-signed runtime is available. Installing system Node.js does not change the
+If an older app reports “This app does not include a signed Windows Gateway
+runtime,” update to an app release with the signed Windows runtime or connect
+to a remote Gateway. Installing system Node.js does not change the
 bundled runtime's admission policy. Remote connections continue to work.
 
 Use connection settings when you already have a Gateway. Enter its URL and token
