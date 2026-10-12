@@ -81,6 +81,10 @@ async function dispatch(
             undefined,
             context,
           );
+    // rejectWebSocketUpgrade destroys after the HTTP flush callback; wait one turn.
+    if (transport === "WebSocket" && !socket.destroyed) {
+      await setImmediate();
+    }
     return { ...response, handled, warn, socketDestroyed: socket.destroyed };
   } finally {
     socket.destroy();

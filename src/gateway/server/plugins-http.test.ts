@@ -1,5 +1,6 @@
 // Plugin HTTP routing tests cover route matching, gateway auth decisions, and upgrade dispatch.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import net from "node:net";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
@@ -48,20 +49,71 @@ function createRoute(params: {
 }
 
 function createMockUpgradeSocket() {
+  type Listener = (...args: unknown[]) => void;
+  const listeners = new Map<string, Set<Listener>>();
+  const on = (event: string, listener: Listener) => {
+    const bucket = listeners.get(event) ?? new Set<Listener>();
+    bucket.add(listener);
+    listeners.set(event, bucket);
+    return socket;
+  };
+  const off = (event: string, listener: Listener) => {
+    listeners.get(event)?.delete(listener);
+    return socket;
+  };
+  const emit = (event: string, ...args: unknown[]) => {
+    for (const listener of Array.from(listeners.get(event) ?? [])) {
+      listener(...args);
+    }
+  };
   const socket = {
     chunks: [] as string[],
     destroyed: false,
-    write(chunk: string) {
-      socket.chunks.push(chunk);
+    writableEnded: false,
+    bytesWritten: 0,
+    write(chunk: string | Buffer) {
+      const text = typeof chunk === "string" ? chunk : chunk.toString();
+      socket.chunks.push(text);
+      socket.bytesWritten += Buffer.byteLength(text);
+      return true;
     },
-    end(chunk: string, callback: () => void) {
-      socket.write(chunk);
-      callback();
+    end(chunk?: string | Buffer | (() => void), callback?: () => void) {
+      if (typeof chunk === "function") {
+        socket.writableEnded = true;
+        chunk();
+        return socket;
+      }
+      if (chunk !== undefined) {
+        socket.write(chunk);
+      }
+      socket.writableEnded = true;
+      callback?.();
+      return socket;
     },
     destroy() {
+      if (socket.destroyed) {
+        return;
+      }
       socket.destroyed = true;
+      emit("close");
     },
-  } as unknown as Duplex & { chunks: string[]; destroyed: boolean };
+    on,
+    once(event: string, listener: Listener) {
+      const wrapped: Listener = (...args) => {
+        off(event, wrapped);
+        listener(...args);
+      };
+      return on(event, wrapped);
+    },
+    off,
+    removeListener: off,
+    addListener: on,
+  } as unknown as Duplex & {
+    chunks: string[];
+    destroyed: boolean;
+    bytesWritten: number;
+    writableEnded: boolean;
+  };
   return socket;
 }
 
@@ -580,6 +632,159 @@ describe("createGatewayPluginUpgradeHandler", () => {
     expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);
     expect(socket.destroyed).toBe(false);
     expect(socket.chunks).toStrictEqual([]);
+  });
+
+  it("flushes HTTP 503 before destroy when handleUpgrade throws", async () => {
+    const handler = createGatewayPluginUpgradeHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/plugin/ws",
+            auth: "plugin",
+            handleUpgrade: async () => {
+              throw new Error("upgrade boom");
+            },
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+    const socket = createMockUpgradeSocket();
+
+    const handled = await handler(
+      { url: "/plugin/ws" } as IncomingMessage,
+      socket,
+      Buffer.alloc(0),
+    );
+
+    expect(handled).toBe(true);
+    expect(socket.chunks.join("")).toContain("HTTP/1.1 503");
+    expect(socket.destroyed).toBe(true);
+  });
+
+  it("destroys without a second HTTP response when handleUpgrade throws after handshake bytes", async () => {
+    const handshake =
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
+    const handler = createGatewayPluginUpgradeHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/plugin/ws",
+            auth: "plugin",
+            handleUpgrade: async (_req, socket) => {
+              socket.write(handshake);
+              throw new Error("post-handshake boom");
+            },
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+    const socket = createMockUpgradeSocket();
+
+    const handled = await handler(
+      { url: "/plugin/ws" } as IncomingMessage,
+      socket,
+      Buffer.alloc(0),
+    );
+
+    expect(handled).toBe(true);
+    expect(socket.chunks.join("")).toBe(handshake);
+    expect(socket.chunks.join("")).not.toContain("HTTP/1.1 503");
+    expect(socket.destroyed).toBe(true);
+  });
+
+  it("proves pre/post-handshake upgrade failures over a real Node HTTP server and TCP client", async () => {
+    async function readUpgradeResponse(port: number): Promise<string> {
+      return await new Promise((resolve, reject) => {
+        const sock = net.connect({ host: "127.0.0.1", port });
+        let data = "";
+        const timer = setTimeout(() => {
+          sock.destroy();
+          reject(new Error("timed out waiting for upgrade response"));
+        }, 5_000);
+        sock.setEncoding("utf8");
+        sock.on("data", (chunk) => {
+          data += chunk;
+        });
+        sock.on("close", () => {
+          clearTimeout(timer);
+          resolve(data);
+        });
+        sock.on("error", (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+        sock.on("connect", () => {
+          sock.write(
+            "GET /plugin/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+          );
+        });
+      });
+    }
+
+    async function withUpgradeServer(
+      handleUpgrade: NonNullable<Parameters<typeof createRoute>[0]["handleUpgrade"]>,
+      run: (port: number) => Promise<void>,
+    ) {
+      const handler = createGatewayPluginUpgradeHandler({
+        registry: createGatewayTestRegistry({
+          httpRoutes: [
+            createRoute({
+              path: "/plugin/ws",
+              auth: "plugin",
+              handleUpgrade,
+            }),
+          ],
+        }),
+        log: createPluginLog(),
+      });
+      const server = createServer((_req, res) => {
+        res.writeHead(404);
+        res.end();
+      });
+      server.on("upgrade", (req, socket, head) => {
+        void handler(req, socket, head).then((handled) => {
+          if (!handled && !socket.destroyed) {
+            socket.destroy();
+          }
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        throw new Error("missing bound port");
+      }
+      try {
+        await run(addr.port);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
+
+    await withUpgradeServer(
+      async () => {
+        throw new Error("upgrade boom");
+      },
+      async (port) => {
+        const body = await readUpgradeResponse(port);
+        expect(body).toContain("HTTP/1.1 503");
+      },
+    );
+
+    await withUpgradeServer(
+      async (_req, socket) => {
+        socket.write(
+          "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+        );
+        throw new Error("post-handshake boom");
+      },
+      async (port) => {
+        const body = await readUpgradeResponse(port);
+        expect(body).toContain("HTTP/1.1 101");
+        expect(body).not.toContain("HTTP/1.1 503");
+      },
+    );
   });
 });
 

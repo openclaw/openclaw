@@ -341,6 +341,14 @@ export function createGatewayPluginRequestHandler(params: {
   };
 }
 
+function pluginUpgradeSocketHasOutput(socket: Duplex): boolean {
+  if (socket.destroyed || socket.writableEnded) {
+    return true;
+  }
+  const bytesWritten = (socket as { bytesWritten?: number }).bytesWritten;
+  return typeof bytesWritten === "number" && bytesWritten > 0;
+}
+
 export function createGatewayPluginUpgradeHandler(params: {
   registry: PluginRegistry;
   getRouteRegistry?: () => PluginRegistry;
@@ -435,7 +443,13 @@ export function createGatewayPluginUpgradeHandler(params: {
       } catch (err) {
         log.warn(`plugin http upgrade failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
         releaseAccessListener();
-        socket.destroy();
+        // If the plugin already wrote handshake/response bytes, appending another
+        // HTTP status would corrupt the connection. Tear down only.
+        if (pluginUpgradeSocketHasOutput(socket)) {
+          socket.destroy();
+        } else {
+          rejectWebSocketUpgrade(socket, { status: 503 });
+        }
         return true;
       }
     }
