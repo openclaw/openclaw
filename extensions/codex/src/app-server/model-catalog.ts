@@ -333,7 +333,11 @@ export function createCodexAppServerModelCatalog(runtime: string) {
             // Re-read model/list and account/read together once, on the same scoped client.
             const retryIsCurrent = captureSharedCodexAppServerCatalogLifetime(client);
             const retryClientIsCurrent = captureSharedClientRegistration(client);
-            return retryIsCurrent() && retryClientIsCurrent() ? discover() : first;
+            if (retryIsCurrent() && retryClientIsCurrent()) {
+              const retry = await discover();
+              return retry;
+            }
+            return first;
           } catch (error) {
             // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
             if (isCodexAppServerIndeterminateRequestCancellationError(error)) {

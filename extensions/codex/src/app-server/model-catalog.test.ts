@@ -802,6 +802,25 @@ describe("Codex app-server model catalog", () => {
     expect(read({}, nativePluginConfig)).toBeUndefined();
   });
 
+  it("retires the client when the bounded retry is cancelled", async () => {
+    listModelsMock.mockResolvedValueOnce({ models: [] });
+    const cancellation = new CodexAppServerLocalRequestCancellationError(
+      "account/read",
+      "retry timed out",
+      true,
+    );
+    rpc.request
+      .mockResolvedValueOnce({ account: { type: "apiKey" }, requiresOpenaiAuth: true })
+      .mockResolvedValueOnce({ account: { type: "apiKey" }, requiresOpenaiAuth: true })
+      .mockRejectedValueOnce(cancellation);
+
+    await expect(owner.load(catalogParams, nativePluginConfig)).rejects.toBe(cancellation);
+
+    expect(listModelsMock).toHaveBeenCalledOnce();
+    expect(rpc.request).toHaveBeenCalledTimes(3);
+    expect(rpc.retire).toHaveBeenCalledExactlyOnceWith(rpc.client);
+  });
+
   it("retries a catalog invalidated by account updates and publishes one current observation", async () => {
     vi.mocked(probeCodexNativeAuth).mockResolvedValue({
       apiKey: "native-presence",
