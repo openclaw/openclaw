@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -16,6 +20,43 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 afterEach(() => vi.restoreAllMocks());
+
+it("transfers an ordinary patch candidate with its final authority grant", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const transfers: string[] = [];
+    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (callback, attachment) =>
+        createAdmission((request, grant) => {
+          const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+          if (
+            isRecord(publication) &&
+            typeof publication.kind === "string" &&
+            publication.kind.startsWith("session-entry-patch-") &&
+            publication.kind !== "session-entry-patch-validated"
+          ) {
+            transfers.push(publication.kind);
+            if (request.stage === "commit") {
+              expect(f.read().label).not.toBe("committed candidate");
+              expect(publication.transfer).toMatchObject({
+                frames: [{ recordDone: true }, { done: true }],
+              });
+            }
+          }
+          callback(request, grant);
+        }, attachment),
+    );
+    await expect(
+      patchInternalSessionEntry(f.scope, () => ({ label: "committed candidate" }), {
+        workerGuard: {},
+        skipMaintenance: true,
+      }),
+    ).resolves.toMatchObject({ label: "committed candidate" });
+    expect(f.read().label).toBe("committed candidate");
+    expect(transfers).toEqual(["session-entry-patch-committed"]);
+  });
+});
 
 it.each(["allowed", "transaction", "commit"] as const)(
   "checks inbound authority only at native mutation grants (%s)",
@@ -86,7 +127,7 @@ it.each(["allowed", "transaction", "commit"] as const)(
   },
 );
 
-it("checks native mutation authority after asynchronous patch preparation", async () => {
+it("checks worker mutation authority after asynchronous patch preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const original = f.read();
@@ -110,7 +151,6 @@ it("checks native mutation authority after asynchronous patch preparation", asyn
           return { label: "must not persist" };
         },
         {
-          // A synchronous predicate selects the retained native writer contract.
           shouldCommit: () => true,
           workerGuard: { assertMutationAllowed },
           skipMaintenance: true,
@@ -122,3 +162,39 @@ it("checks native mutation authority after asynchronous patch preparation", asyn
     expect(f.read()).toEqual(original);
   });
 });
+
+it.each([true, false])(
+  "applies a host-guarded generation patch off the main thread (commit=%s)",
+  async (shouldCommit) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const original = f.read();
+      const allowed = vi.fn();
+      const sql = observeHostDataSql();
+      try {
+        const updated = await patchInternalSessionEntry(
+          f.scope,
+          async () => ({ sessionId: "successor", label: "updated" }),
+          {
+            assertCommitAllowed: allowed,
+            shouldCommit: () => shouldCommit,
+            skipMaintenance: true,
+          },
+        );
+        expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+        if (shouldCommit) {
+          expect(updated).toMatchObject({ sessionId: "successor", label: "updated" });
+          expect(allowed).toHaveBeenCalled();
+        } else {
+          expect(updated).toBeNull();
+          expect(allowed).not.toHaveBeenCalled();
+        }
+      } finally {
+        sql.restore();
+      }
+      expect(f.read()).toMatchObject(
+        shouldCommit ? { sessionId: "successor", label: "updated" } : original!,
+      );
+    });
+  },
+);

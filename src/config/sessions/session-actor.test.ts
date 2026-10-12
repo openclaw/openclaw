@@ -29,7 +29,6 @@ import {
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
-import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
 import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
@@ -71,7 +70,6 @@ it("keeps production incognito acquisition on its native owner without creating 
       { assertCurrent() {}, assertReadable() {} },
     );
     expect(actor).toBeUndefined();
-    expect(memorySessionActorOwners.read(database)).toBeUndefined();
     expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
     expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
       sessionId: "native-session",
@@ -307,8 +305,9 @@ async function withActor(
       async afterCommitted(outcome) {
         if (fault.afterCommitted) {
           await fault.afterCommitted();
-          outcome.receipt.commandId = "detached-follow-up-copy";
-          return { value: outcome.value };
+          const copy = structuredClone(outcome);
+          copy.receipt.commandId = "detached-follow-up-copy";
+          return { value: copy.value };
         }
         return undefined;
       },
@@ -559,9 +558,11 @@ it("preserves native commit through worker publication, reply, and observer fail
   });
 });
 
-it("isolates mutable policy callbacks from admitted snapshots and committed state", async () => {
+it("shares immutable actor revisions and isolates explicit policy copies", async () => {
   await withActor(async ({ actor }) => {
     const initial = await actor.read(authority);
+    expect(actor.snapshot(authority)).toBe(initial);
+    expect(await actor.read(authority)).toBe(initial);
     const stages: string[] = [];
     const result = await actor.patch(
       {
@@ -573,11 +574,17 @@ it("isolates mutable policy callbacks from admitted snapshots and committed stat
         assertCurrent() {},
         authorize(stage, snapshot) {
           stages.push(stage);
-          if (snapshot.entry) {
-            snapshot.entry.sessionId = "policy-mutated";
+          expect(Object.isFrozen(snapshot)).toBe(true);
+          expect(Object.isFrozen(snapshot.entry)).toBe(true);
+          expect(() => {
+            snapshot.dependencySessionIds.length = 0;
+          }).toThrow(TypeError);
+          const copy = structuredClone(snapshot);
+          if (copy.entry) {
+            copy.entry.sessionId = "policy-mutated";
           }
-          snapshot.version = { epoch: "policy-mutated", sequence: -1 };
-          snapshot.dependencySessionIds.length = 0;
+          copy.version = { epoch: "policy-mutated", sequence: -1 };
+          copy.dependencySessionIds.length = 0;
         },
       },
     );
@@ -591,6 +598,12 @@ it("isolates mutable policy callbacks from admitted snapshots and committed stat
     expect(stages).toContain("transaction");
     expect(stages).toContain("commit");
     expect(actor.snapshot(authority)?.entry?.sessionId).toBe(initial.entry?.sessionId);
+    if (result.kind !== "committed") {
+      throw new Error("Expected committed actor revision");
+    }
+    expect(actor.snapshot(authority)).toBe(result.receipt.postimage);
+    expect(actor.snapshot(authority)).not.toBe(initial);
+    expect(initial.entry?.updatedAt).not.toBe(123);
   });
 });
 

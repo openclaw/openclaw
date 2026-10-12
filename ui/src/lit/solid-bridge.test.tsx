@@ -1,7 +1,7 @@
 import { ContextProvider } from "@lit/context";
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { LitElement, html } from "lit";
-import { createEffect, createSignal, flush, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
@@ -174,6 +174,58 @@ it("commits Solid DOM before a Lit parent updateComplete resumes", async () => {
   parent.label = "next";
   await parent.updateComplete;
   expect(parent.querySelector("output")?.textContent).toBe("next:0:false");
+});
+
+it("batches Lit property bursts without invalidating unrelated Solid computations", async () => {
+  const labels = vi.fn((value: string) => value);
+  const counts = vi.fn((value: number) => value);
+  const mount = vi.fn();
+  let readLabel = () => "";
+  defineSolidBridge<{ label: string; count: number }>(
+    "openclaw-solid-granular-test",
+    (props) => {
+      mount();
+      readLabel = () => props.label;
+      const label = createMemo(() => labels(props.label));
+      const count = createMemo(() => counts(props.count));
+      return (
+        <output>
+          {label()}:{count()}
+          <input />
+        </output>
+      );
+    },
+    { properties: { label: { default: "initial" }, count: { default: 0 } } },
+  );
+  const host = document.createElement("openclaw-solid-granular-test") as SolidBridgeElement<{
+    label: string;
+    count: number;
+  }>;
+  document.body.append(host);
+  await host.updateComplete;
+  const input = host.querySelector("input")!;
+  input.value = "draft";
+  labels.mockClear();
+  counts.mockClear();
+
+  host.label = "intermediate";
+  host.label = "final";
+  expect(host.label).toBe("final");
+  expect(readLabel()).toBe("final");
+  await host.updateComplete;
+  expect(host.textContent).toBe("final:0");
+  expect(labels).toHaveBeenCalledExactlyOnceWith("final");
+  expect(counts).not.toHaveBeenCalled();
+  expect(mount).toHaveBeenCalledTimes(1);
+  expect(host.querySelector("input")).toBe(input);
+  expect(input.value).toBe("draft");
+
+  labels.mockClear();
+  host.count = 2;
+  await host.updateComplete;
+  expect(host.textContent).toBe("final:2");
+  expect(labels).not.toHaveBeenCalled();
+  expect(counts).toHaveBeenCalledExactlyOnceWith(2);
 });
 
 it("keeps the same root across moves and releases/recreates it after a real disconnect", async () => {

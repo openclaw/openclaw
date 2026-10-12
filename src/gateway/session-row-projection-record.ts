@@ -231,19 +231,6 @@ export function changesSessionRowDependents(before: Row["storedEntry"], after: R
   );
 }
 
-/** Mark resident logical owners without changing stored entries, relatives, or backfill. */
-export function markAutomation(
-  rows: Iterable<Row>,
-  agentId: string | undefined,
-  dirty: Set<string>,
-) {
-  for (const row of rows) {
-    if (!agentId || row.agentId === agentId) {
-      dirty.add(identity(row));
-    }
-  }
-}
-
 /** Expire accepted facts and pending replies, retaining only independently certified facets. */
 export function invalidateDatabaseFacts(row: Row, retained?: RetainedSessionRowDatabaseFacts) {
   row.databaseFactsRevision++;

@@ -560,7 +560,7 @@ Usage:
     This reruns current admin admission and retains the original captures; other admin failures remain fenced.
     --replacement-head <SHA> --auto-merge retires an unaccepted prior-CI REST admin intent fenced by a different
     exact current head, then requests ordinary current-head auto-merge. It requires exact-head github_pending
-    preparation and all normal required-check and ClawSweeper gates; it never reuses prior admin evidence.
+    preparation and all normal required-check gates; it never reuses prior admin evidence.
     --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
     Cancels a matching active request once, or records an already absent request without sending cancellation.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.

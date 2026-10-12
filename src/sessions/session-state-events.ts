@@ -15,6 +15,7 @@ import {
   prepareSystemEventStorePath,
 } from "../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { buildAgentMainSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -366,11 +367,17 @@ export async function recordSessionGoalChanged(params: {
   });
 }
 
-/** Released synchronous SDK compatibility; runtime prompt preparation uses worker reads. */
+/** @deprecated Retained for prepareWatchedSessionsPrompt; use its async replacement. */
 export function listAmbientGroupWatchTargets(
   watcherSessionKey: string,
   options: OpenClawStateDatabaseOptions = {},
 ): Set<string> {
+  warnPluginSdkDeprecation({
+    family: "watched-sessions-prompt",
+    method: "prepareWatchedSessionsPrompt",
+    replacement: "prepareWatchedSessionsPromptAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   try {
     const { db } = openOpenClawStateDatabase(options);
     const rows = executeSqliteQuerySync(

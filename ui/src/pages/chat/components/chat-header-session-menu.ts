@@ -378,17 +378,11 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
 
   private renderRootView() {
     return html`
-      ${
-        this.compact
-          ? html`<wa-dropdown-item class="session-menu__item" value="open-command-palette">
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.search}</span
-                >
-                <span class="session-menu__text">${t("chat.openCommandPalette")}</span>
-              </wa-dropdown-item>
-              <div class="session-menu__separator" role="separator"></div>`
-          : nothing
-      }
+      <wa-dropdown-item class="session-menu__item" value="open-command-palette">
+        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.search}</span>
+        <span class="session-menu__text">${t("chat.openCommandPalette")}</span>
+      </wa-dropdown-item>
+      <div class="session-menu__separator" role="separator"></div>
       ${
         this.boardWidgetMenu
           ? html`

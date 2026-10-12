@@ -5,7 +5,13 @@ import type { ClawInstallSchemaVersionRow } from "./provenance-runtime-read.kern
 const worker = vi.hoisted(() => ({
   read: vi.fn<() => Promise<ClawInstallSchemaVersionRow[] | undefined>>(),
   assertCurrent: vi.fn<() => void>(),
+  lifecycle: vi.fn(),
 }));
+
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db.js")>();
+  return { ...actual, registerOpenClawStateDatabaseLifecycleListener: worker.lifecycle };
+});
 
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: worker.read,
@@ -51,6 +57,14 @@ beforeEach(() => {
 });
 
 describe("asynchronous Claw consent preparation", () => {
+  it("keeps published consent facts when another owner opens the database", async () => {
+    (await prepareClawInstallSchemaVersions(options)).publish();
+    const current = readCachedClawInstallSchemaVersions(options);
+    const listener = worker.lifecycle.mock.calls[0]?.[0];
+    listener({ kind: "opened", database: { path: options.path } });
+    expect(readCachedClawInstallSchemaVersions(options)).toBe(current);
+  });
+
   it("hands off one task's facts without replacing newer host facts or retaining the scope", async () => {
     (await prepareClawInstallSchemaVersions(options)).publish();
     const facts = structuredClone(captureClawInstallSchemaVersionFacts(options));

@@ -177,7 +177,6 @@ it("records an admitted deletion timeout after its caller cancels and loses sess
   vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
     if (args[0] === "worktree" && args[1] === "remove") {
       options?.beforeRun?.();
-      await fs.unlink(path.join(record.path, "README.md"));
       current = false;
       controller.abort(new Error("caller cancelled"));
       return {

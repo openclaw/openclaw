@@ -231,6 +231,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/io.health-state.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["patchConfigHealthEntryInDatabase"],
+        evidence:
+          "Only openclaw-state-worker-runtime.ts calls this conditional patch through the shared-state worker. Native config compatibility reads and writes remain T1.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-lifecycle-state.ts",
     [
       {
@@ -841,9 +852,10 @@ const reviewedOperations = new Map([
           "upsertCronJobRow",
           "deleteCronJobRowInDatabase",
           "revokeCronJobStandingGrants",
+          "readMaximumRetainedGrantDefinitionGeneration",
         ],
         evidence:
-          "Cron worker kernels or Doctor legacy-repair.ts:395 transactionHooks / store-repair.ts:178 / doctor-heartbeat-task-migration.ts:261,308; the native current-job reader was deleted; standing-generation reads stay T1",
+          "Cron worker kernels or Doctor legacy-repair.ts:395 transactionHooks / store-repair.ts:178 / doctor-heartbeat-task-migration.ts:261,308. Retained grant generations are read by worker upsert or resolveCronJobGrantDefinitionGenerationFloor for commands/doctor/cron/store-repair.ts only.",
       },
       {
         tier: "W",
@@ -1274,9 +1286,10 @@ const reviewedOperations = new Map([
           "readSubagentRunRow",
           "readSubagentSessionListRows",
           "readSubagentRegistryRows",
+          "loadSubagentRunsForSessionsInDatabase",
         ],
         evidence:
-          "Exact rows serve completion admission workers. Session-list and child reads serve openclaw-state-read.worker.ts. Registry rows serve store.worker.ts maintenance/versioned/session reads or completion-mutation.kernel.ts through completion-admission.worker.ts; maintenance no longer opens a host reader. Descendant-basis comparisons retain their native deletion boundary and T1 classification.",
+          "Exact rows serve completion admission workers. Session-list and child reads serve openclaw-state-read.worker.ts. Registry rows serve store.worker.ts maintenance/versioned/session reads or completion-mutation.kernel.ts through completion-admission.worker.ts. Descendant selection is called only by store.worker.ts; the native digest comparison has been removed.",
       },
     ],
   ],
@@ -2237,9 +2250,8 @@ const reviewedOperations = new Map([
       {
         tier: "T3",
         operations: ["loadSqliteTrajectoryRuntimeEventRowsSync"],
-        binding: "countRow",
         evidence:
-          "Only CLI export supplies maxEventCount: src/cli/program/register.status-health-sessions.ts:431 → commands/export-trajectory.ts:158 → trajectory/command-export.ts:80 → trajectory/export.ts:415,420. Keep polling/payload expressions T1.",
+          "Native row reads are CLI-only: commands/sessions-tail.ts tail/follow and trajectory export. Other callers are session-history-read-operation.worker.ts and session-incognito-side-data.worker.ts. The runtime-testing SDK exports the async loader, not this native row reader. Native append and retention remain T1.",
       },
     ],
   ],
@@ -2722,7 +2734,7 @@ function render(rows) {
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
-    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks or initialization rollback require native transactions. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads and native approval SDK compatibility retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
+    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks require native transactions; initialization rollback uses the worker's commit finalizer. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads and native approval SDK compatibility retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
     "",
     "The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packages/`, and `scripts/` as selected by `rg` (respecting ignore rules). It recognizes direct calls, property calls with these names, and named-import aliases. It does not resolve higher-order aliases, dynamic dispatch, transitive wrappers, direct `DatabaseSync` methods, other query primitives, or native-language SQLite. It is a reproducible migration queue, not a complete prohibition checker. Tests are deliberately excluded rather than counted as T3.",
     "",

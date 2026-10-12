@@ -23,7 +23,9 @@ const hoisted = vi.hoisted(() => ({
   activeRegistry: {} as TestPluginRegistry,
   getUserProfileRole: vi.fn((): string | null => null),
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
-  resolveSessionSharingRole: vi.fn(() => "viewer" as "viewer" | "member"),
+  resolveSessionSharingRole: vi.fn<
+    typeof import("../session-sharing-policy.js").resolveSessionSharingRole
+  >(() => "viewer"),
   resolveSessionSharingTarget: vi.fn(() => null as Record<string, unknown> | null),
 }));
 
@@ -764,13 +766,32 @@ describe("session catalog caller visibility", () => {
 
   it("permits a view-capped person to archive a foreign session after explicit membership", async () => {
     setActors([["agent:main:other", "profile-other"]]);
-    hoisted.resolveSessionSharingTarget.mockReturnValue({ canonicalKey: "agent:main:other" });
-    hoisted.resolveSessionSharingRole.mockReturnValue("member");
+    hoisted.resolveSessionSharingTarget.mockReturnValue({
+      agentId: "main",
+      canonicalKey: "agent:main:other",
+      storeKey: "agent:main:other",
+      storeKeys: ["agent:main:other"],
+      storePath: "",
+      entry: {
+        sessionId: "agent:main:other",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "profile-other" },
+      },
+    });
+    hoisted.resolveSessionSharingRole.mockImplementation(
+      (await import("../session-sharing-policy.js")).resolveSessionSharingRole,
+    );
     const archive = vi.fn(async () => ({ ok: true as const }));
     hoisted.activeRegistry.sessionCatalogs = [
       {
         provider: provider({
-          list: vi.fn(async () => [host([session("other-thread", "agent:main:other")])]),
+          list: vi.fn(async () => {
+            const projection = [...projections].at(-1)!;
+            projection.describe({ agentId: "main", key: "agent:main:other" })!.membership = new Set(
+              ["profile-owner"],
+            );
+            return [host([session("other-thread", "agent:main:other")])];
+          }),
           archive,
         }),
       },

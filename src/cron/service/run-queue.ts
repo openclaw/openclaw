@@ -286,7 +286,7 @@ async function cancelCronRunRequests(
 export async function drainCronRunQueue(state: CronServiceState): Promise<void> {
   if (
     state.stopped ||
-    (!launchState(state).contexts.size &&
+    (![...launchState(state).contexts.values()].some((pending) => !pending.started) &&
       !state.store?.jobs.some((job) => job.state.queuedAtMs !== undefined))
   ) {
     return;

@@ -125,8 +125,6 @@ class PendingSessionCreate extends OpenClawLightDomElement {
             platform: null,
             canReveal: false,
             copiedAction: null,
-            panelActions: nothing,
-            panelLayoutActions: nothing,
             sessionMenuAction: nothing,
             onBeginRename: noAction,
             onRenameInput: noAction,

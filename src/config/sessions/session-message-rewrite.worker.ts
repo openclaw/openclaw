@@ -17,6 +17,7 @@ import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
   TranscriptEvent,
+  TranscriptEventAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -41,6 +42,7 @@ import {
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
+import { resolveTranscriptEventAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequencesInTransaction,
@@ -121,6 +123,7 @@ export type SessionMessageRewriteOperations = {
     input: {
       scope: ResolvedTranscriptScope;
       eventJson: string;
+      appendIntent?: TranscriptEventAppendOptions["appendIntent"];
       fence?: SessionTranscriptWriteScope;
     };
     output: ReturnType<typeof commitSessionTranscriptEvent>;
@@ -425,30 +428,35 @@ export function applySessionTranscriptEvent<T>(
   const event: TranscriptEvent = JSON.parse(input.eventJson);
   assertNonMessageTranscriptEvent(event);
   return writeTransaction("session.transcript.event-append", "Transcript event", (database) => {
-    assertSessionTranscriptHot(database.db, input.scope.sessionId);
     if (input.fence) {
-      assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
+      const entry =
+        assertLockedTranscriptWriteAllowed(database, input.scope, input.fence) ??
+        readSessionEntryRow(database, input.scope.sessionKey, "list")?.entry;
+      if (entry?.sessionId !== input.scope.sessionId) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+    } else {
+      assertSessionTranscriptHot(database.db, input.scope.sessionId);
     }
-    const entry = readSessionEntryRow(database, input.scope.sessionKey, "list");
-    if (entry?.entry.sessionId !== input.scope.sessionId) {
-      throw new SessionTranscriptWriterClaimReboundError();
-    }
+    const resolvedEvent = resolveTranscriptEventAppendParent(
+      database,
+      input.scope.sessionId,
+      event,
+      input,
+    );
     const candidate: SessionTranscriptEventCommitted = {
       kind: "session-transcript-event",
       appended: false,
       projectionNeedsReconcile: false,
     };
     candidate.appended =
-      appendTranscriptEventInTransaction(database, input.scope, event, {
-        eventJson: input.eventJson,
+      appendTranscriptEventInTransaction(database, input.scope, resolvedEvent, {
+        eventJson: resolvedEvent === event ? input.eventJson : undefined,
         scheduleProjectionReconcile: false,
         onProjectionReconcileNeeded: () => {
           candidate.projectionNeedsReconcile = true;
         },
       }) !== false;
-    if (input.fence) {
-      assertLockedTranscriptWriteAllowed(database, input.scope, input.fence);
-    }
     return publish(database, candidate);
   });
 }

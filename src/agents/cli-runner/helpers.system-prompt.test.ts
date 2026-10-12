@@ -129,16 +129,6 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("exec approval-pending");
   });
 
-  it("describes bundled exec without assuming a node-only target", () => {
-    const prompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      tools: [{ name: "exec" } as never],
-      modelDisplay: "test/model",
-    });
-
-    expect(prompt).toContain("- exec: Run shell on configured exec target");
-  });
-
   it("distinguishes the CLI working directory from the agent workspace", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",
@@ -181,16 +171,6 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("this run cannot safely finish full BOOTSTRAP.md");
-  });
-
-  it("omits the bootstrap gate when bootstrap mode is not provided", () => {
-    const prompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      tools: [],
-      modelDisplay: "test/model",
-    });
-
-    expect(prompt).not.toContain("## Bootstrap Pending");
   });
 
   it("includes CLI-scoped plugin command guidance", () => {

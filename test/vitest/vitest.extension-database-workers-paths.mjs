@@ -54,6 +54,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/github-copilot/index.test.ts",
   "extensions/migrate-hermes/secrets.test.ts",
   "extensions/migrate-hermes/files-and-skills.test.ts",
+  // Provider-owned embedding auth resolves shared-store ownership through the host broker.
+  "extensions/google/embedding-provider.test.ts",
   "extensions/openai/binary-transport.test.ts",
   "extensions/openai/tts.test.ts",
   "extensions/microsoft/speech-provider.test.ts",

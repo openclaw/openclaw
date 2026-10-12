@@ -25,11 +25,7 @@ import {
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  createSqliteWorkerTransferReceiver,
-  type SqliteWorkerTransferFrame,
-  type SqliteWorkerTransferHandle,
-} from "../../infra/sqlite-worker-transfer.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -105,47 +101,48 @@ describe("WebChat message tool internal source reply", () => {
             const admission = vi
               .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
               .mockImplementation((admit, attachment) => {
-                let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
-                let transferId: number | undefined;
                 let assistantTurn = false;
+                const collectTransfer = () =>
+                  createSqliteWorkerTransferCollector("patch", (candidate) => {
+                    if (
+                      isRecord(candidate) &&
+                      candidate.kind === "session-turn" &&
+                      isRecord(candidate.result) &&
+                      Array.isArray(candidate.result.appendedMessages)
+                    ) {
+                      assistantTurn = candidate.result.appendedMessages.some(
+                        (appended: unknown) =>
+                          isRecord(appended) &&
+                          isRecord(appended.message) &&
+                          appended.message.role === "assistant" &&
+                          readAssistantDisplayContent(appended.message).some(
+                            (block) => block.type === "text" && block.text === message,
+                          ),
+                      );
+                    }
+                  });
+                let transfer = collectTransfer();
                 return create((request, grant) => {
                   const facts =
                     isRecord(request.facts) && request.facts.kind === "session-entry-current"
                       ? request.facts.domainFacts
                       : request.facts;
                   const publication = isRecord(facts) ? facts.publication : undefined;
-                  if (isRecord(publication)) {
-                    if (publication.kind === "session-entry-patch-transfer") {
-                      // SAFETY: The real session-entry worker emits this typed transfer handle.
-                      const handle = publication.handle as SqliteWorkerTransferHandle;
-                      transferId = handle.id;
+                  if (
+                    isRecord(publication) &&
+                    (publication.kind === "session-entry-patch-transfer" ||
+                      publication.kind === "session-entry-patch-committed")
+                  ) {
+                    if (transfer.completed) {
                       assistantTurn = false;
-                      receiver = createSqliteWorkerTransferReceiver(handle, (record) => {
-                        if (
-                          record.kind === "patch" &&
-                          isRecord(record.value) &&
-                          record.value.kind === "session-turn" &&
-                          isRecord(record.value.result) &&
-                          Array.isArray(record.value.result.appendedMessages)
-                        ) {
-                          assistantTurn = record.value.result.appendedMessages.some(
-                            (appended: unknown) =>
-                              isRecord(appended) &&
-                              isRecord(appended.message) &&
-                              appended.message.role === "assistant" &&
-                              readAssistantDisplayContent(appended.message).some(
-                                (block) => block.type === "text" && block.text === message,
-                              ),
-                          );
-                        }
-                      });
-                    } else if (publication.kind === "session-entry-patch-frame") {
-                      // SAFETY: This frame belongs to the intercepted worker transfer above.
-                      receiver?.accept(publication.frame as SqliteWorkerTransferFrame);
-                    } else if (
+                      transfer = collectTransfer();
+                    }
+                    transfer.accept(publication.transfer);
+                    if (
                       request.stage === "commit" &&
                       publication.kind === "session-entry-patch-committed" &&
-                      publication.transferId === transferId &&
+                      publication.transferId === transfer.id &&
+                      transfer.completed &&
                       assistantTurn
                     ) {
                       commitRequests += 1;

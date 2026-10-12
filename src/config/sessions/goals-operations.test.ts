@@ -632,9 +632,10 @@ describe("typed Goal operation persistence", () => {
         if (
           request.stage === stage &&
           isRecord(request.facts) &&
-          isRecord(request.facts.publication) &&
-          request.facts.publication.kind ===
-            (stage === "commit" ? "session-entry-patch-committed" : "session-entry-patch-transfer")
+          (stage === "transaction"
+            ? request.facts.publication === undefined
+            : isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-patch-committed")
         ) {
           admitted = true;
         }

@@ -7,10 +7,7 @@ import { withCurrentProjectionSnapshot } from "../config/sessions/session-access
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
-import {
-  captureSessionActorStorageOwner,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
 import { captureIncognitoSessionHistoryBinding } from "../config/sessions/session-incognito-binding.js";
@@ -20,6 +17,7 @@ import {
 } from "../config/sessions/session-incognito-history-read.js";
 import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
 import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
+import type { ReadRecentSessionConversationTextOptions } from "../config/sessions/transcript-recent-text.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
@@ -34,7 +32,10 @@ import {
   type IncognitoSessionHistoryReader,
 } from "./session-history-snapshot.js";
 import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
-import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import {
+  createSessionTranscriptReader,
+  selectSessionTranscriptProjection,
+} from "./session-transcript-read-kernel.js";
 import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
@@ -292,6 +293,44 @@ export async function readSessionTranscriptBoundedMessageTailPageAsync(
   return readSessionTranscriptBoundedMessageTailPage(scope, options, signal);
 }
 
+const readRecentConversationText = createHistoryPageReader(
+  async (target, options: ReadRecentSessionConversationTextOptions) =>
+    withCurrentProjectionSnapshot(target, (projection) =>
+      selectSessionTranscriptProjection(projection, { kind: "recent-text", options }),
+    ),
+  (read, target, options, signal) =>
+    read({ kind: "recent-text", params: { target, options } }, signal),
+  () => {
+    throw new Error("Recent text requires its captured actor binding");
+  },
+);
+
+export async function readRecentSessionConversationTextAsync(
+  scope: SessionTranscriptReadScope,
+  options: ReadRecentSessionConversationTextOptions,
+  signal?: AbortSignal,
+) {
+  const memory = captureSessionActorTranscriptRead(scope, signal);
+  if (memory) {
+    const result = memory.missing
+      ? []
+      : await memory.read("session.history.recent-text", {
+          options: structuredClone(options),
+        });
+    memory.assertCurrent();
+    return result;
+  }
+  const incognito = captureIncognitoSessionHistoryBinding(scope);
+  return incognito
+    ? readIncognitoSessionHistory(
+        incognito,
+        scope,
+        (target) => ({ type: "session.history.recent-text", input: { ...target, options } }),
+        signal,
+      )
+    : readRecentConversationText(scope, options, signal);
+}
+
 export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync,
   (read, target, options) => read({ kind: "recent-page", params: { target, options } }),
@@ -491,33 +530,42 @@ export async function readSessionMessageCountAsync(
 export async function readSessionReactionsAsync(scope: SessionTranscriptReadScope) {
   const selected = getSessionActorStorageBinding({});
   if (selected && (!scope.sessionKey || isIncognitoSessionKey(scope.sessionKey))) {
-    const namespace = captureSessionActorStorageOwner(scope)!;
+    const agentId =
+      scope.agentId ??
+      (scope.sessionKey ? resolveAgentIdFromSessionKey(scope.sessionKey) : selected.agentId);
+    if (agentId !== selected.agentId) {
+      return {};
+    }
+    getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
     const sessionKey =
       scope.sessionKey ??
-      (namespace.agentId === selected.agentId
-        ? selected.actor.storage!.readCurrent(
-            { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
-            selected.authority,
-          )?.sessionKey
-        : namespace.owner?.readSessionById(scope.sessionId, namespace.authority)?.sessionKey);
+      selected.actor.storage.readCurrent(
+        { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
+        selected.authority,
+      )?.sessionKey;
     if (!sessionKey) {
       return {};
     }
-    const direct =
-      namespace.agentId === selected.agentId && sessionKey === selected.actor.target.sessionKey;
+    const direct = sessionKey === selected.actor.target.sessionKey;
+    if (
+      !direct &&
+      !selected.actor.storage.readCurrent(
+        { type: "session.entry.read", input: { sessionKey } },
+        selected.authority,
+      )
+    ) {
+      return {};
+    }
     const actor = direct
       ? selected.actor
-      : await namespace.owner?.acquireExisting(sessionKey, {
+      : await selected.actor.storage.acquire(sessionKey, {
           assertCurrent: () => selected.actor.assertReadable(),
           assertReadable: () => selected.actor.assertReadable(),
         });
-    if (!actor) {
-      return {};
-    }
     try {
       return await actor.storage!.read(
         { type: "session.reactions.read", input: { sessionId: scope.sessionId } },
-        namespace.authority,
+        selected.authority,
       );
     } finally {
       if (!direct) {
