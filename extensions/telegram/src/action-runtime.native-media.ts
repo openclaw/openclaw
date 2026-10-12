@@ -110,6 +110,12 @@ export async function handleTelegramNativeMediaAction(
       chatId: result.chatId,
       emoji: result.emoji,
       value: result.value,
+      // Source-reply classification matches the delivered target against the run's
+      // conversation through the receipt's thread, so a roll into a forum topic reports a
+      // bare chat without this and loses the current-source completion it just earned.
+      ...(result.receipt
+        ? { receipt: { threadId: result.receipt.threadId, replyToId: result.receipt.replyToId } }
+        : {}),
     });
   }
 
