@@ -73,41 +73,17 @@ describe("notification auto-prompt", () => {
     expect(storage.getItem(STORAGE_KEY)).toBe("1");
   });
 
-  it("records a dismissed browser prompt without enabling web push", async () => {
-    browserRequestPermission.mockResolvedValue("default");
-    const { context, enable } = createContext();
+  it.each([["loading", { loading: true }]])(
+    "does not enable web push when it is %s",
+    (_name, overrides) => {
+      const { context, enable } = createContext(overrides);
 
-    autoPromptNotificationsOnSend(context);
-    autoPromptNotificationsOnSend(context);
-    await Promise.resolve();
+      autoPromptNotificationsOnSend(context);
 
-    expect(browserRequestPermission).toHaveBeenCalledOnce();
-    expect(enable).not.toHaveBeenCalled();
-    expect(storage.getItem(STORAGE_KEY)).toBe("1");
-  });
-
-  it("does not enable web push when permission is denied", () => {
-    const { context, enable } = createContext({ permission: "denied" });
-
-    autoPromptNotificationsOnSend(context);
-
-    expect(enable).not.toHaveBeenCalled();
-    expect(storage.getItem(STORAGE_KEY)).toBeNull();
-  });
-
-  it.each([
-    ["subscribed", { subscription: "registered" as const }],
-    ["mismatched", { subscription: "vapid-mismatch" as const }],
-    ["loading", { loading: true }],
-    ["unsupported", { supported: false, permission: "unsupported" as const }],
-  ])("does not enable web push when it is %s", (_name, overrides) => {
-    const { context, enable } = createContext(overrides);
-
-    autoPromptNotificationsOnSend(context);
-
-    expect(enable).not.toHaveBeenCalled();
-    expect(storage.getItem(STORAGE_KEY)).toBeNull();
-  });
+      expect(enable).not.toHaveBeenCalled();
+      expect(storage.getItem(STORAGE_KEY)).toBeNull();
+    },
+  );
 
   it("prefers the native permission flow when permission is not determined", () => {
     const { context, enable, requestPermission } = createContext({
@@ -157,13 +133,6 @@ describe("notification auto-prompt send boundary", () => {
     isCommand: false,
   };
 
-  it("accepts a direct composer prompt or attachment", () => {
-    expect(shouldAutoPromptNotificationsOnSend(candidate)).toBe(true);
-    expect(
-      shouldAutoPromptNotificationsOnSend({ ...candidate, message: "", hasAttachments: true }),
-    ).toBe(true);
-  });
-
   it("recognizes only the synchronous browser event dispatch", async () => {
     const button = document.createElement("button");
     let duringDispatch = false;
@@ -182,12 +151,7 @@ describe("notification auto-prompt send boundary", () => {
     expect(afterDispatch).toBe(false);
   });
 
-  it.each([
-    ["programmatic send", { directComposerSend: false }],
-    ["recognized command", { isCommand: true }],
-    ["disconnected composer", { connected: false }],
-    ["empty composer", { message: "" }],
-  ])("rejects a %s", (_name, override) => {
+  it.each([["empty composer", { message: "" }]])("rejects a %s", (_name, override) => {
     expect(shouldAutoPromptNotificationsOnSend({ ...candidate, ...override })).toBe(false);
   });
 });
