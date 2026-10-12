@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
+import { readSqliteDataVersion } from "../../infra/sqlite-schema-facts.js";
 
 /**
  * Connection-local memo for reference analysis over a bounded set of candidate

@@ -64,19 +64,18 @@ import { fileURLToPath } from "node:url";
 import { sweepTombstonedCronRunRemnantsForStore } from "../src/config/sessions/cleanup-tombstones.js";
 import { loadSessionEntry, replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { deleteSessionEntryRows } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
-import {
-  readReferencedSessionIds,
-  withBatchedSessionReferenceAnalysis,
-} from "../src/config/sessions/session-accessor.sqlite-lifecycle-state.js";
+import { readReferencedSessionIds } from "../src/config/sessions/session-accessor.sqlite-lifecycle-state.js";
 import { resolveBatchedReferencedSessionIds } from "../src/config/sessions/session-accessor.sqlite-reference-batch.js";
+import { withBatchedSessionReferenceAnalysis } from "../src/config/sessions/session-accessor.sqlite-reference-scan.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "../src/config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../src/config/sessions/session-sqlite-target.js";
 import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../src/infra/node-sqlite.js";
+import { readSqliteDataVersion } from "../src/infra/sqlite-schema-facts.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../src/state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../src/state/openclaw-state-db-contract.js";
 import { cleanupSessionStateForTest } from "../src/test-utils/session-state-cleanup.js";
@@ -213,7 +212,14 @@ async function seedExpiredCronPlaceholder(params: {
     [{ type: "session", id: params.sessionId, content: "cron run transcript" }],
   );
   const database = openStore(params.storePath, params.ownerAgentId);
-  deleteSessionEntryRows(database, params.sessionKey);
+  // The readable entry still owns a retained transcript window here, so
+  // `deleteSessionEntryRows` reaches `writeSessionEntrySnapshots`, which
+  // refuses to run outside an entry transaction. Seeding through the real
+  // transaction owner is what the production delete path does.
+  runOpenClawAgentWriteTransaction((writer) => deleteSessionEntryRows(writer, params.sessionKey), {
+    agentId: database.agentId,
+    path: database.path,
+  });
   const updatedAt = Date.now() - params.ageMs;
   const db = getSessionKysely(database.db);
   executeSqliteQuerySync(

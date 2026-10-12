@@ -18,10 +18,10 @@ import {
 import {
   projectSessionEntryLifecycleMutation,
   readReferencedSessionIds,
-  withBatchedSessionReferenceAnalysis,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceCapCandidates } from "./session-accessor.sqlite-maintenance-candidates.js";
 import { trackMaterializedKeys } from "./session-accessor.sqlite-read-tracking.test-support.js";
+import { withBatchedSessionReferenceAnalysis } from "./session-accessor.sqlite-reference-scan.js";
 import { SESSION_STATE_ID_TRIM_CHARACTERS } from "./session-accessor.sqlite-references.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

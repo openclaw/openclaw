@@ -41,6 +41,7 @@ import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../src/state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../src/test-utils/session-state-cleanup.js";
 
@@ -127,7 +128,14 @@ async function seedExpiredCronPlaceholder(params: {
     [{ type: "session", id: params.sessionId, content: "cron run transcript" }],
   );
   const database = openStore(params.storePath, params.ownerAgentId);
-  deleteSessionEntryRows(database, params.sessionKey);
+  // The readable entry still owns a retained transcript window here, so
+  // `deleteSessionEntryRows` reaches `writeSessionEntrySnapshots`, which
+  // refuses to run outside an entry transaction. Seeding through the real
+  // transaction owner is what the production delete path does.
+  runOpenClawAgentWriteTransaction((writer) => deleteSessionEntryRows(writer, params.sessionKey), {
+    agentId: database.agentId,
+    path: database.path,
+  });
   const updatedAt = Date.now() - params.ageMs;
   const db = getSessionKysely(database.db);
   executeSqliteQuerySync(

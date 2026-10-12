@@ -36,6 +36,7 @@ export type SqliteSessionWriteOperation =
   | "session.maintenance.planner-statistics"
   | "session.maintenance.tombstone-commit"
   | "session.maintenance.tombstone-prepare"
+  | "session.maintenance.tombstone-restore"
   | "session.message-cut.mutate"
   | "session.parent.fork-entry"
   | "session.parent.fork-transcript"

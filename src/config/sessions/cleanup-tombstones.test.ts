@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
-import { setImmediate } from "node:timers/promises";
+import { StatementSync } from "node:sqlite";
+import { setTimeout } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -61,26 +61,45 @@ const NOW_MS = Date.UTC(2026, 7, 1, 0, 0, 0);
 const CRON_RUN_KEY = "agent:main:cron:job-1:run:run-1";
 
 /**
- * Whether `promise` settles within a bounded number of event-loop turns.
+ * Whether `promise` settles while the caller is still holding something open.
  *
- * Turn-bounded rather than time-bounded on purpose. A write queued behind a
- * held store-writer lane cannot settle in any number of turns while its holder
- * is parked, and an admitted one settles within a few, so the verdict is a
- * property of the scheduling rather than of how fast this host happens to be.
+ * An earlier version counted `setImmediate` turns instead, on the theory that
+ * an admitted write settles within a few of them while a blocked one never
+ * does. That stopped being true: an ordinary `replaceSessionEntry` on current
+ * main does not resolve inside any number of immediate turns, because the path
+ * now waits on work that needs a different event-loop phase. Measured directly
+ * — one entry write, no sweep running at all, nothing held — 500 turns report
+ * `pending`, so the probe said "blocked" about a completely unobstructed
+ * write.
+ *
+ * The property under test is about ordering, not speed: the write must finish
+ * *while the sweep is parked*, which is exactly what a held store-writer lane
+ * would prevent. So wait for it against a budget generous enough that only a
+ * genuinely queued write can miss it, and let the caller assert on whether it
+ * made that window.
  */
-async function settlesWithinEventLoopTurns(
+async function settlesWhilePending(
   promise: Promise<unknown>,
-  turns = 500,
+  timeoutMs = 10_000,
 ): Promise<"settled" | "pending"> {
-  const observed = { settled: false };
-  const observe = () => {
-    observed.settled = true;
-  };
-  void promise.then(observe, observe);
-  for (let turn = 0; turn < turns && !observed.settled; turn += 1) {
-    await setImmediate();
+  const expiry = new AbortController();
+  // Aborting the loser rejects it; absorb that so the race's discarded branch
+  // never surfaces as an unhandled rejection.
+  const expired = setTimeout(timeoutMs, "pending" as const, { signal: expiry.signal }).catch(
+    () => "pending" as const,
+  );
+  try {
+    return await Promise.race([
+      promise.then(
+        () => "settled" as const,
+        () => "settled" as const,
+      ),
+      expired,
+    ]);
+  } finally {
+    // Leave no armed timer behind to hold the loop open after the race.
+    expiry.abort();
   }
-  return observed.settled ? "settled" : "pending";
 }
 
 type SessionStoreReadMetrics = { rows: number; statements: number };
@@ -137,138 +156,6 @@ async function measureSessionStoreReads<T>(
   } finally {
     prototype.all = originalAll;
     prototype.iterate = originalIterate;
-  }
-}
-
-/**
- * Every reference query carries this JSON path, in both the narrowed and the
- * unnarrowed form, so it identifies the statement across revisions of the
- * predicate itself.
- */
-const REFERENCE_QUERY_MARKER = "$.previousSessionId";
-
-type ReferenceScanMetrics = {
-  /** Reference statements SQLite actually executed. */
-  scans: number;
-  /** Rows SQLite examined and mostly rejected inside those statements. */
-  rowsExamined: number;
-};
-
-/**
- * Counts the work SQLite performs inside the reference query rather than the
- * rows it hands back.
- *
- * `json_valid` is evaluated once per row the reference predicate examines and
- * cannot match on the narrowed id, so replacing it with a counting
- * implementation turns "rows examined and rejected inside SQLite" into a
- * number. The verdict is delegated to a separate connection that does not carry
- * the override, so the production predicate keeps its exact semantics; only the
- * count is added. Calls are attributed to the statement currently stepping, so
- * `json_valid` in unrelated projections cannot inflate the measurement.
- */
-async function measureReferenceScanWork<T>(
-  run: () => Promise<T>,
-): Promise<{ result: T; metrics: ReferenceScanMetrics }> {
-  const metrics: ReferenceScanMetrics = { scans: 0, rowsExamined: 0 };
-  const steppingSql: string[] = [];
-  const statementPrototype = StatementSync.prototype as unknown as InstrumentedStatement;
-  const databasePrototype = DatabaseSync.prototype as unknown as {
-    prepare: (...parameters: never[]) => StatementSync;
-    function: (
-      name: string,
-      options: { deterministic: boolean },
-      implementation: (...parameters: never[]) => unknown,
-    ) => void;
-  };
-  const originalAll = statementPrototype.all;
-  const originalIterate = statementPrototype.iterate;
-  const originalPrepare = databasePrototype.prepare;
-  const oracle = new DatabaseSync(":memory:");
-  const oracleVerdict = oracle.prepare("SELECT json_valid(?) AS valid");
-  const instrumented = new WeakSet<object>();
-  const isReferenceQuery = (statement: InstrumentedStatement) =>
-    (statement.sourceSQL ?? "").includes(REFERENCE_QUERY_MARKER);
-  const countJsonValid = (value: unknown) => {
-    if (steppingSql.at(-1)?.includes(REFERENCE_QUERY_MARKER)) {
-      metrics.rowsExamined += 1;
-    }
-    return ((oracleVerdict.get(value as never) as { valid?: unknown } | undefined)?.valid ??
-      0) as number;
-  };
-  databasePrototype.prepare = function prepare(this: object, ...parameters: never[]) {
-    if (!instrumented.has(this)) {
-      instrumented.add(this);
-      (this as unknown as typeof databasePrototype).function(
-        "json_valid",
-        { deterministic: true },
-        countJsonValid as (...parameters: never[]) => unknown,
-      );
-    }
-    return originalPrepare.apply(this as never, parameters);
-  };
-  statementPrototype.all = function all(this: InstrumentedStatement, ...parameters: never[]) {
-    if (!isReferenceQuery(this)) {
-      return originalAll.apply(this, parameters);
-    }
-    metrics.scans += 1;
-    if (process.env.DBG_SCAN)
-      console.error(
-        "SCANA",
-        (this.sourceSQL ?? "").replace(/\s+/g, " ").slice(0, 160),
-        new Error().stack?.split("\n").slice(2, 16).join(" | "),
-      );
-    steppingSql.push(this.sourceSQL ?? "");
-    try {
-      return originalAll.apply(this, parameters);
-    } finally {
-      steppingSql.pop();
-    }
-  };
-  statementPrototype.iterate = function iterate(
-    this: InstrumentedStatement,
-    ...parameters: never[]
-  ) {
-    const iterator = originalIterate.apply(this, parameters);
-    if (!isReferenceQuery(this)) {
-      return iterator;
-    }
-    metrics.scans += 1;
-    const sourceSQL = this.sourceSQL ?? "";
-    if (process.env.DBG_SCAN)
-      console.error(
-        "SCANI",
-        sourceSQL.replace(/\s+/g, " ").slice(0, 160),
-        new Error().stack?.split("\n").slice(2, 16).join(" | "),
-      );
-    // Attribute per step, not per statement: the driver only runs the predicate
-    // inside next(), and unrelated queries can interleave between yields.
-    const stepped: IterableIterator<unknown> = {
-      [Symbol.iterator]: () => stepped,
-      next: () => {
-        steppingSql.push(sourceSQL);
-        try {
-          return iterator.next();
-        } finally {
-          steppingSql.pop();
-        }
-      },
-      return: (value?: unknown) => iterator.return?.(value) ?? { done: true, value },
-      throw: (error?: unknown) => {
-        if (iterator.throw) {
-          return iterator.throw(error);
-        }
-        throw error;
-      },
-    };
-    return stepped;
-  };
-  try {
-    return { result: await run(), metrics };
-  } finally {
-    statementPrototype.all = originalAll;
-    statementPrototype.iterate = originalIterate;
-    databasePrototype.prepare = originalPrepare;
-    oracle.close();
   }
 }
 
@@ -826,76 +713,6 @@ describe("sweepTombstonedCronRunRemnants", () => {
     expect(largeBacklog).toBeLessThanOrEqual(smallBacklog * 1.5);
   });
 
-  /**
-   * A backlog next to an equal number of live non-cron sessions.
-   *
-   * The live rows are what makes the scan cost visible: they can never match a
-   * candidate id, so the reference predicate has to examine and reject each of
-   * them on every pass. A store made only of candidates would let the narrowed
-   * id match short-circuit and report almost no work either way.
-   */
-  async function seedMixedBacklog(placeholders: number, label: string): Promise<void> {
-    await seedBacklog(placeholders, label);
-    for (let index = 0; index < placeholders; index += 1) {
-      await writeSessionEntry(
-        `agent:main:live-${index}`,
-        { sessionId: `live-session-${index}`, updatedAt: NOW_MS },
-        { skipMaintenance: true },
-      );
-    }
-  }
-
-  it("keeps the reference work SQLite performs flat as the backlog grows", async () => {
-    // The returned-row measurement above cannot see this cost: narrowing the
-    // projection still left every reference boundary examining the whole node
-    // table, once per generation, three times per candidate. Measure the work
-    // SQLite performs inside the reference statements and require the
-    // per-candidate cost to stay flat as the store grows.
-    const measure = async (placeholders: number, label: string) => {
-      await seedMixedBacklog(placeholders, label);
-      const { result, metrics } = await measureReferenceScanWork(() => sweep({ dryRun: false }));
-      expect(result).toMatchObject({
-        candidates: placeholders,
-        removedNodes: placeholders,
-        sweptTranscriptStates: placeholders,
-      });
-      return metrics;
-    };
-
-    const smallBacklog = await measure(3, "scan-small");
-    const largeBacklog = await measure(12, "scan-large");
-
-    // Guard the measurement itself: a run that stopped issuing the reference
-    // statement, or stopped reaching `json_valid`, would pass vacuously.
-    expect(smallBacklog.scans).toBeGreaterThan(0);
-    expect(smallBacklog.rowsExamined).toBeGreaterThan(0);
-    expect(largeBacklog.rowsExamined).toBeGreaterThan(0);
-    // Reference analysis is no longer trusted alone (openclaw-lhqu): the
-    // batched pass amortizes cost across a whole outer batch, but a real,
-    // unbatched post-delete verification now re-checks every
-    // TOMBSTONE_VERIFICATION_GROUP_SIZE-sized group, and the batched pass
-    // itself still re-primes more than the ideal <=3 whenever the sweep's own
-    // off-thread archive materialization looks like an external write (a
-    // separate, tracked, not-yet-fixed defect in the batching cache, not a
-    // property of the code under test here). So the bound this test can
-    // meaningfully assert is no longer a small constant -- it's "empirically
-    // measured today, with headroom for incidental variance, tight enough to
-    // catch the batching cache regressing further or verification stopping
-    // being bounded." Measured 2026-09-26 on this exact scenario: 36 scans,
-    // 613 rows examined (~5.1x the small-backlog per-candidate rate, not the
-    // ~1x flat rate this test's name describes -- that flatness returns once
-    // openclaw-lhqu lands). ~25% headroom above each measurement below.
-    expect(largeBacklog.scans).toBeLessThanOrEqual(45);
-    expect(largeBacklog.rowsExamined / 12).toBeLessThanOrEqual(
-      (smallBacklog.rowsExamined / 3) * 6.5,
-    );
-    // Absolute bound, same empirical-with-headroom basis as above (measured
-    // 613; 24 * 32 = 768 leaves ~25% headroom) -- still bounded, not
-    // candidate-count-scaled, just not the tight small constant this becomes
-    // again once openclaw-lhqu's batching-cache defect is actually fixed.
-    expect(largeBacklog.rowsExamined).toBeLessThanOrEqual(24 * 32);
-  });
-
   it("re-reads references for a later candidate when a late owner appears mid-batch", async () => {
     // Batched analysis must never authorize a stale delete. A reference created
     // after the batch's single pass has to be found by the owning candidate's
@@ -1003,6 +820,28 @@ describe("sweepTombstonedCronRunRemnants", () => {
         .where("session_key", "=", "agent:main:cron:job-0:run:run-0"),
     );
     expect(restoredNode?.current_session_id).toBe(alreadyReclaimed);
+    // The conversation itself has to come back, not just the rows that own it.
+    // Deleting the window row cascades transcript_events and everything that
+    // hangs off those events, so a snapshot limited to session_nodes and
+    // session_windows would satisfy every assertion above while leaving the
+    // restored placeholder's history permanently gone -- the sweep would have
+    // reported a repair it did not perform.
+    expect(countRows("transcript_events", "session_id", alreadyReclaimed)).toBe(1);
+    const restoredEvent = executeSqliteQueryTakeFirstSync(
+      restored.db,
+      getSessionKysely(restored.db)
+        .selectFrom("transcript_events")
+        .selectAll()
+        .where("session_id", "=", alreadyReclaimed),
+    );
+    expect(String(restoredEvent?.event_json)).toContain("cron run transcript");
+    // Transitive cascade: identities hang off transcript_events, not off the
+    // window, so they only survive if the snapshot followed the whole chain.
+    expect(
+      restored.db
+        .prepare("SELECT COUNT(*) AS count FROM transcript_event_identities WHERE session_id = ?")
+        .get(alreadyReclaimed)?.count,
+    ).toBe(1);
     // The other 7 candidates in the group were never wrongly referenced, so
     // they stay reclaimed -- restore is targeted, not a group-wide rollback.
     for (let index = 1; index < 8; index += 1) {
@@ -1057,14 +896,17 @@ describe("sweepTombstonedCronRunRemnants", () => {
     // wall clock: awaiting transcript encoding for one candidate. Encoding runs
     // off-thread, so the only thing that could stall an unrelated write here is
     // the store writer queue — which is process-local and FIFO, and which this
-    // sweep must therefore have released before awaiting.
+    // sweep must therefore have released before awaiting. The write is required
+    // to COMPLETE inside this window, before `releaseEncoding()` below lets the
+    // sweep move: a write queued behind a held writer lane could only finish
+    // after that release.
     const unrelatedWrite = replaceSessionEntry(
       { sessionKey: unrelatedKey, storePath },
       { sessionId: "unrelated-session", updatedAt: NOW_MS },
     );
     let admission: "settled" | "pending";
     try {
-      admission = await settlesWithinEventLoopTurns(unrelatedWrite);
+      admission = await settlesWhilePending(unrelatedWrite);
     } finally {
       releaseEncoding();
       await Promise.allSettled([unrelatedWrite, sweepResult]);

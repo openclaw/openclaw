@@ -239,9 +239,7 @@ function renderAppliedSummaries(summaries: SessionCleanupSummary[], runtime: Run
       runtime.log(`Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`);
     }
     if (summary.tombstoneRemnants?.removedNodes) {
-      runtime.log(
-        `Swept tombstoned cron-run remnants: ${summary.tombstoneRemnants.removedNodes}`,
-      );
+      runtime.log(`Swept tombstoned cron-run remnants: ${summary.tombstoneRemnants.removedNodes}`);
     }
   }
 }

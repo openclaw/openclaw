@@ -17,10 +17,12 @@ const sweepTombstones = vi.hoisted(() =>
   }),
 );
 
+// mock-isolation: this suite asserts only the order cleanup runs its phases in, so each phase must be a recorder; the real sweep would open a store this suite never creates.
 vi.mock("./cleanup-tombstones.js", () => ({
   sweepTombstonedCronRunRemnantsForStore: sweepTombstones,
 }));
 
+// mock-isolation: same as the tombstone mock above -- order assertions need recorders, and the real budget functions would open a store this suite never creates.
 vi.mock("./session-history-eviction.js", () => ({
   inspectSqliteSessionHistoryDiskBudget: vi.fn(async () => {
     calls.push("budget:preview");

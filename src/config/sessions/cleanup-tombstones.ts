@@ -5,11 +5,7 @@ import fs from "node:fs";
  * Eligibility follows `cron.sessionRetention`. Transcript state is archived
  * before deletion; archive lifetime remains owned by existing archive policy.
  */
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  sqliteStringSet,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
@@ -20,6 +16,11 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import {
+  captureReclaimedRowSnapshot,
+  restoreReclaimedRowSnapshot,
+  type ReclaimedRowSnapshot,
+} from "./cleanup-tombstones-snapshot.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
@@ -28,10 +29,10 @@ import {
   deleteMaterializedSessionStatePlans,
   planSessionStateDeleteIfUnreferenced,
   readReferencedSessionIds,
-  withBatchedSessionReferenceAnalysis,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { deleteSessionNodeArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
 import { runExclusiveSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation.js";
+import { withBatchedSessionReferenceAnalysis } from "./session-accessor.sqlite-reference-scan.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptArchiveDirectory,
@@ -41,6 +42,7 @@ import {
 import { isCanonicalSqliteRetainedHistoryPlaceholder } from "./session-canonical-key.js";
 import { collectAdmissionProtectedCandidateSessionIds } from "./session-history-eviction.admission-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 import type { SessionStoreTarget } from "./targets-collision.js";
 
 const log = createSubsystemLogger("cleanup-tombstones");
@@ -225,70 +227,47 @@ function readProtectedSessionIds(params: {
 }
 
 /**
- * A candidate's full `session_nodes` row and every `session_windows` row it
- * owns, captured before a reclaim touches either. `selectAll()` rather than a
- * named column list deliberately: a snapshot that only knew the columns this
- * file cares about would restore an incomplete row if the schema has grown
- * columns since, silently dropping data on the one path meant to put it back
- * exactly as found.
- */
-type ReclaimedRowSnapshot = {
-  sessionKey: string;
-  node: Record<string, unknown>;
-  windows: Record<string, unknown>[];
-};
-
-function captureReclaimedRowSnapshot(
-  database: OpenClawAgentDatabase,
-  sessionKey: string,
-): ReclaimedRowSnapshot | undefined {
-  const db = getSessionKysely(database.db);
-  const node = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db.selectFrom("session_nodes").selectAll().where("session_key", "=", sessionKey),
-  );
-  if (!node) {
-    return undefined;
-  }
-  const windows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("session_windows").selectAll().where("session_key", "=", sessionKey),
-  ).rows;
-  return { sessionKey, node, windows };
-}
-
-/**
- * Re-inserts a snapshot taken before a reclaim, undoing that reclaim's delete.
+ * Puts one wrongly-reclaimed candidate back, completely.
  *
- * Only ever called immediately after a post-delete verification proves the
- * candidate was live at the moment it was removed -- the row did not change in
- * between (nothing else could have written a `session_nodes` row back under
- * the same primary key without first recreating the placeholder, which the
- * verification query would itself have counted as a live reference), so
- * replaying the exact captured columns reproduces the pre-delete state, not an
- * approximation of it.
+ * Restoration goes through the same writer lane and write transaction every
+ * other mutation in this file uses, for the same reason: a snapshot replayed
+ * outside a transaction can tear, and a half-restored placeholder is worse
+ * than one that is still missing. The transcript search index is derived
+ * rather than cascading state (see `cleanup-tombstones-snapshot.ts`), so each
+ * restored generation is handed back to the index owner's own repair path
+ * instead of having its projection rows replayed.
  */
-function restoreReclaimedRowSnapshot(
-  database: OpenClawAgentDatabase,
-  snapshot: ReclaimedRowSnapshot,
-): void {
-  const db = getSessionKysely(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .insertInto("session_nodes")
-      .values(snapshot.node as never)
-      .onConflict((oc) => oc.column("session_key").doNothing()),
-  );
-  for (const window of snapshot.windows) {
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("session_windows")
-        .values(window as never)
-        .onConflict((oc) => oc.column("session_id").doNothing()),
-    );
-  }
+async function restoreReclaimedCandidate(params: {
+  scope: { agentId: string; path: string };
+  storePath: string;
+  snapshot: ReclaimedRowSnapshot;
+}): Promise<void> {
+  const { scope, snapshot } = params;
+  await runExclusiveSessionLifecycleMutation("cron-cleanup", {
+    scope: params.storePath,
+    identities: [snapshot.sessionKey, ...snapshot.sessionIds],
+    run: async () => {
+      await runExclusiveSqliteSessionWrite(
+        scope,
+        async () => {
+          runOpenClawAgentWriteTransaction(
+            (transactionDb) => {
+              restoreReclaimedRowSnapshot(transactionDb.db, snapshot);
+              for (const sessionId of snapshot.sessionIds) {
+                markSessionTranscriptIndexDirtyInTransaction(transactionDb.db, sessionId);
+              }
+              publishSessionEntryCacheInvalidation(transactionDb, {
+                sessionKey: snapshot.sessionKey,
+              });
+            },
+            scope,
+            { operationLabel: "sessions.cleanup.tombstoned-cron-run-restore" },
+          );
+        },
+        "session.maintenance.tombstone-restore",
+      );
+    },
+  });
 }
 
 /**
@@ -330,7 +309,7 @@ async function sweepTombstonedCronRunRemnants(params: {
   let removedNodes = 0;
   let sweptTranscriptStates = 0;
   const reclaim = async (candidate: TombstoneCandidate): Promise<boolean> => {
-    const result = await runExclusiveSessionLifecycleMutation({
+    const result = await runExclusiveSessionLifecycleMutation("cron-cleanup", {
       scope: params.storePath,
       identities: [candidate.sessionKey, ...candidate.generationIds],
       run: async () => {
@@ -483,13 +462,21 @@ async function sweepTombstonedCronRunRemnants(params: {
   // inserted or updated since. Each candidate keeps its own lifecycle admission
   // and its own write transaction, so a batch never widens the exclusion held
   // over unrelated sessions and a busy placeholder still only skips itself.
-  const batchDatabase = openOpenClawAgentDatabase(toDatabaseOptions(scope));
+  //
+  // Every synchronous group below opens its own handle rather than closing
+  // over one: a reclaim awaits off-thread archive materialization and archive
+  // publication, and either can release and reopen this path's cached
+  // connection, so a handle captured before those awaits may be closed by the
+  // time the next group reads through it. `openOpenClawAgentDatabase` returns
+  // the current cached connection, so re-acquiring costs a map lookup and is
+  // the only way to be reading the live database.
+  const currentDatabase = () => openOpenClawAgentDatabase(toDatabaseOptions(scope));
   const repairedCandidates: { candidate: TombstoneCandidate; liveGenerationIds: string[] }[] = [];
   const unrepairableFailures: { candidate: TombstoneCandidate; liveGenerationIds: string[] }[] = [];
   for (let offset = 0; offset < candidates.length; offset += TOMBSTONE_REFERENCE_BATCH_SIZE) {
     const batch = candidates.slice(offset, offset + TOMBSTONE_REFERENCE_BATCH_SIZE);
     await withBatchedSessionReferenceAnalysis(
-      batchDatabase,
+      currentDatabase(),
       batch.flatMap((candidate) => candidate.generationIds),
       async () => {
         // The batched reference check above is a probabilistic fast path (see
@@ -510,13 +497,16 @@ async function sweepTombstonedCronRunRemnants(params: {
         ) {
           const group = batch.slice(subOffset, subOffset + TOMBSTONE_VERIFICATION_GROUP_SIZE);
           // Snapshotted before the delete, not after: once a candidate is
-          // reclaimed there is nothing left in session_nodes/session_windows
-          // to read back. Capturing every candidate in the group costs one
-          // extra indexed lookup each even though only a rare one will ever
-          // need it, but there is no "decide afterward" option here.
+          // reclaimed there is nothing left to read back -- not the node and
+          // window rows, and not the transcript state those windows cascade.
+          // Capturing every candidate in the group costs indexed reads it will
+          // almost always turn out not to need, but there is no "decide
+          // afterward" option here, and a cheaper snapshot would only be
+          // cheaper by restoring less than the delete removed.
           const snapshotsByKey = new Map<string, ReclaimedRowSnapshot>();
+          const snapshotDatabase = currentDatabase();
           for (const candidate of group) {
-            const snapshot = captureReclaimedRowSnapshot(batchDatabase, candidate.sessionKey);
+            const snapshot = captureReclaimedRowSnapshot(snapshotDatabase.db, candidate.sessionKey);
             if (snapshot) {
               snapshotsByKey.set(candidate.sessionKey, snapshot);
             }
@@ -537,7 +527,7 @@ async function sweepTombstonedCronRunRemnants(params: {
             continue;
           }
           const liveReferences = readReferencedSessionIds(
-            batchDatabase,
+            currentDatabase(),
             new Set(),
             reclaimedGenerationIds,
             {},
@@ -560,7 +550,7 @@ async function sweepTombstonedCronRunRemnants(params: {
               unrepairableFailures.push({ candidate, liveGenerationIds });
               continue;
             }
-            restoreReclaimedRowSnapshot(batchDatabase, snapshot);
+            await restoreReclaimedCandidate({ scope, storePath: params.storePath, snapshot });
             removedNodes -= 1;
             sweptTranscriptStates -= candidate.generationIds.length;
             repairedCandidates.push({ candidate, liveGenerationIds });
