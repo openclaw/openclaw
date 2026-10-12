@@ -340,8 +340,10 @@ floor. Hosted report attempts also ran serially and exceeded the 20-minute job
 budget. The measured 32-class exposed
 eight CPUs and about 32 GiB, satisfying the existing eight-CPU/24-GiB floor for
 two concurrent 6-GiB render heaps. The resource guard, deadline, hosted override,
-and other rows remain unchanged; qualification dispatches use the admitted
-runner backend to exercise this allocation.
+and other rows remain unchanged. Main-shaped qualification dispatches retain
+this exact-head SDK report alongside push coverage and use the admitted runner
+backend. They use the full validation tier; the main validation tier is reserved
+for ordinary same-revision manual or scheduled validation.
 
 ### RunsOn qualification
 

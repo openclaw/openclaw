@@ -1319,8 +1319,8 @@ const additionalChecks = [
     group,
     runner: "blacksmith-4vcpu-ubuntu-2404",
   })),
-  // Only dispatches execute this report; scheduled tips have no change range.
-  ...(eventName === "workflow_dispatch"
+  // Main-shaped qualifications are still dispatches with an exact comparison range.
+  ...(eventName === "workflow_dispatch" || mainQualification
     ? [
         // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {
