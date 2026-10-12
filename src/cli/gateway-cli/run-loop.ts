@@ -817,12 +817,19 @@ export async function runGatewayLoop(params: {
             await hostLifecycle?.retire();
           }
           if (shutdownFailure) {
-            if (installationReplacement && supervisorMode && !getManagedUpdateOwner()) {
-              writeStabilityBundle(
-                "gateway.restart_close_failed",
-                shutdownFailure.error,
-                shutdownFailure.step,
-              );
+            writeStabilityBundle(
+              "gateway.restart_close_failed",
+              shutdownFailure.error,
+              shutdownFailure.step,
+            );
+            // A failed close leaves this process unable to resume in-process, and a
+            // schtasks-supervised run that exits nonzero is never relaunched (manual
+            // task starts ignore RestartOnFailure). The handoff observer waits for
+            // this PID to exit before /Run, so the replacement re-admits state fresh.
+            if (
+              (installationReplacement || supervisorMode === "schtasks") &&
+              !getManagedUpdateOwner()
+            ) {
               await handleRestartAfterServerClose(undefined, false, shutdownFailure);
             } else {
               await forceExitAfterStabilityBundle(

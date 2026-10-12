@@ -1264,6 +1264,49 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("hands a failed restart close to the schtasks supervisor instead of exiting unsupervised", async () => {
+    testLoop.setPlatform("win32");
+    process.env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+    mocks.restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
+    try {
+      await testLoop.withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, exited } = await mocks.createSignaledLoopHarness();
+        close.mockRejectedValueOnce(new Error("Agent database native retirement failed"));
+        captureSignal("SIGUSR2")();
+        await expect(exited).resolves.toBe(0);
+        mocks.expectRestartHandoffCall({
+          restartKind: "full-process",
+          reason: undefined,
+          supervisorMode: "schtasks",
+        });
+        expect(mocks.writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
+          "gateway.restart_close_failed",
+          expect.any(Error),
+          { shutdownStep: "gateway-server-close" },
+        );
+      });
+    } finally {
+      delete process.env.OPENCLAW_WINDOWS_TASK_NAME;
+    }
+  });
+
+  it("still force-exits a failed restart close under an external supervisor", async () => {
+    testLoop.setPlatform("win32");
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    try {
+      await testLoop.withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, runtime, exited } = await mocks.createSignaledLoopHarness();
+        close.mockRejectedValueOnce(new Error("Agent database native retirement failed"));
+        captureSignal("SIGUSR2")();
+        await expect(exited).resolves.toBe(1);
+        expect(mocks.writeGatewayRestartHandoff).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+      });
+    } finally {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+    }
+  });
+
   it("bounds a launchd-supervised stop on the deadline the printed job reports", async () => {
     testLoop.setPlatform("darwin");
     process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
