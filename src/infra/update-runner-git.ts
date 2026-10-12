@@ -13,6 +13,7 @@ import {
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
+import { settleGitUpdateCleanup } from "./update-runner-git-cleanup.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import {
   readCurrentGitUpdateRecovery,
@@ -165,6 +166,7 @@ export async function updateGitCheckout(params: {
     | undefined;
   let stateMigrationStarted = false;
   let cleanupUncertain = false;
+  const cleanupReportingFailures: unknown[] = [];
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
   let rollbackOutcome: NonNullable<UpdateRunResult["rollbackOutcome"]> = {
     status: "not-needed",
@@ -333,7 +335,7 @@ export async function updateGitCheckout(params: {
     return undefined;
   };
 
-  try {
+  const runUpdate = async (): Promise<UpdateRunResult> => {
     const inspectAndPrepare = async (
       inspectionRoot: string,
       runInspectionCommand: CommandRunner,
@@ -415,6 +417,7 @@ export async function updateGitCheckout(params: {
         beforeCandidate: inspectTarget,
         validateCandidate: opts.validateCandidate,
         prepareGitExposure: opts.prepareGitExposure,
+        onCleanupReportingError: (error) => cleanupReportingFailures.push(error),
         retainCleanup: (cleanup) => {
           runtimeCleanups.candidate = cleanup;
           return true;
@@ -669,28 +672,43 @@ export async function updateGitCheckout(params: {
       steps,
       durationMs: Date.now() - startedAt,
     };
-  } catch (error) {
-    cleanupUncertain = hasCommandProcessCleanupError(error);
-    if (!mutationPrepared || cleanupUncertain) {
-      throw error;
-    }
-    const fact = createUpdateErrorFact("git update", error, defaultCommandEnv);
-    steps.push({
-      ...failureStep("git-update", "update checkout", fact.message),
-      failureFacts: [fact],
-    });
-    return await rollbackError(
-      error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
-    ).catch((rollbackFailure: unknown) => {
-      cleanupUncertain = hasCommandProcessCleanupError(rollbackFailure);
-      throw rollbackFailure;
-    });
-  } finally {
-    if (!cleanupUncertain) {
-      await candidateTransfer?.cleanup(step("git-update-pack-cleanup", [], gitRoot));
-      if (!runtimeRetained && (await cleanupCandidateRuntime())) {
-        await runtimePromotion?.cleanup();
+  };
+  return settleGitUpdateCleanup(
+    async () => {
+      try {
+        return await runUpdate();
+      } catch (error) {
+        cleanupUncertain = hasCommandProcessCleanupError(error);
+        if (!mutationPrepared || cleanupUncertain) {
+          throw error;
+        }
+        const fact = createUpdateErrorFact("git update", error, defaultCommandEnv);
+        steps.push({
+          ...failureStep("git-update", "update checkout", fact.message),
+          failureFacts: [fact],
+        });
+        let rollbackFailure: unknown;
+        try {
+          return await rollbackError(
+            error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
+          );
+        } catch (cause) {
+          cleanupUncertain = hasCommandProcessCleanupError(cause);
+          rollbackFailure = cause;
+        }
+        throw new AggregateError([error, rollbackFailure], "Git update and rollback failed", {
+          cause: error,
+        });
       }
-    }
-  }
+    },
+    async () => {
+      if (!cleanupUncertain) {
+        await candidateTransfer?.cleanup(step("git-update-pack-cleanup", [], gitRoot));
+        if (!runtimeRetained && (await cleanupCandidateRuntime())) {
+          await runtimePromotion?.cleanup();
+        }
+      }
+    },
+    cleanupReportingFailures,
+  );
 }
