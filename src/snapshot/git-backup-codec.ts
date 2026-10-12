@@ -11,7 +11,9 @@ import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
+import { getCanonicalSqliteTableNames } from "../infra/sqlite-schema-contract.js";
 import {
+  extractSqliteTableSchema,
   findSqlCharacter,
   normalizeSqlWhitespace,
   quoteSqliteIdentifier as quoteIdentifier,
@@ -24,6 +26,12 @@ import {
   assertSupportedAgentSchemaVersion,
   getOpenClawAgentMigrationSchema,
 } from "../state/openclaw-agent-db-schema-helpers.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { openClawStateMigrationAssertions } from "../state/openclaw-state-db-maintenance.js";
+import {
+  assertSupportedStateSchemaVersion,
+  readStateSchemaContentVersion,
+} from "../state/openclaw-state-db-schema-version.js";
 import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
 import {
   AGENT_SECRET_TABLE_NAMES,
@@ -489,7 +497,15 @@ function validateRestoredOwner(
       getOpenClawAgentMigrationSchema(userVersion),
     );
   } else {
-    buildSnapshotValidator(identity)(database, databasePath);
+    assertSupportedStateSchemaVersion(database, databasePath);
+    const historicalAssertion = openClawStateMigrationAssertions.get(
+      readStateSchemaContentVersion(database),
+    );
+    if (historicalAssertion) {
+      historicalAssertion(database, { pathname: databasePath });
+    } else {
+      buildSnapshotValidator(identity)(database, databasePath);
+    }
   }
 }
 
@@ -646,7 +662,21 @@ export async function restoreGitBackupDirectory(params: {
       restoreIdentity.role === "global"
         ? getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false })
         : getOpenClawAgentMigrationSchema(manifest.userVersion);
-    database.exec(ownerSchema);
+    if (
+      restoreIdentity.role === "global" &&
+      readStateSchemaContentVersion(database) < OPENCLAW_STATE_SCHEMA_VERSION
+    ) {
+      // Historical tables already have their recorded DDL. Only recreate omitted
+      // tables here; current indexes can depend on columns owned by a later migration.
+      const omitted = new Set([...manifest.excludedTables, ...GIT_BACKUP_PROJECTION_TABLES]);
+      for (const table of getCanonicalSqliteTableNames(ownerSchema)) {
+        if (omitted.has(table)) {
+          database.exec(extractSqliteTableSchema(ownerSchema, table));
+        }
+      }
+    } else {
+      database.exec(ownerSchema);
+    }
     if (restoreIdentity.role === "agent") {
       // Index definitions can improve without a schema-version bump. Normalize
       // derived indexes only in private staging; rows and version markers stay intact.
