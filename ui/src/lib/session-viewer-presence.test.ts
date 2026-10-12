@@ -285,6 +285,38 @@ describe("session viewer presence store", () => {
     await flushSync();
   });
 
+  it("declares empty while hidden and restores the set when visible", async () => {
+    const harness = createGatewayHarness();
+    const store = sessionViewerPresenceForGateway(harness.gateway);
+    const owner = {};
+    store.watch(owner, ["agent:main:visible"]);
+    await flushSync();
+
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushSync();
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: [],
+      },
+      expect.anything(),
+    );
+
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushSync();
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_VIEWERS_SET_METHOD,
+      {
+        sessionKeys: ["agent:main:visible"],
+      },
+      expect.anything(),
+    );
+    store.unwatch(owner);
+    await flushSync();
+  });
+
   it("does not treat an older empty acknowledgement as the current final clear", async () => {
     vi.useFakeTimers();
     const harness = createGatewayHarness();

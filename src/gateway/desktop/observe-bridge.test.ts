@@ -524,6 +524,29 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     },
   );
 
+  it("expires unused credential-bearing tokens without a later token operation", async () => {
+    const harness = await createProxyHarness();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const minted = mintDesktopObserverToken({
+      sourceKey: "worker:unused",
+      ownerEpoch: 1,
+      control: false,
+      attachment: { kind: "unix-socket", socketPath: "/tmp/unused-desktop.sock" },
+      preauth: {
+        auth: "vnc-password",
+        credentials: { password: "synthetic-memory-only-password" },
+      },
+    });
+
+    vi.advanceTimersByTime(60_000);
+    // Wall-clock expiry still lies ahead; only the timer could have retired this token.
+    expect(minted.expiresAtMs).toBeGreaterThan(Date.now());
+    const observerUrl = new URL(harness.observerUrl);
+    observerUrl.searchParams.set("token", minted.token);
+    await expectUnauthorizedObserver(observerUrl.toString());
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("pauses and resumes unix-socket reads around websocket backpressure", async () => {
     let bufferedAmount = 5 * 1024 * 1024;
     const pause = vi.spyOn(net.Socket.prototype, "pause");

@@ -60,8 +60,65 @@ function createHarness({
 }
 
 describe("tab eligibility", () => {
-  it.each(["blob:null/private"])("rejects restricted URL %s", (url) => {
+  it.each([
+    "chrome://settings",
+    "chrome-extension://abcdefghijklmnop/popup.html",
+    "devtools://devtools/bundled/inspector.html",
+    "view-source:https://example.com",
+    "about:settings",
+    "about:blank",
+    "about:blank#ready",
+    "blob:chrome-extension://abcdefghijklmnop/private",
+    "blob:null/private",
+  ])("rejects restricted URL %s", (url) => {
     expect(tabEligibility({ id: 1, url })).toEqual({ eligible: false, reason: "restricted" });
+  });
+
+  it("rejects file documents when Chrome has not granted file URL access", () => {
+    expect(
+      tabEligibility({ id: 1, url: "file:///tmp/private.html" }, { fileAccessAllowed: false }),
+    ).toEqual({
+      eligible: false,
+      reason: "restricted",
+    });
+  });
+
+  it("treats a pending destination as an additional eligibility restriction", () => {
+    expect(
+      tabEligibility({
+        id: 1,
+        url: "https://example.com/ordinary",
+        pendingUrl: "chrome://settings",
+      }),
+    ).toEqual({ eligible: false, reason: "restricted" });
+    expect(tabEligibility({ id: 1, pendingUrl: "https://example.com/pending" })).toEqual({
+      eligible: true,
+      reason: null,
+    });
+    expect(
+      tabEligibility({
+        id: 1,
+        url: "chrome://settings",
+        pendingUrl: "https://example.com/pending",
+      }),
+    ).toEqual({ eligible: false, reason: "restricted" });
+    expect(
+      tabEligibility({
+        id: 1,
+        url: "https://example.com/stale",
+        pendingUrl: "not a URL",
+      }),
+    ).toEqual({ eligible: false, reason: "restricted" });
+    expect(
+      tabEligibility(
+        {
+          id: 1,
+          url: "file:///tmp/private.html",
+          pendingUrl: "https://example.com/pending",
+        },
+        { fileAccessAllowed: false },
+      ),
+    ).toEqual({ eligible: false, reason: "restricted" });
   });
 
   it("rejects missing ids, missing URLs, malformed URLs, and incognito tabs", () => {

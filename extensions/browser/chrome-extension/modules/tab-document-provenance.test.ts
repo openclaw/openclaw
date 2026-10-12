@@ -251,6 +251,7 @@ describe("commanded tab document provenance", () => {
     { phase: "before response", reason: "connection" },
     { phase: "after confirmation", reason: "attachment" },
     { phase: "before response", reason: "command access" },
+    { phase: "after confirmation", reason: "command access" },
     { phase: "before response", reason: "attachment access" },
     { phase: "before response", reason: "retireAttachment" },
     { phase: "before response", reason: "invalidateAll" },

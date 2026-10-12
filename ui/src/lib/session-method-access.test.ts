@@ -50,6 +50,18 @@ describe("readSessionMethodAccess", () => {
     }
   });
 
+  it("requires admin for privileged create params", () => {
+    const access = readSessionMethodAccess(snapshot({ scopes: ["operator.write"] }), {
+      method: "sessions.create",
+      params: { agentId: "main", incognito: true },
+    });
+    expect(access.allowed).toBe(false);
+    expect(access).toMatchObject({
+      cause: "missing-scope",
+      requiredScope: "operator.admin",
+    });
+  });
+
   it("keeps profile placement admin-only through the caller's scope", () => {
     const method = "sessions.dispatch";
     const params = { key: "agent:main:cloud", profileId: "aws" };

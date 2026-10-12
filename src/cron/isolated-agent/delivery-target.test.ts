@@ -483,6 +483,36 @@ describe("resolveDeliveryTarget", () => {
     expect(resolveTarget).not.toHaveBeenCalled();
   });
 
+  it("drops session threadId when destination does not match the previous recipient", async () => {
+    setLastSessionEntry({
+      channel: "forum",
+      to: "room:other",
+      threadId: "thread-1",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, DEFAULT_TARGET);
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("does not carry a Telegram topic threadId to a bare explicit group target", async () => {
+    setLastSessionEntry({
+      channel: "telegram",
+      to: "-100200300:topic:77",
+      threadId: "77",
+    });
+    normalizeTelegramTargetForDeliveryTest.mockClear();
+
+    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+      channel: "telegram",
+      to: "-100200300",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-100200300");
+    expect(result.threadId).toBeUndefined();
+    expect(normalizeTelegramTargetForDeliveryTest).toHaveBeenCalledWith("-100200300");
+  });
+
   it("keeps session threadId when destination matches the previous recipient", async () => {
     setLastSessionEntry({
       channel: "forum",

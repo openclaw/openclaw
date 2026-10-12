@@ -29,9 +29,25 @@ describe("parsePairingString", () => {
 
   it.each([
     ["an empty string", ""],
+    ["an HTTP URL", `http://127.0.0.1/extension#${RELAY_SECRET}`],
     ["a non-loopback plaintext URL", `ws://gateway.example.com/extension#${RELAY_SECRET}`],
     ["a remote relay path", `wss://gateway.example.com/extension#${RELAY_SECRET}`],
+    [
+      "a proxy-prefixed remote relay path",
+      `wss://gateway.example.com/proxy/browser/extension#${RELAY_SECRET}`,
+    ],
+    [
+      "a proxy-prefixed loopback direct-Gateway path",
+      `ws://127.0.0.1:18789/proxy/browser/extension#${RELAY_SECRET}`,
+    ],
+    [
+      "a suffixed remote relay path",
+      `wss://gateway.example.com/browser/extension/extra#${RELAY_SECRET}`,
+    ],
     ["relay credentials", `wss://user:pass@gateway.example.com/extension#${RELAY_SECRET}`],
+    ["the wrong path", `ws://127.0.0.1/other#${RELAY_SECRET}`],
+    ["a missing secret", "ws://127.0.0.1/extension#"],
+    ["a short secret", "ws://127.0.0.1/extension#abc123"],
     ["an uppercase secret", `ws://127.0.0.1/extension#${"A".repeat(64)}`],
     ["an unknown query parameter", `ws://127.0.0.1/extension?token=nope#${RELAY_SECRET}`],
     ["duplicate profiles", `ws://127.0.0.1/extension?profile=one&profile=two#${RELAY_SECRET}`],

@@ -232,7 +232,10 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
   });
 
-  it.each([["structured", JSON.stringify({ message: "/help", parameters: {} })]])(
+  it.each([
+    ["plain", "/help"],
+    ["structured", JSON.stringify({ message: "/help", parameters: {} })],
+  ])(
     "blocks %s group commands when room access allows chat but command access does not",
     async (_label, text) => {
       const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);

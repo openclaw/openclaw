@@ -15,7 +15,11 @@ const RETAINED_LOCAL = {
   nativeBootstrapDisabled: true,
 };
 
-type CleanupFailureStage = "marker_set" | "session_remove" | "marker_remove";
+type CleanupFailureStage =
+  | "marker_set"
+  | "session_remove"
+  | "retired_local_remove"
+  | "marker_remove";
 
 function cleanupStorage(params: {
   registry?: unknown;
@@ -40,8 +44,9 @@ function cleanupStorage(params: {
     Object.assign(localValues, values);
   });
   const localRemove = vi.fn(async (keys: string[]) => {
-    if (keys.includes(CUSTODY_BLOCKED_KEY) && failureStage === "marker_remove") {
-      throw new Error("marker_remove failed");
+    const stage = keys.includes(CUSTODY_BLOCKED_KEY) ? "marker_remove" : "retired_local_remove";
+    if (failureStage === stage) {
+      throw new Error(`${stage} failed`);
     }
     for (const key of keys) {
       delete localValues[key];
@@ -100,37 +105,39 @@ describe("retired copilot custody", () => {
     expect(storage.localValues).toMatchObject(RETAINED_LOCAL);
   });
 
-  it.each<CleanupFailureStage>(["marker_set", "session_remove", "marker_remove"])(
-    "keeps cleanup restart-safe when %s fails and an explicit retry finishes",
-    async (stage) => {
-      const storage = cleanupStorage({
-        registry: { sessions: { 7: { creationPending: true } }, pendingArchives: [] },
-        failureStage: stage,
-      });
+  it.each<CleanupFailureStage>([
+    "marker_set",
+    "session_remove",
+    "retired_local_remove",
+    "marker_remove",
+  ])("keeps cleanup restart-safe when %s fails and an explicit retry finishes", async (stage) => {
+    const storage = cleanupStorage({
+      registry: { sessions: { 7: { creationPending: true } }, pendingArchives: [] },
+      failureStage: stage,
+    });
 
-      await expect(discardRetiredCopilotState(storage.chromeApi)).rejects.toThrow("failed");
-      if (stage === "marker_set") {
-        expect(storage.localValues).toHaveProperty("copilotSessionRegistryV1");
-        expect(storage.localValues).not.toHaveProperty(CUSTODY_BLOCKED_KEY);
-      } else {
-        expect(storage.localValues[CUSTODY_BLOCKED_KEY]).toBe(true);
-      }
-      if (stage === "session_remove") {
-        expect(storage.localValues).toHaveProperty("copilotSessionRegistryV1");
-      }
-      if (stage === "marker_remove") {
-        expect(storage.localValues).not.toHaveProperty("copilotSessionRegistryV1");
-      }
+    await expect(discardRetiredCopilotState(storage.chromeApi)).rejects.toThrow("failed");
+    if (stage === "marker_set") {
+      expect(storage.localValues).toHaveProperty("copilotSessionRegistryV1");
+      expect(storage.localValues).not.toHaveProperty(CUSTODY_BLOCKED_KEY);
+    } else {
+      expect(storage.localValues[CUSTODY_BLOCKED_KEY]).toBe(true);
+    }
+    if (stage === "session_remove") {
+      expect(storage.localValues).toHaveProperty("copilotSessionRegistryV1");
+    }
+    if (stage === "marker_remove") {
+      expect(storage.localValues).not.toHaveProperty("copilotSessionRegistryV1");
+    }
 
-      await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
-        blocked: true,
-      });
-      storage.setFailureStage(undefined);
-      await expect(discardRetiredCopilotState(storage.chromeApi)).resolves.toBeUndefined();
-      expect(storage.localValues).toEqual(RETAINED_LOCAL);
-      expect(storage.sessionValues).toEqual({});
-    },
-  );
+    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
+      blocked: true,
+    });
+    storage.setFailureStage(undefined);
+    await expect(discardRetiredCopilotState(storage.chromeApi)).resolves.toBeUndefined();
+    expect(storage.localValues).toEqual(RETAINED_LOCAL);
+    expect(storage.sessionValues).toEqual({});
+  });
 
   it("retries harmless cleanup after session removal fails", async () => {
     const storage = cleanupStorage({
