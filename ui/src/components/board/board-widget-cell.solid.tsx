@@ -642,8 +642,11 @@ function BoardWidgetCellContent(
             ),
             (error, reset) => {
               resetBodyError = reset;
-              bodyErrored = true;
-              requestUpdate();
+              // Publishing the same failure retriggers the frame that produced it.
+              if (!bodyErrored) {
+                bodyErrored = true;
+                requestUpdate();
+              }
               return <BoardWidgetError error={error()} />;
             },
           )}

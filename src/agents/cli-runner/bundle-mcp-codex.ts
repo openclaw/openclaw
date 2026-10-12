@@ -242,6 +242,7 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
   const acquisition = await acquireSessionMcpRuntime({
     sessionId: run.sessionId,
     sessionKey: run.sessionKey,
+    agentId,
     workspaceDir: run.workspaceDir,
     agentDir: run.agentDir,
     cfg: projectionConfig,

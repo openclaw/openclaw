@@ -15,6 +15,21 @@ Each entry cost at least one failed CI run, a reverted approach, or a blocked PR
 - **Strict JSX types catch real bugs.** `aria-pressed` accepts `"true" | "false" | "mixed"`, not a boolean; a generic `onChange: (value: T) => …` doesn't narrow to `string` across the bridge. Fix the types, don't cast.
 - **Optional contexts need a real default.** Solid 2 treats `undefined` as unset even when passed to `createContext`; use `null` for an optional owner and keep standalone component tests in the proof.
 
+### rc.14 upgrade
+
+The [rc.14 changelog](https://github.com/solidjs/solid/blob/8d23a5a13b23f8bfd5f01ceca5d2a73305d11fd7/packages/solid/CHANGELOG.md) and sibling package changelogs add these migration constraints:
+
+- **Writable derivations run after local writes.** When a source changes, `createSignal(fn)` and `createStore(fn)` re-derive from the manually written `prev` or draft, including in the same update. A derivation that ignores it can replace the local write. This does not change the rule that domain owners stay plain TypeScript.
+- **Only uppercase event prefixes bind handlers.** `onClick` binds; `onclick`, `onmouseover`, and `on:click` are attributes. rc.14 adds the `LOWERCASE_EVENT_ATTRIBUTE` diagnostic; keep the existing camelCase and dashed-custom-event conventions.
+- **Dynamic refs run before child insertion.** `dynamic()` and `<Dynamic>` now match compiled elements. A ref must not assume its children are already present.
+- **Effect tuples infer as const.** `createEffect` and `createRenderEffect` retain inline tuple element types without extra casts. Consumers that only read those facts must accept readonly arrays, as the hosted-tab notifier does.
+- **Effect callbacks cannot create primitives implicitly.** Capture the component owner and use `runWithOwner` when a callback deliberately mounts projections or Solid-backed Lit directives. Signals published by those adapters need `ownedWrite: true` for intentional writes under the restored owner.
+- **Async functions can have synchronous fast paths.** A prepared board skips its first `await`, so binding its projection still needs the effect caller's captured owner.
+- **Error rendering must not republish unchanged state.** A board fallback that repeatedly set its existing error flag and invalidated its own render spun under rc.14. Publish only the transition into the error state; retain explicit reset on a new binding.
+- **Teardown releases resources without publishing state.** Keep signal updates in live error/visibility handlers; cleanup only aborts work and releases resources. A video-poster cleanup write failed when its rendered parent was disposed.
+- **RPC fixtures must return fresh snapshots.** Reusing and mutating objects already passed into a store bypasses reactive updates. Clone mock responses when simulating later JSON replies, as the snapshot polling test does.
+- **Binding slots were renamed.** `BindingSlot` replaces `AttributeSlot` without an alias and restricts fill output types. OpenClaw currently uses neither API.
+
 ## Interop
 
 - **A tag can have only one class.** Our first plan kept Lit versions of shared primitives for unported callers while Solid rendered the same tags. The browser upgrades any element with a registered tag, so Lit rendered over Solid's children. The fix is one implementation per tag plus the bridge.
@@ -48,3 +63,5 @@ Each entry cost at least one failed CI run, a reverted approach, or a blocked PR
 - **Ports grow unless you push back.** First drafts came in 7% to nearly 3x larger than the Lit they replaced (formatter-expanded JSX, wrapper layers, defensive branches). Ask for net LOC at or below the original and explain any growth.
 - **Attribute, don't stop.** A failing check gets rerun on the merge base. The same failure there means it's inherited: record it and continue.
 - **Startup bytes vary by machine.** Compare the merge base and the head on the same host before blaming a change.
+
+- Plugin fallback templates can contain nested Solid directives. Restore the fallback component owner when its effect commits the opaque Lit template; a raw `render` call otherwise creates nested roots in rc.14's ownerless effect phase.

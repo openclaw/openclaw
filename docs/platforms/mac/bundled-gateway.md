@@ -84,10 +84,14 @@ Homebrew, or administrator access. Connecting an AI provider can still require
 internet access.
 
 The app creates `<state>/bin/openclaw`, a small shell wrapper that runs the
-current bundled CLI with Bun and the included SQLite library. It also links
-`openclaw-mac` beside it and adds that bin directory to the usual shell profile
-files. An existing operator-created `openclaw` file is preserved; only the
-app's own wrapper or a recognized `install-cli.sh` wrapper is replaced.
+current bundled CLI with Bun and the included SQLite library. When the app runs
+from a persistent location, it also links `openclaw-mac` beside it, and the
+default profile adds that bin directory to the usual shell profile files. Named
+profiles, and copies running from Downloads, the Desktop, a disk image, or a
+temporary directory such as `/tmp`, leave shell profiles unchanged; run their
+wrapper by its full path, such as `~/.openclaw-<profile>/bin/openclaw`. An
+existing operator-created `openclaw` file is preserved; only the app's own
+wrapper or a recognized `install-cli.sh` wrapper is replaced.
 
 Unbundled DEBUG builds retain the developer installer and channel chooser.
 That installer uses a private temporary directory for downloads and build tools,

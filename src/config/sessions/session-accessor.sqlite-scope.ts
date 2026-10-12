@@ -13,6 +13,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -169,6 +170,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
+  assertAgentSessionWriteAdmission(databaseOptions, scope.agentId);
   const timing: StoreWriterTiming = {};
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
   const startedAt = performance.now();
@@ -207,15 +209,19 @@ export async function runExclusiveSqliteSessionWrite<T>(
   });
   let completedAt = startedAt;
   let outcome: "ok" | "error" = "ok";
+  const admitted = () => {
+    assertAgentSessionWriteAdmission(databaseOptions, scope.agentId);
+    return fn();
+  };
   const owned = () =>
     withSqliteReaderOwner(
       { operation, ownerKind: isMainThread ? "main" : "worker", actorId: threadId },
       () =>
         writer === "worker"
-          ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing, signal)
+          ? runOpenClawAgentWorkerWrite(databaseOptions, admitted, timing, signal)
           : runOpenClawAgentWriteAdmission(
               databaseOptions,
-              fn,
+              admitted,
               writer === "foreground-reentrant",
               timing,
               signal,

@@ -50,6 +50,42 @@ export function isConfirmedRequestedStop(session: ProcessSession): boolean {
   );
 }
 
+/** Agent retirement also owns independent services after their creating turns settle. */
+export async function drainAgentExecProcesses(
+  agentId: string,
+  assertCurrent: () => void,
+): Promise<void> {
+  const sessions = listExecSessionsForCancellation().filter(
+    (session) => session.agentId === agentId,
+  );
+  const accepted: ProcessSession[] = [];
+  const failures: unknown[] = [];
+  try {
+    for (const session of sessions) {
+      assertCurrent();
+      accepted.push(session);
+      session.requestCancelled = true;
+      if (!session.exited && !session.finalizing) {
+        session.cancellationRequested = true;
+        getProcessSupervisor().cancel(session.id, "manual-cancel");
+      }
+      removeNotifyOnExit(session);
+    }
+  } catch (error) {
+    failures.push(error);
+  }
+  // Losing cancellation authority cannot release an already accepted process's cleanup.
+  await Promise.all(accepted.map(waitForExecSession));
+  if (accepted.some((session) => session.finalizationFailed || session.cleanupUncertain)) {
+    failures.push(
+      new Error("Command cleanup could not be confirmed; inspect retained process output."),
+    );
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Agent ${agentId} command cleanup is still draining`);
+  }
+}
+
 /** Select before awaited cancellation work; a later human turn cannot enter this plan. */
 export function captureExecRequestCancellation(
   target: ExecRequestIdentity,
