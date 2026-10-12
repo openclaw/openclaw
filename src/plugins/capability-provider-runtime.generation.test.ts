@@ -52,7 +52,7 @@ async function withSpeechFixture(
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     },
-    () => run(fixture),
+    async () => run(fixture),
   );
 }
 
