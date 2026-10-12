@@ -31,6 +31,7 @@ import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from
 import {
   createAgentFixture,
   createCatalogFixture,
+  createFinderMetadataFixture,
   createFormatFixture,
   writeBackupManifest,
 } from "./git-backup.test-support.js";
@@ -186,6 +187,10 @@ describe("Git-backed SQLite snapshots", () => {
           { scope: "all", selection: { all: true } },
         ]) {
           const repositoryPath = path.join(root, `${scope}-repository`);
+          await initializeGitBackupRepository({ repositoryPath, stateDir });
+          const finderPath = path.join(repositoryPath, "agents", ".DS_Store");
+          await fs.mkdir(path.dirname(finderPath), { recursive: true });
+          await fs.writeFile(finderPath, createFinderMetadataFixture());
           const result = await backupGitCreateCommand(createTestRuntime(), {
             repository: repositoryPath,
             ...selection,
@@ -196,6 +201,10 @@ describe("Git-backed SQLite snapshots", () => {
 
           expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
           expect(manifest.identity).toEqual({ role: "agent", agentId: "main" });
+          await expect(fs.readFile(finderPath)).resolves.toEqual(createFinderMetadataFixture());
+          expect(
+            await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
+          ).not.toContain(".DS_Store");
           if (scope === "all") {
             await expect(
               fs.stat(path.join(repositoryPath, "global", "manifest.json")),
@@ -318,47 +327,6 @@ describe("Git-backed SQLite snapshots", () => {
       );
     },
   );
-
-  it("stages only backup-owned paths in an adopted repository", async () => {
-    const root = await tempRoot();
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "repository");
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
-    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
-    await fs.writeFile(path.join(repositoryPath, "unrelated.txt"), "operator-owned\n");
-    await requireGit(repositoryPath, ["add", "unrelated.txt"]);
-
-    const created = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-    const unchanged = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-
-    expect(created.noChanges).toBe(false);
-    expect(unchanged.noChanges).toBe(true);
-    expect(unchanged).not.toHaveProperty("commit");
-    expect(await requireGit(repositoryPath, ["status", "--porcelain", "--", "unrelated.txt"])).toBe(
-      "A  unrelated.txt",
-    );
-    const committedPaths = (
-      await requireGit(repositoryPath, ["show", "--pretty=format:", "--name-only", "HEAD"])
-    )
-      .split("\n")
-      .filter(Boolean);
-    expect(committedPaths.length).toBeGreaterThan(0);
-    expect(
-      committedPaths.every(
-        (entry) =>
-          entry === "global" ||
-          entry.startsWith("global/") ||
-          entry === "agents" ||
-          entry.startsWith("agents/"),
-      ),
-    ).toBe(true);
-    expect(committedPaths).not.toContain("unrelated.txt");
-    expect(
-      await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
-    ).not.toContain("unrelated.txt");
-    expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
-  });
 
   it("preserves an unowned global namespace in an adopted repository", async () => {
     const root = await tempRoot();

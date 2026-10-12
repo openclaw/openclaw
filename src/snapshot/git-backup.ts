@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
@@ -29,6 +30,11 @@ import {
   type GitBackupManifest,
   type GitBackupRestoreResult,
 } from "./git-backup-codec.js";
+import {
+  hasNonFinderNamesake,
+  isFinderMetadataBlob,
+  isFinderMetadataFile,
+} from "./git-backup-finder.js";
 import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
 import { createOpenClawSnapshotCopy } from "./openclaw-snapshot-copy.js";
 import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
@@ -36,6 +42,8 @@ import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
+const GIT_BACKUP_SCOPES = ["global", "agents"];
+const GIT_BACKUP_METADATA_EXCLUSIONS = [":(exclude,glob)**/.DS_Store"];
 
 type GitBackupCreateResult = {
   repositoryPath: string;
@@ -191,7 +199,9 @@ async function isBackupOwnedScope(scopePath: string): Promise<boolean> {
   if (identity === undefined) {
     return true;
   }
-  if (!identity?.isDirectory()) {
+  // Only regular Finder metadata is ignored; a namesake directory or symlink
+  // must never be adopted as an empty backup scope and removed.
+  if (!identity?.isDirectory() || path.basename(scopePath) === ".DS_Store") {
     return false;
   }
   try {
@@ -203,7 +213,7 @@ async function isBackupOwnedScope(scopePath: string): Promise<boolean> {
       await fs.readFile(path.join(scopePath, GIT_BACKUP_MANIFEST), "utf8"),
       scopePath,
     );
-    return true;
+    return !(await hasNonFinderNamesake(scopePath));
   } catch {
     return false;
   }
@@ -222,16 +232,23 @@ async function removeStaleAgentScopes(
   retainedScopes: Set<string>,
 ): Promise<void> {
   const agentsPath = path.join(repositoryPath, "agents");
-  let entries: string[];
+  let entries: Dirent[];
   try {
-    entries = await fs.readdir(agentsPath);
+    entries = await fs.readdir(agentsPath, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return;
     }
     throw error;
   }
-  const scopes = entries.map((entry) => path.join(agentsPath, entry));
+  const scopes: string[] = [];
+  for (const entry of entries) {
+    const scope = path.join(agentsPath, entry.name);
+    if (entry.name === ".DS_Store" && entry.isFile() && (await isFinderMetadataFile(scope))) {
+      continue;
+    }
+    scopes.push(scope);
+  }
   await Promise.all(scopes.map(async (scope) => await assertBackupOwnedScope(scope)));
   await Promise.all(
     scopes
@@ -257,7 +274,7 @@ async function copyStagedScope(
 async function commitGitBackup(params: {
   repositoryPath: string;
   message: string;
-  scopes: string[];
+  paths: string[];
   env?: NodeJS.ProcessEnv;
 }): Promise<string> {
   const email = await runGit(params.repositoryPath, ["config", "--get", "user.email"], {
@@ -267,11 +284,54 @@ async function commitGitBackup(params: {
     email.code === 0 && email.stdout.trim()
       ? []
       : ["-c", "user.name=OpenClaw", "-c", "user.email=backup@openclaw.local"];
-  await requireGit(
-    params.repositoryPath,
-    [...identityArgs, "commit", "-m", params.message, "--", ...params.scopes],
-    { env: params.env },
-  );
+  const indexWorkspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-backup-index-",
+  });
+  try {
+    // A path-scoped commit re-reads working files, re-adding metadata we only
+    // untracked. Build a private index from HEAD plus the selected staged paths
+    // so preserved files and unrelated operator staging cannot enter the commit.
+    const env = { ...process.env, ...params.env, GIT_INDEX_FILE: indexWorkspace.path("index") };
+    const head = await runGit(params.repositoryPath, ["rev-parse", "--verify", "--quiet", "HEAD"], {
+      env,
+    });
+    if (head.code !== 0 && head.code !== 1) {
+      requireGitCommandOutput("git rev-parse HEAD", head);
+    }
+    await requireGit(params.repositoryPath, ["read-tree", head.code === 0 ? "HEAD" : "--empty"], {
+      env,
+    });
+    const selectedPaths = new Set(params.paths);
+    const entries = (
+      await requireGit(
+        params.repositoryPath,
+        ["ls-files", "--stage", "-z", "--", ...GIT_BACKUP_SCOPES],
+        { env: params.env },
+      )
+    )
+      .split("\0")
+      .filter((entry) => selectedPaths.has(entry.slice(entry.indexOf("\t") + 1)));
+    if (entries.length > 0) {
+      await requireGit(params.repositoryPath, ["update-index", "-z", "--index-info"], {
+        env,
+        input: entries.join("\0") + "\0",
+      });
+    }
+    const presentPaths = new Set(entries.map((entry) => entry.slice(entry.indexOf("\t") + 1)));
+    const deletedPaths = params.paths.filter((file) => !presentPaths.has(file));
+    if (deletedPaths.length > 0) {
+      await requireGit(params.repositoryPath, ["update-index", "--force-remove", "-z", "--stdin"], {
+        env,
+        input: deletedPaths.join("\0") + "\0",
+      });
+    }
+    await requireGit(params.repositoryPath, [...identityArgs, "commit", "-m", params.message], {
+      env,
+    });
+  } finally {
+    await indexWorkspace.cleanup();
+  }
   return await requireGit(params.repositoryPath, ["rev-parse", "HEAD"], { env: params.env });
 }
 
@@ -295,6 +355,49 @@ export async function createGitBackup(params: {
     stateDir: params.stateDir,
     gitEnv: params.gitEnv,
   });
+  const head = await runGit(repositoryPath, ["rev-parse", "--verify", "--quiet", "HEAD"], {
+    env: params.gitEnv,
+  });
+  if (head.code !== 0 && head.code !== 1) {
+    requireGitCommandOutput("git rev-parse HEAD", head);
+  }
+  const previousMetadata = new Set<string>();
+  if (head.code === 0) {
+    const entries = (
+      await requireGit(
+        repositoryPath,
+        ["ls-tree", "-r", "-z", head.stdout.trim(), "--", ...GIT_BACKUP_SCOPES],
+        {
+          env: params.gitEnv,
+        },
+      )
+    )
+      .split("\0")
+      .filter(Boolean);
+    for (const entry of entries) {
+      const [attributes = "", file = ""] = entry.split("\t");
+      if (!file.endsWith("/.DS_Store")) {
+        continue;
+      }
+      const [mode, type, object = ""] = attributes.split(" ");
+      const metadata =
+        type === "blob" &&
+        (mode === "100644" || mode === "100755") &&
+        (await isFinderMetadataBlob(repositoryPath, object, params.gitEnv));
+      if (metadata) {
+        previousMetadata.add(file);
+      } else if (
+        params.all ||
+        params.databases.some(({ identity }) =>
+          file.startsWith(`${gitBackupScopePath(identity).split(path.sep).join("/")}/`),
+        )
+      ) {
+        throw new Error(
+          `Refusing to replace non-Finder file in backup history: ${file}; preserve or move it explicitly before refreshing this scope.`,
+        );
+      }
+    }
+  }
   const staging = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-git-backup-",
@@ -333,6 +436,12 @@ export async function createGitBackup(params: {
     if (manifests.length === 0) {
       throw new Error("No Git backup databases were found for the selected scope.");
     }
+    await Promise.all(
+      manifests.map(
+        async ({ identity }) =>
+          await assertBackupOwnedScope(path.join(repositoryPath, gitBackupScopePath(identity))),
+      ),
+    );
     if (params.all) {
       // Selection is the configured roster, including agents whose snapshot failed.
       await removeStaleAgentScopes(
@@ -349,38 +458,86 @@ export async function createGitBackup(params: {
   // Keep both owned roots present so Git accepts both scoped pathspecs even on a first global-only
   // or agent-only backup. Empty directories remain untracked.
   await Promise.all(
-    ["global", "agents"].map(async (scope) =>
+    GIT_BACKUP_SCOPES.map(async (scope) =>
       fs.mkdir(path.join(repositoryPath, scope), { recursive: true, mode: 0o700 }),
     ),
   );
-  await requireGit(repositoryPath, ["add", "-A", "--", "global", "agents"], {
+  const backupPaths = [...GIT_BACKUP_SCOPES, ...GIT_BACKUP_METADATA_EXCLUSIONS];
+  await requireGit(repositoryPath, ["add", "-A", "--", ...backupPaths], {
     env: params.gitEnv,
   });
-  const changed = await requireGit(
-    repositoryPath,
-    ["status", "--porcelain", "--", "global", "agents"],
-    {
-      env: params.gitEnv,
-    },
+  // Untrack regular Finder files from older commits, including at the agents
+  // root. Preserve files on disk and metadata staged as a new operator addition.
+  const addedPaths = new Set(
+    (
+      await requireGit(
+        repositoryPath,
+        ["diff", "--cached", "--diff-filter=A", "--name-only", "-z", "--", ...GIT_BACKUP_SCOPES],
+        {
+          env: params.gitEnv,
+        },
+      )
+    ).split("\0"),
   );
+  const trackedMetadata: string[] = [];
+  const metadataEntries = (
+    await requireGit(repositoryPath, ["ls-files", "--stage", "-z", "--", ...GIT_BACKUP_SCOPES], {
+      env: params.gitEnv,
+    })
+  )
+    .split("\0")
+    .filter(
+      (entry) =>
+        (entry.startsWith("100644 ") || entry.startsWith("100755 ")) && entry.includes(" 0\t"),
+    )
+    .filter((entry) => {
+      const file = entry.slice(entry.indexOf("\t") + 1);
+      return previousMetadata.has(file) && !addedPaths.has(file);
+    });
+  for (const entry of metadataEntries) {
+    const file = entry.slice(entry.indexOf("\t") + 1);
+    const object = entry.split(" ")[1] ?? "";
+    if (await isFinderMetadataBlob(repositoryPath, object, params.gitEnv)) {
+      trackedMetadata.push(file);
+    }
+  }
+  if (trackedMetadata.length > 0) {
+    await requireGit(
+      repositoryPath,
+      ["rm", "--cached", "--force", "--pathspec-from-file=-", "--pathspec-file-nul"],
+      {
+        env: params.gitEnv,
+        input: trackedMetadata.map((file) => `:(literal)${file}\0`).join(""),
+      },
+    );
+  }
+  const stagedBackupPaths = await requireGit(
+    repositoryPath,
+    ["diff", "--cached", "--name-only", "-z", "--", ...backupPaths],
+    { env: params.gitEnv },
+  );
+  const deletedMetadata = (
+    await requireGit(
+      repositoryPath,
+      ["diff", "--cached", "--diff-filter=D", "--name-only", "-z", "--", ...GIT_BACKUP_SCOPES],
+      {
+        env: params.gitEnv,
+      },
+    )
+  )
+    .split("\0")
+    .filter((file) => previousMetadata.has(file));
+  const commitPaths = [...stagedBackupPaths.split("\0").filter(Boolean), ...deletedMetadata];
   let commit: string | undefined;
-  if (changed) {
+  if (commitPaths.length > 0) {
     const now = params.now ?? new Date();
     if (!Number.isFinite(now.getTime())) {
       throw new Error("Git backup timestamp is invalid.");
     }
-    const stagedBackupPaths = await requireGit(
-      repositoryPath,
-      ["diff", "--cached", "--name-only", "--", "global", "agents"],
-      { env: params.gitEnv },
-    );
-    const commitScopes = ["global", "agents"].filter((scope) =>
-      stagedBackupPaths.split("\n").some((entry) => entry.startsWith(`${scope}/`)),
-    );
     commit = await commitGitBackup({
       repositoryPath,
       message: `openclaw backup ${now.toISOString()}`,
-      scopes: commitScopes,
+      paths: commitPaths,
       env: params.gitEnv,
     });
   }
@@ -410,7 +567,7 @@ export async function createGitBackup(params: {
   return {
     repositoryPath,
     ...(commit ? { commit } : {}),
-    noChanges: !changed,
+    noChanges: commitPaths.length === 0,
     pushed,
     ...(pushWarning ? { pushWarning } : {}),
     manifests,
@@ -432,13 +589,12 @@ async function materializeGitBackupRef(params: {
     `${params.ref?.trim() || "HEAD"}^{commit}`,
   ]);
   const scope = gitBackupScopePath(params.identity).split(path.sep).join("/");
-  const files = (
-    await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", commit, "--", scope])
-  )
-    .split("\n")
+  const entries = (await requireGit(repositoryPath, ["ls-tree", "-r", "-z", commit, "--", scope]))
+    .split("\0")
     .filter(Boolean);
+  const files = new Set(entries.map((entry) => entry.slice(entry.indexOf("\t") + 1)));
   const required = new Set([`${scope}/${GIT_BACKUP_MANIFEST}`, `${scope}/${GIT_BACKUP_SCHEMA}`]);
-  if ([...required].some((entry) => !files.includes(entry))) {
+  if ([...required].some((entry) => !files.has(entry))) {
     throw new Error(`Git backup ref ${commit} does not contain ${scope}.`);
   }
   const workspace = await tempWorkspace({
@@ -447,7 +603,22 @@ async function materializeGitBackupRef(params: {
   });
   const outputPath = path.join(workspace.dir, scope);
   try {
-    for (const file of files) {
+    for (const entry of entries) {
+      const separator = entry.indexOf("\t");
+      const file = entry.slice(separator + 1);
+      const [mode, type, object = ""] = entry.slice(0, separator).split(" ");
+      // Only regular, signature-confirmed metadata at the two directory
+      // boundaries is a legacy exception. Never materialize it as table data.
+      if (file === `${scope}/.DS_Store` || file === `${scope}/${GIT_BACKUP_TABLES}/.DS_Store`) {
+        if (
+          type === "blob" &&
+          (mode === "100644" || mode === "100755") &&
+          (await isFinderMetadataBlob(repositoryPath, object))
+        ) {
+          continue;
+        }
+        throw new Error(`Git backup ref contains an unexpected file: ${file}`);
+      }
       if (
         file !== `${scope}/${GIT_BACKUP_MANIFEST}` &&
         file !== `${scope}/${GIT_BACKUP_SCHEMA}` &&
