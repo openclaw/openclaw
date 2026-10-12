@@ -169,6 +169,7 @@ it("retains durable transcript reads across prompt capture and bookkeeping but r
             "next-answer",
           ]);
           const summary = await readActivitySummarySource({ scope, assertCurrent() {} });
+          expect(summary?.snapshot.activeLeafEntryId).toBe("next-answer");
           expect(summary?.page.events).toContainEqual({
             event: expect.objectContaining({ id: "next-question", message: captured }),
           });

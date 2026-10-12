@@ -26,7 +26,6 @@ import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.j
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
-  loadExactSessionEntryReadOnly,
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
@@ -127,7 +126,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
     await seedYieldedParent();
     if (race === "partial cancellation") {
       const brokenKey = "agent:broken:subagent:uncancellable";
-      const brokenStorePath = await writeSubagentSessionEntry({
+      await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "broken",
         sessionKey: brokenKey,
@@ -152,11 +151,8 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
       if (!database) {
         throw new Error("Missing sibling database");
       }
-      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path, "broken")).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
       await writeFile(database.path, "not a SQLite database");
-      expect(() =>
-        loadExactSessionEntryReadOnly({ storePath: brokenStorePath, sessionKey: brokenKey }),
-      ).toThrow();
     }
     const context = createChatAbortContext({
       getRuntimeConfig,

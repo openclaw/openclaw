@@ -27,6 +27,7 @@ it.each(["none", "cleanup", "after-open", "during-open"] as const)(
     const failAfterOpen = failure === "after-open" || failDuringOpen;
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
+      // Prepare shared schema while leaving the competing agent creation cold.
       openOpenClawStateDatabase({ env: state.env });
       const sessionFile = state.path("cache-creation.jsonl");
       await fs.writeFile(
