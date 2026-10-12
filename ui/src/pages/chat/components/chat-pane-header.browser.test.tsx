@@ -1,13 +1,14 @@
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
-import { render } from "lit";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n } from "../../../i18n/index.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/split-view.css";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
-import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
+import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
 
 describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
   "chat pane branch tooltip positioning",
@@ -44,14 +45,17 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           ],
         });
         if (editor) {
-          render(
-            renderChatSidebarEditorMenu({
-              absolutePath: "/repo/example.ts",
-              open: false,
-              onOpenChange: () => undefined,
-              onOpenEditor,
-            }),
-            container,
+          render(nothing, container);
+          mountSolid(
+            () => (
+              <ChatSidebarEditorMenu
+                absolutePath="/repo/example.ts"
+                open={false}
+                onOpenChange={() => undefined}
+                onOpenEditor={onOpenEditor}
+              />
+            ),
+            { container },
           );
         }
         container.style.cssText =
