@@ -968,7 +968,9 @@ extension AppState {
         self.swabbleEnabled = authorized
     }
 
-    func setLocationMode(_ mode: OpenClawLocationMode, requestIsCurrent: @MainActor () -> Bool) async {
+    func setLocationMode(
+        _ mode: OpenClawLocationMode, requestIsCurrent: @escaping @MainActor () -> Bool) async
+    {
         guard !self.isPreview, !Task.isCancelled, requestIsCurrent() else { return }
         self.locationModeGeneration &+= 1
         let generation = self.locationModeGeneration
@@ -978,7 +980,9 @@ extension AppState {
                 return
             }
             let requireAlways = mode == .always
-            let status = await LocationPermissionRequester.shared.request(always: requireAlways)
+            let status = await LocationPermissionRequester.shared.request(always: requireAlways) {
+                self.locationModeGeneration == generation && requestIsCurrent()
+            }
             guard PermissionManager.isLocationAuthorized(status: status, requireAlways: requireAlways) else { return }
         }
         // All Dashboard windows share location intent; a newer Off must invalidate

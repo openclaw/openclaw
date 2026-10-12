@@ -431,13 +431,16 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
 
     public struct Permissions: Encodable, Sendable {
         public let entries: [Entry]
+        public let additionalEntries: [Entry]?
         public let location: Location
 
         public init(
             entries: [Entry],
-            location: Location)
+            location: Location,
+            additionalEntries: [Entry]? = nil)
         {
             self.entries = entries
+            self.additionalEntries = additionalEntries
             self.location = location
         }
 

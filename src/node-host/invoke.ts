@@ -243,6 +243,9 @@ function createNodeHostInvocationClient(
     return client;
   }
   return {
+    get serverCapabilities() {
+      return client.serverCapabilities;
+    },
     async request<T = Record<string, unknown>>(
       method: string,
       params?: unknown,

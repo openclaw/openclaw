@@ -26,6 +26,11 @@ const permissionIdSchema = z.enum([
   "photos",
 ]);
 type PermissionId = z.infer<typeof permissionIdSchema>;
+const permissionEntrySchema = z.object({
+  id: permissionIdSchema,
+  status: z.enum(["granted", "denied", "notDetermined", "unavailable", "limited"]),
+  state: z.enum(NODE_PERMISSION_STATES).optional(),
+});
 
 const namedDevicesSchema = z.array(z.object({ id: z.string(), name: z.string() }));
 const nativeDeviceSettingsSnapshotSchema = z.object({
@@ -97,32 +102,35 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
         .optional(),
     })
     .optional(),
-  permissions: z.object({
-    // Native hosts publish unique ids in display order; never sort or deduplicate them.
-    entries: z
-      .array(
-        z.object({
+  permissions: z
+    .object({
+      entries: z.array(
+        permissionEntrySchema.extend({
           // v2026.9.5 native apps publish this retired entry. Accept only on input
           // until the minimum supported app omits it; never expose a command or row.
-          id: permissionIdSchema.or(z.literal("automation")),
-          status: z.enum(["granted", "denied", "notDetermined", "unavailable", "limited"]),
-          state: z.enum(NODE_PERMISSION_STATES).optional(),
+          id: permissionIdSchema.exclude(["eventPosting"]).or(z.literal("automation")),
         }),
-      )
-      .refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length)
-      .transform((entries) =>
-        entries.flatMap(({ id, status, state }) =>
-          id === "automation" ? [] : [{ id, status, ...(state ? { state } : {}) }],
-        ),
       ),
-    location: z
-      .object({
-        mode: z.enum(["off", "whileUsing", "always"]),
-        precise: z.boolean(),
-        preciseEditable: z.boolean().optional(),
-      })
-      .optional(),
-  }),
+      additionalEntries: z.array(permissionEntrySchema).optional(),
+      location: z
+        .object({
+          mode: z.enum(["off", "whileUsing", "always"]),
+          precise: z.boolean(),
+          preciseEditable: z.boolean().optional(),
+        })
+        .optional(),
+    })
+    .refine(({ entries, additionalEntries = [] }) => {
+      const allEntries = [...entries, ...additionalEntries];
+      return new Set(allEntries.map((entry) => entry.id)).size === allEntries.length;
+    })
+    .transform(({ entries, additionalEntries = [], ...permissions }) => ({
+      ...permissions,
+      // Preserve native display order while keeping the released closed entry vocabulary on the wire.
+      entries: [...entries, ...additionalEntries].flatMap(({ id, status, state }) =>
+        id === "automation" ? [] : [{ id, status, ...(state ? { state } : {}) }],
+      ),
+    })),
   voice: z.object({
     supported: z.boolean(), // voice wake runtime available on this device
     wakeEnabled: z.boolean(), // AppState.swabbleEnabled

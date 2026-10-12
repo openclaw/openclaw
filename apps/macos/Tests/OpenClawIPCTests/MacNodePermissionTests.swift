@@ -50,6 +50,30 @@ struct MacNodePermissionTests {
         }
     }
 
+    @Test func `possible stale Accessibility still requests first-use registration`() {
+        #expect(PermissionManager.accessibilityMissingState(
+            .accessibilityGrantMayBeStale, requestAttempted: false) == .notDetermined)
+        #expect(PermissionManager.accessibilityMissingState(
+            .accessibilityGrantMayBeStale, requestAttempted: true) == .staleGrant)
+        #expect(PermissionManager.accessibilityMissingState(.granted, requestAttempted: true) == nil)
+    }
+
+    @Test func `an unsuccessful Event Posting request offers relaunch recovery`() {
+        #expect(PermissionManager.eventPostingMissingState(granted: false, requestAttempted: false) == .notDetermined)
+        #expect(PermissionManager.eventPostingMissingState(granted: false, requestAttempted: true) == .restartRequired)
+        #expect(PermissionManager.eventPostingMissingState(granted: true, requestAttempted: true) == nil)
+    }
+
+    @Test func `retired permission requests do not start native authorization`() async {
+        let accessibilityAttempted = PermissionManager.accessibilityRequestAttempted
+        let eventPostingAttempted = PermissionManager.eventPostingRequestAttempted
+        let results = await PermissionManager.ensure(
+            [.accessibility, .eventPosting, .notifications, .location], interactive: true, isCurrent: { false })
+        #expect(results.isEmpty)
+        #expect(PermissionManager.accessibilityRequestAttempted == accessibilityAttempted)
+        #expect(PermissionManager.eventPostingRequestAttempted == eventPostingAttempted)
+    }
+
     @Test func `stale grant recovery leaves a pending screen restart for the next action`() throws {
         let first = try #require(PermissionManager.primaryRemediation([
             (.screenRecording, .restartRequired), (.accessibility, .staleGrant), (.eventPosting, .notDetermined),

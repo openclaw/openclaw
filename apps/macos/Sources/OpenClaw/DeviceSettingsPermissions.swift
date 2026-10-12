@@ -4,8 +4,10 @@ import OpenClawKit
 extension DeviceSettingsPermission {
     static let macOSPermissions: [Self] = [
         .notifications, .accessibility, .screenRecording, .microphone,
-        .camera, .speechRecognition, .location, .eventPosting,
+        .camera, .speechRecognition, .location,
     ]
+
+    static let macOSAdditionalPermissions: [Self] = [.eventPosting]
 
     var capability: Capability? {
         switch self {

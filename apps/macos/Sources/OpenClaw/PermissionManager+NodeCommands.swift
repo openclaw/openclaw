@@ -58,9 +58,12 @@ extension PermissionManager {
         case .accessibility:
             let snapshot = ComputerControlPermissionSnapshot.probe()
             guard snapshot.accessibility == .missing else { return nil }
-            return snapshot.inputAccess == .accessibilityGrantMayBeStale ? .staleGrant : .notDetermined
+            return self.accessibilityMissingState(
+                snapshot.inputAccess, requestAttempted: self.accessibilityRequestAttempted)
         case .eventPosting:
-            return self.screenRecordingPermissions.checkPostEventPermission() ? nil : .notDetermined
+            return self.eventPostingMissingState(
+                granted: self.screenRecordingPermissions.checkPostEventPermission(),
+                requestAttempted: self.eventPostingRequestAttempted)
         case .screenRecording:
             if self.screenCaptureNeedsRestart { return .restartRequired }
             return await self.screenRecordingPermissions.checkScreenRecordingPermissionLive() ? nil : .notDetermined
@@ -95,6 +98,21 @@ extension PermissionManager {
         case .canvas:
             return AppStateStore.shared.canvasEnabled ? nil : .disabledInOpenClaw
         }
+    }
+
+    static func accessibilityMissingState(
+        _ access: ComputerControlPermissionSnapshot.InputAccess,
+        requestAttempted: Bool) -> OpenClawPermissionState?
+    {
+        switch access {
+        case .granted, .postEventMissing: nil
+        case .accessibilityMissing: .notDetermined
+        case .accessibilityGrantMayBeStale: requestAttempted ? .staleGrant : .notDetermined
+        }
+    }
+
+    static func eventPostingMissingState(granted: Bool, requestAttempted: Bool) -> OpenClawPermissionState? {
+        granted ? nil : requestAttempted ? .restartRequired : .notDetermined
     }
 
     @MainActor

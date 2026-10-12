@@ -193,6 +193,24 @@ struct DeviceSettingsBridgeTests {
         }
     }
 
+    @Test func `new permissions do not enter the released contract-1 entry list`() throws {
+        let permissions = DeviceSettingsSnapshot.Permissions(
+            entries: DeviceSettingsPermission.macOSPermissions.map { .init(id: $0, status: .notDetermined) },
+            location: .init(mode: .off, precise: true),
+            additionalEntries: DeviceSettingsPermission.macOSAdditionalPermissions.map {
+                .init(id: $0, status: .notDetermined)
+            })
+        let payload = try #require(JSONSerialization
+            .jsonObject(with: JSONEncoder().encode(permissions)) as? [String: Any])
+        let entries = try #require(payload["entries"] as? [[String: Any]])
+        #expect(entries.compactMap { $0["id"] as? String } == [
+            "notifications", "accessibility", "screenRecording", "microphone", "camera", "speechRecognition",
+            "location",
+        ])
+        let additional = try #require(payload["additionalEntries"] as? [[String: Any]])
+        #expect(additional.compactMap { $0["id"] as? String } == ["eventPosting"])
+    }
+
     @Test func `permission card requests preserve the node and typed capability state`() throws {
         let request = try #require(DeviceSettingsRequest(body: [
             "type": "resolve-permission",

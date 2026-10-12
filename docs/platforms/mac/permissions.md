@@ -34,6 +34,10 @@ removed and re-added; a **Restart required** card offers to relaunch the app. On
 the app observes the required grants, **Try again** sends a short confirmation to
 the agent. Granting permission does not automatically repeat the command.
 
+Accessibility is explicitly requested before a possibly stale grant is reported.
+If an Event Posting request remains denied, enable access in System Settings,
+then use **Relaunch OpenClaw**: macOS can cache that denial until the app restarts.
+
 In a browser, or when the command targets another Mac, open the OpenClaw app on
 that Mac and go to **Settings → This Mac → Permissions**, grant the requested
 access, then confirm in the conversation.

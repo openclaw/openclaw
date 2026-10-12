@@ -54,7 +54,10 @@ extension DashboardWindowController {
             try await self.resolveNodePermission(request)
         case let .requestPermission(id):
             if let capability = id.capability {
-                _ = await PermissionManager.ensure([capability], interactive: true)
+                let sourceID = self.notificationSourceID
+                _ = await PermissionManager.ensure([capability], interactive: true) {
+                    self.canUseDeviceSettings(sourceID: sourceID)
+                }
             }
         case let .openSystemSettings(id):
             if let capability = id.capability {
@@ -108,7 +111,7 @@ extension DashboardWindowController {
             case .denied, .staleGrant:
                 SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: capability))
             case .notDetermined:
-                _ = await PermissionManager.ensure([capability], interactive: true)
+                _ = await PermissionManager.ensure([capability], interactive: true, isCurrent: isCurrent)
             case .disabledInOpenClaw:
                 break
             }

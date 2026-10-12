@@ -542,6 +542,9 @@ struct MacNodeHostWorkerTests {
         # Progress belongs to the invoke; ready already lets the app send that invoke.
         while IFS= read -r line; do
           case "$line" in
+            *'"id":"worker-permission"'*)
+              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-permission","ok":false,"error":{"code":"PERMISSION_MISSING","message":"PERMISSION_MISSING: screenRecording","details":{"capabilities":["screenRecording"],"state":"restart-required"}}}}'
+              ;;
             *'"type":"invoke"'*)
               printf '%s\\n' '{"type":"gateway-request","generation":0,"id":"gateway-1",\
         "method":"node.invoke.progress","params":{"invokeId":"worker-run","nodeId":"","seq":0,"chunk":"hello"},\
@@ -563,8 +566,14 @@ struct MacNodeHostWorkerTests {
             id: "worker-run",
             command: "system.run",
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
+        let permissionResponse = await worker.invoke(BridgeInvokeRequest(
+            id: "worker-permission", command: "system.run", paramsJSON: "{}"))
         await worker.stop()
         #expect(response.ok)
+        #expect(permissionResponse.error == OpenClawNodeError(
+            code: .permissionMissing,
+            message: "PERMISSION_MISSING: screenRecording",
+            details: .init(capabilities: ["screenRecording"], state: .restartRequired)))
 
         struct Response: Decodable {
             struct Payload: Decodable {

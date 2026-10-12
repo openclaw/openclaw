@@ -3969,9 +3969,10 @@ export const en: TranslationMap & {
       states: {
         "not-determined": "Choose Grant to review the permission request.",
         denied: "Choose Grant to open System Settings and allow access for OpenClaw.",
-        "restart-required": "macOS has recorded the grant. Relaunch OpenClaw to make it available.",
+        "restart-required":
+          "If you enabled access in System Settings, relaunch OpenClaw to make it available.",
         "stale-grant":
-          "macOS is not applying this grant. Choose Grant to repair it in System Settings.",
+          "macOS may be using a stale permission grant. Choose Grant to review it in System Settings.",
         "disabled-in-openclaw": "Choose Grant to review and enable this capability in OpenClaw.",
       },
       capabilities: {

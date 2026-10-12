@@ -18,12 +18,13 @@ extension DashboardWindowController {
 
     func readDeviceSettingsSnapshot(sourceID: String) async -> DeviceSettingsSnapshot? {
         guard self.canUseDeviceSettings(sourceID: sourceID) else { return nil }
-        let entries = await Self.devicePermissionEntries()
+        let entries = await Self.devicePermissionEntries(DeviceSettingsPermission.macOSPermissions)
+        let additionalEntries = await Self.devicePermissionEntries(DeviceSettingsPermission.macOSAdditionalPermissions)
         // Permission reads can outlive a document; never deliver device data into its replacement.
         guard self.canUseDeviceSettings(sourceID: sourceID) else { return nil }
         let nodeId = MacNodeModeCoordinator.shared.connectedDeviceId()
         guard self.canUseDeviceSettings(sourceID: sourceID) else { return nil }
-        return self.deviceSettingsSnapshot(permissions: entries, nodeId: nodeId)
+        return self.deviceSettingsSnapshot(permissions: entries, additionalEntries: additionalEntries, nodeId: nodeId)
     }
 
     func canUseDeviceSettings(sourceID: String) -> Bool {
@@ -33,7 +34,9 @@ extension DashboardWindowController {
     }
 
     private func deviceSettingsSnapshot(
-        permissions: [DeviceSettingsSnapshot.Permissions.Entry], nodeId: String?) -> DeviceSettingsSnapshot
+        permissions: [DeviceSettingsSnapshot.Permissions.Entry],
+        additionalEntries: [DeviceSettingsSnapshot.Permissions.Entry],
+        nodeId: String?) -> DeviceSettingsSnapshot
     {
         let state = AppStateStore.shared
         let defaults = AppDefaults.standard
@@ -85,7 +88,8 @@ extension DashboardWindowController {
                 entries: permissions,
                 location: .init(
                     mode: DeviceSettingsLocationMode(locationMode),
-                    precise: defaults.object(forKey: locationPreciseKey) as? Bool ?? true)),
+                    precise: defaults.object(forKey: locationPreciseKey) as? Bool ?? true),
+                additionalEntries: additionalEntries),
             voice: .init(
                 supported: voiceWakeSupported && SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
                     localeID: state.voiceWakeLocaleID),
@@ -141,9 +145,11 @@ extension DashboardWindowController {
             detail: detail)
     }
 
-    private static func devicePermissionEntries() async -> [DeviceSettingsSnapshot.Permissions.Entry] {
+    private static func devicePermissionEntries(
+        _ permissions: [DeviceSettingsPermission]) async -> [DeviceSettingsSnapshot.Permissions.Entry]
+    {
         var entries: [DeviceSettingsSnapshot.Permissions.Entry] = []
-        for permission in DeviceSettingsPermission.macOSPermissions {
+        for permission in permissions {
             guard let capability = permission.capability else { continue }
             let state = await PermissionManager.missingState(capability)
             let status: DeviceSettingsPermissionStatus = switch state {
