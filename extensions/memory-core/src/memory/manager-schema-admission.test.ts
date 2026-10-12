@@ -182,7 +182,7 @@ describe("memory index schema admission", () => {
         reader.database.db.prepare("SELECT count(*) AS count FROM memory_index_chunks_vec").get(),
       ).toEqual({ count: 0 });
     } finally {
-      await backend.close();
+      backend.close();
       reader.database.close();
     }
   });
