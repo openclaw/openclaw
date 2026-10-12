@@ -9,6 +9,8 @@ import {
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import { withCodexSessionDescendantCancellation } from "./session-cancellation.js";
 import { registerSharedClientAuthRefreshTests } from "./shared-client-auth-refresh.test-support.js";
 import { waitForCodexAppServerClientExit } from "./shared-client-lifecycle.js";
 import {
@@ -323,6 +325,58 @@ export function registerSharedClientLifetimeTests(
       await expect(waitForCodexAppServerClientExit(client)).resolves.toBeUndefined();
     },
   );
+
+  it("cancels the parent during physical shutdown while a writer still waits for exit", async ({
+    signal,
+  }) => {
+    const harness = createClientHarness({ autoEmitExit: false });
+    signal.addEventListener("abort", harness.emitExit, { once: true });
+    try {
+      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+      const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+      await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
+      const client = await acquire;
+      const session = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionKey: "agent:main:cancel-during-exit",
+        sessionId: "cancel-during-exit",
+      };
+      const bindingStore = createCodexTestBindingStore();
+      await bindingStore.mutate(session, {
+        kind: "set",
+        binding: { threadId: "thread", clientId: client.getInstanceId(), cwd: "/repo" },
+      });
+      retireSharedCodexAppServerClientIfCurrent(client);
+      releaseLeasedSharedCodexAppServerClient(client);
+      expect(client.getCloseError()).toBeDefined();
+      let writerSettled = false;
+      const writer = retainSharedCodexAppServerClientByInstanceId(client.getInstanceId()).then(
+        (lease) => {
+          writerSettled = true;
+          return lease;
+        },
+      );
+      let parentCancelled = false;
+      const result = await withCodexSessionDescendantCancellation(
+        bindingStore,
+        { ...session, assertCurrent: () => {}, acceptsRequest: () => true },
+        async (cancelDescendants) => {
+          parentCancelled = true;
+          return cancelDescendants();
+        },
+      );
+      expect(parentCancelled).toBe(true);
+      expect(result).toEqual({ killed: 0, cancelledRequesters: [] });
+      expect(harness.process.exitCode).toBeNull();
+      expect(writerSettled).toBe(false);
+      harness.emitExit();
+      await expect(writer).resolves.toBeUndefined();
+    } finally {
+      signal.removeEventListener("abort", harness.emitExit);
+      harness.emitExit();
+    }
+  });
 
   it("lets cancellation end a writer handoff to a retired owner that other leases keep alive", async () => {
     const harness = createClientHarness({ autoEmitExit: false });

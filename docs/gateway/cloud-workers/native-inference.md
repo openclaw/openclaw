@@ -248,12 +248,18 @@ Existing sessions use their bound environment's recorded choice, not later edits
 to the profile. Stopped, reclaimed, and inexact placements do not establish a
 current worker-inference binding.
 
-**Current limitation:** explicit model/runtime selection still uses Gateway
-model availability and auth checks; worker proxy auth values do not satisfy those
-checks. An explicit `agentRuntime` requires an explicit canonical `model` and an
-available Gateway runtime choice. The model picker is not a catalog of the node's
-model configuration. Use the configured-default flow above; do not copy worker
-auth values to the Gateway or disable auth checks to make an explicit selection pass.
+With `requiredProfile` set to a worker-inference device profile, an explicit
+canonical `model` and `agentRuntime: "openclaw"` can be selected without Gateway
+provider credentials. The required placement checks the node's model and
+credentials before running the turn. Explicit Gateway account pins still require
+that account to be available.
+
+**Current limitation:** optional profiles still use Gateway model availability
+and auth checks for explicit model/runtime selection; worker proxy auth values
+do not satisfy those checks. The model picker is not a catalog of the node's model
+configuration. Use the configured-default flow above for optional profiles; do
+not copy worker auth values to the Gateway or disable auth checks to make an
+explicit selection pass.
 These are selection-time checks: they do not make Gateway provider auth a
 requirement for continuing an already-bound worker-inference session, including
 an earlier accepted model selection. Gateway authentication, agent/model

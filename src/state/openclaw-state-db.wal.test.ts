@@ -549,6 +549,8 @@ it("cancels queued periodic maintenance during synchronous close without replayi
     )
     .run("maintenance-close", "preserved", "{}", 1);
   const { observations, stop } = observeCheckpoints(database.path);
+  const prepare = vi.spyOn(database.db, "prepare");
+  const exec = vi.spyOn(database.db, "exec");
   const periodicWork: Promise<unknown>[] = [];
   try {
     periodicWork.push(Promise.resolve(periodic()));
@@ -557,10 +559,12 @@ it("cancels queued periodic maintenance during synchronous close without replayi
     const closed = closeOpenClawStateDatabaseByPath(database.path);
     expect(closed).toBe(true);
     expect(database.db.isOpen).toBe(false);
-    expect(observations).toEqual(["complete"]);
+    expect(observations).toEqual([]);
     periodicWork.push(Promise.resolve(periodic()));
     await Promise.all(periodicWork);
-    expect(observations).toEqual(["complete"]);
+    expect(observations).toEqual([]);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
     const reopened = openOpenClawStateDatabase({ path: database.path });
     expect(
       reopened.db
@@ -568,12 +572,55 @@ it("cancels queued periodic maintenance during synchronous close without replayi
         .all("maintenance-close"),
     ).toEqual([{ event_key: "preserved" }]);
   } finally {
+    prepare.mockRestore();
+    exec.mockRestore();
     stop();
     try {
       await closeOpenClawStateDatabaseByPathAsync(database.path);
     } finally {
       await Promise.all(periodicWork);
     }
+  }
+});
+
+it("checkpoints committed worker writes before retiring the host without host SQL", async () => {
+  const root = tempDirs.make("state-wal-worker-shutdown-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+  const store = createPluginStateKeyedStore<string>("fixture-plugin", {
+    namespace: "worker-shutdown",
+    maxEntries: 1,
+    env,
+  });
+  await store.register("retained", "initial");
+  const database = openOpenClawStateDatabase({ env });
+  await store.register("retained", "final");
+  const prepare = vi.spyOn(database.db, "prepare");
+  const exec = vi.spyOn(database.db, "exec");
+  const nativeClose = database.db.close.bind(database.db);
+  let walBytesAtHostClose: number | undefined;
+  const close = vi.spyOn(database.db, "close").mockImplementation(() => {
+    walBytesAtHostClose = fs.statSync(`${database.path}-wal`).size;
+    nativeClose();
+  });
+  try {
+    await closeOpenClawStateDatabaseByPathAsync(database.path);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+    expect(walBytesAtHostClose).toBe(0);
+  } finally {
+    prepare.mockRestore();
+    exec.mockRestore();
+    close.mockRestore();
+  }
+  const reopened = new DatabaseSync(database.path, { readOnly: true });
+  try {
+    expect(
+      reopened
+        .prepare("SELECT value_json FROM plugin_state_entries WHERE entry_key = 'retained'")
+        .get(),
+    ).toEqual({ value_json: '"final"' });
+  } finally {
+    reopened.close();
   }
 });
 

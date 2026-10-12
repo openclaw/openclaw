@@ -600,7 +600,7 @@ describe("media persistence gateway lifecycle recovery", () => {
     const nowMs = 1_000_000;
     for (let index = 0; index < 3; index += 1) {
       const bootId = recordGatewayBootStart(env, nowMs + index);
-      completeGatewayBootLifecycle(
+      await completeGatewayBootLifecycle(
         bootId,
         {
           outcome: "startup_failed",

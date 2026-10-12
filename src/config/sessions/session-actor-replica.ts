@@ -24,9 +24,16 @@ import type {
   SessionActorOutcome,
   SessionActorTarget,
 } from "./session-actor-contract.js";
+import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
+import {
+  advanceSessionActorTranscriptReplica,
+  sameSessionActorTranscriptVersion,
+  type SessionActorTranscriptReplica,
+} from "./session-actor-transcript-replica.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
+import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 export type SessionActorEntryFacts = Pick<
@@ -47,6 +54,7 @@ type ReplicaCell = {
   target: SessionActorTarget;
   snapshot?: SessionActorHotState;
   entry?: SessionActorEntryFacts;
+  transcript?: SessionActorTranscriptReplica;
   predicateColumns?: SessionActorEntryFacts["predicateColumns"];
   generation?: string;
   reservation: number;
@@ -143,12 +151,22 @@ export function ensureReplicaSubscription(): void {
       // Board writes use unchanged-entry markers, so they revoke row projection coverage.
       const unchangedEntry =
         unchangedMarker && cell.entry ? { ...cell.entry, projection: undefined } : undefined;
+      const previousTranscript = cell.transcript;
       const previousPredicateColumns = cell.predicateColumns;
       const previous = cell.snapshot ?? cell.entry;
       const previousProjection = cell.snapshot
         ? { hasBoard: cell.snapshot.hasBoard }
         : cell.entry?.projection;
       discard(cell);
+      if (
+        !("all" in change) &&
+        !change.factsInvalidated &&
+        change.facts?.kind === "participants" &&
+        previousTranscript
+      ) {
+        // Keep payloads private until a fresh actor snapshot confirms their transcript version.
+        retainTranscript(cell, previousTranscript);
+      }
       if (unchangedEntry) {
         // Transcript/metadata markers do not revoke an installed entry receipt.
         // Its original scoped token still rejects any unaccounted storage write.
@@ -159,12 +177,26 @@ export function ensureReplicaSubscription(): void {
         pool.bytes += cell.bytes;
       }
       if (
-        prepared?.fullEntry &&
+        prepared &&
         source.identity === database.physicalIdentity &&
         prepared.source.writeToken === readSqliteDatabaseWriteTokenForPath(database.nativeLocation)
       ) {
         if (prepared.actorPostimage) {
           retainSnapshot(cell, prepared.actorPostimage, prepared.source.incarnation);
+          if (
+            previousTranscript &&
+            previousTranscript.sessionId === prepared.actorPostimage.entry?.sessionId &&
+            sameSessionActorTranscriptVersion(
+              previousTranscript.version,
+              prepared.actorPostimage.transcript.version,
+            )
+          ) {
+            retainTranscript(cell, previousTranscript);
+          }
+          continue;
+        }
+        if (!prepared.fullEntry) {
+          forgetUnused(cell);
           continue;
         }
         const dependencySessionIds = [prepared.fullEntry.sessionId];
@@ -218,10 +250,11 @@ function targetKey(target: SessionActorTarget): string {
 }
 
 function discard(cell: ReplicaCell): void {
-  if (cell.snapshot || cell.entry) {
+  if (cell.snapshot || cell.entry || cell.transcript) {
     pool.snapshots -= 1;
   }
   pool.bytes -= cell.bytes;
+  cell.transcript = undefined;
   cell.snapshot = undefined;
   cell.entry = undefined;
   cell.predicateColumns = undefined;
@@ -233,6 +266,7 @@ function retainSnapshot(
   state: SessionActorHotState,
   generation: string | undefined,
 ): void {
+  const previousTranscript = cell.transcript;
   const detached = isDeeplyFrozenPlainData(state)
     ? state
     : freezeJsonSnapshot(structuredClone(state));
@@ -245,7 +279,44 @@ function retainSnapshot(
   cell.bytes = JSON.stringify(detached).length * 2;
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
+  if (
+    previousTranscript &&
+    previousTranscript.sessionId === state.entry?.sessionId &&
+    sameSessionActorTranscriptVersion(previousTranscript.version, state.transcript.version)
+  ) {
+    retainTranscript(cell, previousTranscript);
+  }
   touch(cell);
+}
+
+function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptReplica): void {
+  if (!cell.snapshot && !cell.entry && !cell.transcript) {
+    pool.snapshots += 1;
+  }
+  const previousBytes = cell.transcript ? JSON.stringify(cell.transcript).length * 2 : 0;
+  const bytes = JSON.stringify(transcript).length * 2;
+  cell.transcript = transcript;
+  cell.bytes += bytes - previousBytes;
+  pool.bytes += bytes - previousBytes;
+  touch(cell);
+}
+
+/** The caller already borrowed this immutable postimage under its live actor authority. */
+export function readSessionActorTranscriptReplica(
+  state: SessionActorHotState,
+): SessionActorTranscriptReplica | undefined {
+  const cell = pool.cells.get(targetKey(state.target));
+  return cell?.snapshot?.writeToken === state.writeToken ? cell.transcript : undefined;
+}
+
+export function retainSessionActorTranscriptReplica(
+  state: SessionActorHotState,
+  transcript: SessionActorTranscriptReplica,
+): void {
+  const cell = pool.cells.get(targetKey(state.target));
+  if (cell?.snapshot?.writeToken === state.writeToken) {
+    retainTranscript(cell, transcript);
+  }
 }
 
 function forgetUnused(cell: ReplicaCell): void {
@@ -255,6 +326,7 @@ function forgetUnused(cell: ReplicaCell): void {
     !cell.pending &&
     !cell.snapshot &&
     !cell.entry &&
+    !cell.transcript &&
     pool.cells.get(key) === cell
   ) {
     pool.cells.delete(key);
@@ -266,7 +338,7 @@ function touch(cell: ReplicaCell): void {
   pool.cells.delete(key);
   pool.cells.set(key, cell);
   for (const candidate of pool.cells.values()) {
-    if (!candidate.snapshot && !candidate.entry) {
+    if (!candidate.snapshot && !candidate.entry && !candidate.transcript) {
       forgetUnused(candidate);
       continue;
     }
@@ -345,50 +417,65 @@ export function readSessionActorEntryFacts(
   });
 }
 
+function readCurrentEntryCellForPath(params: { path: string; sessionKey: string }) {
+  ensureReplicaSubscription();
+  for (const { target } of pool.cells.values()) {
+    const { database, sessionKey } = target;
+    if (
+      database.kind === "file" &&
+      database.nativeLocation === params.path &&
+      sessionKey === params.sessionKey
+    ) {
+      return readCurrentEntryCell({ database, sessionKey });
+    }
+  }
+  return undefined;
+}
+
+/** Recorded transcript facts survive actor release; delivery authority stays with the caller. */
+export function readSessionActorTranscriptAnchorsFromReplica(
+  params: { path: string; sessionKey: string; sessionId: string; agentId: string },
+  selection: SessionTranscriptAnchorSelection,
+) {
+  const current = readCurrentEntryCellForPath(params);
+  const snapshot = current?.cell.snapshot;
+  return snapshot && snapshot.entry?.sessionId === params.sessionId
+    ? readSessionActorTranscriptAnchors(snapshot, params, selection, current?.cell.transcript?.tail)
+    : undefined;
+}
+
 /** Reuse complete actor facts before requesting the same row from the history worker. */
 export function readSessionActorRowFacts(params: {
   path: string;
   sessionKey: string;
 }): SessionRowDatabaseFacts | undefined {
-  ensureReplicaSubscription();
-  for (const cell of pool.cells.values()) {
-    const { database, sessionKey } = cell.target;
-    if (
-      database.kind !== "file" ||
-      database.nativeLocation !== params.path ||
-      sessionKey !== params.sessionKey
-    ) {
-      continue;
-    }
-    const current = readCurrentEntryCell({ database, sessionKey });
-    const state = current?.state;
-    const projection = current?.cell.snapshot
-      ? {
-          hasBoard: current.cell.snapshot.hasBoard,
-          activitySummaryWatermark: current.cell.snapshot.transcript.watermark,
-        }
-      : current?.cell.entry?.projection;
-    if (!state?.entry || !projection) {
-      return undefined;
-    }
-    const summary = readSessionActivitySummary(state.entry);
-    if (summary && !projection.activitySummaryWatermark) {
-      return undefined;
-    }
-    const {
-      skillsSnapshot: _skills,
-      systemPromptReport: _prompt,
-      sessionDiffBaseline: _baseline,
-      ...entry
-    } = state.entry;
-    return structuredClone({
-      sessionKey,
-      entry,
-      hasBoard: projection.hasBoard,
-      ...(summary ? { activitySummaryWatermark: projection.activitySummaryWatermark } : {}),
-    });
+  const current = readCurrentEntryCellForPath(params);
+  const state = current?.state;
+  const projection = current?.cell.snapshot
+    ? {
+        hasBoard: current.cell.snapshot.hasBoard,
+        activitySummaryWatermark: current.cell.snapshot.transcript.watermark,
+      }
+    : current?.cell.entry?.projection;
+  if (!state?.entry || !projection) {
+    return undefined;
   }
-  return undefined;
+  const summary = readSessionActivitySummary(state.entry);
+  if (summary && !projection.activitySummaryWatermark) {
+    return undefined;
+  }
+  const {
+    skillsSnapshot: _skills,
+    systemPromptReport: _prompt,
+    sessionDiffBaseline: _baseline,
+    ...entry
+  } = state.entry;
+  return structuredClone({
+    sessionKey: params.sessionKey,
+    entry,
+    hasBoard: projection.hasBoard,
+    ...(summary ? { activitySummaryWatermark: projection.activitySummaryWatermark } : {}),
+  });
 }
 
 /** A single cold entry batch and actor commands publish into the same bounded MAIN owner. */
@@ -580,13 +667,18 @@ export function createSessionActorReplica(
     },
     beginCommand() {
       const previous = owned.snapshot;
+      const previousTranscript = owned.transcript;
       const previousGeneration = owned.generation;
       const settle = begin();
       return {
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
           return settle((expectedGeneration) => {
             if (outcome.kind === "rolled-back") {
-              return previous !== undefined && install(previous, previousGeneration);
+              const restored = previous !== undefined && install(previous, previousGeneration);
+              if (restored && previousTranscript) {
+                retainTranscript(owned, previousTranscript);
+              }
+              return restored;
             }
             if (outcome.kind === "unknown") {
               discard(owned);
@@ -597,7 +689,14 @@ export function createSessionActorReplica(
             }
             // The command owner has already validated the committed receipt.
             // Closing revokes this handle's disclosure, not accepted commit custody.
-            return install(outcome.receipt.postimage, expectedGeneration);
+            const installed = install(outcome.receipt.postimage, expectedGeneration);
+            if (installed) {
+              retainTranscript(
+                owned,
+                advanceSessionActorTranscriptReplica(previousTranscript, outcome),
+              );
+            }
+            return installed;
           });
         },
       };

@@ -473,9 +473,6 @@ export async function listUserProfileAuthLinksAsync(
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userModelAccounts.links")) {
-    throw new Error(reply.ok ? "Unexpected model account links reply" : reply.message);
-  }
   return reply?.links ?? [];
 }
 

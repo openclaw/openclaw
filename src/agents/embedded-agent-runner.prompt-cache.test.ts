@@ -17,9 +17,15 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCurrentPromptReaction } from "../gateway/current-prompt-reaction.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../gateway/message-action-turn-capability.js";
 import { RUNTIME_CONTEXT_HEADER } from "../llm/types.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import { bindUserTurnPromptReactionSource } from "../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -292,8 +298,13 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               },
             },
             skills: { load: { watch: false } },
-            channels: { telegram: { enabled: false, dmHistoryLimit: 5 } },
-            tools: { allow: ["cache_probe", "cache_fixture__probe"], toolSearch: false },
+            channels: {
+              telegram: { enabled: false, dmHistoryLimit: 5 },
+            },
+            tools: {
+              allow: ["cache_probe", "cache_fixture__probe", "message"],
+              toolSearch: false,
+            },
             mcp: mcp.config,
           };
           await state.writeConfig(config);
@@ -438,8 +449,8 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                 if (requestsThisTurn > 4) {
                   throw new Error(`Unexpected provider retry in synthetic turn ${turn}`);
                 }
-                // Keep error replay within one retained window, after the deliberate pruning cut.
-                const failure = api === "openai-responses" && turn === 9 && requestsThisTurn === 1;
+                // Replay the error in turn 6, then verify those sent bytes after reopen in turn 7.
+                const failure = api === "openai-responses" && turn === 5 && requestsThisTurn === 1;
                 const result = responseFor(
                   api,
                   model,
@@ -535,9 +546,34 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                   idempotencyKey: `${runId}:user`,
                 },
               });
+              // Alternate real WebChat prompt authority with ordinary follow-up runs.
+              // Tool presentation must not depend on this one-turn capability.
+              const source = {
+                agentId: "main",
+                sessionKey,
+                assertCurrent: admission.assertSourceCurrent,
+                createReaction: (sourceRecorder: typeof recorder) =>
+                  createCurrentPromptReaction({
+                    ...target,
+                    recorder: sourceRecorder,
+                    context: { broadcast: () => {}, getRuntimeConfig: () => config },
+                  }),
+              };
+              bindUserTurnPromptReactionSource(recorder, source);
+              const capability =
+                api === "openai-responses" && turn % 2 === 1
+                  ? mintMessageActionTurnCapability({
+                      ...target,
+                      runId,
+                      expiresWithRun: true,
+                      promptReactionSource: { source, recorder },
+                    })
+                  : undefined;
               try {
                 const result = await runEmbeddedAgent({
                   userTurnTranscriptRecorder: recorder,
+                  messageActionTurnCapability: capability,
+                  messageProvider: api === "openai-responses" ? "webchat" : "telegram",
                   abortSignal: signal,
                   inputProvenance: provenance,
                   internalEvents,
@@ -566,7 +602,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                   modelSelectionLocked: true,
                   codeModeOverride: false,
                   thinkLevel: "off",
-                  toolsAllow: ["cache_probe", "cache_fixture__probe"],
+                  toolsAllow: ["cache_probe", "cache_fixture__probe", "message"],
                   runId,
                   // The first admitted turn lazily loads the provider/plugin runtime.
                   timeoutMs: turn === 1 ? 60_000 : 20_000,
@@ -603,25 +639,32 @@ describe("provider prefix across admitted Gateway agent turns", () => {
                     ),
                   })}`,
                 ).toBeGreaterThan(0);
-                if (!(api === "openai-responses" && turn === 9)) {
+                if (!(api === "openai-responses" && turn === 5)) {
                   expect(
                     result.payloads?.some((payload) => payload.text?.includes("answer")),
                     `turn ${turn} completed`,
                   ).toBe(true);
                 }
               } finally {
+                if (capability) {
+                  revokeMessageActionTurnCapability(capability);
+                }
                 admission.close();
               }
             }
             expect(requests.length).toBe(12);
             if (api === "openai-responses") {
-              expect(requests.filter((request) => request.turn === 9)).toHaveLength(1);
-              const afterFailure = requests.find((request) => request.turn === 10)!.prefix.history;
+              expect(requests.filter((request) => request.turn === 5)).toHaveLength(1);
+              const afterFailure = requests.find((request) => request.turn === 6)!.prefix.history;
               expect(
                 afterFailure.join(""),
                 "next turn retains the failed assistant identity without replaying unfinished text",
               ).toContain(FAILED_ASSISTANT_REPLAY_TEXT);
               expect(afterFailure.join("")).not.toContain(FAILED_ASSISTANT_TEXT);
+              expect(
+                requests.find((request) => request.turn === 7)!.prefix.history.join(""),
+                "the already-sent failed-turn replay stays identical in the following run",
+              ).toContain(FAILED_ASSISTANT_REPLAY_TEXT);
               const continuation = requests[1]!.payload as Record<string, unknown>;
               expect(
                 continuation.previous_response_id,

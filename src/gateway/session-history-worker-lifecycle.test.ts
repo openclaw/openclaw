@@ -62,7 +62,7 @@ const observed = vi.hoisted(() => ({
   timers: vi.spyOn(globalThis, "setTimeout"),
   workers: [] as Worker[],
   idleCloseKeepsWorker: new WeakMap<Worker, boolean>(),
-  dispatch: undefined as ((message: unknown) => void) | undefined,
+  dispatch: undefined as ((message: unknown, worker: Worker) => void) | undefined,
   restoration: undefined as
     | {
         sessionId: string;
@@ -92,7 +92,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         ) {
           observed.workers.push(this);
         }
-        observed.dispatch?.(args[0]);
+        observed.dispatch?.(args[0], this);
         super.postMessage(...args);
       }
     },
@@ -325,12 +325,19 @@ it("settles cancelled message reads before reuse and closes their database handl
     await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
     const controller = new AbortController();
     const cancelled = new Error("history consumer closed");
-    let dispatched = false;
-    observed.dispatch = (message) => {
-      const input = asOptionalRecord(asOptionalRecord(message)?.input);
+    const reads: Array<{ worker: Worker; threadId: number }> = [];
+    const received = vi.fn();
+    let cancelledTaskId: unknown;
+    observed.dispatch = (message, worker) => {
+      const task = asOptionalRecord(message);
+      const input = asOptionalRecord(task?.input);
+      if (input?.kind !== "history-page") {
+        return;
+      }
+      reads.push({ worker, threadId: worker.threadId });
       if (asOptionalRecord(input?.request)?.kind === "message-by-id") {
-        observed.dispatch = undefined;
-        dispatched = true;
+        cancelledTaskId = task?.taskId;
+        worker.on("message", received);
         controller.abort(cancelled);
       }
     };
@@ -341,25 +348,30 @@ it("settles cancelled message reads before reuse and closes their database handl
       },
       controller.signal,
     );
-    await expect(pending).rejects.toBe(cancelled);
-    expect(dispatched).toBe(true);
-    const worker = observed.workers.at(-1)!;
-    const threadId = worker.threadId;
-    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "cancel-message-read-message",
-    ]);
-    expect(observed.workers.at(-1)).toBe(worker);
-    const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
-    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
-    expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
-    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "cancel-message-read-message",
-    ]);
-    if (!keepsWorker) {
-      expect(observed.workers.at(-1)).not.toBe(worker);
-    } else {
-      expect(observed.workers.at(-1)).toBe(worker);
+    try {
+      await expect(pending).rejects.toBe(cancelled);
+    } finally {
+      reads[0]?.worker.off("message", received);
     }
+    expect(reads).toHaveLength(1);
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: cancelledTaskId, status: "ok" }),
+    );
+    const cancelledRead = reads[0]!;
+    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "cancel-message-read-message",
+    ]);
+    expect(cancelledRead.worker.threadId).toBe(cancelledRead.threadId);
+    // Re-admission can use discovery before the next read uses the history lane.
+    const dispatchedWorkers = new Map(reads.map(({ worker, threadId }) => [worker, threadId]));
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    for (const [worker, threadId] of dispatchedWorkers) {
+      const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
+      expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
+    }
+    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "cancel-message-read-message",
+    ]);
   });
 });
 

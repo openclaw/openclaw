@@ -146,7 +146,12 @@ describe("startup recovery admission", () => {
       if (action !== "healthy") {
         for (let i = 0; i < 3; i++) {
           const boot = recordGatewayBootStart(env, now - 295_000 + i);
-          completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now - 295_000 + i);
+          await completeGatewayBootLifecycle(
+            boot,
+            { outcome: "startup_failed" },
+            env,
+            now - 295_000 + i,
+          );
         }
         activeBootId = recordGatewayBootStart(
           env,
@@ -157,7 +162,12 @@ describe("startup recovery admission", () => {
         // Two previous crashes plus the live boot must not independently trip safe mode.
         for (let i = 0; i < 2; i++) {
           const boot = recordGatewayBootStart(env, now - 1_000 + i);
-          completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now - 1_000 + i);
+          await completeGatewayBootLifecycle(
+            boot,
+            { outcome: "startup_failed" },
+            env,
+            now - 1_000 + i,
+          );
         }
         activeBootId = recordGatewayBootStart(env, now);
       }
@@ -272,7 +282,7 @@ describe("startup recovery admission", () => {
         const extendedPause = createDeferred();
         if (action === "crash") {
           const boot = recordGatewayBootStart(env, now);
-          completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now);
+          await completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now);
           info.mockImplementation((message) => {
             if (message.includes("restart recovery paused until")) {
               extendedPause.resolve();

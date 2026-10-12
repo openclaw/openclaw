@@ -33,7 +33,6 @@ import {
   loadArchivedSessions,
   loadArchivedSessionsAsync,
   loadMemorySessionMetadata,
-  loadMemorySessionMetadataBatch,
   readTranscriptStatsBatchReadOnlySync,
   resolveMemorySessionTargets,
   resolveMemorySessionTargetsAsync,
@@ -171,7 +170,6 @@ it("wires Memory callbacks, corpus and reset recall through the captured actor w
     for (const read of [
       () => loadArchivedSessions({ ...scope, sessionIds: [scope.sessionId] }),
       () => loadMemorySessionMetadata(scope),
-      () => loadMemorySessionMetadataBatch({ ...scope, sessions: [scope] }),
       () => resolveMemorySessionTargets({ ...scope, sessionIds: [scope.sessionId] }),
       () => readTranscriptStatsBatchReadOnlySync([scope]),
       () => statSessionEntrySync("actor-memory", scope),

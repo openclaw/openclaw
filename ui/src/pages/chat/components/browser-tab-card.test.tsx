@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -11,11 +11,33 @@ import type { BrowserTabTarget } from "../../../components/browser/browser-targe
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { renderActivityGroup } from "./chat-message-group.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 const hosts: HTMLElement[] = [];
+const templateUpdates = new Map<HTMLElement, (value: unknown) => void>();
+
+function renderTemplate(value: unknown, host: HTMLElement) {
+  const update = templateUpdates.get(host);
+  if (update) {
+    update(value);
+    flush();
+    return;
+  }
+  mountSolid(
+    () => {
+      const [template, setTemplate] = createSignal(value);
+      templateUpdates.set(host, (next) => setTemplate(() => next));
+      return <LitContent value={template()} />;
+    },
+    { container: host },
+  );
+  flush();
+}
 
 function messageEntries(messages: Array<{ toolCallId: string }>): MessageGroup["messages"] {
   return groupMessages(
@@ -24,6 +46,7 @@ function messageEntries(messages: Array<{ toolCallId: string }>): MessageGroup["
 }
 
 afterEach(() => {
+  templateUpdates.clear();
   for (const host of hosts.splice(0)) {
     host.remove();
   }
@@ -121,7 +144,7 @@ async function drawActivity(
     timestamp: 1,
     messages: messageEntries(messages),
   };
-  render(
+  renderTemplate(
     renderActivityGroup([group], {
       showReasoning: false,
       latestBrowserTabs: latestBrowserTabCards(messages, []),
@@ -143,7 +166,7 @@ async function card(
   tab: BrowserTabTarget = { target: "host", profile: "managed", targetId: "tab-1" },
 ) {
   const host = container();
-  render(
+  renderTemplate(
     renderToolPreview(
       { kind: "browser-tab", ...tab, url: "https://example.com/page" },
       "chat_tool",
@@ -658,7 +681,7 @@ describe("browser tab card", () => {
       timestamp: 1,
       messages: messageEntries(messages),
     };
-    render(renderActivityGroup([group], { showReasoning: false }), host);
+    renderTemplate(renderActivityGroup([group], { showReasoning: false }), host);
     const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
     expect(elements).toHaveLength(2);
     expect(elements.map((element) => element.preview?.targetId)).toEqual(["first", "second"]);
@@ -696,7 +719,7 @@ describe("browser tab card", () => {
         messages: messageEntries(messages),
       };
       const host = container();
-      render(renderActivityGroup([group], { showReasoning: false }), host);
+      renderTemplate(renderActivityGroup([group], { showReasoning: false }), host);
       const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
       expect(elements.map((element) => element.preview?.targetId)).toEqual(
         length === 2_046 ? ["second"] : ["first", "second"],

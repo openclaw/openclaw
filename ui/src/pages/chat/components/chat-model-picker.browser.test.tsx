@@ -1,11 +1,12 @@
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import { html, nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
 import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { ChatModelPicker } from "./chat-model-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
@@ -14,7 +15,7 @@ const container = document.createElement("div");
 let dispose: (() => void) | undefined;
 afterEach(() => {
   dispose?.();
-  render(nothing, container);
+  container.replaceChildren();
   container.remove();
 });
 
@@ -37,22 +38,31 @@ function mountPicker() {
     })),
     onModelSelect: vi.fn(async () => {}),
   };
-  const update = () =>
-    render(
-      html`
+  let update!: () => void;
+  mountSolid(
+    () => {
+      const [props, setProps] = createSignal(params);
+      update = () => {
+        setProps(() => ({ ...params }));
+        flush();
+      };
+      return (
         <div
           class="agent-chat__input"
-          @pointerdown=${(event: PointerEvent) => focusComposerFromChrome(event, true)}
-          @click=${(event: MouseEvent) => focusComposerFromChrome(event, true)}
-          @keydown=${(event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(container, event)}
+          onPointerDown={(event) => focusComposerFromChrome(event, true)}
+          onClick={(event) => focusComposerFromChrome(event, true)}
+          onKeyDown={(event) => focusChatComposerFromPrintableKeydown(container, event)}
         >
-          <div class="agent-chat__composer-combobox"><textarea></textarea></div>
-          ${solidTemplate(ChatModelPicker, params)}
+          <div class="agent-chat__composer-combobox">
+            <textarea />
+          </div>
+          <ChatModelPicker {...props()} />
         </div>
-      `,
-      container,
-    );
-  update();
+      );
+    },
+    { container },
+  );
+  flush();
   const picker = container.querySelector("details")!;
   const trigger = picker.querySelector("summary")!;
   const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;

@@ -1236,7 +1236,7 @@ const nodeTestShards = targetNodeTestShards
         (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
       ),
     };
-    if (compactReleaseMatrixRows) {
+    if (compactReleaseMatrixRows || (packedGroups && !frozenTarget)) {
       // The workflow treats absent feature flags as false and history as [].
       // Encoded groups own their names; the outer name is only a legacy fallback.
       for (const key of [

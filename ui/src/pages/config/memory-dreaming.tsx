@@ -343,7 +343,7 @@ function DreamingModelPicker(props: DreamingModelPickerProps) {
 }
 
 /** The global dreaming knobs, editable only when the slot owner stores them. */
-export function DreamingSettings(props: DreamingSettingsProps): JSX.Element {
+function DreamingSettings(props: DreamingSettingsProps): JSX.Element {
   const storage = () => fieldAtPath(props.dreaming, ["storage", "mode"]);
   const storageMode = () => normalizeStorageMode(storage().value);
   const storageDefaultDescription = (
@@ -441,7 +441,7 @@ export function DreamingSettings(props: DreamingSettingsProps): JSX.Element {
  * `dreaming` child: writing these fields would be rejected by the gateway, so
  * the page must not pretend they are editable.
  */
-export function renderDreamingUnsupported(pluginId: string): JSX.Element {
+function renderDreamingUnsupported(pluginId: string): JSX.Element {
   return (
     <SettingsSection title={t("memoryPage.dreaming.unsupported.title")}>
       <SettingsRow
@@ -450,10 +450,6 @@ export function renderDreamingUnsupported(pluginId: string): JSX.Element {
       />
     </SettingsSection>
   );
-}
-
-export function renderDreamingSettings(props: DreamingSettingsProps): JSX.Element {
-  return <DreamingSettings {...props} />;
 }
 
 export function MemoryDreamingControls(props: {

@@ -1,6 +1,9 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
-import { SESSION_ROW_DETAIL_FIELDS } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  expandSessionRowFacts,
+  SESSION_ROW_DETAIL_FIELDS,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { normalizeBoardWidgetPutParams } from "../boards/board-store.js";
@@ -8,7 +11,11 @@ import {
   ensureBoardSchema,
   putBoardWidgetInDatabase,
 } from "../boards/sqlite-board-store.kernel.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  assignSessionOwner,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import {
@@ -16,6 +23,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
@@ -32,6 +40,137 @@ import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("keeps sidebar display facts while bounding the wire payload", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const benchmark = process.env.OPENCLAW_SIDEBAR_BENCH === "1";
+    const count = benchmark ? 5_000 : 8;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "sidebar-reader");
+    const profiles = Array.from({ length: 4 }, (_, index) =>
+      ensureProfileForEmail(`sidebar-${index}@example.test`),
+    );
+    for (let index = 0; index < count; index++) {
+      const actor = { type: "human" as const, source: "profile" as const, id: profiles[0]!.id };
+      const scope = {
+        agentId: "main",
+        sessionKey: `agent:main:dashboard:synthetic-session-${index}`,
+      };
+      replaceSessionEntrySync(scope, {
+        sessionId: `synthetic-session-${index}`,
+        updatedAt: 1_800_000_000_000 + index,
+        createdAt: 1_800_000_000_000 + index,
+        label: `Review the synthetic workspace change ${index}`,
+        visibility: "shared",
+        modelProvider: "test-provider",
+        model: "test-model",
+        inputTokens: 1000,
+        outputTokens: 500,
+        totalTokens: 1500,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        permissionMode: "full",
+        createdActor: actor,
+      });
+      if (index >= count - 200) {
+        assignSessionOwner(scope, {
+          owner: { type: "human", id: profiles[index % profiles.length]!.id },
+          assignedBy: actor,
+          assignedAt: 1_800_000_000_000,
+        });
+        for (const profile of profiles) {
+          recordSessionParticipant(scope, {
+            identity: { type: "profile", id: profile.id },
+            promptedAt: 1_800_000_000_000,
+          });
+        }
+      }
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "compact" | "sidebar") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { source: "sidebar", rowMode, limit: 200, agentId: "main" },
+      });
+    try {
+      const compact = await read("compact");
+      const result = await read("sidebar");
+      const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
+      expect(result.sessions).toHaveLength(Math.min(count, 200));
+      expect(rows[0]).toMatchObject({
+        label: `Review the synthetic workspace change ${count - 1}`,
+        owner: { actor: { id: profiles[(count - 1) % profiles.length]!.id } },
+        participants: expect.arrayContaining(
+          profiles
+            .filter((_, index) => index !== (count - 1) % profiles.length)
+            .map((profile) =>
+              expect.objectContaining({ identity: { type: "profile", id: profile.id } }),
+            ),
+        ),
+      });
+      for (const [index, row] of rows.entries()) {
+        expect(row.createdActor).toEqual(compact.sessions[index]!.createdActor);
+        expect(row.expandedParticipants).toEqual(compact.sessions[index]!.expandedParticipants);
+        expect(row).not.toHaveProperty("model");
+        expect(row).not.toHaveProperty("totalTokens");
+        expect(row).not.toHaveProperty("sharedFacts");
+      }
+      expect(result.sessions[0]).not.toHaveProperty("createdActor");
+      expect(result.sharedFacts).toBeDefined();
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
+        Buffer.byteLength(JSON.stringify(compact)) * 0.5,
+      );
+      if (benchmark) {
+        for (const rowMode of ["compact", "sidebar"] as const) {
+          const page = await read(rowMode);
+          if (process.env.OPENCLAW_SIDEBAR_BENCH_DIR) {
+            const { writeFile } = await import("node:fs/promises");
+            await writeFile(
+              `${process.env.OPENCLAW_SIDEBAR_BENCH_DIR}/${rowMode}.json`,
+              JSON.stringify(page),
+            );
+          }
+          const fields: Record<string, number> = {};
+          for (const row of page.sessions) {
+            for (const [key, value] of Object.entries(row)) {
+              fields[key] =
+                (fields[key] ?? 0) + Buffer.byteLength(JSON.stringify({ [key]: value }));
+            }
+          }
+          const samples = [];
+          for (let round = 0; round < 30; round++) {
+            const start = performance.now();
+            const payload = await read(rowMode);
+            const presented = performance.now();
+            const wire = serializeGatewayFrame({
+              type: "res",
+              id: "sidebar",
+              ok: true,
+              payload,
+            }).toString();
+            const serialized = performance.now();
+            const parsed = JSON.parse(wire);
+            expandSessionRowFacts(parsed.payload.sessions, parsed.payload.sharedFacts);
+            samples.push({
+              presentMs: presented - start,
+              serializeMs: serialized - presented,
+              parseMs: performance.now() - serialized,
+              bytes: Buffer.byteLength(wire),
+            });
+          }
+          console.log(
+            JSON.stringify({ benchmark: "sidebar-payload", rowMode, count, fields, samples }),
+          );
+        }
+      }
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
 
 it("projects dashboard cards without sending session execution details", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -81,7 +81,7 @@ export type MemorySettingsPageProps = {
   buildEditor: () => JSX.Element;
 };
 
-export function MemorySettingsContent(props: MemorySettingsPageProps) {
+function MemorySettingsContent(props: MemorySettingsPageProps) {
   const application = useApplication();
   const gateway = projectGateway(application.gateway);
   const agentSelection = projectAgentSelection(application.settingsAgentSelection);

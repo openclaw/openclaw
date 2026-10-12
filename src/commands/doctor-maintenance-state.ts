@@ -174,10 +174,18 @@ export async function createDoctorMaintenanceState(options: {
     }
   };
   const assertOwnerCurrent = (databasePath?: string) => {
-    options.assertCurrent?.();
-    owner!.assertCurrent();
-    if (databasePath !== undefined) {
-      owner!.assertDatabaseAccess(databasePath);
+    const assertCurrent = () => {
+      owner!.assertCurrent(options.assertCurrent);
+      if (databasePath !== undefined) {
+        owner!.assertDatabaseAccess(databasePath);
+      }
+    };
+    // Post-repair work runs outside the checks callback. Its policy reads must
+    // retain the repair scope's cached handles until that scope has drained.
+    if (resources) {
+      resources.run(assertCurrent);
+    } else {
+      owner!.run(assertCurrent);
     }
   };
   const state = {

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { icons } from "../../../components/icons.ts";
 import {
@@ -50,7 +49,7 @@ async function mount(
   );
   region.panelDefinitions = sidebarPanelDefinitions().map((definition) =>
     Object.assign(definition, {
-      content: definition.slot === slot ? html`${panel}` : null,
+      content: definition.slot === slot ? panel : null,
     }),
   );
   region.fetchFavicon = options.fetchFavicon;

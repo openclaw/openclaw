@@ -40,7 +40,7 @@ export type ConfigFormCollectionDraftProperties = {
   props?: ConfigFormCollectionDraftProps;
   draftOpen: boolean;
 };
-export type ConfigFormCollectionDraft = SolidBridgeElement<
+type ConfigFormCollectionDraft = SolidBridgeElement<
   ConfigFormCollectionDraftProperties,
   { openDraft(): void }
 >;
@@ -111,7 +111,7 @@ function parseValue(
   }
 }
 
-export function ConfigFormCollectionDraftContent(props: {
+function ConfigFormCollectionDraftContent(props: {
   props?: ConfigFormCollectionDraftProps;
   host: ConfigFormCollectionDraft;
   draftOpen: boolean;

@@ -140,33 +140,27 @@ export function openEngineStore(ref: {
   try {
     if (!known) {
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
-      db.runTransaction(
-        () => {
-          db.exec(`CREATE SCHEMA IF NOT EXISTS "${identity.namespace.replaceAll('"', '""')}"`);
-          db.exec(
-            "CREATE TABLE IF NOT EXISTS openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)",
-          );
-          const meta = db
-            .prepare("SELECT version, store_id FROM openclaw_schema_meta WHERE store = ?")
-            .get(schema.id);
-          if (!meta) {
-            adapter.schema.bootstrap(store, db);
-          } else {
-            if (meta.store_id !== identity.storeId) {
-              throw new Error(
-                `PostgreSQL database identity mismatch: expected ${identity.storeId}, found ${String(meta.store_id)}. Restore the matching anchor and PostgreSQL backup.`,
-              );
-            }
-            if (meta.version !== schema.version) {
-              adapter.schema.migrate(store, Number(meta.version));
-            }
+      db.runTransaction(() => {
+        db.exec(`CREATE SCHEMA IF NOT EXISTS "${identity.namespace.replaceAll('"', '""')}"`);
+        db.exec(
+          "CREATE TABLE IF NOT EXISTS openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)",
+        );
+        const meta = db
+          .prepare("SELECT version, store_id FROM openclaw_schema_meta WHERE store = ?")
+          .get(schema.id);
+        if (!meta) {
+          adapter.schema.bootstrap(store, db);
+        } else {
+          if (meta.store_id !== identity.storeId) {
+            throw new Error(
+              `PostgreSQL database identity mismatch: expected ${identity.storeId}, found ${String(meta.store_id)}. Restore the matching anchor and PostgreSQL backup.`,
+            );
           }
-        },
-        undefined,
-        false,
-        false,
-        false,
-      );
+          if (meta.version !== schema.version) {
+            adapter.schema.migrate(store, Number(meta.version));
+          }
+        }
+      });
       publishSqliteDatabaseAdmission(anchor, admissionKey, {
         engine: "postgres",
         ...identity,
