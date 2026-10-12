@@ -62,8 +62,14 @@ export function testEmbeddingNetworkPolicy(params: {
           ...(params.id === "lmstudio" ? {} : { remote: { apiKey: "fixture-key" } }),
         });
         if (allowPrivateNetwork === false) {
-          await expect(provider.embed("hello")).rejects.toThrow(/private\/internal\/special-use/);
+          const outcome = await provider.embed("hello").then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
           expect(requests).toEqual([]);
+          expect(outcome).toMatchObject({
+            error: { message: expect.stringMatching(/private\/internal\/special-use/) },
+          });
         } else {
           await expect(provider.embed("hello")).resolves.toEqual([1, 0]);
           expect(requests).toEqual(
