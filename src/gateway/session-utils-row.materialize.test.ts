@@ -17,6 +17,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
+import { readRecentSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   buildGatewaySessionRow,
@@ -492,6 +493,18 @@ test("preserves complete base rows across time and caller presentation fixtures"
         rowContext: fixture.omitRowContext ? undefined : rowContext,
         includeSwarmChildren: true,
         skipTranscriptUsageFallback: !fixture.transcript,
+        transcriptUsage:
+          fixture.transcript && fixture.entry
+            ? await readRecentSessionUsageFromTranscriptAsync(
+                {
+                  agentId: "main",
+                  sessionId: fixture.entry.sessionId,
+                  sessionKey: fixture.key,
+                  storePath,
+                },
+                256 * 1024,
+              )
+            : undefined,
         lightweightListRow: !fixture.transcript,
         includeDerivedTitles: fixture.transcript,
         includeLastMessage: fixture.transcript,

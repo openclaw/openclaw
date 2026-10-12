@@ -108,16 +108,21 @@ export function recordLegacyAcpMigrationSources(
   writeSources(database, sessionKey, [...merged.values()]);
 }
 
-export function retainLegacyAcpMigrationSourcesForEntry(
-  database: DatabaseSync,
-  sessionKey: string,
+/** The entry writer persists this projection together with its new lifecycle. */
+export function retainLegacyAcpMigrationSourcesJson(
+  value: string | null | undefined,
   entry: SessionEntry | undefined,
-): void {
-  const sources = readSources(database, sessionKey);
-  const retained = sources.filter((source) => legacyAcpMigrationBindingMatches(source, entry));
-  if (retained.length !== sources.length) {
-    writeSources(database, sessionKey, retained);
+): string | null {
+  if (!value) {
+    return null;
   }
+  const sources = sourcesSchema.parse(JSON.parse(value));
+  const retained = sources.filter((source) => legacyAcpMigrationBindingMatches(source, entry));
+  return retained.length === sources.length
+    ? value
+    : retained.length
+      ? JSON.stringify(retained)
+      : null;
 }
 
 export function copyLegacyAcpMigrationSourcesForRepair(

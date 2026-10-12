@@ -83,7 +83,6 @@ export function executeSessionMaintenance(
   let version: SessionTranscriptContextVersion | undefined;
   const publish = prepareTranscriptRewriteSync(
     scope,
-    command.input.appendParentId,
     () => {},
     command.input.version,
     (stage) => context.admit(stage),

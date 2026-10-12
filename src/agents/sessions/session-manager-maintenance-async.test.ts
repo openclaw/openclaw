@@ -9,6 +9,7 @@ import {
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { rewriteTranscriptMessageAtAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-message-rewrite.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -156,30 +157,58 @@ it.each(["read", "receipt"] as const)(
   },
 );
 
-it("commits an awaited rewrite and refuses a stale prepared rewrite without publishing it", async () => {
+it.each(["same", "independent"] as const)(
+  "commits an awaited rewrite and refuses a stale rewrite after a %s manager writes",
+  async (writerKind) => {
+    const { scope, manager } = await openSession();
+    const sourceId = await appendUser(manager, "original");
+    vi.spyOn(manager, "prepareTranscriptRewrite").mockImplementation(() => {
+      throw new Error("sync compatibility adapter used");
+    });
+    const rewrite = await manager.prepareTranscriptRewriteAsync();
+    await rewrite.sessionManager.resetLeafAsync();
+    const replacementId = await appendUser(rewrite.sessionManager, "replacement");
+    await rewrite.commit(new Map([[sourceId, replacementId]]));
+    expect(manager.getLeafId()).toBe(replacementId);
+    expect((await SessionManager.openAsync(scope)).getBranch()).toEqual(manager.getBranch());
+
+    const stale = await manager.prepareTranscriptRewriteAsync();
+    await stale.sessionManager.resetLeafAsync();
+    const staleId = await appendUser(stale.sessionManager, "stale");
+    const writer = writerKind === "same" ? manager : await SessionManager.openAsync(scope);
+    const laterId = await writer.appendCustomEntryAsync("later", {});
+    await expect(stale.commit(new Map([[replacementId, staleId]]))).rejects.toThrow(
+      "changed before rewrite publication",
+    );
+    expect(writer.getLeafId()).toBe(laterId);
+    const reopened = await SessionManager.openAsync(scope);
+    expect(reopened.getEntry(staleId)).toBeUndefined();
+    expect(reopened.getBranch()).toEqual(writer.getBranch());
+  },
+);
+
+it("preserves a steer acknowledgment committed after rewrite preparation", async () => {
   const { scope, manager } = await openSession();
-  const sourceId = await appendUser(manager, "original");
-  vi.spyOn(manager, "prepareTranscriptRewrite").mockImplementation(() => {
-    throw new Error("sync compatibility adapter used");
-  });
+  const source = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("steer", 1));
+  if (!source.anchor) {
+    throw new Error("Persisted user message must have a transcript anchor");
+  }
   const rewrite = await manager.prepareTranscriptRewriteAsync();
   await rewrite.sessionManager.resetLeafAsync();
   const replacementId = await appendUser(rewrite.sessionManager, "replacement");
-  await rewrite.commit(new Map([[sourceId, replacementId]]));
-  expect(manager.getLeafId()).toBe(replacementId);
-  expect((await SessionManager.openAsync(scope)).getBranch()).toEqual(manager.getBranch());
-
-  const stale = await manager.prepareTranscriptRewriteAsync();
-  await stale.sessionManager.resetLeafAsync();
-  const staleId = await appendUser(stale.sessionManager, "stale");
-  const laterId = await manager.appendCustomEntryAsync("later", {});
-  await expect(stale.commit(new Map([[replacementId, staleId]]))).rejects.toThrow(
+  const acknowledged = await rewriteTranscriptMessageAtAnchor(source.anchor, () => ({
+    ...source.message,
+    __openclaw: { steerTargetRunId: "steered-run" },
+  }));
+  expect(acknowledged?.generation).toBe(source.anchor.generation);
+  await expect(rewrite.commit(new Map([[source.entryId, replacementId]]))).rejects.toThrow(
     "changed before rewrite publication",
   );
-  expect(manager.getLeafId()).toBe(laterId);
   const reopened = await SessionManager.openAsync(scope);
-  expect(reopened.getEntry(staleId)).toBeUndefined();
-  expect(reopened.getBranch()).toEqual(manager.getBranch());
+  expect(reopened.getEntry(replacementId)).toBeUndefined();
+  expect(reopened.getEntry(source.entryId)).toMatchObject({
+    message: { __openclaw: { steerTargetRunId: "steered-run" } },
+  });
 });
 
 it("adopts only the submitted rewrite snapshot when the prepared manager changes during its receipt", async () => {

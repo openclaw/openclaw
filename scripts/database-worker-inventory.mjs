@@ -230,6 +230,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-accessor.sqlite-acp-provenance.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readSources", "writeSources"],
+        evidence:
+          "Legacy provenance import/repair only: recordLegacyAcpMigrationSources is called by sqlite-import.ts, and copyLegacyAcpMigrationSourcesForRepair by sqlite-node-artifacts.ts. Runtime entry writes and clearing persist provenance with their existing node upsert; the mixed native ACP context reader remains T1.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-lifecycle-state.ts",
     [
       {

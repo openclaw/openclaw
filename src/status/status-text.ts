@@ -33,6 +33,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../config/sessions/lifecycle-read.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import {
@@ -55,7 +56,7 @@ import {
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { readSessionFallbackModel } from "./session-fallback-model.js";
+import { readSessionFallbackModelAsync } from "./session-fallback-model.js";
 import type { StatusMessageParts } from "./status-message.js";
 import { createStatusModelResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
@@ -237,7 +238,7 @@ export async function buildStatusReplyParts(
       sessionId: sessionEntry?.sessionId,
       sessionKeys: sessionKey ? [sessionKey] : [],
     }) === undefined
-      ? readSessionFallbackModel({
+      ? await readSessionFallbackModelAsync({
           ...modelParams,
           config: cfg,
           sessionScope: { agentId: statusAgentId, sessionKey, storePath },
@@ -583,6 +584,19 @@ export async function buildStatusReplyParts(
     sessionKey,
     storePath,
   });
+  const transcriptUsage =
+    (params.includeTranscriptUsage ?? true) && sessionEntry?.sessionId
+      ? await readRecentSessionUsageFromTranscriptAsync(
+          {
+            agentId: statusAgentId,
+            sessionKey,
+            sessionEntry,
+            sessionId: sessionEntry.sessionId,
+            storePath,
+          },
+          256 * 1024,
+        ).catch(() => null)
+      : undefined;
   return buildStatusMessageParts({
     config: cfg,
     preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
@@ -611,7 +625,6 @@ export async function buildStatusReplyParts(
     sessionKey,
     parentSessionKey,
     sessionScope,
-    sessionStorePath: storePath,
     sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
     groupActivation,
     resolvedThink: effectiveThinkLevel,
@@ -637,6 +650,6 @@ export async function buildStatusReplyParts(
     pluginHealthLine,
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,
-    includeTranscriptUsage: params.includeTranscriptUsage ?? true,
+    transcriptUsage,
   });
 }
