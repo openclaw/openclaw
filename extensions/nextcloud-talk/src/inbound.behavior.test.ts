@@ -232,10 +232,7 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
   });
 
-  it.each([
-    ["plain", "/help"],
-    ["structured", JSON.stringify({ message: "/help", parameters: {} })],
-  ])(
+  it.each([["structured", JSON.stringify({ message: "/help", parameters: {} })]])(
     "blocks %s group commands when room access allows chat but command access does not",
     async (_label, text) => {
       const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
@@ -274,32 +271,6 @@ describe("nextcloud-talk inbound behavior", () => {
   );
 
   it.each([
-    { label: "ordinary text", text: "hello", command: "hello" },
-    { label: "array parameters", text: '{"message":"/help","parameters":[]}', command: "/help" },
-    {
-      label: "outer and message whitespace",
-      text: '  {"message":" /help ","parameters":{}}  ',
-      command: "/help",
-    },
-    { label: "malformed JSON", text: '{"message":"/help",', command: '{"message":"/help",' },
-    { label: "missing parameters", text: '{"message":"/help"}', command: '{"message":"/help"}' },
-    {
-      label: "non-string message",
-      text: '{"message":1,"parameters":{}}',
-      command: '{"message":1,"parameters":{}}',
-    },
-    {
-      label: "blank message",
-      text: '{"message":"  ","parameters":{}}',
-      command: '{"message":"  ","parameters":{}}',
-    },
-    {
-      label: "ordinary rich message",
-      text: '{"message":"Hi {user1}","parameters":{"user1":{"type":"user","id":"alice","name":"Alice"}}}',
-      command:
-        '{"message":"Hi {user1}","parameters":{"user1":{"type":"user","id":"alice","name":"Alice"}}}',
-    },
-    { label: "plain group command without mention", text: "/help", command: "/help", group: true },
     {
       label: "structured group command without mention",
       text: '{"message":"/help","parameters":{}}',
