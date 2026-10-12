@@ -438,8 +438,9 @@ async function runWizard(
   options: Parameters<typeof runSetupWizard>[0] = {},
   runtime = createRuntime(),
   prompter = buildWizardPrompter(),
+  signal?: AbortSignal,
 ) {
-  await runSetupWizard({ ...defaultSetupOptions, ...options }, runtime, prompter);
+  await runSetupWizard({ ...defaultSetupOptions, ...options }, runtime, prompter, signal);
 }
 
 describe("runSetupWizard", () => {
@@ -972,6 +973,27 @@ describe("runSetupWizard", () => {
       primary: "anthropic/sonnet-4.6",
     });
     expect(promptDefaultModel).not.toHaveBeenCalled();
+  });
+
+  it("forwards wizard cancellation to provider authentication", async () => {
+    resolvePluginProviders.mockReturnValueOnce([
+      { id: "", label: "Empty", auth: [] },
+      { id: "demo-provider", label: "Demo", auth: [], wizard: { setup: {} } },
+    ]);
+    resolveProviderOnboardAuthFlags.mockReturnValue([
+      providerFlag("nvidiaApiKey", "nvidia-api-key", "--nvidia-api-key"),
+    ]);
+    readExistingModel();
+    const cancellation = new AbortController();
+    await runWizard(
+      { nvidiaApiKey: "provider-credential-fixture", flow: undefined, authChoice: undefined },
+      createRuntime(),
+      buildWizardPrompter({}, { defaultSelect: "keep-model" }),
+      cancellation.signal,
+    );
+    expect(prepareAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: cancellation.signal }),
+    );
   });
 
   it("rejects ambiguous provider credential flags before writing local setup state", async () => {
