@@ -1,16 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveWorkboardDatabaseInput } from "./database-config.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveDatabaseEngineInput } from "./config.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("workboard host database selection", () => {
+describe("host database engine selection", () => {
   it("defaults to SQLite and does not resolve unused PostgreSQL credentials", async () => {
-    await expect(resolveWorkboardDatabaseInput({})).resolves.toBeUndefined();
+    await expect(resolveDatabaseEngineInput({})).resolves.toBeUndefined();
     await expect(
-      resolveWorkboardDatabaseInput({
+      resolveDatabaseEngineInput({
         database: {
           engine: "sqlite",
           postgres: { connection: { source: "file", provider: "missing", id: "/dsn" } },
@@ -24,7 +24,7 @@ describe("workboard host database selection", () => {
     const connection = "postgresql://localhost/workboard_fixture";
     fs.writeFileSync(file, JSON.stringify({ dsn: connection }), { mode: 0o600 });
     await expect(
-      resolveWorkboardDatabaseInput({
+      resolveDatabaseEngineInput({
         database: {
           engine: "postgres",
           postgres: {
@@ -44,7 +44,7 @@ describe("workboard host database selection", () => {
     "refuses missing or unresolved PostgreSQL connections without fallback %#",
     async (postgres) => {
       await expect(
-        resolveWorkboardDatabaseInput({ database: { engine: "postgres", postgres } }),
+        resolveDatabaseEngineInput({ database: { engine: "postgres", postgres } }),
       ).rejects.toThrow(/database.postgres.connection.*(?:Configure|configured)/);
     },
   );

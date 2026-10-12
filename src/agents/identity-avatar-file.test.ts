@@ -193,7 +193,7 @@ describe("local agent avatar files", () => {
       await pending;
     }
     // Reinstalling the pending image must evict the oldest of the eight retained 2 MiB images.
-    expect(await prepare(sources[1]!)).not.toBe(oldest);
+    expect(Object.is(await prepare(sources[1]!), oldest)).toBe(false);
   });
 
   it("coalesces cold work, reuses warm bodies, and revalidates edits, replacements, and removal", async () => {

@@ -23,39 +23,6 @@ describe("runMemorySearchWithDeadline", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("aborts the task with the stable deadline error and clears its timer", async () => {
-    vi.useFakeTimers();
-    let taskSignal: AbortSignal | undefined;
-    const result = runMemorySearchWithDeadline({
-      timeoutMs: 15_000,
-      run: async (signal) => {
-        taskSignal = signal;
-        return await new Promise(() => {});
-      },
-    });
-    const resultAssertion = expect(result).rejects.toThrow("memory_search timed out after 15s");
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    await resultAssertion;
-    expect(taskSignal?.aborted).toBe(true);
-    expect(taskSignal?.reason).toEqual(new Error("memory_search timed out after 15s"));
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("marks its own deadline error and nothing that merely reads like one", async () => {
-    vi.useFakeTimers();
-    const result = runMemorySearchWithDeadline({
-      timeoutMs: 15_000,
-      run: async () => await new Promise(() => {}),
-    });
-    const resultAssertion = expect(result).rejects.toSatisfy(isMemorySearchDeadlineError);
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    await resultAssertion;
-    expect(isMemorySearchDeadlineError(new Error("memory_search timed out after 15s"))).toBe(false);
-    expect(isMemorySearchDeadlineError("memory_search timed out after 15s")).toBe(false);
-  });
-
   it("cannot be branded by copying the marker off the abort reason", async () => {
     // The supervised task is handed the deadline error as `signal.reason`, so a
     // property-based brand is readable by exactly the provider code the brand

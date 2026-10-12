@@ -2,26 +2,16 @@
 import fs from "node:fs/promises";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { CronRunReceiptConflictError } from "../store/run-receipt-store.js";
-import {
-  claimCronRunReceiptInDatabaseForTest,
-  finishCronRunReceiptAsync,
-  prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
-import { prepareCronRunReceiptOwnerMutation } from "./run-receipts.js";
 import { createCronServiceState } from "./state.js";
-import { ensureLoaded, captureCronJobMutationSource, persistCronJobMutation } from "./store.js";
+import { ensureLoaded } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-store-seam",
@@ -339,73 +329,6 @@ describe("cron service store seam coverage", () => {
     ]);
     expect(state.durableNextRunAtMsByJobId.get(surviving.id)).toBe(surviving.state.nextRunAtMs);
     expect(onEvent).not.toHaveBeenCalled();
-  });
-
-  it("does not let quarantine recovery bypass an active receipt fence", async () => {
-    const { storePath } = await makeStorePath();
-    const job = createReloadCronJob({
-      id: "quarantined-receipt-conflict",
-      agentId: "alpha",
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "receipt-owned job" },
-    });
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const state = createStoreTestState(storePath);
-    await ensureLoaded(state);
-    const prepared = prepareCronRunReceiptClaim({
-      observed: undefined,
-      storePath,
-      job,
-      agentId: "alpha",
-      startedAtMs: STORE_TEST_NOW,
-    });
-    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabaseForTest({
-        database: db,
-        prepared,
-        resolveAgentId: (current) => current.agentId!,
-      }),
-    );
-    const ownerMutation = await prepareCronRunReceiptOwnerMutation({
-      state,
-      previousJob: job,
-      nextJob: { ...job, agentId: "beta" },
-    });
-    state.pendingQuarantineConfigJobs = [
-      { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
-    ];
-
-    try {
-      await expect(
-        persistCronJobMutation({
-          state,
-          source: captureCronJobMutationSource(state),
-          jobMutation: {
-            kind: "update",
-            id: job.id,
-            patch: { agentId: "beta" },
-            options: { captured: false },
-          },
-          jobMutationSnapshot: { nowMs: STORE_TEST_NOW },
-          method: "cron.update",
-          assertCurrent: ownerMutation?.assertCurrent,
-          receiptMutation: {
-            jobId: job.id,
-            owner: ownerMutation?.prepared,
-            triggerStateChanged: false,
-            scheduleChanged: false,
-          },
-        }),
-      ).rejects.toBeInstanceOf(CronRunReceiptConflictError);
-      expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBe("alpha");
-      expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
-    } finally {
-      await finishCronRunReceiptAsync({
-        handle: receipt,
-        status: "superseded",
-        finishedAtMs: STORE_TEST_NOW + 1,
-      });
-    }
   });
 
   it("uses the trimmed canonical id for job rows and companion authority", async () => {

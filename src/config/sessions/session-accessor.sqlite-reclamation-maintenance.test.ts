@@ -186,7 +186,6 @@ describe("reclamation deferred maintenance native custody", () => {
       state.db.prepare("SELECT lease_id FROM agent_database_leases ORDER BY lease_id").all();
     const foregroundLeases = leases();
     await runSqliteSessionReclamation({
-      forceInProcess: false,
       plan: plan(),
       assertCommitAllowed: () => {},
     });
@@ -224,7 +223,6 @@ describe("reclamation deferred maintenance native custody", () => {
     writeFileSync(arm, "armed");
     let settled = false;
     const outcome = runSqliteSessionReclamation({
-      forceInProcess: false,
       plan: plan(),
       assertCommitAllowed: () => {},
     }).then(

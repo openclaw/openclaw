@@ -11,10 +11,7 @@ import {
   readCronRunRecordsInDatabase,
 } from "./run-history.kernel.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
-import {
-  isCronRunReceiptOwnerStale,
-  listActiveCronRunReceiptJobIdsInDatabase,
-} from "./run-receipt-store.js";
+import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import {
   loadCronRuntimeAuthorities,
@@ -48,18 +45,8 @@ export function maintainCronRunHistoryInWorker(
     jobIds.length > 0 && tableExists(database.db, "cron_run_receipts")
       ? readActiveCronRunReceiptsInDatabase(database.db, undefined, jobIds)
       : [];
-  const { nowMs, protectedJobIds, locallyOwnedReceiptIds } = input.snapshot;
-  const protectedJobs = new Set([
-    ...protectedJobIds,
-    ...receipts
-      // Host-only liveness is captured before dispatch; new ownership may race this snapshot.
-      .filter((receipt) =>
-        receipt.ownerPid === process.pid
-          ? locallyOwnedReceiptIds.includes(receipt.receiptId)
-          : !isCronRunReceiptOwnerStale(receipt, nowMs),
-      )
-      .map((receipt) => receipt.jobId),
-  ]);
+  const { nowMs, protectedJobIds } = input.snapshot;
+  const protectedJobs = new Set([...protectedJobIds, ...receipts.map((receipt) => receipt.jobId)]);
   const plan = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
   if (plan.reconciliations.length === 0 && !plan.prune) {
     return { outcome: { reconciled: 0, pruned: 0 } };
