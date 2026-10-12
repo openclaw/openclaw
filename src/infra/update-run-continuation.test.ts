@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSelfAndAncestorPidsSync } from "./restart-stale-pids.js";
 import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
@@ -7,9 +8,14 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 const readProcessAncestry = vi.hoisted(() =>
   vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
 );
+// Without a native identity addon, liveness and start times come from the mocked
+// Windows process queries instead of the test host's own native process table.
 vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
   readProcessAncestry,
+  readProcessIdentity: () => {
+    throw new ProcSafeError("helper-unavailable", "native process identity is unavailable");
+  },
 }));
 
 const spawnSync = vi.hoisted(() => vi.fn());
