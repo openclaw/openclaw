@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { css, html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
@@ -150,7 +151,7 @@ export class McpAppConfirm {
           <div class="mcp-app-confirm__title" title=${pending.title}>${pending.title}</div>
           <div>${question}</div>
           <div class="mcp-app-confirm__preview" title=${pending.text}>
-            ${pending.text.length > 200 ? `${pending.text.slice(0, 200)}…` : pending.text}
+            ${pending.text.length > 200 ? `${truncateUtf16Safe(pending.text, 200)}…` : pending.text}
           </div>
         </div>
         <div class="mcp-app-confirm__actions">
